@@ -14,6 +14,8 @@ using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Attachments;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Mvc.Testing.Handlers;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,28 +51,33 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
 
-    /// <summary>Small limits: reads per address, wrong codes per network and server-wide.</summary>
+    /// <summary>Small limits: reads and file reads per address, wrong codes per network and server-wide.</summary>
     internal const int ReadsPerAddress = 4;
+    internal const int FilesPerAddress = 10;
     internal const int FailuresPerNetwork = 3;
     internal const int FailuresPerServer = 6;
 
-    private WebApplicationFactory<Program> Limited(CapturedLog? log = null) => Limited(Api, log);
+    private WebApplicationFactory<Program> Limited(CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer) =>
+        Limited(Api, log, readsPerNetwork, readsPerServer);
 
     /// <summary><paramref name="api"/> with <see cref="ReadsPerAddress"/>, <see cref="FailuresPerNetwork"/> and
     /// <see cref="FailuresPerServer"/>; the caller disposes it.</summary>
-    internal static WebApplicationFactory<Program> Limited(WebApplicationFactory<Program> api, CapturedLog? log = null) => api.WithWebHostBuilder(b =>
+    internal static WebApplicationFactory<Program> Limited(
+        WebApplicationFactory<Program> api, CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer) => api.WithWebHostBuilder(b =>
     {
         b.ConfigureServices(s =>
         {
             s.RemoveAll<AccountLimits>();
             s.AddSingleton(new AccountLimits(
                 AccountLimits.RedeemFailuresPerNetwork, AccountLimits.RedeemFailuresPerServer,
-                readerReadsPerAddress: ReadsPerAddress, readerFailuresPerNetwork: FailuresPerNetwork, readerFailuresPerServer: FailuresPerServer));
+                readerReadsPerAddress: ReadsPerAddress, readerFailuresPerNetwork: FailuresPerNetwork, readerFailuresPerServer: FailuresPerServer,
+                readerFilesPerAddress: FilesPerAddress, readerReadsPerNetwork: readsPerNetwork, readerReadsPerServer: readsPerServer));
         });
         if (log is not null) b.ConfigureLogging(l => l.AddProvider(log));
     });
 
-    /// <summary>A stranger's browser: a cookie jar over https, no session, from <see cref="Address"/>.</summary>
+    /// <summary>A stranger's browser: a cookie jar over https, no session, from <see cref="Address"/>. As the reader page,
+    /// it keeps the copy id of the last copy read and sends it with a file.</summary>
     internal sealed class Reader(WebApplicationFactory<Program> api, string address) : IDisposable
     {
         public CookieContainer Jar { get; } = new();
@@ -86,13 +93,27 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         public Task<HttpResponseMessage> GetAsync(string path = "/api/s") => SendAsync(HttpMethod.Get, path, null, null);
 
-        private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, string? json, string? origin)
+        /// <summary>File <paramref name="index"/> with <paramref name="copy"/>, by default <see cref="Copy"/>.</summary>
+        public Task<HttpResponseMessage> FileAsync(object index, string? copy = null) =>
+            SendAsync(HttpMethod.Get, $"/api/s/files/{index}", null, null, copy ?? Copy);
+
+        public string? Copy { get; set; }
+
+        private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, string? json, string? origin, string? copy = null)
         {
             using var request = new HttpRequestMessage(method, path);
             if (json is not null) request.Content = new StringContent(json, Encoding.UTF8, "application/json");
             if (origin is not null) request.Headers.Add("Origin", origin);
+            if (copy is not null) request.Headers.Add(ReaderApi.CopyHeader, copy);
             request.Headers.Add("X-Forwarded-For", Address);
-            return await Client.SendAsync(request, Ct);
+            var response = await Client.SendAsync(request, Ct);
+            if (path == "/api/s" && response.StatusCode == HttpStatusCode.OK)
+            {
+                await response.Content.LoadIntoBufferAsync(Ct);
+                Copy = JsonNode.Parse(await response.Content.ReadAsStringAsync(Ct))!["copy"]?.GetValue<string>();
+            }
+
+            return response;
         }
 
         public Cookie? ReaderCookie => Jar.GetCookies(new Uri(new Uri(KumbuAppFactory.PublicUrl), ReaderApi.CookiePath)).FirstOrDefault(c => c.Name == ReaderApi.Cookie);
@@ -100,17 +121,21 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
         public void Dispose() => _client?.Dispose();
     }
 
-    internal sealed record Published(RestClient Alice, string Code, string Formatted);
+    internal sealed record Published(RestClient Alice, string Code, string Formatted)
+    {
+        public string Copy => ShareCode.CopyId(Code);
+    }
 
     private Task<Published> PublishedAsync() => PublishedAsync(Api);
 
-    /// <summary>Alice's <c>Work</c> with <see cref="Plan"/> embedding <c>Beds/flow.jpg</c> (a camera's JPEG), published
-    /// through <see cref="Publications"/> (there is no REST route yet).</summary>
-    internal static async Task<Published> PublishedAsync(WebApplicationFactory<Program> api)
+    /// <summary>Alice's <c>Work</c> with <see cref="Plan"/> embedding <c>Beds/flow.jpg</c> (a camera's JPEG) and
+    /// <paramref name="more"/> images besides, published through <see cref="Publications"/>.</summary>
+    internal static async Task<Published> PublishedAsync(WebApplicationFactory<Program> api, int more = 0)
     {
         var alice = await RestClient.NewAsync(api, vault: "Work");
         await alice.CreateFileAsync("Beds/flow.jpg", ImageMetadataTests.JpegWithGps(6));
-        await alice.CreateAsync("Beds/Plan.md", PlanText);
+        for (var i = 1; i <= more; i++) await alice.CreateFileAsync($"Beds/flow-{i}.jpg", ImageMetadataTests.JpegWithGps(6));
+        await alice.CreateAsync("Beds/Plan.md", PlanText + string.Concat(Enumerable.Range(1, more).Select(i => $"\n![[flow-{i}.jpg]]")));
         var (notes, access) = await OpenAsync(api, alice);
         var published = await api.Services.GetRequiredService<Publications>()
             .PublishAsync(access, notes, P(Plan), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
@@ -168,7 +193,8 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
         var markdown = body["markdown"]!.GetValue<string>();
         Assert.Contains("Dig on Monday.", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("#todo", markdown, StringComparison.Ordinal);
-        Assert.NotNull(body["snapshotAt"]);
+        Assert.EndsWith("Z", body["snapshotAt"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Matches("^[0-9a-f]{32}$", body["copy"]!.GetValue<string>());
         var file = Assert.Single(body["files"]!.AsArray())!;
         Assert.Equal(0, file["index"]!.GetValue<int>());
         Assert.Equal("flow.jpg", file["name"]!.GetValue<string>());
@@ -350,14 +376,14 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
             {
                 "POST /api/s" => reader.PostAsync(published.Formatted),
                 "GET /api/s" => reader.GetAsync(),
-                _ => reader.GetAsync("/api/s/files/0"),
+                _ => reader.FileAsync(0),
             };
 
             // Without the cookie the GETs fail; the POST fails with a wrong code.
             answers.Add(($"{endpoint} 404", endpoint.StartsWith("POST", StringComparison.Ordinal) ? await reader.PostAsync(WrongCode()) : await Send()));
             if (!endpoint.StartsWith("POST", StringComparison.Ordinal)) (await reader.PostAsync(published.Formatted)).Dispose();
             answers.Add(($"{endpoint} 200", await Send()));
-            for (var i = 0; i < ReadsPerAddress; i++) (await Send()).Dispose();
+            for (var i = 0; i < (endpoint.EndsWith("/0", StringComparison.Ordinal) ? FilesPerAddress : ReadsPerAddress); i++) (await Send()).Dispose();
             answers.Add(($"{endpoint} 429", await Send()));
         }
 
@@ -377,21 +403,22 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     {
         var published = await PublishedAsync();
         using var stranger = new Reader(Api, "203.0.113.106");
-        using var noCookie = await stranger.GetAsync("/api/s/files/0");
+        using var noCookie = await stranger.FileAsync(0, published.Copy);
         await AssertNotFoundAsync(noCookie);
 
         using var reader = new Reader(Api, "203.0.113.107");
         (await reader.PostAsync(published.Formatted)).Dispose();
-        using var file = await reader.GetAsync("/api/s/files/0");
+        Assert.Equal(published.Copy, reader.Copy);
+        using var file = await reader.FileAsync(0);
 
         Assert.Equal(HttpStatusCode.OK, file.StatusCode);
         Assert.Equal("image/jpeg", file.Content.Headers.ContentType!.MediaType);
         Assert.Equal(ImageMetadata.Strip(ImageMetadataTests.JpegWithGps(6), "image/jpeg"), await file.Content.ReadAsByteArrayAsync(Ct));
         Assert.Equal(Security.FileContentPolicy, Assert.Single(file.Headers.GetValues("Content-Security-Policy")));
 
-        foreach (var bad in new[] { "/api/s/files/1", "/api/s/files/-1", "/api/s/files/x", "/api/s/files/99999999999" })
+        foreach (var bad in new[] { "1", "-1", "x", "99999999999" })
         {
-            using var response = await reader.GetAsync(bad);
+            using var response = await reader.FileAsync(bad);
             await AssertNotFoundAsync(response);
             Assert.Equal(await noCookie.Content.ReadAsStringAsync(Ct), await response.Content.ReadAsStringAsync(Ct));
         }
@@ -401,12 +428,127 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_copy_with_more_images_than_the_read_allowance_loads()
+    {
+        var published = await PublishedAsync(Api, more: ReadsPerAddress + 1);
+        await using var api = Limited();
+        using var reader = new Reader(api, "203.0.113.60");
+        (await reader.PostAsync(published.Formatted)).Dispose();
+
+        for (var i = 0; i <= ReadsPerAddress + 1; i++)
+        {
+            using var file = await reader.FileAsync(i);
+            Assert.True(file.StatusCode == HttpStatusCode.OK, $"file {i} answered {(int)file.StatusCode}");
+        }
+
+        // The copy's reads are untouched, and the files have an allowance of their own.
+        for (var i = 1; i < ReadsPerAddress; i++)
+        {
+            using var again = await reader.GetAsync();
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+        }
+
+        for (var i = ReadsPerAddress + 2; i < FilesPerAddress; i++) (await reader.FileAsync(0)).Dispose();
+        using var limited = await reader.FileAsync(0);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.NotNull(limited.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task Reads_are_limited_per_network_and_server()
+    {
+        var published = await PublishedAsync();
+        const int perNetwork = 3, perServer = 5;
+        await using var api = Limited(readsPerNetwork: perNetwork, readsPerServer: perServer);
+        using var reader = new Reader(api, "203.0.113.70");
+
+        for (var i = 0; i < perNetwork; i++)
+        {
+            reader.Address = $"203.0.113.{70 + i}";
+            using var read = await reader.PostAsync(published.Formatted);
+            await AssertCopyAsync(read);
+        }
+
+        reader.Address = "203.0.113.79";
+        using (var network = await reader.GetAsync())
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, network.StatusCode);
+            Assert.NotNull(network.Headers.RetryAfter);
+        }
+
+        using var other = new Reader(api, "198.51.100.70");
+        for (var i = perNetwork; i < perServer; i++)
+        {
+            using var read = await other.PostAsync(published.Formatted);
+            await AssertCopyAsync(read);
+        }
+
+        using var third = new Reader(api, "192.0.2.70");
+        using var server = await third.PostAsync(published.Formatted);
+        Assert.Equal(HttpStatusCode.TooManyRequests, server.StatusCode);
+        Assert.NotNull(server.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task A_file_reads_only_with_its_copys_id()
+    {
+        var x = await PublishedAsync();
+        var y = await PublishedAsync();
+        await using var api = Limited();
+        using var reader = new Reader(api, "203.0.113.80");
+        // Tab A reads X, tab B reads Y: the one reader cookie is Y's now.
+        (await reader.PostAsync(x.Formatted)).Dispose();
+        (await reader.PostAsync(y.Formatted)).Dispose();
+        using var missing = await new Reader(api, "203.0.113.81").FileAsync(0, x.Copy);
+        var lookup = Convert.ToHexStringLower(ShareCode.Lookup(y.Code));
+
+        // More than the network's wrong codes, so a counted one would show.
+        for (var i = 0; i <= FailuresPerNetwork; i++)
+        {
+            reader.Address = $"203.0.113.{82 + i}";
+            foreach (var copy in new[] { x.Copy, "none", y.Copy.ToUpperInvariant(), lookup })
+            {
+                using var refused = await reader.FileAsync(0, copy);
+                await AssertNotFoundAsync(refused);
+                Assert.Equal(await missing.Content.ReadAsStringAsync(Ct), await refused.Content.ReadAsStringAsync(Ct));
+                Assert.Null(SetCookie(refused, ReaderApi.Cookie));
+            }
+        }
+
+        using (var none = await reader.GetAsync("/api/s/files/0")) await AssertNotFoundAsync(none);
+        Assert.NotNull(reader.ReaderCookie);
+        using var file = await reader.FileAsync(0, y.Copy);
+        Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+        using var read = await reader.PostAsync(x.Formatted);
+        await AssertCopyAsync(read);
+    }
+
+    [Fact]
+    public void A_code_is_read_from_a_small_body()
+    {
+        var endpoint = Api.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == "/api/s/" && e.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+
+        Assert.Equal(1024, endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize);
+    }
+
+    [Fact]
     public async Task A_session_beside_it_changes_nothing()
     {
         var published = await PublishedAsync();
         var alice = published.Alice;
         var slots = app.Database.GetCollection<BsonDocument>("user_slots");
-        var before = (await slots.Find(Builders<BsonDocument>.Filter.Eq("user", alice.User.Id)).ToListAsync(Ct)).Select(d => d.ToJson()).Order().ToList();
+        var users = app.Database.GetCollection<BsonDocument>("users");
+        // Back by more than the minute within which a session isn't touched again, so a touch would show.
+        var back = DateTime.UtcNow - TimeSpan.FromMinutes(5);
+        var bySlot = Builders<BsonDocument>.Filter.Eq("user", alice.User.Id) & Builders<BsonDocument>.Filter.Exists("lastUsedAt");
+        Assert.True((await slots.UpdateManyAsync(bySlot, Builders<BsonDocument>.Update.Set("lastUsedAt", back), cancellationToken: Ct)).ModifiedCount > 0);
+        await users.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", alice.User.Id), Builders<BsonDocument>.Update.Set("lastSignInAt", back).Set("previousSignInAt", back), cancellationToken: Ct);
+        async Task<List<string>> StateAsync() =>
+            [.. (await slots.Find(Builders<BsonDocument>.Filter.Eq("user", alice.User.Id)).ToListAsync(Ct)).Select(d => d.ToJson()).Order(),
+                (await users.Find(Builders<BsonDocument>.Filter.Eq("_id", alice.User.Id)).SingleAsync(Ct)).ToJson()];
+        var before = await StateAsync();
 
         async Task<List<string>> AnswersAsync(Reader reader)
         {
@@ -417,7 +559,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
                 () => reader.GetAsync(),
                 () => reader.PostAsync(published.Formatted),
                 () => reader.GetAsync(),
-                () => reader.GetAsync("/api/s/files/0"),
+                () => reader.FileAsync(0),
             })
             {
                 using var response = await send();
@@ -436,8 +578,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         // Only snapshotAt could differ between two reads, and it doesn't: the same copy.
         Assert.Equal(expected, answers);
-        var after = (await slots.Find(Builders<BsonDocument>.Filter.Eq("user", alice.User.Id)).ToListAsync(Ct)).Select(d => d.ToJson()).Order().ToList();
-        Assert.Equal(before, after);
+        Assert.Equal(before, await StateAsync());
     }
 
     [Fact]
@@ -466,7 +607,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         using var reader = new Reader(Api, "203.0.113.110");
         (await reader.PostAsync(published.Formatted)).Dispose();
-        for (var i = 0; i < 8; i++) (await reader.GetAsync(i % 2 == 0 ? "/api/s" : "/api/s/files/0")).Dispose();
+        for (var i = 0; i < 8; i++) (await (i % 2 == 0 ? reader.GetAsync() : reader.FileAsync(0))).Dispose();
         (await reader.PostAsync(WrongCode())).Dispose();
 
         Assert.Equal(counts, await CountsAsync());
@@ -498,8 +639,9 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         (await reader.PostAsync(published.Formatted)).Dispose();
         (await reader.GetAsync()).Dispose();
-        (await reader.GetAsync("/api/s/files/0")).Dispose();
-        (await reader.GetAsync("/api/s/files/7")).Dispose();
+        (await reader.FileAsync(0)).Dispose();
+        (await reader.FileAsync(7)).Dispose();
+        (await reader.FileAsync(0, ShareCode.CopyId(WrongCode()))).Dispose();
         for (var i = 0; i <= FailuresPerNetwork; i++)
         {
             reader.Address = $"203.0.113.{51 + i}";
@@ -510,8 +652,13 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         // The network's allowance used up, which is logged as a warning, and then held.
         Assert.Contains(log.Lines, l => l.StartsWith("Warning", StringComparison.Ordinal) && l.Contains("share codes", StringComparison.Ordinal));
-        var secrets = new[] { published.Code, published.Formatted, Convert.ToHexStringLower(ShareCode.Lookup(published.Code)), Convert.ToHexString(ShareCode.Lookup(published.Code)) }
-            .Concat(wrong).Concat(wrong.Select(ShareCode.Format)).Concat(wrong.Select(c => Convert.ToHexStringLower(ShareCode.Lookup(c))));
+        var secrets = new[]
+            {
+                published.Code, published.Formatted, Convert.ToHexStringLower(ShareCode.Lookup(published.Code)), Convert.ToHexString(ShareCode.Lookup(published.Code)),
+                Convert.ToBase64String(ShareCode.Lookup(published.Code)), published.Copy,
+            }
+            .Concat(wrong).Concat(wrong.Select(ShareCode.Format)).Concat(wrong.Select(c => Convert.ToHexStringLower(ShareCode.Lookup(c))))
+            .Concat(wrong.Select(c => Convert.ToBase64String(ShareCode.Lookup(c))));
         foreach (var secret in secrets)
         {
             Assert.DoesNotContain(log.Lines, l => l.Contains(secret, StringComparison.OrdinalIgnoreCase));

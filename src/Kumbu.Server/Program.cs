@@ -278,7 +278,8 @@ app.MapSharingApi();
 app.MapPublicationApi();
 app.MapReaderApi();
 // The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
-app.MapGet("/s", (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
+// HEAD too, which would otherwise fall through to the web app's shell.
+app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head],(IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
     ? Results.Stream(page.CreateReadStream(), "text/html")
     : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 

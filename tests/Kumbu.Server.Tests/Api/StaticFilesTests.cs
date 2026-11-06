@@ -138,13 +138,42 @@ public sealed class StaticFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task A_head_of_the_reader_page_answers_as_its_get()
+    {
+        static string Headers(HttpResponseMessage r) => string.Join('\n', r.Headers.Concat(r.Content.Headers)
+            .Where(h => h.Key != "Date").OrderBy(h => h.Key, StringComparer.OrdinalIgnoreCase).Select(h => $"{h.Key}: {string.Join(" | ", h.Value)}"));
+        using var get = await _web.CreateClient().GetAsync("/s", Ct);
+        using var head = await _web.CreateClient().SendAsync(new HttpRequestMessage(HttpMethod.Head, "/s"), Ct);
+
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+        Assert.Equal(Headers(get), Headers(head));
+        Assert.Equal(Security.ReaderPagePolicy, Assert.Single(head.Headers.GetValues("Content-Security-Policy")));
+    }
+
+    [Fact]
     public async Task The_app_keeps_its_own_policy_and_the_reader_page_allows_nothing_inline()
     {
         using var response = await _web.CreateClient().GetAsync("/", Ct);
 
         Assert.Equal(Security.ContentSecurityPolicy, Assert.Single(response.Headers.GetValues("Content-Security-Policy")));
         Assert.False(response.Headers.Contains("X-Robots-Tag"));
+        Assert.Equal("same-origin", Assert.Single(response.Headers.GetValues("Referrer-Policy")));
+        Assert.Equal("no-cache", response.Headers.CacheControl!.ToString());
         Assert.DoesNotContain("'unsafe-inline'", Security.ReaderPagePolicy, StringComparison.Ordinal);
         Assert.DoesNotContain("'unsafe-eval'", Security.ReaderPagePolicy, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/api/session", "no-store")]
+    [InlineData("/settings", "no-cache")]
+    [InlineData("/sx", "no-cache")]
+    public async Task Other_paths_carry_none_of_the_reader_headers(string path, string cache)
+    {
+        using var response = await _web.CreateClient().GetAsync(path, Ct);
+
+        Assert.False(response.Headers.Contains("X-Robots-Tag"));
+        Assert.Equal("same-origin", Assert.Single(response.Headers.GetValues("Referrer-Policy")));
+        Assert.Equal(cache, response.Headers.CacheControl!.ToString());
+        Assert.NotEqual(Security.ReaderPagePolicy, Assert.Single(response.Headers.GetValues("Content-Security-Policy")));
     }
 }

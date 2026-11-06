@@ -162,19 +162,23 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     /// <summary>The copy under <paramref name="code"/>, with its document's id and its owner; null if no document has the
     /// code's lookup, or its reader slot or copy doesn't open.</summary>
     public async Task<(ObjectId Id, string Owner, PublishedCopy Copy)?> OpenCopyAsync(string code, CancellationToken ct) =>
-        await OpenAsync(code, ct) is { } opened ? (opened.Doc.Id, opened.Owner, opened.Copy) : null;
+        await OpenPublicationAsync(code, ct) is { } opened ? (opened.Id, opened.Owner, opened.Copy) : null;
 
     /// <summary>File <paramref name="index"/> of the copy under <paramref name="code"/>; null if the copy doesn't open, names
     /// no such file, or the file's document is missing or doesn't open at that index.</summary>
-    public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(string code, int index, CancellationToken ct)
+    public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(string code, int index, CancellationToken ct) =>
+        await OpenPublicationAsync(code, ct) is { } opened ? await OpenFileAsync(opened, index, ct) : null;
+
+    /// <summary>As <see cref="OpenFileAsync(string, int, CancellationToken)"/>, of a copy already opened: only the file's
+    /// document is read and opened.</summary>
+    public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(OpenedPublication opened, int index, CancellationToken ct)
     {
-        if (await OpenAsync(code, ct) is not { } opened) return null;
         if (opened.Copy.Files.FirstOrDefault(f => f.Index == index) is not { } file) return null;
-        var doc = await catalog.PublicationFiles.Find(Files.Eq(d => d.Publication, opened.Doc.Id) & Files.Eq(d => d.Index, index)).FirstOrDefaultAsync(ct);
+        var doc = await catalog.PublicationFiles.Find(Files.Eq(d => d.Publication, opened.Id) & Files.Eq(d => d.Index, index)).FirstOrDefaultAsync(ct);
         if (doc is null) return null;
         try
         {
-            return (VaultCrypto.Open(opened.Key, doc.Blob, FileContext(Convert.ToHexStringLower(opened.Doc.Lookup), index)), file.MediaType);
+            return (VaultCrypto.Open(opened.Key, doc.Blob, FileContext(Convert.ToHexStringLower(opened.Lookup), index)), file.MediaType);
         }
         catch (CryptographicException)
         {
@@ -182,7 +186,8 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         }
     }
 
-    private async Task<(PublicationDocument Doc, byte[] Key, string Owner, PublishedCopy Copy)?> OpenAsync(string code, CancellationToken ct)
+    /// <summary>The publication under <paramref name="code"/>, opened; null as <see cref="OpenCopyAsync"/>.</summary>
+    public async Task<OpenedPublication?> OpenPublicationAsync(string code, CancellationToken ct)
     {
         var lookup = ShareCode.Lookup(code);
         if (await catalog.Publications.Find(P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { } doc) return null;
@@ -193,7 +198,7 @@ internal sealed class PublicationStore(VaultCatalog catalog)
             var slot = JsonSerializer.Deserialize<ReaderSlot>(VaultCrypto.Open(readerKey, doc.Reader, ReaderContext(l)));
             if (slot?.Key is not { } key || slot.Owner is not { } owner) return null;
             var copy = JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(key, doc.Blob, CopyContext(l)));
-            return copy is null ? null : (doc, key, owner, copy);
+            return copy is null ? null : new OpenedPublication(doc.Id, owner, copy, key, doc.Lookup);
         }
         catch (Exception e) when (e is CryptographicException or JsonException)
         {
@@ -221,4 +226,20 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     private static string CopyContext(string l) => $"publication:{l}:copy";
 
     private static string FileContext(string l, int n) => $"publication:{l}:file:{n}";
+}
+
+/// <summary>A copy opened with its code (<see cref="PublicationStore.OpenPublicationAsync"/>): its document's id, its
+/// owner and the copy, and what opens its files without opening the copy again. Holds the publication key: kept for a
+/// request, never stored or logged.</summary>
+internal sealed class OpenedPublication(ObjectId id, string owner, PublishedCopy copy, byte[] key, byte[] lookup)
+{
+    public ObjectId Id { get; } = id;
+
+    public string Owner { get; } = owner;
+
+    public PublishedCopy Copy { get; } = copy;
+
+    internal byte[] Key { get; } = key;
+
+    internal byte[] Lookup { get; } = lookup;
 }

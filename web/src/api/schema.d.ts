@@ -8518,6 +8518,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Payload Too Large */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Too Many Requests */
                 429: {
                     headers: {
@@ -8545,7 +8554,9 @@ export interface paths {
         get: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "X-Kumbu-Copy"?: string;
+                };
                 path: {
                     index: string;
                 };
@@ -9236,6 +9247,7 @@ export interface components {
             /** Format: date-time */
             snapshotAt: string;
             files: components["schemas"]["ReaderFileView"][];
+            copy: string;
         };
         RecoverRequest: {
             username: string;

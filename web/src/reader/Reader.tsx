@@ -15,14 +15,14 @@ const webLink = (href: string | undefined) => {
   }
 };
 
-/** A file of the copy, fetched with the reader cookie and shown from a blob URL (the page's CSP allows no other). */
-function CopiedImage({ index, alt }: { index: number; alt: string }) {
+/** A file of the copy, fetched with the reader cookie and the copy's id, and shown from a blob URL (the page's CSP allows no other). */
+function CopiedImage({ copy, index, alt }: { copy: string; index: number; alt: string }) {
   const [src, setSrc] = useState<string>();
   const [broken, setBroken] = useState(false);
   useEffect(() => {
     let url: string | undefined;
     let gone = false;
-    readFile(index).then(
+    readFile(copy, index).then(
       (blob) => {
         if (gone) return;
         url = URL.createObjectURL(blob);
@@ -34,19 +34,19 @@ function CopiedImage({ index, alt }: { index: number; alt: string }) {
       gone = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [index]);
+  }, [copy, index]);
   if (broken) return <span className="font-mono text-[0.85em] text-muted">{alt}</span>;
   return src ? <img src={src} alt={alt} onError={() => setBroken(true)} className="my-3 max-w-full rounded-[8px]" /> : null;
 }
 
-/** The indices of the copy's files: an `f/<n>` that names none of them is no image. */
-const Files = createContext<ReadonlySet<number>>(new Set());
+/** The copy's id and the indices of its files: an `f/<n>` that names none of them is no image. */
+const Files = createContext<{ copy: string; indices: ReadonlySet<number> }>({ copy: "", indices: new Set() });
 
 // Only the copy's own files (`f/<n>`): an image from anywhere else would tell a third party who reads, and when.
 function CopyImage({ src, alt }: { src?: string; alt?: string }) {
   const files = useContext(Files);
   const index = src === undefined ? undefined : /^f\/(\d+)$/.exec(src)?.[1];
-  return index !== undefined && files.has(Number(index)) ? <CopiedImage index={Number(index)} alt={alt ?? ""} /> : null;
+  return index !== undefined && files.indices.has(Number(index)) ? <CopiedImage copy={files.copy} index={Number(index)} alt={alt ?? ""} /> : null;
 }
 
 const remarkPlugins = [remarkGfm];
@@ -94,7 +94,7 @@ const components: Components = {
 };
 
 function Copy({ copy }: { copy: ReaderCopy }) {
-  const files = useMemo(() => new Set(copy.files.map((f) => f.index)), [copy.files]);
+  const files = useMemo(() => ({ copy: copy.copy, indices: new Set(copy.files.map((f) => f.index)) }), [copy.copy, copy.files]);
   return (
     <article>
       <h1 className="text-[28px] leading-tight font-bold text-text">{copy.title}</h1>

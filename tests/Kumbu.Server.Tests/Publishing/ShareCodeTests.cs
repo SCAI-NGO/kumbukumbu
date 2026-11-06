@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.RegularExpressions;
+using Kumbu.Core.Crypto;
 using Kumbu.Server.Publishing;
 
 namespace Kumbu.Server.Tests.Publishing;
@@ -79,6 +80,22 @@ public sealed partial class ShareCodeTests
         Assert.Equal(lookup, ShareCode.Lookup(ShareCode.Parse(ShareCode.Format(code).ToLowerInvariant())!));
         Assert.Equal(reader, ShareCode.ReaderKey(code));
         Assert.NotEqual(lookup, ShareCode.Lookup(ShareCode.New()));
+    }
+
+    [Fact]
+    public void The_copy_id_is_short_stable_hex_and_neither_the_lookup_nor_the_reader_key()
+    {
+        var code = ShareCode.New();
+        var id = ShareCode.CopyId(code);
+
+        Assert.Matches("^[0-9a-f]{32}$", id);
+        Assert.Equal(id, ShareCode.CopyId(ShareCode.Parse(ShareCode.Format(code).ToLowerInvariant())!));
+        Assert.NotEqual(id, ShareCode.CopyId(ShareCode.New()));
+        Assert.Equal(Convert.ToHexStringLower(VaultCrypto.Derive(code, "kumbu/v1/publication-copy", [])[..16]), id);
+        foreach (var other in new[] { ShareCode.Lookup(code), ShareCode.ReaderKey(code) })
+        {
+            Assert.DoesNotContain(id, Convert.ToHexStringLower(other), StringComparison.Ordinal);
+        }
     }
 
     [Fact]

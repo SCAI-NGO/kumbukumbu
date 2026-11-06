@@ -12,6 +12,8 @@ export interface ReaderCopy {
   markdown: string;
   snapshotAt: string;
   files: ReaderFile[];
+  /** The copy's id, sent with each of its files: the one reader cookie may be another tab's copy's by then. */
+  copy: string;
 }
 
 export type ReadResult = { kind: "copy"; copy: ReaderCopy } | { kind: "none" } | { kind: "off" } | { kind: "busy" };
@@ -40,8 +42,9 @@ export async function readAgain(): Promise<ReadResult> {
   return answer(await fetch("/api/s", { credentials: "same-origin" }));
 }
 
-export async function readFile(index: number): Promise<Blob> {
-  const response = await fetch(`/api/s/files/${index}`, { credentials: "same-origin" });
+/** File `index` of the copy `copy`; the server opens it only if the reader cookie is still that copy's. */
+export async function readFile(copy: string, index: number): Promise<Blob> {
+  const response = await fetch(`/api/s/files/${index}`, { credentials: "same-origin", headers: { "X-Kumbu-Copy": copy } });
   if (!response.ok) throw new Error(`The file answered ${response.status}.`);
   return response.blob();
 }

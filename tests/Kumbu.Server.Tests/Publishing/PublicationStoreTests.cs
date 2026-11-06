@@ -238,6 +238,24 @@ public sealed class PublicationStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_file_opens_from_the_copy_already_opened()
+    {
+        var a = await AccountAsync("Work");
+        var code = ShareCode.New();
+        var files = Files(2);
+        await InsertCopyAsync(a.Vaults["Work"].Id, code, VaultCrypto.NewKey(), a.User.Id, Copy(), files);
+        var opened = (await Store().OpenPublicationAsync(code, Ct))!;
+        Assert.Equal(a.User.Id, opened.Owner);
+        Assert.Equal(Json(Copy()), Json(opened.Copy));
+
+        // The copy isn't opened again: with its document gone, its files still open from what was opened.
+        await Raw("publications").DeleteOneAsync(new BsonDocument("_id", opened.Id), Ct);
+        Assert.Null(await Store().OpenFileAsync(code, 1, Ct));
+        Assert.Equal(files[1], (await Store().OpenFileAsync(opened, 1, Ct))!.Value.Bytes);
+        Assert.Null(await Store().OpenFileAsync(opened, 2, Ct));
+    }
+
+    [Fact]
     public async Task A_copy_opens_only_under_its_own_lookup()
     {
         var a = await AccountAsync("Work");

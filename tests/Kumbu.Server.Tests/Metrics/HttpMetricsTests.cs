@@ -96,12 +96,12 @@ public sealed class HttpMetricsTests(KumbuAppFactory app)
 
         var limited = false;
         (await reader.GetAsync("/s")).Dispose();
-        for (var i = 0; i <= ReaderApiTests.ReadsPerAddress && !limited; i++)
+        for (var i = 0; i <= ReaderApiTests.ReadsPerAddress + 1 && !limited; i++)
         {
             using var response = i switch
             {
                 0 => await reader.PostAsync(published.Formatted),
-                1 => await reader.GetAsync("/api/s/files/0"),
+                1 => await reader.FileAsync(0),
                 _ => await reader.GetAsync(),
             };
             limited = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests;

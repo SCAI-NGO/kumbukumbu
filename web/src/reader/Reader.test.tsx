@@ -10,11 +10,14 @@ const code = "K7QM-4XDA-9PRT-2VNB-6HJC-8EWS-3FGY-5KZD";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+const copyId = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
 const copy = (markdown: string, files: { index: number; name: string; mediaType: string }[] = []) => ({
   title: "Questions on routing",
   markdown,
   snapshotAt: "2026-11-05T14:32:00Z",
   files,
+  copy: copyId,
 });
 
 const none = () => json(404, { error: "This link doesn't open a published note: the code is wrong, or the note is no longer published." });
@@ -219,6 +222,10 @@ describe("Reader", () => {
     const img = await screen.findByRole("img", { name: "flow.jpg" });
     expect(img.getAttribute("src")).toMatch(/^blob:/);
     expect(filesFetched(fetch, 0)).toBe(1);
+    // With the copy's id: the reader cookie may be another tab's copy's by now.
+    const init = fetch.mock.calls.find(([url]) => String(url).endsWith("/api/s/files/0"))![1]!;
+    expect(new Headers(init.headers).get("X-Kumbu-Copy")).toBe(copyId);
+    expect(init.credentials).toBe("same-origin");
     unmount();
     expect(urls.revoke).toHaveBeenCalledWith(img.getAttribute("src"));
   });
