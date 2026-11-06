@@ -21,6 +21,7 @@ const listed = {
   lastUsedAt: null,
   revokedAt: null,
   expiresAt: null as string | null,
+  publish: [] as string[],
 };
 const revoked = { ...listed, id: "k0", name: "Old phone", prefix: "Zz99Yy", vaults: { Home: "read" }, revokedAt: "2026-10-02T09:00:00Z" };
 
@@ -306,6 +307,91 @@ describe("Keys", () => {
     await act(() => router.navigate("/settings"));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/settings");
+  });
+});
+
+describe("May publish", () => {
+  const own = (name: string) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false });
+  const garten = { ...own("Gartenarbeit"), owner: '"Alice"', ownerUsername: "alice", level: "write", shared: true, membership: "m1" };
+  const hint = "Can publish this vault's notes behind a secret link, update and withdraw them.";
+
+  function publishing(enabled: boolean, bodies: unknown[] = []) {
+    return api({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: enabled }),
+      "GET /api/vaults": () => json(200, [own("Work"), own("Home"), garten]),
+      "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "taken" })),
+    });
+  }
+
+  it("offers May publish only for owned vaults", async () => {
+    publishing(true);
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    const shared = within(dialog).getByRole("group", { name: /^Gartenarbeit/ });
+    // Not before a right is chosen.
+    expect(within(work).queryByLabelText("May publish")).not.toBeInTheDocument();
+
+    await userEvent.click(within(work).getByLabelText("Read"));
+    await userEvent.click(within(shared).getByLabelText("Read and write"));
+    expect(within(work).getByLabelText("May publish")).not.toBeChecked();
+    expect(within(shared).queryByLabelText("May publish")).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(hint);
+  });
+
+  it("sends May publish", async () => {
+    const bodies: unknown[] = [];
+    publishing(true, bodies);
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    await userEvent.click(within(work).getByLabelText("Read and write"));
+    await userEvent.click(within(work).getByLabelText("May publish"));
+    expect(within(work).getByText(hint)).toBeInTheDocument();
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Home" })).getByLabelText("Read"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "write", Home: "read" }, publish: ["Work"], expiresInDays: 90 }]));
+  });
+
+  it("drops May publish with the right", async () => {
+    const bodies: unknown[] = [];
+    publishing(true, bodies);
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    await userEvent.click(within(work).getByLabelText("Read and write"));
+    await userEvent.click(within(work).getByLabelText("May publish"));
+    await userEvent.click(within(work).getByLabelText("None"));
+    expect(within(work).queryByLabelText("May publish")).not.toBeInTheDocument();
+    await userEvent.click(within(work).getByLabelText("Read"));
+    expect(within(work).getByLabelText("May publish")).not.toBeChecked();
+    await userEvent.click(within(work).getByLabelText("None"));
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Home" })).getByLabelText("Read"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toEqual({ name: "Claude", vaults: { Home: "read" }, expiresInDays: 90 });
+  });
+
+  it("hides May publish when publishing is off", async () => {
+    publishing(false);
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    await userEvent.click(within(work).getByLabelText("Read and write"));
+    expect(within(work).queryByLabelText("May publish")).not.toBeInTheDocument();
+  });
+
+  it("lists May publish on a key's vault line", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, publish: ["Work"] }]) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Laptop")).closest("li")!;
+    expect(item).toHaveTextContent("Work: read and write, may publish");
+    expect(item).toHaveTextContent("Home: read");
+    expect(item).not.toHaveTextContent("Home: read, may publish");
   });
 });
 

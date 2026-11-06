@@ -11,7 +11,7 @@ import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
-import { grant, RightsPicker, type Right } from "./NewKeyDialog";
+import { grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
 import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
@@ -140,6 +140,7 @@ function ConnectionItem({ connection: c, vaults, onChange, onRevoke }: { connect
         {Object.entries(c.vaults).map(([vault, right]) => (
           <li key={vault} className="break-words">
             {vault}: <CappedRight right={right} vault={vaults?.find((v) => v.name === vault)} />
+            {c.publish.includes(vault) && ", may publish"}
           </li>
         ))}
       </ul>
@@ -170,10 +171,12 @@ function RightsDialog({ connection, onClose }: { connection: Connection; onClose
   const dialog = useDialog<HTMLFormElement>(onClose);
   const vaults = useVaults();
   const [chosen, setChosen] = useState<Record<string, Right>>(connection.vaults as Record<string, Right>);
+  // Sent back as it is unless changed: a change of rights without it takes May publish away.
+  const [publish, setPublish] = useState<string[]>(connection.publish);
   const granted = grant(chosen);
 
   const save = useMutation({
-    mutationFn: () => call(api.PUT("/api/connections/{id}/vaults", { params: { path: { id: connection.id } }, body: { vaults: granted } })),
+    mutationFn: () => call(api.PUT("/api/connections/{id}/vaults", { params: { path: { id: connection.id } }, body: { vaults: granted, ...publishing(publish) } })),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["connections"] });
       onClose();
@@ -197,7 +200,7 @@ function RightsDialog({ connection, onClose }: { connection: Connection; onClose
           Change rights
         </h2>
         <p className="break-words text-text-body">{connection.name}</p>
-        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen}>
+        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen} publish={publish} onPublishChange={setPublish}>
           The app has to reconnect after this.
         </RightsPicker>
         {save.isError && <FormError>{errorText(save.error)}</FormError>}

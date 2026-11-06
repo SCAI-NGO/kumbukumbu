@@ -11,7 +11,7 @@ const view = {
   requestId: "r1",
   client: { name: "Claude · claude.ai", host: "claude.ai", verified: true },
   redirectHost: "claude.ai",
-  connection: { name: "Work", vaults: { Arbeit: "write", Privat: "read" }, actsAs: {} as Record<string, string>, expiresAt: null as string | null, currentClient: null },
+  connection: { name: "Work", vaults: { Arbeit: "write", Privat: "read" }, actsAs: {} as Record<string, string>, expiresAt: null as string | null, currentClient: null, publish: [] as string[] },
   renewal: false,
   problem: null as string | null,
 };
@@ -76,6 +76,13 @@ describe("Consent", () => {
     expect(shared).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit");
     expect(shared.querySelector("em")).toHaveTextContent("Gartenarbeit");
     expect(screen.getByText(/^Privat:/).closest("li")).toHaveTextContent(/^Privat: read$/);
+  });
+
+  it("shows May publish on the consent page when set", async () => {
+    api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, connection: { ...view.connection, publish: ["Arbeit"] } }) });
+    renderApp("/consent?request=r1");
+    expect(await screen.findByText("Arbeit: read and write · may publish")).toBeInTheDocument();
+    expect(screen.getByText("Privat: read")).toBeInTheDocument();
   });
 
   it("warns about an app that registered itself and shows the expiry", async () => {

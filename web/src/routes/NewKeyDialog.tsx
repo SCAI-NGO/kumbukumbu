@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -36,24 +36,34 @@ export const maintainClass =
 /** The vaults that got a right, as the server takes them. */
 export const grant = (chosen: Record<string, Right>) => Object.fromEntries(Object.entries(chosen).filter(([, right]) => right !== "none"));
 
+/** May publish as the server takes it: left out when it names no vault, which the server reads the same. */
+export const publishing = (publish: string[]) => (publish.length > 0 ? { publish } : {});
+
 /**
  * A right per vault, as one group of radios for each; "none" leaves the vault out. `children` is the hint underneath.
  * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it. A vault shared
  * with her names its owner, any level may be chosen for it, and one above her own is shown as what it acts as; one
- * choice that covers a vault others write into and a private one is warned about.
+ * choice that covers a vault others write into and a private one is warned about. May publish is offered beside a right
+ * on a vault of her own while the server publishes, and goes with the right when "None" is chosen.
  */
 export function RightsPicker({
   vaults,
   chosen,
   onChange,
+  publish,
+  onPublishChange,
   children,
 }: {
   vaults: UseQueryResult<VaultView[]>;
   chosen: Record<string, Right>;
   onChange(chosen: Record<string, Right>): void;
+  publish: string[];
+  onPublishChange(publish: string[]): void;
   children?: ReactNode;
 }) {
   const id = useId();
+  const session = useQuery({ queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) });
+  const publishEnabled = session.data?.publishEnabled === true;
   const mixed = mixedVault(vaults.data, Object.keys(grant(chosen)));
   return (
     <div className="flex flex-col gap-3">
@@ -75,7 +85,10 @@ export function RightsPicker({
                   name={`${id}-${vault.name}`}
                   value={right.value}
                   checked={(chosen[vault.name] ?? "none") === right.value}
-                  onChange={() => onChange({ ...chosen, [vault.name]: right.value })}
+                  onChange={() => {
+                    onChange({ ...chosen, [vault.name]: right.value });
+                    if (right.value === "none" && publish.includes(vault.name)) onPublishChange(publish.filter((v) => v !== vault.name));
+                  }}
                   className="sr-only"
                 />
                 {right.label}
@@ -83,6 +96,20 @@ export function RightsPicker({
             ))}
           </div>
           {chosen[vault.name] === "maintain" && <p className="text-sm text-warning">{maintainSentence}</p>}
+          {publishEnabled && vault.owner == null && (chosen[vault.name] ?? "none") !== "none" && (
+            <>
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-text">
+                <input
+                  type="checkbox"
+                  checked={publish.includes(vault.name)}
+                  onChange={(e) => onPublishChange(e.target.checked ? [...publish, vault.name] : publish.filter((v) => v !== vault.name))}
+                  className="size-5 accent-accent"
+                />
+                May publish
+              </label>
+              {publish.includes(vault.name) && <p className="text-sm text-muted">Can publish this vault's notes behind a secret link, update and withdraw them.</p>}
+            </>
+          )}
           {chosen[vault.name] && isCapped(chosen[vault.name], vault) && (
             <p className="text-sm text-muted">
               <CappedRight right={chosen[vault.name]} vault={vault} />
@@ -130,6 +157,7 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
   const vaults = useVaults();
   const [name, setName] = useState("");
   const [chosen, setChosen] = useState<Record<string, Right>>({});
+  const [publish, setPublish] = useState<string[]>([]);
   // A key that expires by itself is the safer default: a forgotten one stops working on its own.
   const [expiresInDays, setExpiresInDays] = useState(90);
 
@@ -137,7 +165,7 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
   const ready = name.trim() !== "" && Object.keys(granted).length > 0;
 
   const create = useMutation({
-    mutationFn: () => call(api.POST("/api/keys", { body: { name, vaults: granted, ...(expiresInDays ? { expiresInDays } : {}) } })),
+    mutationFn: () => call(api.POST("/api/keys", { body: { name, vaults: granted, ...publishing(publish), ...(expiresInDays ? { expiresInDays } : {}) } })),
     // The result carries the key: it goes to the reveal's state, not the client-wide mutation cache.
     gcTime: 0,
     onSuccess: (created) => {
@@ -166,7 +194,7 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
         </h2>
         <TextField label="Name" value={name} onChange={setName} autoComplete="off" />
 
-        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen}>
+        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen} publish={publish} onPublishChange={setPublish}>
           A key needs a name and at least one vault it may read. Read and write is enough for most agents; choose Maintain only for one you
           trust with the vault's structure.
         </RightsPicker>

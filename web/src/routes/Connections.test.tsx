@@ -25,6 +25,7 @@ const base = {
   state: "connected",
   reason: null as string | null,
   client: { name: "Claude", host: "claude.ai", verified: true } as { name: string; host: string; verified: boolean } | null,
+  publish: [] as string[],
 };
 
 function api(
@@ -253,6 +254,54 @@ describe("Connections", () => {
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
     await waitFor(() => expect(queryClient.getMutationCache().getAll().filter((m) => m.state.data !== undefined)).toEqual([]));
+  });
+});
+
+describe("May publish of a connection", () => {
+  const session = () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: true });
+
+  it("sends May publish for a new connection", async () => {
+    const bodies: unknown[] = [];
+    api([], { "GET /api/session": session, "POST /api/connections": async (r) => (bodies.push(await r.json()), json(201, { ...base, state: "waiting", client: null })) });
+    renderApp("/keys");
+    await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect an app" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
+    const arbeit = within(dialog).getByRole("group", { name: "Arbeit" });
+    await userEvent.click(within(arbeit).getByLabelText("Read"));
+    await userEvent.click(within(arbeit).getByLabelText("May publish"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ name: "Work", vaults: { Arbeit: "read" }, publish: ["Arbeit"], expiresInDays: 90 }]));
+  });
+
+  it("edits May publish of a connection", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, vaults: { Arbeit: "write", Home: "read" }, publish: ["Arbeit"] }], {
+      "GET /api/session": session,
+      "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/keys");
+    const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
+    expect(item).toHaveTextContent("Arbeit: read and write, may publish");
+    expect(item).not.toHaveTextContent("Home: read, may publish");
+
+    // Saved unchanged, the right is sent back: without it the server would take it away.
+    await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
+    let dialog = screen.getByRole("dialog", { name: "Change rights" });
+    expect(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("May publish")).toBeChecked();
+    expect(within(within(dialog).getByRole("group", { name: "Home" })).getByLabelText("May publish")).not.toBeChecked();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "write", Home: "read" }, publish: ["Arbeit"] }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
+    dialog = screen.getByRole("dialog", { name: "Change rights" });
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("May publish"));
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Home" })).getByLabelText("May publish"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ vaults: { Arbeit: "write", Home: "read" }, publish: ["Home"] });
   });
 });
 
