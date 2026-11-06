@@ -273,22 +273,29 @@ public sealed partial class PublishShellTests(KumbuAppFactory app)
         var alice = await AliceAsync(Api);
         var key = await alice.KeyAsync("Claude", KeyRight.Write, mayPublish: true);
         Assert.False((await alice.ShAsync($"publish add {Questions}", key)).IsError);
+        var bob = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.ShareWithAsync(bob, "alices-work", MemberRole.Write);
 
-        // Her session: a key whose only vault is being re-keyed opens nothing.
-        RequestCaller Session() => RequestCaller.ForSession(alice.User, alice.UserKey, DateTime.UtcNow, windowOpen: true, Api.Services.GetRequiredService<VaultCatalog>());
+        // Sessions: a key whose only vault is being re-keyed opens nothing.
+        RequestCaller Session(RestClient who) => RequestCaller.ForSession(who.User, who.UserKey, DateTime.UtcNow, windowOpen: true, Api.Services.GetRequiredService<VaultCatalog>());
+        RequestCaller Alice() => Session(alice);
 
         await using (await alice.HoldRekeyAsync())
         {
-            var root = await ScopedShAsync(Api, "publish ls", Session());
+            var root = await ScopedShAsync(Api, "publish ls", Alice());
             Assert.Equal((false, "no published notes below /"), (root.IsError, root.Output));
             foreach (var line in new[] { "publish ls /Work", $"publish add {Questions}", $"publish update {Questions}", $"publish rm {Questions}" })
             {
-                var busy = await Assert.ThrowsAsync<VaultBusyException>(() => ScopedShAsync(Api, line, Session()));
+                var busy = await Assert.ThrowsAsync<VaultBusyException>(() => ScopedShAsync(Api, line, Alice()));
                 Assert.Equal(VaultBusyException.BeingReencrypted, busy.Message);
             }
+
+            // Busy before anything else is asked: a member hears that, not that she isn't the owner.
+            var member = await Assert.ThrowsAsync<VaultBusyException>(() => ScopedShAsync(Api, "publish rm /alices-work/Routing/Questions.md", Session(bob)));
+            Assert.Equal(VaultBusyException.BeingReencrypted, member.Message);
         }
 
-        Assert.Matches($@"^{Regex.Escape(Questions)}  .* UTC  older: no$", (await ScopedShAsync(Api, "publish ls", Session())).Output);
+        Assert.Matches($@"^{Regex.Escape(Questions)}  .* UTC  older: no$", (await ScopedShAsync(Api, "publish ls", Alice())).Output);
     }
 
     [Fact]
