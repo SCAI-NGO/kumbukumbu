@@ -110,7 +110,7 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.Created, published.StatusCode);
         var body = await RestClient.JsonAsync(published);
-        Assert.StartsWith(KumbuAppFactory.PublicUrl + "/s#", body["link"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.True(body["link"]!.GetValue<string>().StartsWith(KumbuAppFactory.PublicUrl + "/s#", StringComparison.Ordinal), "the link points at the reader page");
         Assert.NotNull(ShareCode.Parse(body["link"]!.GetValue<string>().Split('#')[1]));
         Assert.Empty(body["plain"]!.AsArray());
         Assert.Equal(_time.GetUtcNow().UtcDateTime, body["snapshotAt"]!.GetValue<DateTime>());
@@ -142,7 +142,7 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
         Assert.True(await WindowOpenAsync(alice));
         var (updatedStatus, updated) = await AnswerAsync(alice.SendAsync(HttpMethod.Put, Questions));
         Assert.Equal(HttpStatusCode.OK, updatedStatus);
-        Assert.Equal(published["link"]!.GetValue<string>(), updated["link"]!.GetValue<string>());
+        Assert.True(published["link"]!.GetValue<string>() == updated["link"]!.GetValue<string>(), "an update keeps the link");
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
 
         var own = await OkJsonAsync(alice, Questions);
         Assert.Equal("/Work/Routing/Questions.md", own["path"]!.GetValue<string>());
-        Assert.Equal(published["link"]!.GetValue<string>(), own["link"]!.GetValue<string>());
+        Assert.True(published["link"]!.GetValue<string>() == own["link"]!.GetValue<string>(), "the owner's note view holds the link");
         Assert.Equal(snapshotAt, own["snapshotAt"]!.GetValue<string>());
         Assert.False(own["older"]!.GetValue<bool>());
         Assert.Null(own["changedAt"]);
@@ -182,9 +182,9 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
         var listed = (await OkJsonAsync(alice, "/api/vaults/Work/publications"))["publications"]!.AsArray().Single()!;
         Assert.Equal("/Work/Routing/Questions.md", listed["path"]!.GetValue<string>());
         Assert.Equal(snapshotAt, listed["snapshotAt"]!.GetValue<string>());
-        Assert.Null(listed["link"]);
+        Assert.True(listed["link"] is null, "the vault list holds a link");
         var overview = await OkTextAsync(alice, "/api/publications");
-        Assert.Contains("/Work/Routing/Questions.md", overview, StringComparison.Ordinal);
+        Assert.True(overview.Contains("/Work/Routing/Questions.md", StringComparison.Ordinal), "the overview lists the note");
 
         var bobsNote = await OkTextAsync(bob, "/api/publications/alices-work/Routing/Questions.md");
         var bobsList = await OkTextAsync(bob, "/api/vaults/alices-work/publications");
@@ -196,12 +196,12 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
         Assert.Equal("/alices-work/Routing/Questions.md", JsonNode.Parse(bobsList)!["publications"]!.AsArray().Single()!["path"]!.GetValue<string>());
         foreach (var text in new[] { bobsNote, bobsList, overview })
         {
-            Assert.DoesNotContain(code, text, StringComparison.Ordinal);
-            Assert.DoesNotContain(ShareCode.Format(code), text, StringComparison.Ordinal);
+            Assert.False(text.Contains(code, StringComparison.Ordinal), "the code is shown");
+            Assert.False(text.Contains(ShareCode.Format(code), StringComparison.Ordinal), "the formatted code is shown");
         }
 
-        Assert.DoesNotContain(snapshotAt, bobsNote, StringComparison.Ordinal);
-        Assert.DoesNotContain(snapshotAt, bobsList, StringComparison.Ordinal);
+        Assert.False(bobsNote.Contains(snapshotAt, StringComparison.Ordinal), "a member's note view holds the snapshot time");
+        Assert.False(bobsList.Contains(snapshotAt, StringComparison.Ordinal), "a member's list holds the snapshot time");
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
 
         var (againStatus, again) = await AnswerAsync(PublishAsync(alice));
         Assert.Equal(HttpStatusCode.Conflict, againStatus);
-        Assert.StartsWith("/Work/Routing/Questions.md is already published", again["error"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("/Work/Routing/Questions.md is already published; Update copy makes a new copy under the same link.", again["error"]!.GetValue<string>());
 
         await alice.CreateAsync("Ideas.md", "# Ideas\n");
         var (notPublished, _) = await AnswerAsync(alice.SendAsync(HttpMethod.Delete, "/api/publications/Work/Ideas.md"));
@@ -344,6 +344,38 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
         Assert.Equal("/Work/Ideas.md", Assert.Single((await OkJsonAsync(offAlice, "/api/vaults/Work/publications"))["unpublishable"]!.AsArray())!.GetValue<string>());
         await AssertStatusAsync(HttpStatusCode.NoContent, offAlice.SendAsync(HttpMethod.Delete, "/api/unpublishable/Work/Ideas.md"));
         Assert.Empty((await OkJsonAsync(offAlice, "/api/vaults/Work/publications"))["unpublishable"]!.AsArray());
+
+        // Refused before the password: a closed window isn't asked to open, and no password is checked.
+        await using var timedOff = Timed().WithWebHostBuilder(b => b.UseSetting("Kumbu:Publish:Enabled", "false"));
+        var remembered = await AliceAsync(timedOff, remember: true);
+        CloseWindow();
+        await AssertRefusedFiveTimesAsync(remembered, Questions, "publishing-off");
+    }
+
+    /// <summary>A publish without a password, then five with a wrong one, each refused with <paramref name="code"/>;
+    /// the session lives on, so none of them was checked (the fifth wrong one in a row would have ended it).</summary>
+    private static async Task AssertRefusedFiveTimesAsync(RestClient user, string url, string code)
+    {
+        foreach (var password in new string?[] { null, Wrong, Wrong, Wrong, Wrong, Wrong })
+        {
+            var (status, body) = await AnswerAsync(PublishAsync(user, url, password));
+            Assert.Equal(HttpStatusCode.Forbidden, status);
+            Assert.Equal(code, body["code"]?.GetValue<string>());
+        }
+
+        Assert.False(await WindowOpenAsync(user));
+    }
+
+    [Fact]
+    public async Task A_member_is_refused_before_any_password_is_asked()
+    {
+        await using var api = Timed();
+        var alice = await AliceAsync(api);
+        var bob = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
+        await alice.ShareWithAsync(bob, "alices-work", MemberRole.Maintain);
+        CloseWindow();
+
+        await AssertRefusedFiveTimesAsync(bob, "/api/publications/alices-work/Routing/Questions.md", "not-owner");
     }
 
     [Fact]
@@ -388,7 +420,7 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
         Assert.Equal(["/Gartenarbeit/Beete.md", "/Work/Routing/Questions.md"], overview.Select(e => e!["path"]!.GetValue<string>()).Order(StringComparer.Ordinal));
         Assert.All(overview, e =>
         {
-            Assert.Null(e!["link"]);
+            Assert.True(e!["link"] is null, "the overview holds a link");
             Assert.False(e["older"]!.GetValue<bool>());
             Assert.NotNull(e["snapshotAt"]);
             Assert.False(string.IsNullOrEmpty(e["publishedBy"]!.GetValue<string>()));

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Publishing;
+using Kumbu.Core.Sh;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
@@ -77,12 +79,15 @@ public static class PublicationApi
         return TypedResults.Ok(View(state));
     }
 
-    /// <summary>The password is checked as an invitation's, before the note is read; given, it opens the window.</summary>
+    /// <summary>The password is checked as an invitation's, before the note is read; given, it opens the window. The
+    /// switch and a member are refused first, as <see cref="Publications"/> would: no prompt, no password check spent.</summary>
     private static async Task<Created<PublishedView>> PublishAsync(
         string vault, string? path, PublishRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits,
         Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var (access, note) = await NoteAsync(store, vault, path, ct);
+        if (!publications.Enabled) throw new PublishRefusedException("publishing is switched off on this server", ShellErrorKind.Refused, Refusals.PublishingOff);
+        if (!Owned(access)) throw new PublishRefusedException($"only the owner of {access.Name} can publish its notes", ShellErrorKind.Refused, Refusals.NotOwner);
         if (body.Password is null) Security.RequirePasswordWindow(caller);
         else
         {
@@ -92,7 +97,17 @@ public static class PublicationApi
         }
 
         var (by, byRef) = Writer(caller, access);
-        var published = await publications.PublishAsync(access, store, note, caller.User!.Id, by, byRef, Publications.BaseUrl(http, options.Value), ct);
+        PublishedNote published;
+        try
+        {
+            published = await publications.PublishAsync(access, store, note, caller.User!.Id, by, byRef, Publications.BaseUrl(http, options.Value), ct);
+        }
+        // The shell's sentence names `publish update`; the web app's button is Update copy.
+        catch (PublishRefusedException e) when (e.Kind == ShellErrorKind.Conflict && e.Message.StartsWith($"{note} is already published", StringComparison.Ordinal))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, $"{note.Value} is already published; Update copy makes a new copy under the same link.");
+        }
+
         return TypedResults.Created((string?)null, View(published));
     }
 

@@ -105,7 +105,7 @@ public static class ApiErrors
                 _ => Result(StatusCodes.Status400BadRequest, sentence),
             };
         }
-                catch (Kumbu.Server.Vaults.VaultDeletedException e)
+        catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }
