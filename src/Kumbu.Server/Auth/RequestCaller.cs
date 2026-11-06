@@ -141,7 +141,7 @@ public sealed class RequestCaller : ICaller
     /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
     {
-        var credential = new ApiKeyCredential(key.Id, apiKey);
+        var credential = new ApiKeyCredential(key.Id, apiKey, key.Kind == ApiKeyKind.Device);
         await credential.OpenAsync(catalog, ct);
         var reference = WriterRef.ForOwner(key.Kind == ApiKeyKind.Device ? WriterRef.Device : WriterRef.Agent, key.Id);
         return new(CallerKind.ApiKey, key.User, key.Name, reference, credential, catalog, device: key.Kind == ApiKeyKind.Device);

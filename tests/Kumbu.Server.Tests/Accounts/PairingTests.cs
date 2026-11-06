@@ -169,6 +169,21 @@ public sealed class PairingTests(MongoFixture fixture)
         Assert.Equal(info.Id, resolved!.Id);
     }
 
+    [Fact]
+    public async Task A_device_key_never_may_publish()
+    {
+        var a = await AccountAsync();
+
+        var redeemed = await Pairings().RedeemAsync(Code(a).Code, "Laptop", Ct);
+
+        var info = Assert.Single(await Keys().ListAsync(a.User, a.Key, Ct));
+        Assert.Empty(info.Publish);
+        Assert.False(Assert.Single(await Catalog().OpenForApiKeyAsync(info.Id, redeemed!.Key, Ct)).MayPublish);
+        await Assert.ThrowsAsync<ArgumentException>(() => Keys().CreateAsync(
+            a.User, a.Key, a.ReadAt, "Work – Obsidian Desk", new Dictionary<string, KeyRight> { [a.VaultId] = KeyRight.Maintain }, Ct,
+            kind: ApiKeyKind.Device, publish: new HashSet<string> { a.VaultId }));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(30)]

@@ -82,12 +82,15 @@ internal static class RightsCredentials
 /// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
 /// request, so the rights <see cref="Level"/> answers from are those of exactly the vaults the store sees.
 /// </summary>
-public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential, IRightsCredential
+public sealed class ApiKeyCredential(string keyId, string apiKey, bool device = false) : ICredential, IRightsCredential
 {
     private IReadOnlyList<VaultAccess>? _opened;
 
     /// <summary>The key's id (not the key): what a sync WebSocket's ticket is bound to.</summary>
     public string KeyId => keyId;
+
+    /// <summary>One of the user's devices holds the key (<see cref="Accounts.ApiKeyKind.Device"/>): it never publishes.</summary>
+    public bool Device => device;
 
     public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
         _opened ??= await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);

@@ -54,7 +54,11 @@ public sealed record ConnectedClient(
 /// (<c>"expired"</c>) and <c>NeedsReconnect</c>; <c>Client</c> is null until an app was authorised.</summary>
 public sealed record ConnectionInfo(
     string Id, string Name, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
-    ConnectionState State, string? Reason, ConnectedClient? Client);
+    ConnectionState State, string? Reason, ConnectedClient? Client)
+{
+    /// <summary>The ids of the vaults the connection may publish on ("May publish"), all among <see cref="Vaults"/>.</summary>
+    public IReadOnlySet<string> Publish { get; init; } = new HashSet<string>();
+}
 
 /// <summary>
 /// Connections (OAuth connectors design): siblings of API keys, each with its own connector URL
@@ -91,11 +95,13 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// other than <see cref="ApiKeys.ExpiryDays"/>; <see cref="ConnectionNameTakenException"/> if an API key or
     /// connection of the user that is neither revoked nor expired has that name; <see cref="CredentialsChangedException"/>
     /// if the user's credentials changed at or after <paramref name="credentialReadAt"/> or the user is inactive.
+    /// <paramref name="publish"/> names the vaults it may publish on, as for an API key.
     /// </summary>
     public async Task<ConnectionInfo> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null)
+        int? expiresInDays = null, IReadOnlySet<string>? publish = null)
     {
+        publish ??= new HashSet<string>();
         var clean = WriterNames.Check(user, name, Noun);
         if (vaults.Count == 0) throw new ArgumentException("A connection needs at least one vault.", nameof(vaults));
         if (expiresInDays is { } days && !ApiKeys.ExpiryDays.Contains(days))
@@ -105,10 +111,10 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
 
         await EnsureReadyAsync(ct);
         // Only checked: the slots come with the tokens, wrapped under each of them.
-        await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct);
+        await CheckVaultsAsync(user, userKey, vaults, publish, ct);
 
         var id = NewId();
-        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null, KeyRights.SealedVersion);
+        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null, KeyRights.SealedVersion, PublishField(publish));
         // Sealed under this user key: it must still be the one in force (UserKeyRotation).
         var keyId = UserCatalog.KeyId(userKey, user.Id);
         var now = Now;
@@ -213,14 +219,17 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// (<see cref="ConnectionReasons.RightsChanged"/>). Null if the user has no such connection that is neither
     /// revoked nor expired. <see cref="CredentialsChangedException"/>, as at creation, if the user is inactive, their
     /// credentials changed at or after <paramref name="credentialReadAt"/>, or the user key isn't the one in force.
+    /// "May publish" becomes <paramref name="publish"/>: without it, the connection may publish nowhere.
     /// </summary>
     public async Task<ConnectionInfo?> SetVaultsAsync(
-        User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct)
+        User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
+        IReadOnlySet<string>? publish = null)
     {
         if (vaults.Count == 0) throw new ArgumentException("A connection needs at least one vault.", nameof(vaults));
+        publish ??= new HashSet<string>();
         await EnsureReadyAsync(ct);
         if (!await IsLiveAsync(user.Id, id, ct)) return null;
-        await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct);
+        await CheckVaultsAsync(user, userKey, vaults, publish, ct);
 
         bool changed;
         using (var session = await catalog.StartSessionAsync(ct))
@@ -233,7 +242,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var now = Now;
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
-                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion };
+                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion, Publish = PublishField(publish) };
                     // As at creation: the user document is checked and written here, so a credentials change, a
                     // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
                     // above is seen here, or its deletion conflicts on the user document.
@@ -410,8 +419,25 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
             doc.RevokedAt,
             state,
             reason,
-            meta.Client);
+            meta.Client)
+        {
+            Publish = PublishOf(doc, meta),
+        };
     }
+
+    /// <summary>The vaults the meta may publish on, among those it lists and the connection still has; none for a meta
+    /// sealed before publishing existed.</summary>
+    internal static HashSet<string> PublishOf(ConnectionDocument doc, ConnectionMeta meta) =>
+        meta.Publish is { } publish ? publish.Where(v => meta.Vaults.ContainsKey(v) && doc.Vaults.Contains(v)).ToHashSet(StringComparer.Ordinal) : [];
+
+    /// <summary>The vaults must be the user's, and "May publish" only on those she owns (<see cref="VaultCatalog.RequirePublishable"/>).</summary>
+    private async Task CheckVaultsAsync(User user, byte[] userKey, IReadOnlyDictionary<string, KeyRight> vaults, IReadOnlySet<string> publish, CancellationToken ct)
+    {
+        VaultCatalog.RequirePublishable(vaults, publish, null);
+        VaultCatalog.RequirePublishable(vaults, publish, await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct));
+    }
+
+    private static List<string>? PublishField(IReadOnlySet<string> publish) => publish.Count == 0 ? null : [.. publish.Order(StringComparer.Ordinal)];
 
     private static byte[] SealMeta(byte[] userKey, string userId, string id, ConnectionMeta meta) =>
         VaultCrypto.Seal(MetaKey(userKey, userId), JsonSerializer.SerializeToUtf8Bytes(meta), MetaContext(id));
@@ -475,12 +501,14 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     }
 
     /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>/<c>maintain</c>,
-    /// read with <see cref="KeyRights.ParseSealed"/>) and, once authorised, the client.</summary>
+    /// read with <see cref="KeyRights.ParseSealed"/>), "May publish" (vault ids, written only where given) and, once
+    /// authorised, the client.</summary>
     internal sealed record ConnectionMeta(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
         [property: JsonPropertyName("client"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectedClient? Client,
-        [property: JsonPropertyName("v")] int? V = null);
+        [property: JsonPropertyName("v")] int? V = null,
+        [property: JsonPropertyName("publish"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<string>? Publish = null);
 }
 
 /// <summary>

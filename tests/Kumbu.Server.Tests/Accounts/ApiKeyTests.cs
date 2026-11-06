@@ -523,6 +523,158 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Diary"]]);
     }
 
+    private VaultCatalog Catalog => app.Services.GetRequiredService<VaultCatalog>();
+
+    private static HashSet<string> Publish(params string[] vaultIds) => [.. vaultIds];
+
+    /// <summary>Alice's <c>Work</c>, shared with Bob as <c>alices-work</c> at write; Bob has a vault <c>Gartenarbeit</c> of his own.</summary>
+    private async Task<(Api.RestClient Alice, Api.RestClient Bob, string VaultId)> SharedWorkAsync()
+    {
+        var alice = await Api.RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var bob = await Api.RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
+        await Sharing.Share.ShareWithAsync(alice, bob, "alices-work", Kumbu.Server.Sharing.MemberRole.Write);
+        return (alice, bob, await Sharing.Share.VaultIdAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_key_may_publish_only_where_it_was_given()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Gartenarbeit");
+        var (key, info) = await Keys.CreateAsync(
+            user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Gartenarbeit"]] = KeyRight.Write }, Ct,
+            publish: Publish(vaults["Work"]));
+
+        var opened = await Catalog.OpenForApiKeyAsync(info.Id, key, Ct);
+
+        Assert.True(opened.Single(v => v.Id == vaults["Work"]).MayPublish);
+        Assert.False(opened.Single(v => v.Id == vaults["Gartenarbeit"]).MayPublish);
+        Assert.Equal(Publish(vaults["Work"]), info.Publish);
+    }
+
+    [Fact]
+    public async Task A_read_key_may_publish_too()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (key, info) = await Keys.CreateAsync(
+            user, userKey, JustRead, "reader", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Read }, Ct, publish: Publish(vaults["Work"]));
+
+        var opened = Assert.Single(await Catalog.OpenForApiKeyAsync(info.Id, key, Ct));
+
+        Assert.Equal(AccessLevel.Read, opened.Level);
+        Assert.True(opened.MayPublish);
+    }
+
+    [Fact]
+    public async Task A_slot_sealed_before_publishing_may_not_publish()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary", "Ideas");
+        var all = new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write, [vaults["Ideas"]] = KeyRight.Write };
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "agent", all, Ct, publish: Publish([.. all.Keys]));
+        async Task ResealAsync(string vault, Func<byte[], byte[]> seal)
+        {
+            var filter = Builders<BsonDocument>.Filter.Eq("apiKey", info.Id) & Builders<BsonDocument>.Filter.Eq("vault", vaults[vault]);
+            var slot = await SlotDocs.Find(filter).SingleAsync(Ct);
+            var vaultKey = LegacySlot.Open(key, vaults[vault], info.Id, slot["wrapped"].AsByteArray).VaultKey;
+            await SlotDocs.UpdateOneAsync(filter, Builders<BsonDocument>.Update.Set("wrapped", seal(vaultKey)), cancellationToken: Ct);
+        }
+
+        // Work as sealed before 0.3.0 (no version), Diary as sealed in 0.3.0 (no "publish"); Ideas with it, to show the
+        // payload is the server's own.
+        await ResealAsync("Work", vaultKey => LegacySlot.Seal(key, vaults["Work"], info.Id, vaultKey, "write"));
+        await ResealAsync("Diary", vaultKey => LegacySlot.SealV2(key, vaults["Diary"], info.Id, vaultKey, "write", null, null, publish: null));
+        await ResealAsync("Ideas", vaultKey => LegacySlot.SealV2(key, vaults["Ideas"], info.Id, vaultKey, "write", null, null, publish: true));
+
+        var opened = await Catalog.OpenForApiKeyAsync(info.Id, key, Ct);
+
+        Assert.Equal(3, opened.Count);
+        Assert.False(opened.Single(v => v.Id == vaults["Work"]).MayPublish);
+        Assert.False(opened.Single(v => v.Id == vaults["Diary"]).MayPublish);
+        Assert.True(opened.Single(v => v.Id == vaults["Ideas"]).MayPublish);
+    }
+
+    [Fact]
+    public async Task A_member_derived_slot_with_a_planted_publish_flag_may_not_publish()
+    {
+        var (_, bob, vaultId) = await SharedWorkAsync();
+        var keys = app.PublicApi.Services.GetRequiredService<ApiKeys>();
+        var (key, info) = await keys.CreateAsync(bob.User, bob.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct);
+        var filter = Builders<BsonDocument>.Filter.Eq("apiKey", info.Id) & Builders<BsonDocument>.Filter.Eq("vault", vaultId);
+        var slot = await SlotDocs.Find(filter).SingleAsync(Ct);
+        var payload = LegacySlot.Open(key, vaultId, info.Id, slot["wrapped"].AsByteArray);
+        Assert.NotNull(payload.Via);
+        Assert.NotNull(payload.AliasKey);
+
+        // Its own membership and alias key, so it still opens; and the flag, planted.
+        await SlotDocs.UpdateOneAsync(
+            filter,
+            Builders<BsonDocument>.Update.Set("wrapped", LegacySlot.SealV2(key, vaultId, info.Id, payload.VaultKey, "write", payload.Via, payload.AliasKey, publish: true)),
+            cancellationToken: Ct);
+
+        var opened = Assert.Single(await app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenForApiKeyAsync(info.Id, key, Ct));
+        Assert.Equal("alices-work", opened.Name);
+        Assert.False(opened.IsOwner);
+        Assert.Equal(AccessLevel.Write, opened.Level);
+        Assert.False(opened.MayPublish);
+    }
+
+    [Fact]
+    public async Task May_publish_on_a_shared_vault_or_one_without_a_right_is_refused()
+    {
+        var (alice, bob, vaultId) = await SharedWorkAsync();
+        var keys = app.PublicApi.Services.GetRequiredService<ApiKeys>();
+        var bobsOwn = await Sharing.Share.VaultIdAsync(bob);
+
+        var shared = await Assert.ThrowsAsync<ArgumentException>(() => keys.CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "shared", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write, [bobsOwn] = KeyRight.Write }, Ct,
+            publish: Publish(vaultId)));
+        var withoutRight = await Assert.ThrowsAsync<ArgumentException>(() => keys.CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "no right", new Dictionary<string, KeyRight> { [bobsOwn] = KeyRight.Write }, Ct, publish: Publish(vaultId)));
+        var notGiven = await Assert.ThrowsAsync<ArgumentException>(() => keys.CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "not given", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, publish: Publish(bobsOwn)));
+
+        Assert.All(new[] { shared, withoutRight, notGiven }, e => Assert.StartsWith("May publish is only for vaults you own, given with a right.", e.Message, StringComparison.Ordinal));
+        Assert.Empty(await keys.ListAsync(bob.User, bob.UserKey, Ct));
+        Assert.Empty(await keys.ListAsync(alice.User, alice.UserKey, Ct));
+    }
+
+    [Fact]
+    public async Task The_list_shows_may_publish()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct,
+            publish: Publish(vaults["Work"]));
+        var (_, other) = await Keys.CreateAsync(user, userKey, JustRead, "other", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct);
+
+        var listed = await Keys.ListAsync(user, userKey, Ct);
+        Assert.Equal(Publish(vaults["Work"]), listed.Single(k => k.Id == created.Id).Publish);
+        Assert.Empty(listed.Single(k => k.Id == other.Id).Publish);
+
+        // The meta as sealed before publishing existed: no "publish".
+        var oldMeta = Encoding.UTF8.GetBytes($$$"""{"name":"agent","vaults":{"{{{vaults["Work"]}}}":"write","{{{vaults["Diary"]}}}":"read"},"v":2}""");
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id), Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, oldMeta)), cancellationToken: Ct);
+
+        Assert.Empty((await Keys.ListAsync(user, userKey, Ct)).Single(k => k.Id == created.Id).Publish);
+    }
+
+    [Fact]
+    public async Task The_owners_session_may_publish_and_a_member_session_may_not()
+    {
+        var (alice, bob, vaultId) = await SharedWorkAsync();
+        var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
+
+        var hers = Assert.Single(await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct));
+        var his = await catalog.OpenForUserAsync(bob.User.Id, bob.UserKey, Ct);
+
+        Assert.True(hers.MayPublish);
+        Assert.False(his.Single(v => v.Id == vaultId).MayPublish);
+        Assert.True(his.Single(v => v.Id != vaultId).MayPublish);
+        var dev = await Catalog.OpenAsync(KumbuAppFactory.Token, Ct);
+        Assert.NotEmpty(dev);
+        Assert.All(dev, v => Assert.False(v.MayPublish));
+    }
+
     [Fact]
     public async Task A_well_formed_but_unknown_key_is_401()
     {
@@ -559,7 +711,10 @@ internal static class LegacySlot
     internal sealed record Payload(
         [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
         [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
-        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null);
+        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("via")] string? Via = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("aliasKey")] byte[]? AliasKey = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("publish")] bool? Publish = null);
 
     private static byte[] ApiKeyKek(string apiKey, string vaultId) =>
         Kumbu.Core.Crypto.VaultCrypto.Derive(apiKey, "kumbu/v1/api-key-kek", Encoding.UTF8.GetBytes(vaultId));
@@ -574,6 +729,16 @@ internal static class LegacySlot
     /// <summary>An API key's slot payload as sealed before 0.3.0: vault key and right, no version.</summary>
     public static byte[] Seal(string apiKey, string vaultId, string keyId, byte[] vaultKey, string rights) =>
         Kumbu.Core.Crypto.VaultCrypto.Seal(ApiKeyKek(apiKey, vaultId), Legacy(vaultKey, rights), ApiKeyContext(vaultId, keyId));
+
+    /// <summary>An API key's slot payload as sealed from 0.3.0 on (<c>v: 2</c>), with exactly the fields given: a null one is left out.</summary>
+    public static byte[] SealV2(string apiKey, string vaultId, string keyId, byte[] vaultKey, string rights, string? via, byte[]? aliasKey, bool? publish)
+    {
+        var fields = new Dictionary<string, object> { ["vaultKey"] = vaultKey, ["rights"] = rights, ["v"] = 2 };
+        if (via is not null) fields["via"] = via;
+        if (aliasKey is not null) fields["aliasKey"] = aliasKey;
+        if (publish is { } p) fields["publish"] = p;
+        return Kumbu.Core.Crypto.VaultCrypto.Seal(ApiKeyKek(apiKey, vaultId), System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(fields), ApiKeyContext(vaultId, keyId));
+    }
 
     public static Payload Open(string apiKey, string vaultId, string keyId, byte[] wrapped) =>
         System.Text.Json.JsonSerializer.Deserialize<Payload>(Kumbu.Core.Crypto.VaultCrypto.Open(ApiKeyKek(apiKey, vaultId), wrapped, ApiKeyContext(vaultId, keyId)))!;

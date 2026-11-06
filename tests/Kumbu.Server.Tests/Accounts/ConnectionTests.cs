@@ -325,6 +325,31 @@ public sealed class ConnectionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Setting_vaults_can_take_may_publish_away()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
+        var both = new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read };
+        var created = await Connections().CreateAsync(user, userKey, JustRead, "phone", both, Ct, publish: new HashSet<string> { vaults["Work"] });
+        Assert.Equal(new[] { vaults["Work"] }, created.Publish);
+        Assert.Equal(new[] { vaults["Work"] }, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Publish);
+
+        var moved = await Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, both, Ct, publish: new HashSet<string> { vaults["Diary"] });
+        Assert.Equal(new[] { vaults["Diary"] }, moved!.Publish);
+        Assert.Equal(new[] { vaults["Diary"] }, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Publish);
+
+        var taken = await Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, both, Ct);
+        Assert.Empty(taken!.Publish);
+        Assert.Empty(Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Publish);
+
+        // Only on a vault it is given, at creation and when the vaults are set.
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(
+            user, userKey, JustRead, created.Id, Grant(vaults["Work"]), Ct, publish: new HashSet<string> { vaults["Diary"] }));
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().CreateAsync(
+            user, userKey, JustRead, "tablet", Grant(vaults["Work"]), Ct, publish: new HashSet<string> { vaults["Diary"] }));
+        Assert.Empty(Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Publish);
+    }
+
+    [Fact]
     public async Task Changing_the_rights_of_an_authorised_connection_needs_a_reconnect()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
@@ -397,7 +422,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         const string tokenId = "token-1";
         var token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
         var (slots, vaultKeys) = await Catalog().ConnectionSlotsFromUserAsync(
-            user.Id, userKey, created.Id, tokenId, token, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write }, null, Ct);
+            user.Id, userKey, created.Id, tokenId, token, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write }, new HashSet<string>(), null, Ct);
         Assert.All(slots, s => Assert.Equal(2, LegacySlot.OpenConnection(token, s.Vault, created.Id, tokenId, s.Wrapped).V));
         // Notes as a slot sealed before 0.3.0 (no version); Diary as one sealed now.
         var legacy = slots.Single(s => s.Vault == vaults["Notes"]);
