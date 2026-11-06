@@ -203,8 +203,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// <summary>
     /// What a batch of the note store does to the vault's publications and marks (publish spec §3.6, §3.7), in the
     /// batch's own transaction, under the vault's gate; <paramref name="batch"/> in stored paths. Marks follow what moves:
-    /// a note's or file's mark to its target, a folder's to the folder everything under it moved to, once nothing stays
-    /// there. A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
+    /// a note's or file's mark to its target, a folder's to the folder it was renamed to (<see cref="Followed"/>). A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
     /// under a mark too (<c>unpublishable</c>); otherwise it follows its note and files, under the same link. Edits
     /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw: anyone else
     /// gets <see cref="PublishedNoteException"/>, which aborts the batch.
@@ -220,8 +219,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             .Concat(batch.AttachmentMoves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value)))
             .ToDictionary(m => m.From, m => m.To, StringComparer.Ordinal);
         var trashed = batch.Trashes.Select(t => t.Path.Value).ToHashSet(StringComparer.Ordinal);
-        var after = AfterBatch(access.Vault, batch);
-        IReadOnlyList<string> marks = [.. record.Unpublishable.Select(m => Followed(m, moved, after)).Distinct(StringComparer.Ordinal)];
+        var paths = new Lazy<BatchPaths>(() => BatchPaths.Of(access.Vault, batch));
+        IReadOnlyList<string> marks = [.. record.Unpublishable.SelectMany(m => Followed(m, moved, paths)).Distinct(StringComparer.Ordinal)];
 
         // A path is newly covered when it moved under a mark, or a mark that moved now covers it.
         bool Newly(string from, string to) => Covered(marks, to) && (from != to || !Covered(record.Unpublishable, to));
@@ -258,36 +257,53 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = [.. record.Log, .. logged] }, ct);
     }
 
-    /// <summary>A mark after the batch: a note's or file's at its target; a folder's at the one folder everything moved
-    /// from under it went to, with the same rest, once nothing of the vault stays under it. Folder markers count as files.</summary>
-    private static string Followed(string mark, IReadOnlyDictionary<string, string> moved, IReadOnlySet<string> after)
+    /// <summary>
+    /// A mark after the batch. A note's or file's goes to its target. A folder's M goes to N only for a real rename:
+    /// everything the batch moves from under <c>M/</c> lands under <c>N/</c> with the same rest, and after the batch
+    /// nothing else is under <c>N/</c>. While something live stays under <c>M/</c>, M stays alone; while only the trash
+    /// holds something there, both stay marked, so that what comes back from the trash is covered too. Folder markers
+    /// count as files. The vault's paths are read only for a folder mark with something moved from under it.
+    /// </summary>
+    private static IEnumerable<string> Followed(string mark, IReadOnlyDictionary<string, string> moved, Lazy<BatchPaths> paths)
     {
-        if (moved.TryGetValue(mark, out var target)) return target;
+        if (moved.TryGetValue(mark, out var target)) return [target];
         var prefix = mark + "/";
         string? folder = null;
+        var landed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (from, to) in moved)
         {
             if (!from.StartsWith(prefix, StringComparison.Ordinal)) continue;
             var rest = from[mark.Length..];
-            if (!to.EndsWith(rest, StringComparison.Ordinal) || to.Length == rest.Length) return mark;
-            var landed = to[..^rest.Length];
-            if (folder is not null && folder != landed) return mark;
-            folder = landed;
+            if (!to.EndsWith(rest, StringComparison.Ordinal) || to.Length == rest.Length) return [mark];
+            var into = to[..^rest.Length];
+            if (folder is not null && folder != into) return [mark];
+            folder = into;
+            landed.Add(to);
         }
 
-        return folder is null || after.Any(p => p.StartsWith(prefix, StringComparison.Ordinal)) ? mark : folder;
+        if (folder is null) return [mark];
+        var (after, trash) = paths.Value;
+        var under = folder + "/";
+        if (after.Any(p => p.StartsWith(prefix, StringComparison.Ordinal) || (p.StartsWith(under, StringComparison.Ordinal) && !landed.Contains(p)))) return [mark];
+        return trash.Any(p => p.StartsWith(prefix, StringComparison.Ordinal)) ? [mark, folder] : [folder];
     }
 
-    /// <summary>The vault's notes and files as the batch leaves them, as the working set holds them before it applies.</summary>
-    private static HashSet<string> AfterBatch(UnlockedVault vault, NoteBatch batch)
+    /// <summary>The vault's notes and files as the batch leaves them, and the paths its trash holds then, from the
+    /// working set as it is before the batch applies.</summary>
+    private sealed record BatchPaths(HashSet<string> After, HashSet<string> Trash)
     {
-        var paths = vault.Notes.Keys.Concat(vault.Attachments.Keys).Select(p => p.Value).ToHashSet(StringComparer.Ordinal);
-        paths.ExceptWith(batch.Trashes.Select(n => n.Path.Value).Concat(batch.AttachmentTrashes.Select(a => a.Path.Value))
-            .Concat(batch.Moves.Select(m => m.Current.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path.Value)));
-        paths.UnionWith(batch.Creates.Select(n => n.Path.Value).Concat(batch.AttachmentCreates.Select(a => a.Path.Value))
-            .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path.Value))
-            .Concat(batch.Moves.Select(m => m.Target.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path.Value)));
-        return paths;
+        public static BatchPaths Of(UnlockedVault vault, NoteBatch batch)
+        {
+            var after = vault.Notes.Keys.Concat(vault.Attachments.Keys).Select(p => p.Value).ToHashSet(StringComparer.Ordinal);
+            var trashed = batch.Trashes.Select(n => n.Path.Value).Concat(batch.AttachmentTrashes.Select(a => a.Path.Value)).ToList();
+            after.ExceptWith(trashed.Concat(batch.Moves.Select(m => m.Current.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path.Value)));
+            after.UnionWith(batch.Creates.Select(n => n.Path.Value).Concat(batch.AttachmentCreates.Select(a => a.Path.Value))
+                .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path.Value))
+                .Concat(batch.Moves.Select(m => m.Target.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path.Value)));
+            var trash = vault.Trash.Select(t => t.Trashed.Note.Path.Value).Concat(vault.AttachmentTrash.Select(t => t.Trashed.Attachment.Path.Value))
+                .Concat(trashed).ToHashSet(StringComparer.Ordinal);
+            return new BatchPaths(after, trash);
+        }
     }
 
     /// <summary>A note, a file, or a folder with notes or files below it, as <c>cd</c> finds one.</summary>
@@ -520,12 +536,4 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     private static PublishRefusedException NoSuchNote(VaultPath note) => new($"{note}: no such note", ShellErrorKind.NotFound);
 
     private static PublishRefusedException NotPublished(VaultPath note) => new($"{note} is not published", ShellErrorKind.NotFound);
-}
-
-/// <summary>A removal or move would withdraw a publication, and its caller may not withdraw (publish spec §3.7): the
-/// batch aborts and nothing moves or goes. A final refusal, <see cref="Code"/> <c>published</c>: 403 over REST, never a
-/// retryable answer.</summary>
-public sealed class PublishedNoteException(string sentence) : Exception(sentence)
-{
-    public string Code => Refusals.Published;
 }

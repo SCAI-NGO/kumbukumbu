@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Publishing;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Sharing;
@@ -315,6 +316,10 @@ public sealed partial class PublishedNoteRemovalTests(KumbuAppFactory app)
         Assert.Contains("is published", text, StringComparison.Ordinal);
         Assert.True(await ExistsAsync(alice));
         await AssertPublishedAsync(w);
+        // The plan is used up, and a retry says why.
+        var (_, again) = await alice.ShAsync(apply.Groups[1].Value, maintain);
+        Assert.Contains("failed at", again, StringComparison.Ordinal);
+        Assert.Contains($"{Questions} is published", again, StringComparison.Ordinal);
 
         using var planned = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Work/checkpoints/before/preview");
         Assert.Equal(HttpStatusCode.OK, planned.StatusCode);
@@ -379,6 +384,92 @@ public sealed partial class PublishedNoteRemovalTests(KumbuAppFactory app)
         var (_, access) = await AliceAsync(w.Alice);
         Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
         await AssertPublishedAsync(w);
+    }
+
+    [Fact]
+    public async Task A_folder_mark_follows_only_a_real_rename()
+    {
+        var w = await PublishedAsync();
+        await w.Alice.CreateAsync("Private/a.md", "a");
+        await MarkAsync(w.Alice, "/Work/Private");
+        var key = await w.Alice.KeyAsync("Claude", KeyRight.Write);
+
+        // Private's last note goes into a folder that holds other things: no rename, so the mark stays where it is.
+        var (isError, text) = await w.Alice.ShAsync("mv /Work/Private/a.md /Work/Routing/a.md", key);
+
+        Assert.False(isError, text);
+        var (_, access) = await AliceAsync(w.Alice);
+        Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
+        await AssertPublishedAsync(w);
+
+        await w.Alice.CreateAsync("Private/b.md", "b");
+        using var moved = await w.Alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Work/Private/b.md", to = "/Work/Routing/b.md" });
+
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
+        await AssertPublishedAsync(w);
+    }
+
+    [Fact]
+    public async Task A_folder_mark_stays_while_the_trash_holds_something_under_it()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Private/secret.md", "secret");
+        await alice.CreateAsync("Private/plan.md", "plan");
+        await MarkAsync(alice, "/Work/Private");
+        using (var deleted = await alice.SendAsync(HttpMethod.Delete, alice.Url("Private/secret.md"))) Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        var key = await alice.KeyAsync("Claude", KeyRight.Write);
+
+        var (isError, text) = await alice.ShAsync("mv /Work/Private/ /Work/Other/", key);
+
+        Assert.False(isError, text);
+        // Both stay marked: the old folder for what comes back from the trash, the new one for what moved.
+        var (_, access) = await AliceAsync(alice);
+        Assert.Equal([P("/Work/Other"), P("/Work/Private")], (await Publications.MarksAsync(access, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal));
+        using (var restored = await alice.SendAsync(HttpMethod.Post, "/api/restore/Work/Private/secret.md", new { })) Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        foreach (var note in new[] { "/Work/Private/secret.md", "/Work/Other/plan.md" })
+        {
+            var e = await Assert.ThrowsAsync<PublishRefusedException>(() => PublishAsync(alice, note));
+            Assert.Equal(Refusals.Unpublishable, e.Code);
+        }
+    }
+
+    [Fact]
+    public async Task A_notes_own_mark_follows_it()
+    {
+        var w = await PublishedAsync();
+        await w.Alice.CreateAsync("Notes/x.md", "x");
+        await MarkAsync(w.Alice, "/Work/Notes/x.md");
+        var key = await w.Alice.KeyAsync("Claude", KeyRight.Write);
+
+        Assert.False((await w.Alice.ShAsync("mv /Work/Notes/x.md /Work/Done/x.md", key)).IsError);
+
+        var (_, access) = await AliceAsync(w.Alice);
+        Assert.Equal([P("/Work/Done/x.md")], await Publications.MarksAsync(access, Ct));
+        var e = await Assert.ThrowsAsync<PublishRefusedException>(() => PublishAsync(w.Alice, "/Work/Done/x.md"));
+        Assert.Equal(Refusals.Unpublishable, e.Code);
+        await AssertPublishedAsync(w);
+    }
+
+    [Fact]
+    public async Task A_store_without_publications_refuses_to_trash_or_move_in_a_vault_that_publishes()
+    {
+        var w = await PublishedAsync();
+        var bare = new EncryptedNoteStore(Catalog, new UserCredential(w.Alice.User.Id, w.Alice.UserKey));
+        var note = (await bare.GetAsync(P(Questions), Ct))!;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => bare.TryTrashAsync(note, w.Alice.Username, BySession, DateTime.UtcNow, Ct));
+        var batch = new NoteBatch { Moves = { (note, note with { Path = P("/Work/Done/Questions.md"), Revision = note.Revision + 1 }) } };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => bare.TryCommitAsync(batch, w.Alice.Username, BySession, DateTime.UtcNow, Ct));
+        Assert.True(await ExistsAsync(w.Alice));
+        Assert.False(await ExistsAsync(w.Alice, "Done/Questions.md"));
+        await AssertPublishedAsync(w);
+
+        // A vault that never published has no record to keep: such a store still works there (the seeder, the welcome vault).
+        var other = await RestClient.NewAsync(Api, vault: "Work");
+        await other.CreateAsync("a.md", "a");
+        var plain = new EncryptedNoteStore(Catalog, new UserCredential(other.User.Id, other.UserKey));
+        Assert.True(await plain.TryTrashAsync((await plain.GetAsync(P("/Work/a.md"), Ct))!, other.Username, BySession, DateTime.UtcNow, Ct));
     }
 
     [Fact]

@@ -21,7 +21,8 @@ public sealed class EncryptedNoteStore(
 
     /// <summary>Publications follow removals and moves in their transaction (<see cref="Publishing.Publications.FollowAsync"/>).
     /// Only the request's store has them, through DI (Program.cs): <see cref="Publishing.Publications"/> is internal, so
-    /// it can't be a parameter of the public constructor.</summary>
+    /// it can't be a parameter of the public constructor. The public one is for callers that only create (the seeder,
+    /// the welcome vault): without publications, a trash or move in a vault that publishes is refused.</summary>
     private readonly Publishing.Publications? _publications;
 
     internal EncryptedNoteStore(
@@ -489,9 +490,21 @@ public sealed class EncryptedNoteStore(
         }, ct);
     }
 
-    /// <summary>The vault's publications and marks after a batch, in its transaction; a refusal aborts the batch.</summary>
-    private Task FollowAsync(IClientSessionHandle session, VaultAccess access, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct) =>
-        _publications?.FollowAsync(session, access, credential is ApiKeyCredential { Device: true }, batch, by, byRef, at, ct) ?? Task.CompletedTask;
+    /// <summary>The vault's publications and marks after a batch, in its transaction; a refusal aborts the batch. A store
+    /// without <see cref="Publishing.Publications"/> fails closed: it trashes and moves nothing in a vault that has a
+    /// publishing record.</summary>
+    private async Task FollowAsync(IClientSessionHandle session, VaultAccess access, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
+    {
+        if (_publications is not null)
+        {
+            await _publications.FollowAsync(session, access, credential is ApiKeyCredential { Device: true }, batch, by, byRef, at, ct);
+        }
+        else if ((batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentMoves.Count > 0)
+            && await catalog.Publishing.Find(session, F.Eq(d => d.Vault, access.Id)).AnyAsync(ct))
+        {
+            throw new InvalidOperationException("A note store without publications can't trash or move in a vault that publishes; nothing was written.");
+        }
+    }
 
     /// <summary>
     /// Search by meaning over the embeddings of the credential's vaults: the query's vector against every chunk's, in

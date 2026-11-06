@@ -90,7 +90,7 @@ internal static class ToolResult
         {
             return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Refused);
         }
-        catch (Publishing.PublishedNoteException e)
+        catch (Kumbu.Core.Publishing.PublishedNoteException e)
         {
             return (ShellResult.Error(e.Message) with { Kind = ShellErrorKind.Refused, Code = e.Code }, KumbuMetrics.ToolError.Refused);
         }

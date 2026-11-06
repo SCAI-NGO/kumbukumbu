@@ -106,7 +106,7 @@ public static class ApiErrors
             };
         }
         // Final: a device must not retry it (publish spec §3.7).
-        catch (Publishing.PublishedNoteException e)
+        catch (Kumbu.Core.Publishing.PublishedNoteException e)
         {
             return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
         }

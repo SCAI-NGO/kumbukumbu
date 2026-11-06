@@ -666,7 +666,18 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         batch.AttachmentTrashes.AddRange(files.Trash);
-        var conflicts = await store.TryCommitAsync(batch, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, ct);
+        IReadOnlyList<VaultPath> conflicts;
+        try
+        {
+            conflicts = await store.TryCommitAsync(batch, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, ct);
+        }
+        catch (Publishing.PublishedNoteException e)
+        {
+            // The plan is used up: a retry says why, rather than that it is unknown.
+            plans.Failed(token, e.Message, at);
+            throw;
+        }
+
         if (conflicts.Count > 0) return Failed(token, string.Join(", ", conflicts.Select(c => c.Value)), at);
 
         var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {work.ChangedCount} changed, "
