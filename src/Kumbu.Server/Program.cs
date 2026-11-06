@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
@@ -156,6 +157,7 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
+builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
