@@ -8,6 +8,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Metrics;
+using Kumbu.Server.Publishing;
 using Microsoft.Extensions.Options;
 using Kumbu.Server.Sharing;
 using MongoDB.Driver;
@@ -91,6 +92,20 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The content checkpoints hold, once per vault and text, the keyed hash of the content in "pid".</summary>
     internal IMongoCollection<SealedDocument> CheckpointTexts { get; } = db.GetCollection<SealedDocument>("checkpoint_texts");
+
+    /// <summary>The vault's publishing record (<see cref="PublishingRecord"/>), one per vault under <see cref="UnlockedVault.PublishingId"/>.</summary>
+    internal IMongoCollection<SealedDocument> Publishing { get; } = db.GetCollection<SealedDocument>("publishing");
+
+    /// <summary>The published copies, found by their lookup id alone (<see cref="PublicationStore"/>).</summary>
+    internal IMongoCollection<PublicationDocument> Publications { get; } = db.GetCollection<PublicationDocument>("publications");
+
+    /// <summary>The copies' files, sealed under their publication's key; no vault blobs, so <see cref="BlobSweep"/> never sees them.</summary>
+    internal IMongoCollection<PublicationFileDocument> PublicationFiles { get; } = db.GetCollection<PublicationFileDocument>("publication_files");
+
+    /// <summary><see cref="Publications"/> and <see cref="PublicationFiles"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> PublicationsByVault { get; } = db.GetCollection<SealedDocument>("publications");
+
+    private IMongoCollection<SealedDocument> PublicationFilesByVault { get; } = db.GetCollection<SealedDocument>("publication_files");
 
     /// <summary>The attachments' records, one per path, as notes are: loaded with the vault.</summary>
     internal IMongoCollection<SealedDocument> Attachments { get; } = db.GetCollection<SealedDocument>("attachments");
@@ -692,12 +707,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
-        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault];
+        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
-    /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
+    /// the published copies with their files), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -1587,6 +1603,22 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         await PdfJobs.Indexes.CreateOneAsync(
             new CreateIndexModel<PdfJobDocument>(Builders<PdfJobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
             cancellationToken: ct);
+        await Publishing.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        await Publications.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<PublicationDocument>(Builders<PublicationDocument>.IndexKeys.Ascending(d => d.Lookup), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<PublicationDocument>(Builders<PublicationDocument>.IndexKeys.Ascending(d => d.Vault)),
+            ],
+            ct);
+        await PublicationFiles.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<PublicationFileDocument>(
+                    Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Publication).Ascending(d => d.Index), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<PublicationFileDocument>(Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Vault)),
+            ],
+            ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),
