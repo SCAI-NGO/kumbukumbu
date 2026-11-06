@@ -135,6 +135,18 @@ describe("publishing in the tree", () => {
     const actions = (await noteMenu()).map((i) => i.label);
     expect(actions).toContain("Mark unpublishable");
     expect(actions).not.toContain("Publish…");
+    cleanup();
+
+    // With no note open the tree asks for the marks itself: the open note's menu filled the cache above.
+    api({ publishEnabled: false, marks: ["/Work/Private"] });
+    useEditor.getState().reset();
+    useEditor.getState().setActiveVault("Work");
+    const router = renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Private");
+    await waitFor(() => expect(within(row("Private")).getByRole("img", { name: "Unpublishable" })).toBeInTheDocument());
+    expect(await labels("Private")).toContain("Allow publishing");
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("offers Publish only where no mark covers the note", async () => {
