@@ -94,7 +94,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     internal IMongoCollection<SealedDocument> CheckpointTexts { get; } = db.GetCollection<SealedDocument>("checkpoint_texts");
 
     /// <summary>The vault's publishing record (<see cref="PublishingRecord"/>), one per vault under <see cref="UnlockedVault.PublishingId"/>.</summary>
-    internal IMongoCollection<SealedDocument> Publishing { get; } = db.GetCollection<SealedDocument>("publishing");
+    internal IMongoCollection<SealedDocument> Publishing { get; } = db.GetCollection<SealedDocument>(PublicationStore.RecordCollection);
 
     /// <summary>The published copies, found by their lookup id alone (<see cref="PublicationStore"/>).</summary>
     internal IMongoCollection<PublicationDocument> Publications { get; } = db.GetCollection<PublicationDocument>("publications");

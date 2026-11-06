@@ -9,6 +9,7 @@ using Kumbu.Core.Publishing;
 using Kumbu.Core.Sh;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.OAuth;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
@@ -26,10 +27,10 @@ public sealed record PublicationState(
 /// Publishing, updating and withdrawing one note (publish spec §3.1–3.5). Only the vault's owner, and only through a
 /// caller that may publish there (<see cref="VaultAccess.MayPublish"/>); never what an unpublishable mark covers. The
 /// copy is the note's fair copy (<see cref="FairCopies"/>) with the images it embeds, their metadata stripped. Each
-/// change is one transaction under the vault's gate: the copy, its files and the vault's record together. Paths in
+/// change is one transaction under the vault's gate: the copy, its files, the vault's record and the owner's vault event together. Paths in
 /// and out are in the caller's view; the record holds them as the vault stores them. The code is never logged.
 /// </summary>
-internal sealed class Publications(VaultCatalog catalog, PublicationStore store, IOptions<KumbuOptions> options, TimeProvider time)
+internal sealed class Publications(VaultCatalog catalog, PublicationStore store, IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time)
 {
     public const string PdfsNotYet = "PDFs are not published yet";
 
@@ -74,6 +75,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var written = await WriteAsync(access, attempt, async session =>
             {
                 await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Bytes, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
             if (written) return new PublishedNote(ShareCode.Link(baseUrl, code), at, made.Plain);
@@ -103,6 +105,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var written = await WriteAsync(access, attempt, async session =>
             {
                 await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Bytes, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
             if (written) return new PublishedNote(ShareCode.Link(baseUrl, entry.Code), at, made.Plain);
@@ -127,11 +130,81 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var written = await WriteAsync(access, attempt, async session =>
             {
                 await store.DeleteCopyAsync(session, entry.Code, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
             if (written) return;
         }
     }
+
+    /// <summary>The vault's unpublishable marks, in the caller's view; none for a member.</summary>
+    public async Task<IReadOnlyList<VaultPath>> MarksAsync(VaultAccess access, CancellationToken ct) =>
+        IsOwner(access) ? [.. (await store.ReadAsync(null, access.Vault, ct)).Record.Unpublishable.Select(m => access.ToCaller(Parse(m)))] : [];
+
+    /// <summary>
+    /// Sets or lifts the mark on <paramref name="path"/>: a note, a file, or a folder with something below it (publish
+    /// spec §3.6). Setting one withdraws, in the same transaction, every publication whose note or any file it covers;
+    /// lifting removes only that exact mark. Also while switched off: marks only reduce what can go out.
+    /// </summary>
+    public async Task SetUnpublishableAsync(
+        VaultAccess access, EncryptedNoteStore notes, VaultPath path, bool marked, string by, WriterRef byRef, CancellationToken ct)
+    {
+        Check(access, publishing: false);
+        var stored = access.ToVault(path);
+        if (marked && !await ExistsAsync(notes, path, ct)) throw new PublishRefusedException($"{path}: no such note, file or folder", ShellErrorKind.NotFound);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
+            var has = record.Unpublishable.Contains(stored.Value, StringComparer.Ordinal);
+            if (has == marked) return;
+            if (!marked)
+            {
+                var lifted = record with { Unpublishable = [.. record.Unpublishable.Where(m => !string.Equals(m, stored.Value, StringComparison.Ordinal))] };
+                if (await WriteAsync(access, attempt, session => store.WriteAsync(session, access.Vault, doc, lifted, ct), ct)) return;
+                continue;
+            }
+
+            string[] marks = [.. record.Unpublishable, stored.Value];
+            var withdrawn = record.Publications.Where(p => Covered(marks, p.Note) || p.Files.Any(f => Covered(marks, f.Path))).ToList();
+            var at = Now;
+            var logged = withdrawn.Select(p => LogEntry(PublishingKinds.Withdrawn, Parse(p.Note), at, by, byRef, WithdrawalReasons.Unpublishable)).ToList();
+            var next = record with
+            {
+                Publications = [.. record.Publications.Except(withdrawn)],
+                Unpublishable = marks,
+                Log = [.. record.Log, .. logged],
+            };
+            var written = await WriteAsync(access, attempt, async session =>
+            {
+                foreach (var (entry, log) in withdrawn.Zip(logged))
+                {
+                    await store.DeleteCopyAsync(session, entry.Code, ct);
+                    await EventAsync(session, access, log, ct);
+                }
+
+                await store.WriteAsync(session, access.Vault, doc, next, ct);
+            }, ct);
+            if (written) return;
+        }
+    }
+
+    /// <summary>A note, a file, or a folder with notes or files below it, as <c>cd</c> finds one.</summary>
+    private static async Task<bool> ExistsAsync(EncryptedNoteStore notes, VaultPath path, CancellationToken ct) =>
+        await notes.GetAsync(path, ct) is not null
+        || await notes.GetAttachmentAsync(path, ct) is not null
+        || (await notes.ListNotesUnderAsync(path, ct)).Count > 0
+        || (await notes.ListAttachmentsUnderAsync(path, ct)).Count > 0;
+
+    /// <summary>The log entry's event, in the same transaction as the record (publish decision 8): its id alone.</summary>
+    private Task EventAsync(IClientSessionHandle session, VaultAccess access, PublishingLogEntry log, CancellationToken ct) =>
+        VaultEvents.RecordAsync(db, session, access.Id, EventKind(log), null, log.At, null, ct, entry: log.Id);
+
+    private static string EventKind(PublishingLogEntry log) => log.Kind switch
+    {
+        PublishingKinds.Published => VaultEvents.NotePublished,
+        PublishingKinds.Updated => VaultEvents.PublicationUpdated,
+        _ => VaultEvents.PublicationWithdrawn,
+    };
 
     /// <summary>The publications at or below <paramref name="under"/>. With <paramref name="linkBase"/> the owner's
     /// states carry the link (only her session's single-note read gives one).</summary>

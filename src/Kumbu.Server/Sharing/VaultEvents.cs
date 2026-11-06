@@ -2,7 +2,10 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 using Kumbu.Server.Api;
+using Kumbu.Server.Publishing;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
@@ -13,7 +16,8 @@ namespace Kumbu.Server.Sharing;
 /// <summary>
 /// What happened to a shared vault and its memberships, for the owner's and the members' activity (collab design §8.3):
 /// plain event documents (collection <c>vault_events</c>) holding ids, a kind, a time and at most a role or a date,
-/// and of a re-keying the ids of the credentials and memberships it ended, never a name or a text. The text is built
+/// of a re-keying the ids of the credentials and memberships it ended, and of a publication its entry in the vault's
+/// sealed publishing log, never a name, a path or a text. The text is built
 /// when it is read, names resolved per viewer (<see cref="TextFor"/>). The events of a membership are its owner's and
 /// its member's; those without one (<see cref="IsVaultWide"/>) are the vault's, for every member. Deleted with the
 /// vault (<see cref="VaultCatalog.DeleteVaultsAsync"/>) and with a member's account, as her memberships are.
@@ -58,6 +62,13 @@ public static class VaultEvents
     /// <summary>The owner's account was deactivated: read-only for members (task 3.15).</summary>
     public const string OwnerInactive = "owner-inactive";
 
+    /// <summary>The owner's alone (publish spec §3.10, §3.11): a publish, an update, a withdrawal.
+    /// <see cref="VaultEventDocument.Entry"/> is its entry in the vault's sealed publishing log, which holds the note
+    /// and who; members see none of them.</summary>
+    public const string NotePublished = "note-published";
+    public const string PublicationUpdated = "publication-updated";
+    public const string PublicationWithdrawn = "publication-withdrawn";
+
     /// <summary>The kinds a member sees of her own membership; the owner sees every kind.</summary>
     private static readonly HashSet<string> MemberKinds = [MembershipRevoked, MembershipLeft, RoleChanged];
 
@@ -72,9 +83,10 @@ public static class VaultEvents
     /// <paramref name="membershipId"/> is null for a vault-wide one.</summary>
     internal static Task RecordAsync(
         IMongoDatabase db, IClientSessionHandle session, string vaultId, string kind, string? membershipId, DateTime at, string? role, CancellationToken ct,
-        DateTime? until = null, IReadOnlyCollection<string>? credentials = null, IReadOnlyCollection<string>? endedMembers = null)
+        DateTime? until = null, IReadOnlyCollection<string>? credentials = null, IReadOnlyCollection<string>? endedMembers = null, string? entry = null)
     {
         var e = New(vaultId, kind, membershipId, at, role, until);
+        e.Entry = entry;
         if (credentials is { Count: > 0 }) e.Credentials = [.. credentials];
         if (endedMembers is not null) e.EndedMembers = [.. endedMembers];
         return Docs(db).InsertOneAsync(session, e, cancellationToken: ct);
@@ -183,8 +195,17 @@ public static class VaultEvents
     /// and quoted, and himself as "you". Never anything of another member. <paramref name="keysEnded"/>: whether a
     /// re-encryption ended keys or apps of the member's (<see cref="KeysEnded"/>).
     /// </summary>
-    internal static string TextFor(string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true) => (toOwner, kind) switch
+    /// <para>A publication's event: <paramref name="person"/> is who did it (<see cref="WriterLabels.You"/> for the owner's
+    /// session), <paramref name="note"/> the note as the owner sees it, null when the record no longer has the entry.</para>
+    internal static string TextFor(
+        string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null) => (toOwner, kind) switch
     {
+        (true, NotePublished or PublicationUpdated or PublicationWithdrawn) when note is null => "A publication of this vault changed.",
+        (true, NotePublished) => $"{person} published {note}.",
+        (true, PublicationUpdated) => $"{person} updated the published copy of {note}.",
+        (true, PublicationWithdrawn) when reason == WithdrawalReasons.Removed => $"The publication of {note} was withdrawn: {Inside(person)} removed the note.",
+        (true, PublicationWithdrawn) when reason == WithdrawalReasons.Unpublishable => $"The publication of {note} was withdrawn: {Inside(person)} made it unpublishable.",
+        (true, PublicationWithdrawn) => $"{person} withdrew the publication of {note}.",
         (true, InvitationCreated) => $"You invited {person} to {role ?? "read"}.",
         (true, InvitationWithdrawn) => $"You withdrew the invitation for {person}.",
         (true, InvitationDeclined) => $"You declined {person}.",
@@ -233,6 +254,11 @@ public static class VaultEvents
     /// <summary>A person at the start of a sentence: <see cref="WriterLabels.GoneOwner"/> capitalised, a quoted name as it is.</summary>
     internal static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
 
+    /// <summary>A person inside a sentence: <see cref="WriterLabels.You"/> as "you", a quoted name as it is.</summary>
+    private static string Inside(string person) => person == WriterLabels.You ? "you" : person;
+
+    private static bool IsPublication(string kind) => kind is NotePublished or PublicationUpdated or PublicationWithdrawn;
+
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
     private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";
 
@@ -243,9 +269,16 @@ public static class VaultEvents
     {
         private Dictionary<string, string>? _labels;
         private string? _owner;
+        private Dictionary<string, PublishingLogEntry>? _log;
 
         public async Task<string> TextAsync(VaultEventDocument e, CancellationToken ct)
         {
+            if (access.IsOwner && IsPublication(e.Kind))
+            {
+                var log = e.Entry is { } entry ? (await PublishingLogAsync(ct)).GetValueOrDefault(entry) : null;
+                return TextFor(e.Kind, toOwner: true, log is null ? "" : Who(log), access.Name, null, null, note: log is null ? null : NoteOf(log), reason: log?.Reason);
+            }
+
             if (access.IsOwner)
             {
                 var person = e.Membership is { } id ? (await LabelsAsync(ct)).GetValueOrDefault(id) ?? WriterLabels.FormerMember : "";
@@ -255,6 +288,25 @@ public static class VaultEvents
             var membership = access.Membership!;
             _owner ??= WriterLabels.Owner(await displayName(membership.Owner, ct));
             return TextFor(e.Kind, toOwner: false, _owner, access.Name, e.Role, e.Until, KeysEnded(e, [membership.Id]));
+        }
+
+        /// <summary>The owner's session as "You", any other writer by its label, sanitised and quoted (“Claude”).</summary>
+        private static string Who(PublishingLogEntry log) => log.ByRef.Kind == WriterRef.Session ? WriterLabels.You : $"“{WriterLabels.Sanitise(log.By)}”";
+
+        private string? NoteOf(PublishingLogEntry log) => VaultPath.TryParse(log.Note, out var note) ? access.ToCaller(note).Value : null;
+
+        /// <summary>The entries of the vault's sealed publishing log, by id; none if the record doesn't open.</summary>
+        private async Task<Dictionary<string, PublishingLogEntry>> PublishingLogAsync(CancellationToken ct)
+        {
+            if (_log is not null) return _log;
+            try
+            {
+                return _log = (await PublicationStore.ReadAsync(db, access.Vault, ct)).Log.ToDictionary(l => l.Id, StringComparer.Ordinal);
+            }
+            catch (Exception e) when (e is CryptographicException or InvalidDataException)
+            {
+                return _log = [];
+            }
         }
 
         /// <summary>The owner's labels for every membership of the vault, opened with the vault, sanitised.</summary>
@@ -317,4 +369,8 @@ public sealed class VaultEventDocument
     /// absent on an event from before it was kept. Each member is told only whether hers is among them.</summary>
     [BsonElement("endedMembers"), BsonIgnoreIfNull]
     public List<string>? EndedMembers { get; set; }
+
+    /// <summary>Of a publication's event: the id of its entry in the vault's sealed publishing log, nothing else of it.</summary>
+    [BsonElement("entry"), BsonIgnoreIfNull]
+    public string? Entry { get; set; }
 }

@@ -24,13 +24,24 @@ internal sealed class PublicationStore(VaultCatalog catalog)
 
     private static FilterDefinitionBuilder<PublicationFileDocument> Files => Builders<PublicationFileDocument>.Filter;
 
+    /// <summary>The collection of the vaults' records (<see cref="VaultCatalog.Publishing"/>).</summary>
+    internal const string RecordCollection = "publishing";
+
     /// <summary>The vault's record and its document; the empty record and no document if it has none yet.</summary>
     public async Task<(SealedDocument? Doc, PublishingRecord Record)> ReadAsync(IClientSessionHandle? session, UnlockedVault vault, CancellationToken ct)
     {
-        var filter = F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.PathId, vault.PublishingId());
-        var doc = await (session is null ? catalog.Publishing.Find(filter) : catalog.Publishing.Find(session, filter)).FirstOrDefaultAsync(ct);
+        var doc = await (session is null ? catalog.Publishing.Find(RecordOf(vault)) : catalog.Publishing.Find(session, RecordOf(vault))).FirstOrDefaultAsync(ct);
         return doc is null ? (null, PublishingRecord.Empty) : (doc, vault.OpenPublishing(doc));
     }
+
+    /// <summary>The vault's record with nothing but the database, for the owner's event texts (<see cref="Sharing.VaultEvents"/>).</summary>
+    internal static async Task<PublishingRecord> ReadAsync(IMongoDatabase db, UnlockedVault vault, CancellationToken ct)
+    {
+        var doc = await db.GetCollection<SealedDocument>(RecordCollection).Find(RecordOf(vault)).FirstOrDefaultAsync(ct);
+        return doc is null ? PublishingRecord.Empty : vault.OpenPublishing(doc);
+    }
+
+    private static FilterDefinition<SealedDocument> RecordOf(UnlockedVault vault) => F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.PathId, vault.PublishingId());
 
     /// <summary>
     /// Inserts the record at revision 1 when <paramref name="current"/> is null, or replaces <paramref name="current"/>
