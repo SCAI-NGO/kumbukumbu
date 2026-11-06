@@ -524,7 +524,7 @@ public static class AccountApi
     {
         var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
         var publish = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in requested ?? []) publish.Add(idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'."));
+        foreach (var name in requested ?? []) publish.Add((name is null ? null : idsByName.GetValueOrDefault(name)) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'."));
         return publish;
     }
 

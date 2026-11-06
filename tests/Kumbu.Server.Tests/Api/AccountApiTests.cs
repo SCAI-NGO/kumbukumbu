@@ -1160,6 +1160,9 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(VaultCatalog.MayPublishOnlyOwned, await RestClient.ErrorAsync(withoutRight));
         Assert.Equal(HttpStatusCode.BadRequest, notHers.StatusCode);
         Assert.Equal("You have no vault named 'Fremd'.", await RestClient.ErrorAsync(notHers));
+        using var nullName = await user.SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "agent", vaults = new Dictionary<string, string> { ["Work"] = "write" }, publish = new string?[] { null } });
+        Assert.Equal(HttpStatusCode.BadRequest, nullName.StatusCode);
         using var list = await user.GetAsync("/api/keys");
         Assert.Empty((await JsonAsync(list)).AsArray());
     }
