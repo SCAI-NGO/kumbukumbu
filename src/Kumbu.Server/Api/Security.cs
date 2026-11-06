@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Threading.RateLimiting;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Publishing;
 
 namespace Kumbu.Server.Api;
 
@@ -68,6 +69,14 @@ public static class Security
     /// </summary>
     public const string FileContentPolicy = "sandbox; default-src 'none'; frame-ancestors 'none'";
 
+    /// <summary>
+    /// For the reader page (publish spec §3.12), which strangers open on the app's origin: only its own scripts, styles,
+    /// images and fonts and its own endpoint; nothing inline, nothing evaluated, no form, no frame, no plug-in.
+    /// <c>blob:</c> and <c>data:</c> images: the page shows a copy's files through object URLs.
+    /// </summary>
+    public const string ReaderPagePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; " +
+        "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
     public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
 
@@ -92,9 +101,22 @@ public static class Security
             {
                 var headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
-                headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
+                // The reader's paths (publish spec §3.12): no index, no referrer, no cache, the page's or a file's policy.
+                var reader = ReaderPaths.Is(context.Request.Path);
+                if (reader)
+                {
+                    headers["X-Robots-Tag"] = "noindex, nofollow";
+                    headers["Referrer-Policy"] = "no-referrer";
+                    headers.CacheControl = "no-store";
+                }
+                else
+                {
+                    headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
+                }
+
                 var metadata = context.GetEndpoint()?.Metadata;
                 headers.ContentSecurityPolicy = metadata?.GetMetadata<FileContentMetadata>() is not null ? FileContentPolicy
+                    : reader ? ReaderPagePolicy
                     : metadata?.GetMetadata<SameOriginFramesMetadata>() is not null ? SameOriginFramesPolicy
                     : ContentSecurityPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
@@ -233,6 +255,17 @@ public sealed class AccountLimits : IDisposable
     public const int RedeemFailuresPerServer = 10_000;
 
     /// <summary>
+    /// The reader endpoint's limits (publish spec §3.12), as pairing's redeem: reads a minute per address, against load,
+    /// and wrong share codes a minute per network and server-wide. A share code is 160 random bits, so these bound the
+    /// work strangers make the server do, not guessing.
+    /// </summary>
+    public const int ReaderReadsPerAddress = 60;
+
+    public const int ReaderFailuresPerNetwork = 100;
+
+    public const int ReaderFailuresPerServer = 10_000;
+
+    /// <summary>
     /// Each of these requests reads every note in its scope with its history. The web app asks once per search that
     /// rested for 200 ms (with the switch for earlier versions on) and once per page of 50 activity rows, and asks
     /// again for each page shown when the window regains focus; a person stays well under 60 a minute, while a stolen
@@ -291,18 +324,25 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
     private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
     private readonly PartitionedRateLimiter<string> _aliasRenameByUser;
+    private readonly PartitionedRateLimiter<string> _readerReadByAddress;
+    private readonly PartitionedRateLimiter<string> _readerFailuresByNetwork;
+    private readonly PartitionedRateLimiter<string> _readerFailures;
 
     public AccountLimits()
         : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks and on renames, so that one can be
-    /// reached in a few requests, or not at all.</summary>
+    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks, on renames and on readers, so that
+    /// one can be reached in a few requests, or not at all.</summary>
     internal AccountLimits(
         int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
-        int aliasRenamesPerUser = AliasRenamesPerUser)
+        int aliasRenamesPerUser = AliasRenamesPerUser, int readerReadsPerAddress = ReaderReadsPerAddress, int readerFailuresPerNetwork = ReaderFailuresPerNetwork,
+        int readerFailuresPerServer = ReaderFailuresPerServer)
     {
+        _readerReadByAddress = Limiter(readerReadsPerAddress);
+        _readerFailuresByNetwork = Limiter(readerFailuresPerNetwork);
+        _readerFailures = Limiter(readerFailuresPerServer);
         _aliasRenameByUser = Limiter(aliasRenamesPerUser);
         _redeemFailuresByNetwork = Limiter(redeemFailuresPerNetwork);
         _redeemFailures = Limiter(redeemFailuresPerServer);
@@ -361,13 +401,26 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>A wrong or expired code, counted towards <see cref="RedeemsBlocked"/>, for the network and the server;
     /// says which of them it used up the minute's allowance of, for the log.</summary>
-    public RedeemBlock RedeemFailed(HttpContext context)
+    public RedeemBlock RedeemFailed(HttpContext context) => Failed(_redeemFailuresByNetwork, _redeemFailures, context);
+
+    /// <summary>A read of a published note, every one, right code or wrong: per address.</summary>
+    public TimeSpan? ReaderRead(HttpContext context) => Take(_readerReadByAddress, Address(context));
+
+    /// <summary>As <see cref="RedeemsBlocked"/>, for wrong share codes: while it holds, every read it covers is refused,
+    /// a right code too.</summary>
+    public bool ReadersBlocked(HttpContext context) => Exhausted(_readerFailuresByNetwork, Network(context)) || Exhausted(_readerFailures, ServerWide);
+
+    /// <summary>A wrong, withdrawn or hidden share code, counted towards <see cref="ReadersBlocked"/>; says which
+    /// allowance it used up, for the log.</summary>
+    public RedeemBlock ReaderFailed(HttpContext context) => Failed(_readerFailuresByNetwork, _readerFailures, context);
+
+    private static RedeemBlock Failed(PartitionedRateLimiter<string> perNetwork, PartitionedRateLimiter<string> perServer, HttpContext context)
     {
         var network = Network(context);
-        using var byNetwork = _redeemFailuresByNetwork.AttemptAcquire(network);
-        using var byServer = _redeemFailures.AttemptAcquire(ServerWide);
-        return byServer.IsAcquired && Exhausted(_redeemFailures, ServerWide) ? RedeemBlock.Server
-            : byNetwork.IsAcquired && Exhausted(_redeemFailuresByNetwork, network) ? RedeemBlock.Network
+        using var byNetwork = perNetwork.AttemptAcquire(network);
+        using var byServer = perServer.AttemptAcquire(ServerWide);
+        return byServer.IsAcquired && Exhausted(perServer, ServerWide) ? RedeemBlock.Server
+            : byNetwork.IsAcquired && Exhausted(perNetwork, network) ? RedeemBlock.Network
             : RedeemBlock.None;
     }
 
@@ -426,6 +479,9 @@ public sealed class AccountLimits : IDisposable
         _metadataFetchByAddress.Dispose();
         _metadataFetchByHost.Dispose();
         _aliasRenameByUser.Dispose();
+        _readerReadByAddress.Dispose();
+        _readerFailuresByNetwork.Dispose();
+        _readerFailures.Dispose();
     }
 }
 

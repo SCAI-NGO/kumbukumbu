@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Server.Publishing;
 using Microsoft.AspNetCore.Routing;
 using Prometheus;
 
@@ -26,15 +27,19 @@ public static class HttpMetrics
 
             await next();
         });
-        app.UseHttpMetrics(o => o.ReduceStatusCodeCardinality());
-        return app.Use(async (context, next) =>
+        // No count of readers (publish spec §3.12): the reader's paths are neither counted nor timed, nor their 429s.
+        return app.UseWhen(context => !ReaderPaths.Is(context.Request.Path), counted =>
         {
-            await next();
-            if (context.Response.StatusCode == StatusCodes.Status429TooManyRequests)
+            counted.UseHttpMetrics(o => o.ReduceStatusCodeCardinality());
+            counted.Use(async (context, next) =>
             {
-                var endpoint = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "none";
-                KumbuMetrics.RateLimited.WithLabels(endpoint).Inc();
-            }
+                await next();
+                if (context.Response.StatusCode == StatusCodes.Status429TooManyRequests)
+                {
+                    var endpoint = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "none";
+                    KumbuMetrics.RateLimited.WithLabels(endpoint).Inc();
+                }
+            });
         });
     }
 }

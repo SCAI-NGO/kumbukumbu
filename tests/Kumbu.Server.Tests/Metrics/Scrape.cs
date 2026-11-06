@@ -7,7 +7,7 @@ namespace Kumbu.Server.Tests.Metrics;
 /// <summary>Reads the metrics port of a test host the way Prometheus does.</summary>
 public static class Scrape
 {
-    public static async Task<string> TextAsync(KumbuAppFactory app)
+    public static async Task<string> TextAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> app)
     {
         var server = app.Services.GetRequiredService<Kumbu.Server.Metrics.MetricsServer>();
         using var http = new HttpClient();

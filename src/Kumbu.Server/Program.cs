@@ -228,9 +228,10 @@ var webApp = new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
+        // The reader page, s.html, is never cached (publish spec §3.12).
         context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/assets")
             ? "public, max-age=31536000, immutable"
-            : "no-cache";
+            : ReaderPaths.Is(context.Context.Request.Path) ? "no-store" : "no-cache";
     },
 };
 app.UseDefaultFiles();
@@ -269,6 +270,11 @@ app.MapPairingApi();
 app.MapExportApi();
 app.MapSharingApi();
 app.MapPublicationApi();
+app.MapReaderApi();
+// The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
+app.MapGet("/s", (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
+    ? Results.Stream(page.CreateReadStream(), "text/html")
+    : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
