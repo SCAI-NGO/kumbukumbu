@@ -274,6 +274,16 @@ public class FairCopyTests
     }
 
     [Fact]
+    public void A_server_whose_name_is_not_ascii_is_found_in_either_spelling()
+    {
+        const string own = "https://kümbu.example.org";
+        var ascii = new System.Globalization.IdnMapping().GetAscii("kümbu.example.org");
+        Assert.Equal("x y", Text($"[x](https://{ascii}/a) [y](https://kümbu.example.org/a)", own));
+        Assert.Equal("a  b  c", Text($"a https://kümbu.example.org/Work b https://{ascii}/Work c", own));
+        Assert.Equal("x", Text($"[x](https://example.org/?u={ascii}/Work)", own));
+    }
+
+    [Fact]
     public void A_definition_label_may_run_over_lines()
     {
         Assert.Equal("see Private Plan", Text("[Private\nPlan]: /Work/Private/Plan.md\n\nsee [Private Plan]"));

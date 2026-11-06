@@ -493,10 +493,14 @@ public static partial class FairCopies
         // Browsers read the ideographic full stops in a host name as dots.
         private const string Dot = "[.。．｡]";
 
-        public Own(string host)
+        /// <param name="host">As IDNA writes it, for comparing hosts that a URL parser read.</param>
+        /// <param name="names">How text may spell it: that, and its Unicode form, folded.</param>
+        public Own(string host, IEnumerable<string> names)
         {
             Host = host;
-            var pattern = Regex.Escape(host).Replace(@"\.", Dot, StringComparison.Ordinal);
+            var spellings = names.Append(host).Distinct().ToList();
+            Firsts = string.Concat(spellings.Select(n => n[0]));
+            var pattern = "(?:" + string.Join('|', spellings.Select(n => Regex.Escape(n).Replace(@"\.", Dot, StringComparison.Ordinal))) + ")";
             var end = $@"{Dot}?(?![A-Za-z0-9-])(?!{Dot}[A-Za-z0-9-])";
             Url = new Regex(
                 $@"\G(?:(?<scheme>(?:https?:)?//)(?:[^\s/?#@<>]+@)?)?(?<www>www{Dot})?{pattern}{end}(?<port>:[0-9]{{1,5}})?"
@@ -507,22 +511,26 @@ public static partial class FairCopies
 
         public string Host { get; }
 
+        /// <summary>The first characters of its spellings, where a search for it may start.</summary>
+        public string Firsts { get; }
+
         /// <summary>A URL to the host, anchored where the match starts.</summary>
         public Regex Url { get; }
 
         /// <summary>The host's name anywhere, as in another link's query or title.</summary>
         public Regex Mention { get; }
 
-        public static Own? Of(string? origin) => origin is not null && Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? new Own(HostOf(uri)) : null;
+        public static Own? Of(string? origin) =>
+            origin is not null && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                ? new Own(HostOf(uri), [WithoutWww(Dots(new Folded(uri.Host).Text).TrimEnd('.').ToLowerInvariant())])
+                : null;
     }
 
     // The same host is the same server: scheme and port don't count, nor a trailing dot or "www.". Compared as IDNA
-    // writes it, so "ｋｕｍｂｕ" is "kumbu".
-    private static string HostOf(Uri uri)
-    {
-        var host = Dots(uri.IdnHost).TrimEnd('.').ToLowerInvariant();
-        return host.StartsWith("www.", StringComparison.Ordinal) ? host[4..] : host;
-    }
+    // writes it, so "ｋｕｍｂｕ" is "kumbu" and "kümbu" is "xn--kmbu-0ra".
+    private static string HostOf(Uri uri) => WithoutWww(Dots(uri.IdnHost).TrimEnd('.').ToLowerInvariant());
+
+    private static string WithoutWww(string host) => host.StartsWith("www.", StringComparison.Ordinal) ? host[4..] : host;
 
     private static string Dots(string text) => text.Replace('。', '.').Replace('．', '.').Replace('｡', '.');
 
@@ -609,7 +617,7 @@ public static partial class FairCopies
         var s = folded.Text;
         var at = folded.ToFolded(p);
         var to = folded.ToFolded(limit);
-        if (at >= to || s[at] is not ('h' or 'H' or '/' or 'w' or 'W') && char.ToLowerInvariant(s[at]) != own.Host[0]) return 0;
+        if (at >= to || s[at] is not ('h' or 'H' or '/' or 'w' or 'W') && !own.Firsts.Contains(char.ToLowerInvariant(s[at]))) return 0;
         var m = own.Url.Match(s, at, to - at);
         if (!m.Success || m.Index != at) return 0;
         if (!m.Groups["scheme"].Success && !m.Groups["www"].Success && !m.Groups["port"].Success && !m.Groups["path"].Success) return 0;
