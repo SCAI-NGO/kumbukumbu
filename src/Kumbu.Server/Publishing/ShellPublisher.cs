@@ -50,7 +50,7 @@ internal sealed class ShellPublisher(
     {
         var access = await AccessAsync(note, ct);
         var (by, byRef) = Writer(access);
-        await publications.WithdrawAsync(access, note, by, byRef, ct);
+        await publications.WithdrawAsync(access, store, note, by, byRef, ct);
     }
 
     /// <summary>Who the record names. A member is refused before anything is written, so her writer id isn't needed
