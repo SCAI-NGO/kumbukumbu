@@ -459,7 +459,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             return new Made(
                 fair,
                 [.. fair.Files.Select(p => new PublishedFile(p.Value, attachments[p].Version))],
-                [.. fair.Files.Select((p, n) => new PublishedCopyFile(n, p.Name, attachments[p].Current.MediaType))],
+                [.. fair.Files.Select((p, n) => new PublishedCopyFile(n, attachments[p].Current.MediaType))],
                 bytes,
                 plain);
         }

@@ -12,7 +12,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 
 const copyId = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 
-const copy = (markdown: string, files: { index: number; name: string; mediaType: string }[] = []) => ({
+const copy = (markdown: string, files: { index: number; mediaType: string }[] = []) => ({
   title: "Questions on routing",
   markdown,
   snapshotAt: "2026-11-05T14:32:00Z",
@@ -214,7 +214,7 @@ describe("Reader", () => {
   it("shows copied images from blob urls", async () => {
     const urls = blobUrls();
     const fetch = stubFetch({
-      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
+      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, mediaType: "image/jpeg" }])),
       "GET /api/s/files/0": () => new Response(new Uint8Array([0xff, 0xd8, 0xff]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
     });
     const { unmount } = render(<Reader />);
@@ -233,7 +233,7 @@ describe("Reader", () => {
   it("fetches each file once when the page renders again", async () => {
     blobUrls();
     const fetch = stubFetch({
-      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
+      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, mediaType: "image/jpeg" }])),
       "GET /api/s/files/0": () => new Response(new Uint8Array([0xff, 0xd8, 0xff]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
     });
     const { rerender } = render(<Reader />);
@@ -248,7 +248,7 @@ describe("Reader", () => {
   it("shows an image that does not load as its name", async () => {
     blobUrls();
     stubFetch({
-      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
+      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, mediaType: "image/jpeg" }])),
       "GET /api/s/files/0": () => new Response(new Uint8Array([0]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
     });
     render(<Reader />);

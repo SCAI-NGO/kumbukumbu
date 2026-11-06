@@ -17,7 +17,8 @@ public sealed record ReaderCodeRequest(string Code);
 /// through <c>GET /api/s/files/{index}</c>, and its copy id, which the page sends with each (<see cref="ReaderApi.CopyHeader"/>).</summary>
 public sealed record ReaderView(string Title, string Markdown, DateTime SnapshotAt, ReaderFileView[] Files, string Copy);
 
-public sealed record ReaderFileView(int Index, string Name, string MediaType);
+/// <summary>A file of the copy: its index and media type, never its name in the vault.</summary>
+public sealed record ReaderFileView(int Index, string MediaType);
 
 /// <summary>The paths strangers open (publish spec §3.12): the reader page and its endpoint. They get the reader's
 /// headers and are left out of the HTTP metrics.</summary>
@@ -154,5 +155,5 @@ public static class ReaderApi
     private static CookieOptions CookieOptions() => new() { Path = CookiePath, Secure = true, SameSite = SameSiteMode.Strict, HttpOnly = true };
 
     private static ReaderView View(string code, PublishedCopy copy) =>
-        new(copy.Title, copy.Markdown, copy.SnapshotAt, [.. copy.Files.Select(f => new ReaderFileView(f.Index, f.Name, f.MediaType))], ShareCode.CopyId(code));
+        new(copy.Title, copy.Markdown, copy.SnapshotAt, [.. copy.Files.Select(f => new ReaderFileView(f.Index, f.MediaType))], ShareCode.CopyId(code));
 }

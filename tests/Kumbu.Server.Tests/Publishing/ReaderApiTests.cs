@@ -201,7 +201,8 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
         Assert.Matches("^[0-9a-f]{32}$", body["copy"]!.GetValue<string>());
         var file = Assert.Single(body["files"]!.AsArray())!;
         Assert.Equal(0, file["index"]!.GetValue<int>());
-        Assert.Equal("flow.jpg", file["name"]!.GetValue<string>());
+        // The vault's file name stays at home: the page needs only the index.
+        Assert.Null(file["name"]);
         Assert.Equal("image/jpeg", file["mediaType"]!.GetValue<string>());
     }
 

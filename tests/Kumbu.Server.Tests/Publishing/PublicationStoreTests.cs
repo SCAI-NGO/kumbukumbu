@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Publishing;
@@ -70,7 +71,7 @@ public sealed class PublicationStoreTests(MongoFixture fixture)
     }
 
     private PublishedCopy Copy(string title = Title, int files = 2) =>
-        new(title, $"# {title}\n\nWhere does the traffic go?\n", Now, [.. Enumerable.Range(0, files).Select(i => new PublishedCopyFile(i, $"picture-{i}.png", "image/png"))]);
+        new(title, $"# {title}\n\nWhere does the traffic go?\n", Now, [.. Enumerable.Range(0, files).Select(i => new PublishedCopyFile(i, "image/png"))]);
 
     private static byte[][] Files(int count) => [.. Enumerable.Range(0, count).Select(i => Encoding.UTF8.GetBytes($"bytes of picture {i}"))];
 
@@ -189,6 +190,28 @@ public sealed class PublicationStoreTests(MongoFixture fixture)
             Assert.Equal(-1, bytes.AsSpan().IndexOf(key));
             Assert.Equal(-1, bytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(Convert.ToBase64String(key))));
         }
+    }
+
+    [Fact]
+    public async Task A_copy_holds_no_file_name_and_one_stored_with_names_still_opens()
+    {
+        var a = await AccountAsync("Work");
+        var code = ShareCode.New();
+        var key = VaultCrypto.NewKey();
+        await InsertCopyAsync(a.Vaults["Work"].Id, code, key, a.User.Id, Copy(files: 1), Files(1));
+        var l = Convert.ToHexStringLower(ShareCode.Lookup(code));
+        var raw = await Raw("publications").Find(new BsonDocument("vault", a.Vaults["Work"].Id)).SingleAsync(Ct);
+        var stored = JsonNode.Parse(VaultCrypto.Open(key, raw["blob"].AsByteArray, $"publication:{l}:copy"))!;
+        Assert.Equal(["Index", "MediaType"], stored["Files"]![0]!.AsObject().Select(p => p.Key));
+
+        // A copy made before names were left out: the name is ignored.
+        stored["Files"]![0]!["Name"] = "Passport-J-Smith.jpg";
+        var older = VaultCrypto.Seal(key, Encoding.UTF8.GetBytes(stored.ToJsonString()), $"publication:{l}:copy");
+        await Raw("publications").UpdateOneAsync(new BsonDocument("_id", raw["_id"]), new BsonDocument("$set", new BsonDocument("blob", older)), cancellationToken: Ct);
+
+        var opened = (await Store().OpenCopyAsync(code, Ct))!.Value.Copy;
+        Assert.Equal(Json(Copy(files: 1)), Json(opened));
+        Assert.DoesNotContain("Passport", Json(opened), StringComparison.Ordinal);
     }
 
     [Fact]

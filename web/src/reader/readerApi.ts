@@ -3,7 +3,6 @@
 
 export interface ReaderFile {
   index: number;
-  name: string;
   mediaType: string;
 }
 

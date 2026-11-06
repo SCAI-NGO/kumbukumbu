@@ -359,7 +359,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
             "1. Should the chatbot move the user between screens? See Routing master.\n2. Is there a list of routes? [Router docs](https://example.org/router)\n![flow.jpg](f/0)",
             copy.Markdown);
         var file = Assert.Single(copy.Files);
-        Assert.Equal((0, "flow.jpg", "image/jpeg"), (file.Index, file.Name, file.MediaType));
+        Assert.Equal(new PublishedCopyFile(0, "image/jpeg"), file);
 
         var (bytes, mediaType) = (await Store.OpenFileAsync(CodeOf(published), 0, Ct))!.Value;
         Assert.Equal("image/jpeg", mediaType);

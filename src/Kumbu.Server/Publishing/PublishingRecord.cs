@@ -42,10 +42,10 @@ internal static class WithdrawalReasons
 }
 
 /// <summary>What a reader sees, sealed under the publication key: the filtered Markdown, its title, when it was taken
-/// and the files it embeds, by index.</summary>
+/// and the files it embeds, by index, without their names in the vault (a copy that stored one opens all the same).</summary>
 internal sealed record PublishedCopy(string Title, string Markdown, DateTime SnapshotAt, IReadOnlyList<PublishedCopyFile> Files);
 
-internal sealed record PublishedCopyFile(int Index, string Name, string MediaType);
+internal sealed record PublishedCopyFile(int Index, string MediaType);
 
 /// <summary>The reader slot, sealed under the reader key: the publication key, and the owner, whose account the
 /// reader endpoint checks before it opens the copy (decision 7).</summary>

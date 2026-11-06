@@ -9238,7 +9238,6 @@ export interface components {
         ReaderFileView: {
             /** Format: int32 */
             index: number | string;
-            name: string;
             mediaType: string;
         };
         ReaderView: {
