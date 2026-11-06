@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { expect, it } from "vitest";
 
 // The reader page runs on the app's origin, beside the owner's session cookie: none of the app's code may come with it.
-const allowed = new Set(["react", "react-dom/client", "react-markdown", "remark-gfm", "../index.css"]);
+const packages = new Set(["react", "react-dom/client", "react-markdown", "remark-gfm"]);
 
 it("imports nothing of the app", () => {
   const folder = import.meta.dirname;
-  const sources = readdirSync(folder).filter((name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name));
+  const styles = resolve(folder, "../index.css");
+  const sources = readdirSync(folder, { recursive: true, encoding: "utf8" }).filter((name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name));
   expect(sources).toContain("Reader.tsx");
 
   const imports = sources.flatMap((name) => {
@@ -19,5 +20,12 @@ it("imports nothing of the app", () => {
     );
   });
   expect(imports.length).toBeGreaterThan(0);
-  expect(imports.filter(({ specifier }) => !allowed.has(specifier) && !(specifier.startsWith("./") && !specifier.includes("..")))).toEqual([]);
+
+  // A relative import counts by where it lands, from the file that holds it: inside this folder, or the app's styles.
+  const allowed = ({ name, specifier }: { name: string; specifier: string }) => {
+    if (!specifier.startsWith(".")) return packages.has(specifier);
+    const target = resolve(folder, dirname(name), specifier);
+    return target === styles || target.startsWith(folder + sep);
+  };
+  expect(imports.filter((i) => !allowed(i))).toEqual([]);
 });

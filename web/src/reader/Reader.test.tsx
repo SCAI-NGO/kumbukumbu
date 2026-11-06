@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Reader from "./Reader";
@@ -31,6 +32,27 @@ function stubFetch(handlers: Record<string, Handler>) {
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
+
+/** jsdom has no blob URLs: they are stubbed, and spied on. */
+function blobUrls() {
+  for (const name of ["createObjectURL", "revokeObjectURL"] as const) {
+    if (!(name in URL)) Object.defineProperty(URL, name, { value: () => undefined, configurable: true, writable: true });
+  }
+  let n = 0;
+  return {
+    create: vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:http://localhost/${n++}`),
+    revoke: vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined),
+  };
+}
+
+const deferred = () => {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((r) => (resolve = r));
+  return { promise, resolve };
+};
+
+const filesFetched = (fetch: ReturnType<typeof stubFetch>, index: number) =>
+  fetch.mock.calls.filter(([url]) => new URL(String(url), location.href).pathname === `/api/s/files/${index}`).length;
 
 beforeEach(() => {
   process.env.TZ = "UTC";
@@ -66,6 +88,21 @@ describe("Reader", () => {
     expect(screen.getByText("Which way is shorter?")).toBeInTheDocument();
   });
 
+  it("sends one request from the fragment under StrictMode", async () => {
+    history.replaceState(null, "", `/s#${code}`);
+    const fetch = stubFetch({ "POST /api/s": () => json(200, copy("Which way is shorter?")) });
+
+    render(
+      <StrictMode>
+        <Reader />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][1]?.method).toBe("POST");
+  });
+
   it("reloads with the cookie when there is no fragment", async () => {
     const replaceState = vi.spyOn(history, "replaceState");
     const fetch = stubFetch({ "GET /api/s": () => json(200, copy("Which way is shorter?")) });
@@ -96,16 +133,51 @@ describe("Reader", () => {
     });
     render(<Reader />);
 
-    await userEvent.type(await screen.findByLabelText("Enter the code you were given"), "wrong");
+    const input = await screen.findByLabelText("Enter the code you were given");
+    expect(input).toHaveAttribute("autocapitalize", "characters");
+    expect(input).toHaveAttribute("autocorrect", "off");
+    expect(input).toHaveAttribute("spellcheck", "false");
+    expect(input).not.toHaveAttribute("aria-invalid", "true");
+    await userEvent.type(input, "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Read" }));
-    expect(await screen.findByText("This code doesn't open a published note.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Enter the code you were given")).toBeInTheDocument();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This code doesn't open a published note.");
+    expect(screen.getByLabelText("Enter the code you were given")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Enter the code you were given")).toHaveAttribute("aria-describedby", alert.id);
+    expect(alert.id).not.toBe("");
 
     await userEvent.clear(screen.getByLabelText("Enter the code you were given"));
     await userEvent.type(screen.getByLabelText("Enter the code you were given"), code);
     await userEvent.click(screen.getByRole("button", { name: "Read" }));
     expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
     expect(posted).toEqual([{ code: "wrong" }, { code }]);
+  });
+
+  it("waits while a code is read, and keeps only the latest answer", async () => {
+    const answers = [deferred(), deferred()];
+    let posts = 0;
+    stubFetch({ "GET /api/s": none, "POST /api/s": () => answers[posts++].promise });
+    render(<Reader />);
+
+    const input = await screen.findByLabelText("Enter the code you were given");
+    await userEvent.type(input, "wrong");
+    await userEvent.click(screen.getByRole("button", { name: "Read" }));
+    await waitFor(() => expect(posts).toBe(1));
+    expect(screen.getByRole("button", { name: "Read" })).toBeDisabled();
+    expect(screen.getByRole("form", { name: "Read a published note" })).toHaveAttribute("aria-busy", "true");
+
+    // The button waits; a form can still be sent another way, and then only the latest answer counts.
+    await userEvent.clear(input);
+    await userEvent.type(input, code);
+    fireEvent.submit(screen.getByRole("form", { name: "Read a published note" }));
+    await waitFor(() => expect(posts).toBe(2));
+
+    answers[1].resolve(json(200, copy("Which way is shorter?")));
+    expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    answers[0].resolve(none());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Enter the code you were given")).not.toBeInTheDocument();
   });
 
   it("says when the server reads no published notes, and when there were too many tries", async () => {
@@ -137,9 +209,7 @@ describe("Reader", () => {
   });
 
   it("shows copied images from blob urls", async () => {
-    const createObjectURL = vi.fn(() => "blob:http://localhost/0f1e");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL, revokeObjectURL }));
+    const urls = blobUrls();
     const fetch = stubFetch({
       "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
       "GET /api/s/files/0": () => new Response(new Uint8Array([0xff, 0xd8, 0xff]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
@@ -148,9 +218,50 @@ describe("Reader", () => {
 
     const img = await screen.findByRole("img", { name: "flow.jpg" });
     expect(img.getAttribute("src")).toMatch(/^blob:/);
-    expect(fetch.mock.calls.filter(([url]) => new URL(String(url), location.href).pathname === "/api/s/files/0")).toHaveLength(1);
+    expect(filesFetched(fetch, 0)).toBe(1);
     unmount();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:http://localhost/0f1e");
+    expect(urls.revoke).toHaveBeenCalledWith(img.getAttribute("src"));
+  });
+
+  it("fetches each file once when the page renders again", async () => {
+    blobUrls();
+    const fetch = stubFetch({
+      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
+      "GET /api/s/files/0": () => new Response(new Uint8Array([0xff, 0xd8, 0xff]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
+    });
+    const { rerender } = render(<Reader />);
+    await screen.findByRole("img", { name: "flow.jpg" });
+
+    rerender(<Reader />);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByRole("img", { name: "flow.jpg" })).toBeInTheDocument();
+    expect(filesFetched(fetch, 0)).toBe(1);
+  });
+
+  it("shows an image that does not load as its name", async () => {
+    blobUrls();
+    stubFetch({
+      "GET /api/s": () => json(200, copy("![flow.jpg](f/0)", [{ index: 0, name: "flow.jpg", mediaType: "image/jpeg" }])),
+      "GET /api/s/files/0": () => new Response(new Uint8Array([0]), { status: 200, headers: { "Content-Type": "image/jpeg" } }),
+    });
+    render(<Reader />);
+
+    fireEvent.error(await screen.findByRole("img", { name: "flow.jpg" }));
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("flow.jpg")).toBeInTheDocument();
+  });
+
+  it("keeps the note's headings below the title", async () => {
+    stubFetch({ "GET /api/s": () => json(200, copy("# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six")) });
+    render(<Reader />);
+
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("Questions on routing");
+    expect(screen.getByRole("heading", { name: "One" }).tagName).toBe("H2");
+    expect(screen.getByRole("heading", { name: "Two" }).tagName).toBe("H3");
+    expect(screen.getByRole("heading", { name: "Three" }).tagName).toBe("H4");
+    expect(screen.getByRole("heading", { name: "Four" }).tagName).toBe("H5");
+    expect(screen.getByRole("heading", { name: "Five" }).tagName).toBe("H6");
+    expect(screen.getByRole("heading", { name: "Six" }).tagName).toBe("H6");
   });
 
   it("opens web links without a referrer", async () => {
@@ -161,7 +272,9 @@ describe("Reader", () => {
     expect(link).toHaveAttribute("href", "https://example.org/map");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");
-    expect(screen.getByRole("link", { name: "Bob" })).toHaveAttribute("href", "mailto:bob@example.org");
+    const mail = screen.getByRole("link", { name: "Bob" });
+    expect(mail).toHaveAttribute("href", "mailto:bob@example.org");
+    expect(mail).not.toHaveAttribute("target");
   });
 });
 
