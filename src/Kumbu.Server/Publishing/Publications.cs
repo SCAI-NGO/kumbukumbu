@@ -200,6 +200,96 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         }
     }
 
+    /// <summary>
+    /// What a batch of the note store does to the vault's publications and marks (publish spec §3.6, §3.7), in the
+    /// batch's own transaction, under the vault's gate; <paramref name="batch"/> in stored paths. Marks follow what moves:
+    /// a note's or file's mark to its target, a folder's to the folder everything under it moved to, once nothing stays
+    /// there. A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
+    /// under a mark too (<c>unpublishable</c>); otherwise it follows its note and files, under the same link. Edits
+    /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw: anyone else
+    /// gets <see cref="PublishedNoteException"/>, which aborts the batch.
+    /// </summary>
+    internal async Task FollowAsync(
+        IClientSessionHandle session, VaultAccess access, bool device, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
+    {
+        if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
+        var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
+        if (record.Publications.Count == 0 && record.Unpublishable.Count == 0) return;
+
+        var moved = batch.Moves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value))
+            .Concat(batch.AttachmentMoves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value)))
+            .ToDictionary(m => m.From, m => m.To, StringComparer.Ordinal);
+        var trashed = batch.Trashes.Select(t => t.Path.Value).ToHashSet(StringComparer.Ordinal);
+        var after = AfterBatch(access.Vault, batch);
+        IReadOnlyList<string> marks = [.. record.Unpublishable.Select(m => Followed(m, moved, after)).Distinct(StringComparer.Ordinal)];
+
+        // A path is newly covered when it moved under a mark, or a mark that moved now covers it.
+        bool Newly(string from, string to) => Covered(marks, to) && (from != to || !Covered(record.Unpublishable, to));
+
+        var kept = new List<PublicationEntry>();
+        var withdrawn = new List<(PublicationEntry Entry, string Reason)>();
+        foreach (var entry in record.Publications)
+        {
+            var note = moved.GetValueOrDefault(entry.Note, entry.Note);
+            var files = entry.Files.Select(f => f with { Path = moved.GetValueOrDefault(f.Path, f.Path) }).ToList();
+            if (trashed.Contains(entry.Note)) withdrawn.Add((entry, WithdrawalReasons.Removed));
+            else if (Newly(entry.Note, note) || entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
+            else kept.Add(note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files });
+        }
+
+        if (withdrawn.Count > 0 && !(IsOwner(access) && (access.MayPublish || device)))
+        {
+            var shown = access.ToCaller(Parse(withdrawn[0].Entry.Note));
+            throw new PublishedNoteException(access.Membership is not null
+                ? $"{shown} is published by the vault's owner; only the owner can remove it or move it into an unpublishable folder"
+                : $"{shown} is published, and this key may not publish in {access.Name}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
+        }
+
+        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)) return;
+
+        // Each withdrawal is logged under the path its note had before the batch.
+        var logged = withdrawn.Select(w => LogEntry(PublishingKinds.Withdrawn, Parse(w.Entry.Note), at, by, byRef, w.Reason)).ToList();
+        foreach (var ((entry, _), log) in withdrawn.Zip(logged))
+        {
+            await store.DeleteCopyAsync(session, entry.Code, ct);
+            await EventAsync(session, access, log, ct);
+        }
+
+        await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = [.. record.Log, .. logged] }, ct);
+    }
+
+    /// <summary>A mark after the batch: a note's or file's at its target; a folder's at the one folder everything moved
+    /// from under it went to, with the same rest, once nothing of the vault stays under it. Folder markers count as files.</summary>
+    private static string Followed(string mark, IReadOnlyDictionary<string, string> moved, IReadOnlySet<string> after)
+    {
+        if (moved.TryGetValue(mark, out var target)) return target;
+        var prefix = mark + "/";
+        string? folder = null;
+        foreach (var (from, to) in moved)
+        {
+            if (!from.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var rest = from[mark.Length..];
+            if (!to.EndsWith(rest, StringComparison.Ordinal) || to.Length == rest.Length) return mark;
+            var landed = to[..^rest.Length];
+            if (folder is not null && folder != landed) return mark;
+            folder = landed;
+        }
+
+        return folder is null || after.Any(p => p.StartsWith(prefix, StringComparison.Ordinal)) ? mark : folder;
+    }
+
+    /// <summary>The vault's notes and files as the batch leaves them, as the working set holds them before it applies.</summary>
+    private static HashSet<string> AfterBatch(UnlockedVault vault, NoteBatch batch)
+    {
+        var paths = vault.Notes.Keys.Concat(vault.Attachments.Keys).Select(p => p.Value).ToHashSet(StringComparer.Ordinal);
+        paths.ExceptWith(batch.Trashes.Select(n => n.Path.Value).Concat(batch.AttachmentTrashes.Select(a => a.Path.Value))
+            .Concat(batch.Moves.Select(m => m.Current.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path.Value)));
+        paths.UnionWith(batch.Creates.Select(n => n.Path.Value).Concat(batch.AttachmentCreates.Select(a => a.Path.Value))
+            .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path.Value))
+            .Concat(batch.Moves.Select(m => m.Target.Path.Value)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path.Value)));
+        return paths;
+    }
+
     /// <summary>A note, a file, or a folder with notes or files below it, as <c>cd</c> finds one.</summary>
     private static async Task<bool> ExistsAsync(EncryptedNoteStore notes, VaultPath path, CancellationToken ct) =>
         await notes.GetAsync(path, ct) is not null
@@ -430,4 +520,12 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     private static PublishRefusedException NoSuchNote(VaultPath note) => new($"{note}: no such note", ShellErrorKind.NotFound);
 
     private static PublishRefusedException NotPublished(VaultPath note) => new($"{note} is not published", ShellErrorKind.NotFound);
+}
+
+/// <summary>A removal or move would withdraw a publication, and its caller may not withdraw (publish spec §3.7): the
+/// batch aborts and nothing moves or goes. A final refusal, <see cref="Code"/> <c>published</c>: 403 over REST, never a
+/// retryable answer.</summary>
+public sealed class PublishedNoteException(string sentence) : Exception(sentence)
+{
+    public string Code => Refusals.Published;
 }

@@ -155,6 +155,10 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         return files + (await catalog.Publications.DeleteManyAsync(session, P.In(d => d.Vault, vaultIds), cancellationToken: ct)).DeletedCount;
     }
 
+    /// <summary>The vaults' records, without opening them: with the copies gone, their entries would name dead links.</summary>
+    public async Task DeleteRecordsOfVaultsAsync(IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, CancellationToken ct) =>
+        await catalog.Publishing.DeleteManyAsync(session, F.In(d => d.Vault, vaultIds), cancellationToken: ct);
+
     /// <summary>The copy under <paramref name="code"/>, with its document's id and its owner; null if no document has the
     /// code's lookup, or its reader slot or copy doesn't open.</summary>
     public async Task<(ObjectId Id, string Owner, PublishedCopy Copy)?> OpenCopyAsync(string code, CancellationToken ct) =>

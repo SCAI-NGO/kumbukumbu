@@ -105,6 +105,11 @@ public static class ApiErrors
                 _ => Result(StatusCodes.Status400BadRequest, sentence),
             };
         }
+        // Final: a device must not retry it (publish spec §3.7).
+        catch (Publishing.PublishedNoteException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
+        }
         catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);

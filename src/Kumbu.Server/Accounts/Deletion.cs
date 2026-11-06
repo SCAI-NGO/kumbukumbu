@@ -74,6 +74,9 @@ public sealed class Deletion(
 
     private IMongoCollection<InvitationDocument> InvitationDocs { get; } = db.GetCollection<InvitationDocument>("invitations");
 
+    // Made here, not injected: PublicationStore is internal and holds nothing but the catalog.
+    private readonly Publishing.PublicationStore _publications = new(catalog);
+
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
     /// once <paramref name="confirm"/> repeats the name and <paramref name="password"/> is the user's (so a stolen
@@ -353,6 +356,11 @@ public sealed class Deletion(
             await catalog.Vaults.UpdateOneAsync(s, v => v.Id == vaultId, Builders<VaultDocument>.Update.Set(v => v.ClosingAt, at), cancellationToken: ct);
             await Sharing.VaultEvents.RecordAsync(db, s, vaultId, Sharing.VaultEvents.ClosingStarted, null, now, null, ct, until: at);
         }
+
+        // Her publications go at once, not with the vault (publish spec §3.7); nobody publishes in a closing vault, so
+        // its marks go with its record.
+        await _publications.DeleteCopiesOfVaultsAsync(s, ids, ct);
+        await _publications.DeleteRecordsOfVaultsAsync(s, ids, ct);
 
         var memberships = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
         var m = Builders<Sharing.MembershipDocument>.Filter;
