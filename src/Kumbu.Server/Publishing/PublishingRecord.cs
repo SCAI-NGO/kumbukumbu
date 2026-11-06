@@ -11,15 +11,20 @@ namespace Kumbu.Server.Publishing;
 internal sealed record PublishingRecord(IReadOnlyList<PublicationEntry> Publications, IReadOnlyList<string> Unpublishable, IReadOnlyList<PublishingLogEntry> Log)
 {
     public static readonly PublishingRecord Empty = new([], [], []);
+
+    public override string ToString() => $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count} }}";
 }
 
 /// <summary>
 /// One publication. Id: 16 random bytes in lower-case hex. Code: the share code, normalised (for Copy link again).
 /// Key: the publication key; this is the vault-side slot (decision 6). NoteVersion and the files' versions tell when
-/// the copy is older than what it was made from.
+/// the copy is older than what it was made from. Not logged: <see cref="ToString"/> leaves out the code and the key.
 /// </summary>
 internal sealed record PublicationEntry(
-    string Id, string Note, string Code, byte[] Key, DateTime SnapshotAt, string NoteVersion, IReadOnlyList<PublishedFile> Files, string By, WriterRefPayload ByRef);
+    string Id, string Note, string Code, byte[] Key, DateTime SnapshotAt, string NoteVersion, IReadOnlyList<PublishedFile> Files, string By, WriterRefPayload ByRef)
+{
+    public override string ToString() => $"PublicationEntry {{ Id = {Id}, Note = {Note}, SnapshotAt = {SnapshotAt:O}, Files = {Files.Count} }}";
+}
 
 internal sealed record PublishedFile(string Path, string Version);
 
@@ -44,6 +49,9 @@ internal sealed record PublishedCopyFile(int Index, string Name, string MediaTyp
 
 /// <summary>The reader slot, sealed under the reader key: the publication key, and the owner, whose account the
 /// reader endpoint checks before it opens the copy (decision 7).</summary>
-internal sealed record ReaderSlot(byte[] Key, string Owner);
+internal sealed record ReaderSlot(byte[] Key, string Owner)
+{
+    public override string ToString() => $"ReaderSlot {{ Owner = {Owner} }}";
+}
 
 internal sealed class PublishingConflictException() : Exception("The vault's publications changed meanwhile; try again.");

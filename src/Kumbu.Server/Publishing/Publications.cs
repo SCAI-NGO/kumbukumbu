@@ -16,19 +16,28 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Publishing;
 
-public sealed record PublishedNote(string Link, DateTime SnapshotAt, IReadOnlyList<string> Plain);
+/// <summary>A new publication's link, shown once. Not logged: <see cref="ToString"/> leaves the link out.</summary>
+public sealed record PublishedNote(string Link, DateTime SnapshotAt, IReadOnlyList<string> Plain)
+{
+    public override string ToString() => $"PublishedNote {{ SnapshotAt = {SnapshotAt:O}, Plain = [{string.Join(", ", Plain)}] }}";
+}
 
 /// <summary>A published note as the caller may see it: for a member only <see cref="Note"/> (publish spec §3.10);
-/// <see cref="Link"/> only when asked for, and only for the owner.</summary>
+/// <see cref="Link"/> only when asked for, and only for the owner; <see cref="ToString"/> leaves it out.</summary>
 public sealed record PublicationState(
-    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null);
+    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null)
+{
+    public override string ToString() =>
+        $"PublicationState {{ Note = {Note}, SnapshotAt = {SnapshotAt:O}, Older = {Older}, ChangedAt = {ChangedAt:O}, PublishedBy = {PublishedBy} }}";
+}
 
 /// <summary>
 /// Publishing, updating and withdrawing one note (publish spec §3.1–3.5). Only the vault's owner, and only through a
 /// caller that may publish there (<see cref="VaultAccess.MayPublish"/>); never what an unpublishable mark covers. The
-/// copy is the note's fair copy (<see cref="FairCopies"/>) with the images it embeds, their metadata stripped. Each
-/// change is one transaction under the vault's gate: the copy, its files, the vault's record and the owner's vault event together. Paths in
-/// and out are in the caller's view; the record holds them as the vault stores them. The code is never logged.
+/// copy is the note's fair copy (<see cref="FairCopies"/>) with the images it embeds, their metadata stripped, at most
+/// <see cref="CopyLimit"/> bytes of them. Each change is one transaction under the vault's gate: the copy, its files,
+/// the vault's record and the owner's vault event together. Paths in and out are in the caller's view; the record
+/// holds them as the vault stores them. The code is never logged.
 /// </summary>
 internal sealed class Publications(VaultCatalog catalog, PublicationStore store, IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time)
 {
@@ -41,6 +50,9 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
     /// <summary><c>Kumbu:Publish:Enabled</c>: off, nothing is published or updated; withdrawing still works.</summary>
     public bool Enabled => options.Value.Publish.Enabled;
+
+    /// <summary>The most bytes of images one copy takes, after stripping; an image past it is plain text.</summary>
+    internal long CopyLimit { get; init; } = 64L * 1024 * 1024;
 
     /// <summary>Where links point: <c>Kumbu:PublicUrl</c>, else the request's scheme and host.</summary>
     public static string BaseUrl(HttpContext http, KumbuOptions options) => OAuthUrls.Origin(http, options.PublicUrl);
@@ -113,15 +125,15 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     }
 
     /// <summary>The copy, its files and its entry go; the log keeps the withdrawal. Also while switched off: it only
-    /// reduces what is out.</summary>
-    public async Task WithdrawAsync(VaultAccess access, VaultPath note, string by, WriterRef byRef, CancellationToken ct)
+    /// reduces what is out. By the record's entry, so also when the note is gone.</summary>
+    public async Task WithdrawAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, string by, WriterRef byRef, CancellationToken ct)
     {
         Check(access, publishing: false);
         var stored = access.ToVault(note);
         for (var attempt = 1; ; attempt++)
         {
             var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
-            var entry = Find(record, stored) ?? throw NotPublished(note);
+            var entry = Find(record, stored) ?? throw (await notes.GetAsync(note, ct) is null ? NoSuchNote(note) : NotPublished(note));
             var next = record with
             {
                 Publications = [.. record.Publications.Where(p => p.Id != entry.Id)],
@@ -211,10 +223,11 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     public async Task<IReadOnlyList<PublicationState>> ListAsync(
         VaultAccess access, EncryptedNoteStore notes, VaultPath under, string? linkBase, CancellationToken ct)
     {
-        var scope = access.ToVault(under).Value;
+        // The root holds the whole vault; the record is the vault's alone.
+        var scope = under.IsRoot ? null : access.ToVault(under).Value;
         var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
         var states = new List<PublicationState>();
-        foreach (var entry in record.Publications.Where(p => Covered([scope], p.Note)).OrderBy(p => p.Note, StringComparer.Ordinal))
+        foreach (var entry in record.Publications.Where(p => scope is null || Covered([scope], p.Note)).OrderBy(p => p.Note, StringComparer.Ordinal))
         {
             states.Add(await StateOfAsync(access, notes, entry, linkBase, ct));
         }
@@ -291,7 +304,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
     /// <summary>
     /// The fair copy with the images it may take: present, not covered by a mark, and whose bytes
-    /// <see cref="ImageMetadata.Strip"/> takes. One it doesn't becomes plain text: the copy is made again without it.
+    /// <see cref="ImageMetadata.Strip"/> takes, as long as they fit in <see cref="CopyLimit"/> in the order they appear.
+    /// One it doesn't becomes plain text: the copy is made again without it, each file read and stripped once.
     /// </summary>
     private async Task<Made> MakeAsync(VaultAccess access, EncryptedNoteStore notes, StoredNote note, PublishingRecord record, string baseUrl, CancellationToken ct)
     {
@@ -301,6 +315,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         var source = access.ToVault(note.Path);
         var ownOrigin = new Uri(baseUrl).GetLeftPart(UriPartial.Authority);
         var unusable = new HashSet<VaultPath>();
+        var stripped = new Dictionary<VaultPath, byte[]?>();
 
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
 
@@ -311,11 +326,21 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         {
             var fair = FairCopies.Make(source, note.Content, Attachment, MayCopy, ownOrigin);
             var bytes = new List<byte[]>();
+            var total = 0L;
             foreach (var path in fair.Files)
             {
-                var state = attachments[path].Current;
-                var raw = EncryptedNoteStore.TryParseBlobId(state.BlobId, out var id) ? await catalog.ReadBlobAsync(access.Vault, id, ct) : null;
-                if ((raw is null ? null : ImageMetadata.Strip(raw, state.MediaType)) is { } stripped) bytes.Add(stripped);
+                if (!stripped.TryGetValue(path, out var file))
+                {
+                    var state = attachments[path].Current;
+                    var raw = EncryptedNoteStore.TryParseBlobId(state.BlobId, out var id) ? await catalog.ReadBlobAsync(access.Vault, id, ct) : null;
+                    stripped[path] = file = raw is null ? null : ImageMetadata.Strip(raw, state.MediaType);
+                }
+
+                if (file is not null && total + file.Length <= CopyLimit)
+                {
+                    bytes.Add(file);
+                    total += file.Length;
+                }
                 else unusable.Add(path);
             }
 

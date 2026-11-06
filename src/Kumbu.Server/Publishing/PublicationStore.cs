@@ -96,8 +96,17 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         }
 
         var id = ObjectId.GenerateNewId();
-        await catalog.Publications.InsertOneAsync(
-            session, new PublicationDocument { Id = id, Vault = vaultId, Lookup = lookup, Reader = reader, Blob = SealCopy(key, l, copy), At = catalog.Now }, cancellationToken: ct);
+        try
+        {
+            await catalog.Publications.InsertOneAsync(
+                session, new PublicationDocument { Id = id, Vault = vaultId, Lookup = lookup, Reader = reader, Blob = SealCopy(key, l, copy), At = catalog.Now }, cancellationToken: ct);
+        }
+        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // Without the driver's exception: its message names the lookup id.
+            throw new PublishingConflictException();
+        }
+
         await InsertFilesAsync(session, vaultId, id, l, key, files, ct);
     }
 

@@ -386,7 +386,7 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         }
 
         await Task.Delay(5, Ct);
-        await Publications.WithdrawAsync(access, P(note), owner.Username, BySession, Ct);
+        await Publications.WithdrawAsync(access, notes, P(note), owner.Username, BySession, Ct);
     }
 
     [Fact]

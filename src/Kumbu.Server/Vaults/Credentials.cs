@@ -93,8 +93,12 @@ public sealed class ApiKeyCredential(string keyId, string apiKey, bool device = 
     public bool Device => device;
 
     /// <summary>A device's slots never carry "May publish"; one planted into them counts for nothing.</summary>
-    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
-        _opened ??= device ? [.. (await catalog.OpenForApiKeyAsync(keyId, apiKey, ct)).Select(a => a with { MayPublish = false })] : await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct)
+    {
+        if (_opened is not null) return _opened;
+        var opened = await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
+        return _opened = device ? [.. opened.Select(a => a with { MayPublish = false })] : opened;
+    }
 
     // As for a session: the other vaults belong to someone else or weren't given to this key.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);

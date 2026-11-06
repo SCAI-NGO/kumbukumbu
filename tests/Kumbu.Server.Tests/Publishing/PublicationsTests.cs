@@ -189,7 +189,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
                 ShellErrorKind.Refused, Refusals.NotOwner, "only the owner of alices-work can publish its notes");
             await RefusedAsync(
                 () => Publications.UpdateAsync(access, notes, P(note), bob.Username, BySession, KumbuAppFactory.PublicUrl, Ct), ShellErrorKind.Refused, Refusals.NotOwner);
-            await RefusedAsync(() => Publications.WithdrawAsync(access, P(note), bob.Username, BySession, Ct), ShellErrorKind.Refused, Refusals.NotOwner);
+            await RefusedAsync(() => Publications.WithdrawAsync(access, notes, P(note), bob.Username, BySession, Ct), ShellErrorKind.Refused, Refusals.NotOwner);
         }
 
         Assert.Equal(0, await CountAsync("publications", vaultId));
@@ -208,7 +208,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
             () => Publications.PublishAsync(access, notes, P(Questions), alice.User.Id, "Claude", WriterRef.ForOwner(WriterRef.Agent, keyId), KumbuAppFactory.PublicUrl, Ct),
             ShellErrorKind.Refused, Refusals.NoPublishRight,
             "this key may not publish in Work; its owner can allow it (\"May publish\") under API keys or Connections in the web app");
-        await RefusedAsync(() => Publications.WithdrawAsync(access, P(Questions), "Claude", WriterRef.ForOwner(WriterRef.Agent, keyId), Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
+        await RefusedAsync(() => Publications.WithdrawAsync(access, notes, P(Questions), "Claude", WriterRef.ForOwner(WriterRef.Agent, keyId), Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
         Assert.Equal(0, await CountAsync("publications", vaultId));
 
         // The same key's sibling with the right publishes.
@@ -276,7 +276,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
 
         await RefusedAsync(
             () => Publications.PublishAsync(access, notes, note, "dev", "dev", WriterRef.Server, KumbuAppFactory.PublicUrl, Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
-        await RefusedAsync(() => Publications.WithdrawAsync(access, note, "dev", WriterRef.Server, Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
+        await RefusedAsync(() => Publications.WithdrawAsync(access, notes, note, "dev", WriterRef.Server, Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
     }
 
     [Fact]
@@ -298,7 +298,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
             ShellErrorKind.Refused, Refusals.PublishingOff, "publishing is switched off on this server");
         Assert.Single(await publications.ListAsync(access, notes, P("/Work"), null, Ct));
 
-        await publications.WithdrawAsync(access, P(Questions), alice.Username, BySession, Ct);
+        await publications.WithdrawAsync(access, notes, P(Questions), alice.Username, BySession, Ct);
 
         Assert.Null(await Store.OpenCopyAsync(CodeOf(published), Ct));
         Assert.Empty(await publications.ListAsync(access, notes, P("/Work"), null, Ct));
@@ -473,10 +473,10 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
     {
         var alice = await AliceWithQuestionsAsync();
         var published = await PublishAsync(alice);
-        var (_, access) = await AliceAsync(alice);
+        var (notes, access) = await AliceAsync(alice);
         Assert.Equal(1, await CountAsync("publication_files", access.Id));
 
-        await Publications.WithdrawAsync(access, P(Questions), alice.Username, BySession, Ct);
+        await Publications.WithdrawAsync(access, notes, P(Questions), alice.Username, BySession, Ct);
 
         Assert.Null(await Store.OpenCopyAsync(CodeOf(published), Ct));
         Assert.Equal(0, await CountAsync("publications", access.Id));
@@ -487,7 +487,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         var withdrawn = record.Log[^1];
         Assert.Equal((PublishingKinds.Withdrawn, Questions, WithdrawalReasons.ByRight), (withdrawn.Kind, withdrawn.Note, withdrawn.Reason));
         await RefusedAsync(
-            () => Publications.WithdrawAsync(access, P(Questions), alice.Username, BySession, Ct), ShellErrorKind.NotFound, null, $"{Questions} is not published");
+            () => Publications.WithdrawAsync(access, notes, P(Questions), alice.Username, BySession, Ct), ShellErrorKind.NotFound, null, $"{Questions} is not published");
 
         // Publishing again makes a new link.
         Assert.NotEqual(published.Link, (await PublishAsync(alice)).Link);
@@ -511,5 +511,160 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
             Assert.Equal(expected, await Publications.StateAsync(access, notes, P("/alices-work/Routing/Questions.md"), KumbuAppFactory.PublicUrl, Ct));
             Assert.Null(await Publications.StateAsync(access, notes, P("/alices-work/Routing/flow.jpg"), null, Ct));
         }
+    }
+
+    [Fact]
+    public async Task No_record_prints_a_code_a_link_or_a_key()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        var published = await PublishAsync(alice);
+        var (notes, access) = await AliceAsync(alice);
+        var record = (await Store.ReadAsync(null, access.Vault, Ct)).Record;
+        var entry = Assert.Single(record.Publications);
+        var state = (await Publications.StateAsync(access, notes, P(Questions), KumbuAppFactory.PublicUrl, Ct))!;
+        Assert.Equal(published.Link, state.Link);
+        var code = CodeOf(published);
+        string[] secrets = [code, published.Link[(published.Link.IndexOf('#') + 1)..], published.Link, Convert.ToBase64String(entry.Key), Convert.ToHexString(entry.Key)];
+
+        foreach (var text in new[] { published.ToString(), state.ToString(), entry.ToString(), record.ToString(), new ReaderSlot(entry.Key, alice.User.Id).ToString() })
+        {
+            Assert.DoesNotContain(secrets, s => text.Contains(s, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // What isn't secret still shows.
+        Assert.Contains(Questions, entry.ToString(), StringComparison.Ordinal);
+        Assert.Contains(Questions, state.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Listing_the_root_or_the_vault_lists_everything()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("a.md", "a");
+        await alice.CreateAsync("Deep/Down/b.md", "b");
+        await PublishAsync(alice, "/Work/a.md");
+        await PublishAsync(alice, "/Work/Deep/Down/b.md");
+        var (notes, access) = await AliceAsync(alice);
+
+        foreach (var under in new[] { "/", "/Work" })
+        {
+            Assert.Equal([P("/Work/Deep/Down/b.md"), P("/Work/a.md")], (await Publications.ListAsync(access, notes, P(under), null, Ct)).Select(s => s.Note));
+        }
+
+        Assert.Equal([P("/Work/Deep/Down/b.md")], (await Publications.ListAsync(access, notes, P("/Work/Deep"), null, Ct)).Select(s => s.Note));
+    }
+
+    [Fact]
+    public async Task Withdrawing_what_is_neither_published_nor_a_note_is_no_such_note()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        await alice.CreateAsync("Routing/Other.md", "x");
+        var (notes, access) = await AliceAsync(alice);
+
+        await RefusedAsync(
+            () => Publications.WithdrawAsync(access, notes, P("/Work/Routing/Nothing.md"), alice.Username, BySession, Ct), ShellErrorKind.NotFound, null, "/Work/Routing/Nothing.md: no such note");
+        await RefusedAsync(
+            () => Publications.WithdrawAsync(access, notes, P("/Work/Routing/Other.md"), alice.Username, BySession, Ct), ShellErrorKind.NotFound, null, "/Work/Routing/Other.md is not published");
+
+        // An entry whose note is gone is still withdrawn by its entry.
+        var published = await PublishAsync(alice);
+        var (doc, record) = await Store.ReadAsync(null, access.Vault, Ct);
+        using (var session = await Catalog.StartSessionAsync(Ct))
+        {
+            await Store.WriteAsync(session, access.Vault, doc, record with { Publications = [record.Publications[0] with { Note = "/Work/Routing/Gone.md" }] }, Ct);
+        }
+
+        await Publications.WithdrawAsync(access, notes, P("/Work/Routing/Gone.md"), alice.Username, BySession, Ct);
+        Assert.Null(await Store.OpenCopyAsync(CodeOf(published), Ct));
+    }
+
+    [Fact]
+    public async Task A_member_is_told_first_that_publishing_is_switched_off()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        var bob = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.ShareWithAsync(bob, "alices-work", MemberRole.Write);
+        await using var off = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Publish:Enabled", "false"));
+        var publications = off.Services.GetRequiredService<Publications>();
+        var (notes, access) = await OpenAsync(new UserCredential(bob.User.Id, bob.UserKey), "alices-work", off.Services);
+        const string note = "/alices-work/Routing/Questions.md";
+
+        await RefusedAsync(
+            () => publications.PublishAsync(access, notes, P(note), bob.User.Id, bob.Username, BySession, KumbuAppFactory.PublicUrl, Ct), ShellErrorKind.Refused, Refusals.PublishingOff);
+        await RefusedAsync(
+            () => publications.UpdateAsync(access, notes, P(note), bob.Username, BySession, KumbuAppFactory.PublicUrl, Ct), ShellErrorKind.Refused, Refusals.PublishingOff);
+        // Withdrawing isn't switched off, so the member hears why he may not.
+        await RefusedAsync(() => publications.WithdrawAsync(access, notes, P(note), bob.Username, BySession, Ct), ShellErrorKind.Refused, Refusals.NotOwner);
+    }
+
+    [Fact]
+    public async Task A_copy_takes_images_up_to_its_limit()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        var jpeg = ImageMetadataTests.JpegWithGps(6);
+        var size = ImageMetadata.Strip(jpeg, "image/jpeg")!.Length;
+        await alice.CreateFileAsync("a.jpg", jpeg);
+        await alice.CreateFileAsync("b.jpg", jpeg);
+        await alice.CreateAsync("Two.md", "![[a.jpg]]\n![[b.jpg]]");
+        await alice.CreateAsync("Big.md", "![[a.jpg]]");
+        var s = Api.Services;
+        Publications Limited(long limit) => new(Catalog, Store, s.GetRequiredService<IMongoDatabase>(), s.GetRequiredService<Microsoft.Extensions.Options.IOptions<KumbuOptions>>(), s.GetRequiredService<TimeProvider>())
+        {
+            CopyLimit = limit,
+        };
+        var (notes, access) = await AliceAsync(alice);
+
+        var two = await Limited(size + size / 2).PublishAsync(access, notes, P("/Work/Two.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+        var big = await Limited(size - 1).PublishAsync(access, notes, P("/Work/Big.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+
+        Assert.Equal(["b.jpg"], two.Plain);
+        var copy = (await Store.OpenCopyAsync(CodeOf(two), Ct))!.Value.Copy;
+        Assert.Equal("![a.jpg](f/0)\nb.jpg", copy.Markdown);
+        Assert.Equal(["a.jpg"], big.Plain);
+        Assert.Empty((await Store.OpenCopyAsync(CodeOf(big), Ct))!.Value.Copy.Files);
+        Assert.Equal(64L * 1024 * 1024, Publications.CopyLimit);
+    }
+
+    [Fact]
+    public async Task Parallel_publishes_of_one_note_give_one_copy()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        var (_, access) = await AliceAsync(alice);
+
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
+        {
+            try
+            {
+                return (Published: await PublishAsync(alice), Refused: (PublishRefusedException?)null);
+            }
+            catch (PublishRefusedException e)
+            {
+                return (Published: (PublishedNote?)null, Refused: e);
+            }
+        }));
+
+        Assert.Single(attempts, a => a.Published is not null);
+        Assert.All(
+            attempts.Where(a => a.Refused is not null),
+            a => Assert.Equal((ShellErrorKind.Conflict, $"{Questions} is already published; publish update makes a new copy under the same link"), (a.Refused!.Kind, a.Refused.Message)));
+        Assert.Equal(1, await CountAsync("publications", access.Id));
+        Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications);
+    }
+
+    [Fact]
+    public async Task A_lookup_taken_twice_is_a_conflict_without_the_drivers_words()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        var code = CodeOf(await PublishAsync(alice));
+        var (_, access) = await AliceAsync(alice);
+        using var session = await Catalog.StartSessionAsync(Ct);
+        session.StartTransaction();
+
+        var e = await Assert.ThrowsAsync<PublishingConflictException>(
+            () => Store.InsertCopyAsync(session, access.Id, code, Kumbu.Core.Crypto.VaultCrypto.NewKey(), alice.User.Id, new PublishedCopy("t", "m", DateTime.UtcNow, []), [], Ct));
+
+        Assert.Null(e.InnerException);
+        Assert.Equal("The vault's publications changed meanwhile; try again.", e.Message);
+        await session.AbortTransactionAsync(Ct);
     }
 }
