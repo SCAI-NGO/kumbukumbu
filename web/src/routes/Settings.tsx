@@ -14,6 +14,7 @@ import { useDialog } from "../hooks/useDialog";
 import { usePreferences } from "../attachments/downloadFiles";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
+import PublicationsSection from "./PublicationsSection";
 import SharedVaultsSection from "./SharedVaultsSection";
 import DeleteVaultDialog from "../shell/DeleteVaultDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
@@ -38,6 +39,9 @@ export default function Settings() {
       <VaultsSection />
       <Section title="Shared vaults">
         <SharedVaultsSection />
+      </Section>
+      <Section title="Published notes">
+        <PublicationsSection />
       </Section>
       <YourDataSection />
       <DownloadsSection />

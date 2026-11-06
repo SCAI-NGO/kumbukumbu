@@ -1,0 +1,486 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Paths;
+using Kumbu.Core.Publishing;
+
+namespace Kumbu.Core.Tests.Publishing;
+
+public class FairCopyTests
+{
+    private static readonly VaultPath Note = P("/Work/Routing/Questions.md");
+
+    private static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
+
+    // Resolves a bare attachment name to the note's folder, as LinkResolver would for one lying there.
+    private static VaultPath? InFolder(string target) =>
+        Path.GetExtension(target) is var ext && ext.Length > 0 && ext != ".md" ? P("/Work/Routing/" + target.Split('/')[^1]) : null;
+
+    private static FairCopy Copy(string content, bool mayCopy = true, string? ownOrigin = null) =>
+        FairCopies.Make(Note, content, InFolder, _ => mayCopy, ownOrigin);
+
+    private static string Text(string content, string? ownOrigin = null) => Copy(content, ownOrigin: ownOrigin).Markdown;
+
+    [Fact]
+    public void Frontmatter_goes() => Assert.Equal("Text", Text("---\nstatus: draft\n---\nText"));
+
+    [Fact]
+    public void The_first_heading_is_the_title_without_its_tags()
+    {
+        var copy = Copy("# Questions on routing #routing\n\n1. x");
+        Assert.Equal("Questions on routing", copy.Title);
+        Assert.Equal("1. x", copy.Markdown);
+    }
+
+    [Fact]
+    public void Without_a_heading_the_title_is_the_file_name()
+    {
+        Assert.Equal("Questions", Copy("x").Title);
+        Assert.Equal("Questions", Copy("## Not a title\nx").Title);
+        Assert.Equal("## Not a title\nx", Copy("## Not a title\nx").Markdown);
+    }
+
+    [Fact]
+    public void A_tag_standing_alone_goes()
+    {
+        Assert.Equal("Done.", Text("Done. #todo #later"));
+        Assert.Equal("a\nb", Text("a\n#todo\nb"));
+    }
+
+    [Fact]
+    public void A_tag_in_running_text_keeps_its_word()
+    {
+        Assert.Equal("We discussed routing today", Text("We discussed #routing today"));
+        Assert.Equal("a/b is open", Text("#a/b is open"));
+    }
+
+    [Fact]
+    public void Comments_go()
+    {
+        Assert.Equal("a\nb", Text("a\n%% ask about deep links later %%\nb"));
+        Assert.Equal("a  b", Text("a %%x%% b"));
+        Assert.Equal("b", Text("<!-- x -->\nb"));
+        Assert.Equal("a\nb", Text("a\n%% one\ntwo\nthree %%\nb"));
+        Assert.Equal("a", Text("a\n%% never closed\n[[Private/Plan]]"));
+        // A fence inside a comment makes no code of what follows it.
+        Assert.Equal("a\nPlan b", Text("a\n%%\n```\n%%\n[[Private/Plan]] %%x%%b"));
+    }
+
+    [Theory]
+    [InlineData("[[Routing master]]", "Routing master")]
+    [InlineData("[[Projects/Routing master]]", "Routing master")]
+    [InlineData("[[Routing master|the master]]", "the master")]
+    [InlineData("[[Routing master#Open]]", "Routing master")]
+    [InlineData("[[#Open]]", "Open")]
+    [InlineData("[see this](/Work/Private/Plan.md)", "see this")]
+    [InlineData("[x](../Private/Plan.md#h)", "x")]
+    [InlineData("![[Other note]]", "Other note")]
+    [InlineData("[x](obsidian://open?vault=Work)", "x")]
+    public void Every_link_form_becomes_its_text(string link, string text) => Assert.Equal($"a {text} b", Text($"a {link} b"));
+
+    [Fact]
+    public void No_path_leaves()
+    {
+        var content = string.Join('\n',
+            "Plain [[Private/Plan]] and [[Private/Plan.md]].",
+            "Alias [[Private/Plan|the plan]], heading [[Private/Plan#Open]], both [[Private/Plan#Open|it]].",
+            "Embedded ![[Private/Plan]] and ![[Private/Plan.md#Open]].",
+            "Markdown [one](/Work/Private/Plan.md), [two](../Private/Plan.md#h), [three](<Private/Plan.md> \"t\"), ![four](Private/Plan.md).",
+            "Encoded [five](Private/Plan%2Emd) and [[[Private/Plan]]](https://example.org).",
+            "App [six](obsidian://open?vault=Work&file=Private%2FPlan).",
+            "Reference [p][d], [d][] and [d].",
+            "",
+            "[d]: Private/Plan.md \"Work\"",
+            "",
+            "Html <a href=\"Private/Plan.md\">p</a> <img src=\"/Work/Private/Plan.md\">.",
+            "Autolinks <obsidian://open?vault=Work&file=Private%2FPlan> <file:///home/alice/Work/Private/Plan.md>.",
+            "With a space <obsidian://open?vault=Work&file=Private Plan>.",
+            "",
+            "Over lines [see",
+            "this](Private/Plan.md), [x](",
+            "Private/Plan.md), [y](https://example.org \"a",
+            "b\"), [z](Private/Plan.md \"a",
+            "b\") and [[[Private/Plan]]](Private/Plan.md).",
+            "Tags <a",
+            "href=\"Private/Plan.md\">p</a>, <a href='Private/Plan.md'",
+            ">q</a>, <a title=\"x>y\" href=\"Private/Plan.md\">r</a> and <img alt='>' src=\"Private/Plan.md\"/>.",
+            "",
+            "> [e]: Private/Plan.md",
+            "- [f]: Private/Plan.md",
+            "1. [g]: <Private/Plan.md>",
+            "> - [h]:",
+            ">   Private/Plan.md",
+            "",
+            "[i]: Private/Plan.md",
+            "  \"Work",
+            "  title\"",
+            "",
+            "Uses [p][e] [p][f] [p][g] [p][h] [p][i].",
+            "",
+            "Own https://kumbu.example.org/notes/Work/Private/Plan.md, <http://KUMBU.example.org.:8080/notes/Work/a.md>,",
+            "www.kumbu.example.org/notes/Work/b.md and kumbu.example.org/notes/Work/c.md;",
+            "[own](//kumbu.example.org:9/Work) [w](https://www.kumbu.example.org/Work) [https://kumbu.example.org/Work](https://example.org).",
+            "",
+            "Unparsed [a](Private/Plan.md and [b]",
+            "",
+            "Shapes [[Private/Plan] [[Private/Plan|[q]]] ![[Private/Plan|[q]]] [[Private/[Plan]]] [[Private/Plan#a[b]c]]",
+            "[[Private/Plan|a]b]] [[Private/Plan",
+            "]]",
+            "",
+            "Bare obsidian://open?vault=Work&file=Private%2FPlan and file:///home/alice/Work/Private/Plan.md.",
+            "Query [x](https://example.org/r?u=https://kumbu.example.org/notes/Work/Plan.md) <https://example.org/?u=kumbu.example.org/Work>",
+            "[t](https://example.org/r \"https://kumbu.example.org/notes/Work/Plan.md\") [r][q]",
+            "",
+            "[q]: https://example.org/#kumbu.example.org/notes/Work",
+            "",
+            "User https://alice@kumbu.example.org/notes/Work/Plan.md, entity https://kumbu.example.org&#47;notes&#47;Work&#47;Plan.md,",
+            "dots https://kumbu。example。org/notes/Work/Plan.md [d](https://kumbu．example．org/notes/Work/Plan.md).",
+            "",
+            "- ```sh",
+            "  echo",
+            "  ```",
+            "",
+            "%% private %% [[Private/Plan]]",
+            "",
+            "``` a`b",
+            "[[Private/Plan.md]] [x](Private/Plan.md)",
+            "```");
+        var copy = FairCopies.Make(Note, content, _ => null, _ => true, "https://kumbu.example.org");
+        foreach (var leak in new[] { "Private/", "Plan.md", "obsidian", "file:", "Work", "[[", "private", "kumbu" })
+        {
+            Assert.DoesNotContain(leak, copy.Markdown, StringComparison.Ordinal);
+        }
+
+        Assert.Empty(copy.Files);
+    }
+
+    [Theory]
+    // Each about 1 MB or 20,000 nestings. Timed against plain text of the same length, so a busy machine slows both
+    // alike: linear, it stays within a small factor of it; a quadratic reading, or one with a large constant per
+    // bracket, takes a hundred times longer and more.
+    [InlineData("[", "a", "](x)", 20_000)]
+    [InlineData("![", "a", "](x.png)", 20_000)]
+    [InlineData("[](", "", "", 20_000)]
+    [InlineData("[a](x \"", "", "", 20_000)]
+    [InlineData("<a x='", "", "", 20_000)]
+    [InlineData("<?", "", "", 20_000)]
+    [InlineData("`` ` ", "", "", 20_000)]
+    [InlineData("#a ", "b", "", 20_000)]
+    [InlineData("[[a|[x](y)]] ", "", "", 20_000)]
+    [InlineData("https://kumbu.example.org", "", "", 20_000)]
+    [InlineData("[a](", "", "", 250_000)]
+    [InlineData("![a](", "", "", 200_000)]
+    [InlineData("[[", "", "", 500_000)]
+    [InlineData("x<y ", "", "", 250_000)]
+    [InlineData("- ```\n", "", "", 100_000)]
+    [InlineData("[file:](x)", "", "", 100_000)]
+    [InlineData("[https://kumbu.example.org/](x)", "", "", 35_000)]
+    [InlineData("[obsidian://a](x)", "", "", 60_000)]
+    public void Deep_nesting_finishes_quickly(string before, string middle, string after, int n)
+    {
+        var input = string.Concat(Enumerable.Repeat(before, n)) + middle + string.Concat(Enumerable.Repeat(after, n));
+        var prose = string.Concat(Enumerable.Repeat("Some plain words, ", input.Length / 18 + 1))[..input.Length];
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        FairCopies.Make(Note, prose, _ => null, _ => true, "https://kumbu.example.org");
+        var baseline = clock.Elapsed;
+        clock.Restart();
+        var copy = FairCopies.Make(Note, input, _ => null, _ => true, "https://kumbu.example.org");
+        var elapsed = clock.Elapsed;
+        Assert.True(elapsed < baseline * 20 + TimeSpan.FromSeconds(1), $"took {elapsed}, plain text of that length {baseline}");
+        Assert.True(elapsed < TimeSpan.FromSeconds(15), $"took {elapsed}");
+        Assert.DoesNotContain("](x", copy.Markdown, StringComparison.Ordinal);
+        if (before == "[") Assert.Equal("a", copy.Markdown);
+    }
+
+    [Fact]
+    public void Links_in_link_text_are_plain_text()
+    {
+        Assert.Equal("[a b](https://example.org)", Text("[a [b](https://example.org/b)](https://example.org)"));
+        Assert.Equal("a b c", Text("[a ![b](https://example.org/b.png) c](Private/Plan.md)"));
+    }
+
+    [Fact]
+    public void An_autolink_of_another_scheme_goes_even_with_spaces()
+    {
+        Assert.Equal("a  b", Text("a <obsidian://open?vault=Work&file=Private Plan> b"));
+        // Read as an autolink, it binds more tightly than the brackets around it.
+        Assert.Equal("[a ](https://example.org)", Text("[a <obsidian://x y]>](https://example.org)"));
+    }
+
+    [Fact]
+    public void Fences_in_lists_and_quotes_are_text()
+    {
+        // Where a fence in a container ends depends on the container: the copy reads what it holds, and escapes the
+        // fence so the reader doesn't open one either.
+        Assert.Equal("- \\```sh\n  echo x\n  \\```\n\n Plan", Text("- ```sh\n  echo [[x]]\n  ```\n\n%% private %% [[Private/Plan]]"));
+        Assert.Equal("> \\```\n> x\n> \\```\nafter y", Text("> ```\n> [[x]]\n> ```\nafter [[y]]"));
+        Assert.Equal("1. \\```js\n   a x\n   \\```\n2. y", Text("1. ```js\n   a [[x]]\n   ```\n2. [[y]]"));
+        foreach (var note in new[]
+        {
+            "- a\n  ```\n[x](/Work/Private/Plan.md)\n```",
+            "> ```\n[x](/Work/Private/Plan.md)\n> ```",
+            "- ```\n[x](/Work/Private/Plan.md)\n- ```",
+            "> - ```\n> [x](/Work/Private/Plan.md)\n> - ```",
+            "-     ```\n[x](/Work/Private/Plan.md)\n```",
+            "1. a\n\n   ```\n   [x](/Work/Private/Plan.md)\n   ```",
+        })
+        {
+            Assert.DoesNotContain("Private", Text(note), StringComparison.Ordinal);
+        }
+
+        // A fence never closed is text.
+        Assert.Equal("\\```\nPlan", Text("```\n[[Private/Plan]]"));
+        // A top-level fence closes with at most three spaces in, as CommonMark has it.
+        Assert.Equal("```\n    ```\n```\nx\n\\```", Text("```\n    ```\n```\n[x](/Work/Private/Plan.md)\n```"));
+    }
+
+    [Fact]
+    public void Raw_html_blocks_hold_no_code()
+    {
+        foreach (var note in new[]
+        {
+            "<pre>\n```\n</pre>\n[x](/Work/Private/Plan.md)\n```",
+            "<pre>\n\n    [x](/Work/Private/Plan.md)\n</pre>",
+            "<?php\n```\n?>\n[x](/Work/Private/Plan.md)\n```",
+            "<!DOCTYPE html\n```\n>\n[x](/Work/Private/Plan.md)\n```",
+            "<![CDATA[\n```\n]]>\n[x](/Work/Private/Plan.md)\n```",
+            "<custom-tag>\n```\n</custom-tag>\n[x](/Work/Private/Plan.md)\n```",
+            "<div>\n```\n</div>\n[x](/Work/Private/Plan.md)\n```",
+        })
+        {
+            var copy = Text(note);
+            Assert.DoesNotContain("](/Work", copy, StringComparison.Ordinal);
+        }
+
+        // The fence after the block is code, as it is in the note; the one inside it, now text, is escaped, or it would
+        // pair with the first and turn that code into a link.
+        Assert.Equal("\\```\n```\n[x](/Work/Private/Plan.md)\n```\ny", Text("<style>\n```\n</style>\n```\n[x](/Work/Private/Plan.md)\n```\n[y](/Work/Private/Plan.md)"));
+    }
+
+    [Fact]
+    public void Pipes_split_table_cells_before_anything_else()
+    {
+        const string head = "| a | b |\n|---|---|\n";
+        Assert.DoesNotContain("Private", Text(head + "| [x](https://example.org/?q=|[y](/Work/Private/Plan.md)) | c |"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text(head + "| `x|[y](/Work/Private/Plan.md)` | c |"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text(head + "| <https://example.org/|[y](/Work/Private/Plan.md)> | c |"), StringComparison.Ordinal);
+        Assert.Equal("x", Text("[x](https://example.org/ \"a|b\")"));
+    }
+
+    [Fact]
+    public void Line_endings_are_read_as_line_feeds()
+    {
+        Assert.Equal("a\nb", Text("---\r\nstatus: draft\r\n---\r\na\r\n%% x %%\r\nb"));
+        Assert.Equal("a\nb", Text("a\r%% x %%\rb"));
+        Assert.Equal("Questions on routing", Copy("# Questions on routing #routing\r\n\r\nx").Title);
+    }
+
+    [Fact]
+    public void A_server_whose_name_is_not_ascii_is_found_in_either_spelling()
+    {
+        const string own = "https://kümbu.example.org";
+        var ascii = new System.Globalization.IdnMapping().GetAscii("kümbu.example.org");
+        Assert.Equal("x y", Text($"[x](https://{ascii}/a) [y](https://kümbu.example.org/a)", own));
+        Assert.Equal("a  b  c", Text($"a https://kümbu.example.org/Work b https://{ascii}/Work c", own));
+        Assert.Equal("x", Text($"[x](https://example.org/?u={ascii}/Work)", own));
+    }
+
+    [Fact]
+    public void A_definition_label_may_run_over_lines()
+    {
+        Assert.Equal("see Private Plan", Text("[Private\nPlan]: /Work/Private/Plan.md\n\nsee [Private Plan]"));
+        Assert.Equal("see Private Plan", Text("> [Private\n> Plan]: /Work/Private/Plan.md\n\nsee [Private Plan]"));
+        Assert.Equal("x", Text("x\n[a\nb]:\n/Work/Private/Plan.md"));
+        // Left shaped like one over lines, with no destination to read, the safety net takes it out.
+        Assert.Equal("x", Text("x\n[a\nb]:"));
+    }
+
+    [Fact]
+    public void Removals_join_no_new_way_out()
+    {
+        const string own = "https://kumbu.example.org";
+        Assert.DoesNotContain("kumbu", Text("https://kumbu<b></b>.example.org/notes/Work and www.kumbu<i></i>.example.org/Work", own), StringComparison.Ordinal);
+        Assert.DoesNotContain("](/Work", Text("[x]<b>(/Work/Private/Plan.md)</b>"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text("a ` b\n`%% Private secret %%` c"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Odd_wikilinks_leave_their_text()
+    {
+        Assert.Equal("Plan] q] q] Plan] Plan ab Plan\n]]", Text("[[Private/Plan] [[Private/Plan|[q]]] ![[Private/Plan|[q]]] [[Private/[Plan]]] [[Private/Plan#a[b]c]] [[Private/Plan|a]b]] [[Private/Plan\n]]"));
+    }
+
+    [Fact]
+    public void Bare_urls_of_other_schemes_go()
+    {
+        Assert.Equal("open  or .", Text("open obsidian://open?vault=Work or file:///home/alice/Work/a.md."));
+        Assert.Equal("note: this", Text("note: this"));
+    }
+
+    [Fact]
+    public void A_heading_of_tags_alone_goes() => Assert.Equal(("Questions", "x"), (Copy("# #Work\n\nx").Title, Copy("# #Work\n\nx").Markdown));
+
+    [Fact]
+    public void Footnotes_stay() => Assert.Equal("Note[^1].\n\n[^1]: A footnote.", Text("Note[^1].\n\n[^1]: A footnote."));
+
+    [Fact]
+    public void The_title_is_plain_text()
+    {
+        var copy = Copy("# See [Router docs](https://example.org/router) ![[map.png]] ![c](https://example.org/c.png)\n\n![[flow.png]]");
+        Assert.Equal("See Router docs map.png c", copy.Title);
+        Assert.Equal("![flow.png](f/0)", copy.Markdown);
+        Assert.Equal(["map.png"], copy.Plain);
+        Assert.Equal([P("/Work/Routing/flow.png")], copy.Files);
+    }
+
+    [Fact]
+    public void A_tag_right_after_html_keeps_its_word()
+    {
+        Assert.Equal("x tag y", Text("x <b>#tag</b> y"));
+        Assert.Equal("x tag", Text("x <b>#tag</b>"));
+    }
+
+    [Fact]
+    public void A_line_left_with_its_marker_alone_goes()
+    {
+        Assert.Equal("- a\n- b", Text("- a\n- #todo\n- b"));
+        Assert.Equal("b", Text("- [ ] %%x%%\nb"));
+        Assert.Equal("b", Text("> #todo\n\nb"));
+        Assert.Equal("1. a", Text("1. a\n2. <br>"));
+        Assert.Equal("-\n- a", Text("-\n- a"));
+    }
+
+    [Fact]
+    public void No_blank_line_leads()
+    {
+        Assert.Equal("Text", Text("%% x %%\n\nText"));
+        Assert.Equal("Text", Text("---\na: b\n---\n\n#todo\n\nText"));
+    }
+
+    [Fact]
+    public void The_safety_net_leaves_no_link_syntax()
+    {
+        Assert.Equal("[a", Text("[a](Private/Plan.md"));
+        Assert.Equal("text", Text("[d]:\n\ntext"));
+        Assert.Equal("a \\<b", Text("a <b"));
+        Assert.Equal("use x\\<y here", Text("use x<y here"));
+        Assert.Equal("x \n> y", Text("x <a href=\"Private/Plan.md\"\n> y"));
+        Assert.Equal("[r](https://example.org) ![x](f/0) <https://example.org>", Copy("[r](https://example.org) ![x](x.png) <https://example.org>").Markdown);
+    }
+
+    [Fact]
+    public void Code_stays_as_written()
+    {
+        Assert.Equal("```\n[[Secret]] #tag %%c%%\n```", Text("```\n[[Secret]] #tag %%c%%\n```"));
+        Assert.Equal("see `[[Secret]]` and `#tag`", Text("see `[[Secret]]` and `#tag`"));
+        Assert.Equal("a\n\n    [[Secret]] <b>x</b>\nb", Text("a\n\n    [[Secret]] <b>x</b>\nb"));
+    }
+
+    [Fact]
+    public void Remote_images_become_links()
+    {
+        Assert.Equal("[chart](https://example.org/c.png)", Text("![chart](https://example.org/c.png)"));
+        Assert.Equal("[https://example.org/c.png](https://example.org/c.png)", Text("![](https://example.org/c.png)"));
+    }
+
+    [Theory]
+    [InlineData("[Router docs](https://example.org/router)")]
+    [InlineData("<https://example.org>")]
+    [InlineData("[mail](mailto:alice@example.org)")]
+    [InlineData("<alice@example.org>")]
+    [InlineData("[r][web]\n\n[web]: https://example.org/router")]
+    public void Web_links_stay(string link) => Assert.Equal(link, Text(link));
+
+    [Fact]
+    public void Links_to_the_server_itself_are_vault_links()
+    {
+        const string own = "https://kumbu.example.org";
+        Assert.Equal("a plan b", Text("a [plan](https://kumbu.example.org/notes/Work/Private/Plan.md) b", own));
+        Assert.Equal("a  b", Text("a <https://KUMBU.example.org/notes/Work/x.md> b", own));
+        Assert.Equal("a shot b", Text("a ![shot](https://kumbu.example.org/api/files/Work/a.png) b", own));
+        Assert.Equal("a", Text("a\n![](https://kumbu.example.org/api/files/Work/a.png)", own));
+        Assert.Equal("[x](https://kumbu.example.org.evil.example/)", Text("[x](https://kumbu.example.org.evil.example/)", own));
+        Assert.Equal("[x](https://evil.example/kumbu.example.org/)", Text("[x](https://evil.example/kumbu.example.org/)", own));
+        Assert.Equal("x", Text("[x](https://example.org/r?u=https://kumbu.example.org/a)", own));
+        Assert.Equal("x", Text("[x](https://example.org/r \"kumbu.example.org\")", own));
+        Assert.Equal("a  b", Text("a https://alice@kumbu.example.org/notes/Work/x.md b", own));
+        Assert.Equal("a  b", Text("a https://kumbu.example.org&#47;notes&#47;Work b", own));
+        Assert.Equal("a  b x", Text("a https://kumbu。example。org/notes/Work b [x](https://kumbu｡example｡org/a)", own));
+        // Full width, a soft hyphen, a zero-width space: the browser reads the same host.
+        foreach (var host in new[] { "ｋｕｍｂｕ.example.org", "kum­bu.example.org", "kumbu​.example.org" })
+        {
+            Assert.Equal("a  b x", Text($"a https://{host}/notes/Work b [x](https://{host}/a)", own));
+        }
+
+        Assert.Equal("x", Text("[x](https://example.org/login?next=https%3A%2F%2Fkumbu.example.org%2FWork)", own));
+        Assert.Equal("x", Text("[x](https://example.org/#&#107;umbu.example.org/Work)", own));
+        // The same host is the same server, whatever the scheme or port.
+        Assert.Equal("x", Text("[x](https://kumbu.example.org:8443/)", own));
+        Assert.Equal("x", Text("[x](http://kumbu.example.org/)", own));
+        Assert.Equal("x", Text("[x](HTTPS://Kumbu.Example.Org./a)", own));
+        Assert.Equal("see .", Text("see https://kumbu.example.org/notes/Work/x.md.", own));
+        Assert.Equal("see .", Text("see www.kumbu.example.org/notes/Work/x.md.", own));
+        Assert.Equal("on kumbu.example.org today", Text("on kumbu.example.org today", own));
+        Assert.Equal("see https://kumbu.example.org.evil.example/a", Text("see https://kumbu.example.org.evil.example/a", own));
+        Assert.Equal("[x](https://kumbu.example.org/)", Text("[x](https://kumbu.example.org/)"));
+    }
+
+    [Fact]
+    public void An_image_it_may_copy_is_embedded_by_number()
+    {
+        var one = Copy("![[flow.png]]");
+        Assert.Equal("![flow.png](f/0)", one.Markdown);
+        Assert.Equal([P("/Work/Routing/flow.png")], one.Files);
+        Assert.Empty(one.Plain);
+
+        var twice = Copy("![[flow.png]]\n![[flow.png|300]]");
+        Assert.Equal("![flow.png](f/0)\n![flow.png](f/0)", twice.Markdown);
+        Assert.Single(twice.Files);
+
+        var two = Copy("![[flow.png]] ![map](map.png) ![](flow.png)");
+        Assert.Equal("![flow.png](f/0) ![map](f/1) ![flow.png](f/0)", two.Markdown);
+        Assert.Equal([P("/Work/Routing/flow.png"), P("/Work/Routing/map.png")], two.Files);
+    }
+
+    [Fact]
+    public void An_attachment_it_may_not_copy_is_plain_text()
+    {
+        var refused = Copy("![[flow.png]] and ![[flow.png]]", mayCopy: false);
+        Assert.Equal("flow.png and flow.png", refused.Markdown);
+        Assert.Equal(["flow.png"], refused.Plain);
+        Assert.Empty(refused.Files);
+
+        var gone = FairCopies.Make(Note, "![[gone.png]]", _ => null, _ => true);
+        Assert.Equal("gone.png", gone.Markdown);
+        Assert.Equal(["gone.png"], gone.Plain);
+
+        Assert.Equal("report.pdf", Copy("![[report.pdf]]", mayCopy: false).Markdown);
+        Assert.Equal("the map", Copy("![the map](map.png)", mayCopy: false).Markdown);
+        Assert.Equal("map.png", Copy("![](map.png)", mayCopy: false).Markdown);
+    }
+
+    [Fact]
+    public void Raw_html_goes_its_text_stays() => Assert.Equal("a b c", Text("a <span style=\"x\">b</span> c"));
+
+    [Fact]
+    public void The_example_of_spec_6()
+    {
+        const string note = """
+            ---
+            status: draft
+            ---
+            # Questions on routing #routing
+
+            1. Should the chatbot move the user between screens? See [[Routing master]].
+            2. Is there a list of routes? [Router docs](https://example.org/router)
+            %% ask about deep links later %%
+            ![[flow.png]]
+            """;
+        var copy = Copy(note);
+        Assert.Equal("Questions on routing", copy.Title);
+        Assert.Equal("""
+            1. Should the chatbot move the user between screens? See Routing master.
+            2. Is there a list of routes? [Router docs](https://example.org/router)
+            ![flow.png](f/0)
+            """, copy.Markdown);
+        Assert.Equal([P("/Work/Routing/flow.png")], copy.Files);
+    }
+}

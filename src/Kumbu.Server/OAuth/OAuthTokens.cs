@@ -133,6 +133,8 @@ public sealed class OAuthTokens(
         var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw new ConnectionUnavailableException("This app is no longer known; start the connection again in the app.");
         var rights = Rights(doc, meta, request.ReadOnly);
         if (rights.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
+        // Of the vaults granted; none for an app that asked to read only, as its rights are capped to read.
+        IReadOnlySet<string> publish = request.ReadOnly ? new HashSet<string>() : Connections.PublishOf(doc, meta).Where(rights.ContainsKey).ToHashSet(StringComparer.Ordinal);
 
         var code = Secrets.New(CodePrefix);
         var tokenId = NewTokenId();
@@ -143,7 +145,7 @@ public sealed class OAuthTokens(
         IReadOnlyDictionary<string, VaultCatalog.VaultKeyGrant> vaultKeys;
         try
         {
-            (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, expiresAt, ct);
+            (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, publish, expiresAt, ct);
         }
         catch (ArgumentException)
         {
@@ -749,9 +751,10 @@ public sealed class OAuthTokens(
             .Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key))
             .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.ParseSealed(v.Value, meta.V)!.Value, StringComparer.Ordinal);
 
-    // The version too: a legacy "write" (maintain) and a new one are different rights in the same words.
+    // The version too: a legacy "write" (maintain) and a new one are different rights in the same words. And "May publish".
     private static bool SameRights(Connections.ConnectionMeta a, Connections.ConnectionMeta b) =>
-        a.V == b.V && a.Vaults.Count == b.Vaults.Count && a.Vaults.All(v => b.Vaults.TryGetValue(v.Key, out var right) && right == v.Value);
+        a.V == b.V && a.Vaults.Count == b.Vaults.Count && a.Vaults.All(v => b.Vaults.TryGetValue(v.Key, out var right) && right == v.Value)
+        && (a.Publish ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(b.Publish ?? []);
 
     /// <summary>16 random bytes in hex, as API key ids.</summary>
     private static string NewTokenId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));

@@ -93,7 +93,24 @@ public static class ApiErrors
         {
             return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
         }
-                catch (Kumbu.Server.Vaults.VaultDeletedException e)
+        // Its sentences are the shell's ("…: no such note"), made a sentence of the REST API's.
+        catch (Kumbu.Core.Publishing.PublishRefusedException e)
+        {
+            var sentence = char.ToUpperInvariant(e.Message[0]) + e.Message[1..] + ".";
+            return e.Kind switch
+            {
+                Kumbu.Core.Sh.ShellErrorKind.Refused => TypedResults.Json(new ApiError(sentence, Code: e.Code), statusCode: StatusCodes.Status403Forbidden),
+                Kumbu.Core.Sh.ShellErrorKind.NotFound => Result(StatusCodes.Status404NotFound, sentence),
+                Kumbu.Core.Sh.ShellErrorKind.Conflict => Result(StatusCodes.Status409Conflict, sentence),
+                _ => Result(StatusCodes.Status400BadRequest, sentence),
+            };
+        }
+        // Final: a device must not retry it (publish spec §3.7).
+        catch (Kumbu.Core.Publishing.PublishedNoteException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
+        }
+        catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }

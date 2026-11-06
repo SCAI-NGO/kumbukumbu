@@ -45,6 +45,11 @@ describe("colour schemes", () => {
       },
     );
 
+    // A mark, not text: 3:1 (WCAG 1.4.11), as the green dot of a publication up to date.
+    it.each(grounds)("success on %s is at least 3:1", (ground) => {
+      expect(contrast(scheme.tokens.success, scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
+    });
+
     it("on-accent on accent is at least 4.5:1", () => {
       expect(contrast(scheme.tokens.onAccent, scheme.tokens.accent)).toBeGreaterThanOrEqual(4.5);
     });

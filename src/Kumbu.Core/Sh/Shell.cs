@@ -34,7 +34,7 @@ public sealed class Shell
 
     public Shell(
         INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
-        IAttachmentPixels? pixels = null, IWriterLabels? labels = null, string version = "0.0.0-dev")
+        IAttachmentPixels? pixels = null, IWriterLabels? labels = null, Publishing.IPublisher? publisher = null, string version = "0.0.0-dev")
     {
         _observer = observer;
         _pixels = pixels;
@@ -49,7 +49,7 @@ public sealed class Shell
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
             new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
-            new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
+            new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints), new PublishCommand(publisher),
             new Uname(version), new Help(_commands),
         ];
         foreach (var command in commands)

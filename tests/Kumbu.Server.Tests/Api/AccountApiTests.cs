@@ -7,11 +7,13 @@ using System.Text.Json.Nodes;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Tests.Vaults;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -1124,6 +1126,69 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, expiring.StatusCode);
         var expiresAt = (await JsonAsync(expiring))["apiKey"]!["expiresAt"]!.GetValue<DateTime>().ToUniversalTime();
         Assert.InRange(expiresAt, DateTime.UtcNow.AddDays(90).AddMinutes(-1), DateTime.UtcNow.AddDays(90));
+    }
+
+    [Fact]
+    public async Task Creating_a_key_with_may_publish_on_a_shared_vault_is_400()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "Garten", MemberRole.Write);
+
+        using var shared = await bob.SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "agent", vaults = new Dictionary<string, string> { ["Garten"] = "write" }, publish = new[] { "Garten" } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, shared.StatusCode);
+        Assert.Equal(VaultCatalog.MayPublishOnlyOwned, await RestClient.ErrorAsync(shared));
+        using var list = await bob.GetAsync("/api/keys");
+        Assert.Empty((await JsonAsync(list)).AsArray());
+    }
+
+    [Fact]
+    public async Task Creating_a_key_with_may_publish_on_a_vault_without_a_right_is_400()
+    {
+        var user = await RestClient.NewAsync(Api, vault: "Work");
+        using var second = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+
+        using var withoutRight = await user.SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "agent", vaults = new Dictionary<string, string> { ["Work"] = "write" }, publish = new[] { "Gartenarbeit" } });
+        using var notHers = await user.SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "agent", vaults = new Dictionary<string, string> { ["Work"] = "write" }, publish = new[] { "Fremd" } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, withoutRight.StatusCode);
+        Assert.Equal(VaultCatalog.MayPublishOnlyOwned, await RestClient.ErrorAsync(withoutRight));
+        Assert.Equal(HttpStatusCode.BadRequest, notHers.StatusCode);
+        Assert.Equal("You have no vault named 'Fremd'.", await RestClient.ErrorAsync(notHers));
+        using var nullName = await user.SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "agent", vaults = new Dictionary<string, string> { ["Work"] = "write" }, publish = new string?[] { null } });
+        Assert.Equal(HttpStatusCode.BadRequest, nullName.StatusCode);
+        using var list = await user.GetAsync("/api/keys");
+        Assert.Empty((await JsonAsync(list)).AsArray());
+    }
+
+    [Fact]
+    public async Task The_key_view_lists_may_publish()
+    {
+        var user = await RestClient.NewAsync(Api, vault: "Work");
+        using var second = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+
+        using var created = await user.SendAsync(
+            HttpMethod.Post, "/api/keys",
+            new { name = "publisher", vaults = new Dictionary<string, string> { ["Work"] = "read", ["Gartenarbeit"] = "write" }, publish = new[] { "Work" } });
+        using var plain = await user.SendAsync(HttpMethod.Post, "/api/keys", new { name = "plain", vaults = new Dictionary<string, string> { ["Work"] = "write" } });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(["Work"], Names((await JsonAsync(created))["apiKey"]!["publish"]!));
+        Assert.Equal(HttpStatusCode.Created, plain.StatusCode);
+        Assert.Empty(Names((await JsonAsync(plain))["apiKey"]!["publish"]!));
+        using var list = await user.GetAsync("/api/keys");
+        var listed = (await JsonAsync(list)).AsArray();
+        Assert.Equal(["Work"], Names(listed.Single(k => k!["name"]!.GetValue<string>() == "publisher")!["publish"]!));
+        Assert.Empty(Names(listed.Single(k => k!["name"]!.GetValue<string>() == "plain")!["publish"]!));
+
+        static string[] Names(JsonNode publish) => [.. publish.AsArray().Select(n => n!.GetValue<string>())];
     }
 
     [Fact]

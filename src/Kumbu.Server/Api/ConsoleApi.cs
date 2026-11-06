@@ -39,7 +39,7 @@ public static class ConsoleApi
     internal static readonly FrozenSet<string> Allowed = FrozenSet.Create(
         StringComparer.Ordinal,
         "ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort",
-        "history", "diff", "trash", "lscp", "uname", "help");
+        "history", "diff", "trash", "lscp", "publish", "uname", "help");
 
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>
@@ -77,6 +77,12 @@ public static class ConsoleApi
             if (stages.Select(s => s[0]).FirstOrDefault(n => shell.HasCommand(n) && !Allowed.Contains(n)) is { } refused)
             {
                 return ShellResult.Error($"{refused}: not in this console, which only reads");
+            }
+
+            // Of publish, only ls reads (publish spec §3.9).
+            if (stages.FirstOrDefault(s => s[0] == "publish" && (s.Count < 2 || s[1] != "ls")) is { } publish)
+            {
+                return ShellResult.Error($"{string.Join(' ', publish.Take(2))}: not in this console, which only reads");
             }
 
             // Also when the shell then refuses the line: the check stays as simple as the read-only one.

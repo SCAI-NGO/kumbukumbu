@@ -54,7 +54,9 @@ export function GoneText({ movedTo }: { movedTo: string | null }) {
   );
 }
 
-const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
+/** A bar's buttons and the bar itself, also the publication's above the note. */
+export const barButtonClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
+export const barClass = "flex min-h-11 flex-none flex-wrap items-center gap-x-1 border-b border-line bg-surface pr-1.5 pl-4 text-[13px] text-muted";
 
 /**
  * "liz changed this note just now"; "You changed this note in Obsidian (Laptop) …" for a write by one of the user's
@@ -78,10 +80,7 @@ export function ChangeText({ change, write = false }: { change: NoteVersion; wri
 /** The quiet bar over the note: what changed elsewhere, and what the user can do about it. */
 export function ElsewhereBar({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
   return (
-    <section
-      aria-label="Changed elsewhere"
-      className="flex min-h-11 flex-none flex-wrap items-center gap-x-1 border-b border-line bg-surface pr-1.5 pl-4 text-[13px] text-muted"
-    >
+    <section aria-label="Changed elsewhere" className={barClass}>
       <span aria-hidden className="size-2 flex-none rounded-full bg-accent" />
       <span role="status" className="min-w-0 flex-1 py-2 pl-1.5">
         {children}
@@ -93,7 +92,7 @@ export function ElsewhereBar({ children, actions }: { children: ReactNode; actio
 
 export function BarButton({ onClick, children }: { onClick(): void; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className={linkClass}>
+    <button type="button" onClick={onClick} className={barButtonClass}>
       {children}
     </button>
   );

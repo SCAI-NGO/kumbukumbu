@@ -258,6 +258,56 @@ describe("the note view", () => {
     expect(useEditor.getState().recentPaths).not.toContain(PLAN);
   });
 
+  it("says that deleting a published note withdraws the link", async () => {
+    const withdraws = "It is published: deleting it withdraws the link.";
+    const notPublished = (r: Request) => json(404, { error: `${new URL(r.url).pathname} is not published.` });
+    // The dialog learns it from the vault's list, which holds no link: the note's own route, with the link, says no.
+    noteApi({
+      "GET /api/vaults/Work/publications": () =>
+        json(200, { publications: [{ path: PLAN, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: "ada", link: null }], unpublishable: [] }),
+      "GET /api/publications/*": notPublished,
+    });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    expect(await within(screen.getByRole("dialog", { name: "Delete plan?" })).findByText(withdraws)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    cleanup();
+
+    // Not published: nothing to withdraw.
+    noteApi({ "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }), "GET /api/publications/*": notPublished });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    let dialog = screen.getByRole("dialog", { name: "Delete plan?" });
+    expect(await within(dialog).findByText("inbox")).toBeInTheDocument();
+    expect(within(dialog).queryByText(withdraws)).toBeNull();
+    cleanup();
+
+    // A member is told nothing, and asks nothing of publications.
+    const fetch = noteApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, owner: '"Alice"', level: "write", shared: true, membership: "m1" }]),
+      "GET /api/vaults/Work/publications": () =>
+        json(200, { publications: [{ path: PLAN, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: null, link: null }], unpublishable: [] }),
+      "GET /api/publications/*": () => json(200, { path: PLAN, snapshotAt: null, older: null, changedAt: null, publishedBy: null, link: null }),
+    });
+    const asked = () => fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname).filter((p) => p.includes("publications"));
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    // The bar's own question, that it is published by the vault's owner; the dialog adds none.
+    expect(await screen.findByText("Published by the vault's owner")).toBeInTheDocument();
+    const before = asked();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    dialog = screen.getByRole("dialog", { name: "Delete plan?" });
+    expect(await within(dialog).findByText("inbox")).toBeInTheDocument();
+    expect(within(dialog).queryByText(withdraws)).toBeNull();
+    expect(asked()).toEqual(before);
+    expect(before).not.toContain("/api/vaults/Work/publications");
+  });
+
   it("goes to the vaults after deleting the only note of a folder", async () => {
     const lone = "/Work/inbox.md";
     noteApi({

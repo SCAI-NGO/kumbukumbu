@@ -16,14 +16,16 @@ export type FileState = components["schemas"]["FileStateView"];
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
 /**
- * Every note of the vault may read differently now: its tree, notes, links, history and search are asked again.
+ * Every note of the vault may read differently now: its tree, notes, links, history, publications and marks, and
+ * search are asked again.
  * `notes: false` after one note's restore: the other notes' text is as it was, and reading the open one again
  * would replace its text on screen. `versions`: the open note's version too, which tells the editor of a write.
  * `search: false` leaves an open search as it is.
  */
 function vaultChanged(queryClient: QueryClient, vault: string, { notes = true, versions = false, search = true } = {}) {
   const inIt = (k: unknown) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`));
-  for (const key of ["tree", ...(notes ? ["note"] : []), ...(versions ? ["version"] : []), "links", "backlinks", "history", "trash", "checkpoints"]) {
+  const keys = ["tree", ...(notes ? ["note"] : []), ...(versions ? ["version"] : []), "links", "backlinks", "history", "trash", "checkpoints", "publications", "publication"];
+  for (const key of keys) {
     void queryClient.invalidateQueries({ queryKey: [key], predicate: (q) => q.queryKey.some(inIt) });
   }
   for (const key of ["vaults", "changes", ...(search ? ["search"] : [])]) void queryClient.invalidateQueries({ queryKey: [key] });

@@ -30,6 +30,10 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     /// code (<see cref="VaultCatalog.CheckWritable(UnlockedVault, VaultAccess)"/>).</summary>
     public string? ReadOnlyCode { get; init; }
 
+    /// <summary>The caller may publish this vault's notes (publish design §3.8): the owner's session, or her key or
+    /// connection given "May publish" here. Never a member, nor the dev token.</summary>
+    public bool MayPublish { get; init; }
+
     /// <summary>The refusal's sentence for <see cref="ReadOnlyCode"/>, the vault named as the caller sees it.</summary>
     public static string ReadOnlySentence(string code, string vault) => code switch
     {

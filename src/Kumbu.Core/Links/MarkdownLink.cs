@@ -180,7 +180,7 @@ public sealed partial record MarkdownLink(
         return backslashes % 2 == 1;
     }
 
-    private static string Decode(string path) => Uri.UnescapeDataString(EscapeRegex().Replace(path, "$1"));
+    internal static string Decode(string path) => Uri.UnescapeDataString(EscapeRegex().Replace(path, "$1"));
 
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:")]
     private static partial Regex SchemeRegex();

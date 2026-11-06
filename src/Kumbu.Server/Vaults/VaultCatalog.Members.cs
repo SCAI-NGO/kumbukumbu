@@ -382,16 +382,17 @@ public sealed partial class VaultCatalog
         _ => access,
     };
 
-    /// <summary>A key's or a connection's access: the owner's, under the vault's shown name at its sealed level; a member's,
-    /// under her alias, at most at her role, writing under the writer id recorded for <paramref name="credentialId"/>.</summary>
+    /// <summary>A key's or a connection's access: the owner's, under the vault's shown name at its sealed level, with "May
+    /// publish" as sealed; a member's, under her alias, at most at her role, writing under the writer id recorded for
+    /// <paramref name="credentialId"/>, and never publishing, whatever its slot holds.</summary>
     private static VaultAccess CredentialAccess(
-        UnlockedVault vault, byte[] vaultKey, Accounts.KeyRight right, MembershipDocument? membership, string? alias, string credentialId) =>
-        membership is null
-            ? new(vault, vault.Shown, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
+        UnlockedVault vault, byte[] vaultKey, Accounts.KeyRight right, MembershipDocument? membership, string? alias, string credentialId, bool mayPublish) =>
+        (membership is null
+            ? new VaultAccess(vault, vault.Shown, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
             : ReadOnlyIfOwnerInactive(new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false)
             {
                 WriterId = Memberships.WriterIdOf(membership, vaultKey, credentialId),
-            });
+            })) with { MayPublish = membership is null && mayPublish };
 
     /// <summary>The level a membership's role gives; a role that doesn't parse reads as <c>read</c>.</summary>
     internal static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch

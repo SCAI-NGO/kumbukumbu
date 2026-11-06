@@ -60,6 +60,15 @@ public sealed class KumbuOptions
     public MetricsOptions Metrics { get; set; } = new();
 
     public PdfOptions Pdf { get; set; } = new();
+
+    public PublishOptions Publish { get; set; } = new();
+}
+
+/// <summary>Publishing notes behind a link (publish design §3.13).</summary>
+public sealed class PublishOptions
+{
+    /// <summary>Off (<c>KUMBU_PUBLISH_ENABLED=false</c>), nothing is published, updated or read; withdrawing still works.</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>The PDF sidecar, which parses PDFs and decodes images in a container of its own (<see cref="Attachments.PdfSidecar"/>).</summary>

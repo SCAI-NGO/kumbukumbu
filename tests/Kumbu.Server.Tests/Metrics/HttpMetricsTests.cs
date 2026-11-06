@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Kumbu.Server.Api;
+using Kumbu.Server.Tests.Publishing;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Kumbu.Server.Tests.Metrics;
@@ -82,5 +83,34 @@ public sealed class HttpMetricsTests(KumbuAppFactory app)
 
         Assert.True(limited);
         Assert.True(Scrape.Value(await Scrape.TextAsync(app), series) >= before + 1);
+    }
+
+    [Fact]
+    public async Task Readers_are_not_counted()
+    {
+        var published = await ReaderApiTests.PublishedAsync(app.PublicApi);
+        await using var api = ReaderApiTests.Limited(app.PublicApi);
+        const string none = "kumbu_http_rate_limited_total{endpoint=\"none\"}";
+        var before = Scrape.Value(await Scrape.TextAsync(api), none);
+        using var reader = new ReaderApiTests.Reader(api, "203.0.113.120");
+
+        var limited = false;
+        (await reader.GetAsync("/s")).Dispose();
+        for (var i = 0; i <= ReaderApiTests.ReadsPerAddress + 1 && !limited; i++)
+        {
+            using var response = i switch
+            {
+                0 => await reader.PostAsync(published.Formatted),
+                1 => await reader.FileAsync(0),
+                _ => await reader.GetAsync(),
+            };
+            limited = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests;
+        }
+
+        Assert.True(limited);
+        var text = await Scrape.TextAsync(api);
+        var readerRoutes = new[] { "endpoint=\"/s\"", "endpoint=\"/s.html\"", "endpoint=\"/api/s\"", "endpoint=\"/api/s/\"", "endpoint=\"/api/s/files/{index}\"" };
+        Assert.DoesNotContain(text.Split('\n'), l => readerRoutes.Any(r => l.Contains(r, StringComparison.Ordinal)));
+        Assert.Equal(before, Scrape.Value(text, none));
     }
 }

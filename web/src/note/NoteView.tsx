@@ -9,6 +9,7 @@ import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
 import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
 import { boardUrl, crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { usePublications } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -16,6 +17,7 @@ import { useEditor } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
+import PublicationBar from "./PublicationBar";
 import AgentBanner, { ago, shownWriter, useAgentChange, useAgentHighlight } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
@@ -79,7 +81,8 @@ export default function NoteView({ path }: { path: string }) {
   const save = useSaveNote(path);
   // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
   const vaults = useVaults();
-  const changes = !vaults.data || mayChange(levelOf(vaults.data.find((v) => v.name === vaultOf(path))), path);
+  const vault = vaults.data?.find((v) => v.name === vaultOf(path));
+  const changes = !vaults.data || mayChange(levelOf(vault), path);
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
@@ -321,6 +324,8 @@ export default function NoteView({ path }: { path: string }) {
           </Link>
         </nav>
       )}
+      {/* Once the vault list says whose vault it is: the owner's bar and a member's differ. */}
+      {vault && <PublicationBar path={path} owner={vault.owner == null} />}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
         {bannerHasIt && failedText}
       </AgentBanner>
@@ -446,6 +451,11 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
   const navigate = useNavigate();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const sources = [...new Set((backlinks.data ?? []).map((b) => b.path))];
+  // Only the owner learns what a deletion withdraws; a member's question would only tell her it is published.
+  const vaults = useVaults();
+  const own = !!vaults.data?.some((v) => v.name === vaultOf(path) && v.owner == null);
+  // The vault's list, which holds no link: this question needs none.
+  const published = !!usePublications(vaultOf(path), own).data?.publications.some((p) => p.path === path);
 
   const confirm = () =>
     remove.mutate(path, {
@@ -463,6 +473,7 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
           Delete {titleOf(path)}?
         </h2>
         <p className="text-text-body">It goes to the vault's trash.</p>
+        {own && published && <p className="text-text-body">It is published: deleting it withdraws the link.</p>}
         {backlinks.isPending ? (
           <p className="text-sm text-muted">Looking for notes that link here …</p>
         ) : backlinks.isError ? (

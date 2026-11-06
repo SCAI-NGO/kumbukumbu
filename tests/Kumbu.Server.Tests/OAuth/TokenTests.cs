@@ -197,6 +197,34 @@ public sealed class TokenTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_connections_first_token_may_publish_where_it_was_given()
+    {
+        var (owner, id, work, garten) = await OAuthFlow.PublishingConnectionAsync(Api);
+        var flow = await AllowedAsync(Api, owner, id);
+        var (access, _, _) = await ExchangeAsync(flow);
+
+        var opened = await OAuthFlow.OpenedAsync(Api, id, access);
+
+        Assert.True(opened.Single(v => v.Id == work).MayPublish);
+        Assert.False(opened.Single(v => v.Id == garten).MayPublish);
+    }
+
+    [Fact]
+    public async Task A_read_only_grant_may_not_publish()
+    {
+        var (owner, id, work, garten) = await OAuthFlow.PublishingConnectionAsync(Api);
+        var flow = await OAuthFlow.StartAsync(Api, owner, id, await OAuthFlow.RegisterAsync(Api, Callback), Callback, scope: "kumbu:read");
+        await flow.AllowAsync();
+        var (access, _, _) = await ExchangeAsync(flow);
+
+        var opened = await OAuthFlow.OpenedAsync(Api, id, access);
+
+        Assert.Equal(2, opened.Count);
+        Assert.All(opened, v => Assert.Equal(Kumbu.Core.Notes.AccessLevel.Read, v.Level));
+        Assert.All(opened, v => Assert.False(v.MayPublish));
+    }
+
+    [Fact]
     public async Task The_access_token_works_on_its_connection_url()
     {
         var (flow, access, _) = await ConnectedAsync(Api);

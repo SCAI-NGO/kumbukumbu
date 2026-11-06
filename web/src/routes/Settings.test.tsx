@@ -134,7 +134,7 @@ describe("Settings", () => {
     expect(localStorage.length).toBe(0);
   });
 
-  it("has a section Your data after Vaults and Shared vaults, with the export of one's vaults", async () => {
+  it("has a section Your data after Vaults, Shared vaults and Published notes, with the export of one's vaults", async () => {
     mockSystem(true);
     api();
     renderApp("/settings");
@@ -143,7 +143,8 @@ describe("Settings", () => {
     expect(yourData).toHaveTextContent(/each folder opens in Obsidian as a vault \(no history, trash or checkpoints\)/);
     const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
     expect(titles.indexOf("Shared vaults")).toBe(titles.indexOf("Vaults") + 1);
-    expect(titles.indexOf("Your data")).toBe(titles.indexOf("Shared vaults") + 1);
+    expect(titles.indexOf("Published notes")).toBe(titles.indexOf("Shared vaults") + 1);
+    expect(titles.indexOf("Your data")).toBe(titles.indexOf("Published notes") + 1);
   });
 
   it("groups the schemes as dark and light, each with a swatch", async () => {

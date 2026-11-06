@@ -122,6 +122,23 @@ public sealed class RefreshTests(KumbuAppFactory app)
         await Collection("slots").CountDocumentsAsync(new BsonDocument("token", record["_id"]), cancellationToken: Ct);
 
     [Fact]
+    public async Task A_refreshed_token_keeps_may_publish()
+    {
+        var (owner, id, work, garten) = await OAuthFlow.PublishingConnectionAsync(Api);
+        var flow = await OAuthFlow.StartAsync(Api, owner, id, await OAuthFlow.RegisterAsync(Api, Callback), Callback);
+        await flow.AllowAsync();
+        using var exchanged = await flow.TokenAsync();
+        var first = await PairOf(exchanged);
+
+        var second = await RefreshedAsync(flow, first.Refresh);
+        var third = await RefreshedAsync(flow, second.Refresh);
+
+        var opened = await OAuthFlow.OpenedAsync(Api, id, third.Access);
+        Assert.True(opened.Single(v => v.Id == work).MayPublish);
+        Assert.False(opened.Single(v => v.Id == garten).MayPublish);
+    }
+
+    [Fact]
     public async Task Refreshing_rotates_both_tokens()
     {
         var (flow, first) = await ConnectedAsync(Api);

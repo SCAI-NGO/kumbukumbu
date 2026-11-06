@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+using Kumbu.Core.Publishing;
+using Kumbu.Core.Sh;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Publishing;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -343,5 +349,192 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         var diaryId = await carol.VaultIdAsync();
         using (var rekeyed = await carol.SendAsync(HttpMethod.Post, "/api/vaults/Notizen/rekey", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
         Assert.False(await app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName).Find(e => e.Vault == diaryId).AnyAsync(Ct));
+    }
+
+    private Publications Publications => Api.Services.GetRequiredService<Publications>();
+
+    private static readonly WriterRef BySession = WriterRef.ForOwner(WriterRef.Session, null);
+
+    private static readonly string[] PublicationKinds = [VaultEvents.NotePublished, VaultEvents.PublicationUpdated, VaultEvents.PublicationWithdrawn];
+
+    private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
+
+    private async Task<(EncryptedNoteStore Notes, VaultAccess Access)> OpenAsync(ICredential credential, string vault)
+    {
+        var notes = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), credential);
+        return (notes, (await notes.UnlockedVaultsAsync(Ct)).Single(a => a.Name == vault));
+    }
+
+    private Task<(EncryptedNoteStore Notes, VaultAccess Access)> SessionOfAsync(RestClient owner) => OpenAsync(new UserCredential(owner.User.Id, owner.UserKey), owner.Vault);
+
+    private async Task PublishBySessionAsync(RestClient owner, string note)
+    {
+        var (notes, access) = await SessionOfAsync(owner);
+        await Publications.PublishAsync(access, notes, P(note), owner.User.Id, owner.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+    }
+
+    /// <summary>The owner's session publishes, updates <paramref name="updates"/> times and withdraws <paramref name="note"/>,
+    /// one right after the other.</summary>
+    private async Task PublishUpdateWithdrawAsync(RestClient owner, string note, int updates)
+    {
+        var (notes, access) = await SessionOfAsync(owner);
+        await PublishBySessionAsync(owner, note);
+        for (var n = 0; n < updates; n++)
+        {
+            await Publications.UpdateAsync(access, notes, P(note), owner.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+        }
+
+        await Publications.WithdrawAsync(access, notes, P(note), owner.Username, BySession, Ct);
+    }
+
+    [Fact]
+    public async Task Publications_are_in_the_owners_history_and_name_the_agent()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("a.md", "a");
+        var vaultId = await alice.VaultIdAsync();
+        var (key, info) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, publish: new HashSet<string> { vaultId });
+        var (notes, access) = await OpenAsync(new ApiKeyCredential(info.Id, key), "Work");
+
+        await Publications.PublishAsync(access, notes, P("/Work/a.md"), alice.User.Id, "Claude", WriterRef.ForOwner(WriterRef.Agent, info.Id), KumbuAppFactory.PublicUrl, Ct);
+
+        Assert.Equal(["“Claude” published /Work/a.md."], await ActivityTextsAsync(alice, "Work"));
+        // A plain document: the log entry's id, no path, no name.
+        var raw = Assert.Single(await app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName).Find(new BsonDocument("vault", vaultId)).ToListAsync(Ct));
+        Assert.Equal(["_id", "vault", "kind", "membership", "at", "entry"], raw.Names);
+        Assert.Equal(VaultEvents.NotePublished, raw["kind"].AsString);
+        Assert.Equal(BsonNull.Value, raw["membership"]);
+        var record = (await Api.Services.GetRequiredService<PublicationStore>().ReadAsync(null, access.Vault, Ct)).Record;
+        Assert.Equal(Assert.Single(record.Log).Id, raw["entry"].AsString);
+        Assert.DoesNotContain("a.md", raw.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Claude", raw.ToJson(), StringComparison.Ordinal);
+
+        // Her session is "you"; a mark's withdrawal names who marked.
+        var (ownNotes, own) = await SessionOfAsync(alice);
+        await Publications.SetUnpublishableAsync(own, ownNotes, P("/Work/a.md"), true, alice.Username, BySession, Ct);
+        Assert.Equal("The publication of /Work/a.md was withdrawn: you made it unpublishable.", (await ActivityTextsAsync(alice, "Work"))[0]);
+        await alice.CreateAsync("b.md", "b");
+        await PublishBySessionAsync(alice, "/Work/b.md");
+        Assert.Equal("You published /Work/b.md.", (await ActivityTextsAsync(alice, "Work"))[0]);
+
+        // An entry the record no longer has.
+        await app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName).InsertOneAsync(
+            new VaultEventDocument { Vault = vaultId, Kind = VaultEvents.PublicationUpdated, At = DateTime.UtcNow.AddSeconds(1), Entry = "00000000000000000000000000000000" }, cancellationToken: Ct);
+        Assert.Equal("A publication of this vault changed.", (await ActivityTextsAsync(alice, "Work"))[0]);
+    }
+
+    [Fact]
+    public void Every_publication_sentence_reads_as_written()
+    {
+        string Text(string kind, string person, string? reason = null) =>
+            VaultEvents.TextFor(kind, toOwner: true, person, "Work", null, null, note: "/Work/a.md", reason: reason);
+
+        Assert.Equal("You published /Work/a.md.", Text(VaultEvents.NotePublished, "You"));
+        Assert.Equal("“Claude” published /Work/a.md.", Text(VaultEvents.NotePublished, "“Claude”"));
+        Assert.Equal("You updated the published copy of /Work/a.md.", Text(VaultEvents.PublicationUpdated, "You"));
+        Assert.Equal("“Claude” withdrew the publication of /Work/a.md.", Text(VaultEvents.PublicationWithdrawn, "“Claude”", WithdrawalReasons.ByRight));
+        Assert.Equal("The publication of /Work/a.md was withdrawn: you removed the note.", Text(VaultEvents.PublicationWithdrawn, "You", WithdrawalReasons.Removed));
+        Assert.Equal("The publication of /Work/a.md was withdrawn: “Laptop” removed the note.", Text(VaultEvents.PublicationWithdrawn, "“Laptop”", WithdrawalReasons.Removed));
+        Assert.Equal("The publication of /Work/a.md was withdrawn: you made it unpublishable.", Text(VaultEvents.PublicationWithdrawn, "You", WithdrawalReasons.Unpublishable));
+        Assert.Equal("The publication of /Work/a.md was withdrawn: “Claude” made it unpublishable.", Text(VaultEvents.PublicationWithdrawn, "“Claude”", WithdrawalReasons.Unpublishable));
+        foreach (var kind in PublicationKinds)
+        {
+            Assert.Equal("A publication of this vault changed.", VaultEvents.TextFor(kind, toOwner: true, "", "Work", null, null, note: null));
+        }
+    }
+
+    [Fact]
+    public async Task Only_the_owners_own_session_is_you()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("a.md", "a");
+        var (notes, access) = await SessionOfAsync(alice);
+
+        // A session's kind without the owner's flag, which no owner's write has: named by its label, not "you".
+        await Publications.PublishAsync(access, notes, P("/Work/a.md"), alice.User.Id, "Bob", WriterRef.ForMember("w1", WriterRef.Session), KumbuAppFactory.PublicUrl, Ct);
+
+        Assert.Equal(["“Bob” published /Work/a.md."], await ActivityTextsAsync(alice, "Work"));
+    }
+
+    [Fact]
+    public async Task Events_of_one_instant_keep_their_order()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var vaultId = await alice.VaultIdAsync();
+        var at = DateTime.UtcNow.AddSeconds(1);
+        var events = app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName);
+        foreach (var kind in new[] { VaultEvents.ProviderChanged, VaultEvents.VaultRenamed, VaultEvents.RekeyFinished })
+        {
+            await events.InsertOneAsync(new VaultEventDocument { Id = ObjectId.GenerateNewId(), Vault = vaultId, Kind = kind, At = at }, cancellationToken: Ct);
+        }
+
+        // Newest first, also within one instant: the later one recorded first.
+        Assert.Equal(
+            ["Gartenarbeit was re-encrypted; members' keys and apps for it were revoked.", "You renamed this vault.", "You changed the embedding provider."],
+            await ActivityTextsAsync(alice, "Gartenarbeit"));
+    }
+
+    [Fact]
+    public async Task Every_change_is_a_line_of_history()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("a.md", "a");
+
+        await PublishUpdateWithdrawAsync(alice, "/Work/a.md", updates: 2);
+
+        Assert.Equal(
+            [
+                "You withdrew the publication of /Work/a.md.", "You updated the published copy of /Work/a.md.", "You updated the published copy of /Work/a.md.",
+                "You published /Work/a.md.",
+            ],
+            await ActivityTextsAsync(alice, "Work"));
+    }
+
+    [Fact]
+    public async Task Members_see_no_publication_event()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work", remember: true);
+        await alice.CreateAsync("a.md", "a");
+        var bob = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.ShareWithAsync(bob, "alices-work", MemberRole.Write, label: "Bob");
+
+        await PublishUpdateWithdrawAsync(alice, "/Work/a.md", updates: 1);
+        await PublishBySessionAsync(alice, "/Work/a.md");
+        var (notes, access) = await SessionOfAsync(alice);
+        await Publications.SetUnpublishableAsync(access, notes, P("/Work/a.md"), true, alice.Username, BySession, Ct);
+        Assert.Equal(5, (await ActivityTextsAsync(alice, "Work")).Count(t => t.Contains("/Work/a.md", StringComparison.Ordinal)));
+
+        Assert.DoesNotContain((await FeedAsync(bob)).Select(e => e!["kind"]!.GetValue<string>()), PublicationKinds.Contains);
+        using var activity = await bob.GetAsync("/api/vaults/alices-work/activity");
+        Assert.Equal(HttpStatusCode.OK, activity.StatusCode);
+        var events = (await RestClient.JsonAsync(activity))["events"]!.AsArray();
+        Assert.DoesNotContain(events.Select(e => e!["kind"]!.GetValue<string>()), PublicationKinds.Contains);
+        Assert.DoesNotContain(events, e => e!["text"]!.GetValue<string>().Contains("publi", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task An_aborted_publish_leaves_no_event()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("a.md", "a");
+        await alice.CreateAsync("b.md", "b");
+        var vaultId = await alice.VaultIdAsync();
+        await PublishBySessionAsync(alice, "/Work/a.md");
+
+        // Another transaction holds the record, so each attempt's write of it conflicts and is aborted.
+        using (var holder = await app.Database.Client.StartSessionAsync(cancellationToken: Ct))
+        {
+            holder.StartTransaction();
+            await app.Database.GetCollection<BsonDocument>("publishing").UpdateOneAsync(
+                holder, new BsonDocument("vault", vaultId), new BsonDocument("$set", new BsonDocument("held", true)), cancellationToken: Ct);
+            var refused = await Assert.ThrowsAsync<PublishRefusedException>(() => PublishBySessionAsync(alice, "/Work/b.md"));
+            Assert.Equal(ShellErrorKind.Conflict, refused.Kind);
+            await holder.AbortTransactionAsync(Ct);
+        }
+
+        Assert.Equal(1L, await app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName).CountDocumentsAsync(new BsonDocument("vault", vaultId), cancellationToken: Ct));
+        Assert.Equal(1L, await app.Database.GetCollection<BsonDocument>("publications").CountDocumentsAsync(new BsonDocument("vault", vaultId), cancellationToken: Ct));
+        Assert.Equal(["You published /Work/a.md."], await ActivityTextsAsync(alice, "Work"));
     }
 }

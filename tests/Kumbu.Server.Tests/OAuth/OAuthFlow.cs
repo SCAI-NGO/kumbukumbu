@@ -4,10 +4,14 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Kumbu.Server.Tests.OAuth;
 
@@ -235,6 +239,32 @@ public sealed class OAuthFlow
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
         return body.RootElement.GetProperty("client_id").GetString()!;
+    }
+
+    /// <summary>
+    /// A new user with vaults <c>Work</c> and <c>Gartenarbeit</c>, both at write on one connection that may publish on
+    /// <c>Work</c> only, made through the server's own service: the owner, the connection's id and the two vault ids.
+    /// </summary>
+    public static async Task<(RestClient Owner, string Id, string Work, string Garten)> PublishingConnectionAsync(WebApplicationFactory<Program> api)
+    {
+        var owner = await RestClient.NewAsync(api, vault: "Work");
+        using var second = await owner.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        var work = (await catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Work", Ct))!;
+        var garten = (await catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Gartenarbeit", Ct))!;
+        var info = await api.Services.GetRequiredService<Connections>().CreateAsync(
+            owner.User, owner.UserKey, DateTime.UtcNow, "Work", new Dictionary<string, KeyRight> { [work] = KeyRight.Write, [garten] = KeyRight.Write }, Ct,
+            publish: new HashSet<string> { work });
+        return (owner, info.Id, work, garten);
+    }
+
+    /// <summary>The vaults <paramref name="access"/> opens on its connection, as a request on the connection's URL opens them.</summary>
+    public static async Task<IReadOnlyList<VaultAccess>> OpenedAsync(WebApplicationFactory<Program> api, string connectionId, string access)
+    {
+        var resolved = await api.Services.GetRequiredService<OAuthTokens>().ResolveAccessAsync(access, connectionId, ResourceOf(connectionId), Ct);
+        Assert.NotNull(resolved.Connection);
+        return await api.Services.GetRequiredService<VaultCatalog>().OpenForConnectionAsync(connectionId, resolved.Connection.TokenId, access, Ct);
     }
 
     /// <summary>A PKCE verifier: 32 random bytes in base64url, 43 characters (RFC 7636 §4.1).</summary>

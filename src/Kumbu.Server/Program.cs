@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
@@ -14,6 +15,7 @@ using Kumbu.Server.Mcp;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
+using Kumbu.Server.Publishing;
 using Kumbu.Server.Search;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
@@ -38,6 +40,9 @@ builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 // HttpClientFactory logs four lines per outgoing request: for an external embedding provider, one set per search
 // query, which would put when someone searched into the log. Failures are logged by the drivers themselves.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+// The MCP library logs every JSON-RPC message whole at Trace, which would put a note's text, or the link
+// publish add prints, into the log. Its Information lines (the client's name, a tool call) stay.
+builder.Logging.AddFilter("ModelContextProtocol", LogLevel.Information);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
@@ -113,6 +118,8 @@ builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<Kumbu.Server.Welcome.WelcomeVault>();
 builder.Services.AddSingleton<Rekeying>();
+builder.Services.AddSingleton<PublicationStore>();
+builder.Services.AddSingleton<Publications>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<OAuthLimits>();
@@ -140,7 +147,10 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped(RequestCaller.Current);
 builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
 builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
-builder.Services.AddScoped<EncryptedNoteStore>();
+// By hand: the constructor that takes Publications is internal, and DI only sees public ones.
+builder.Services.AddScoped(sp => new EncryptedNoteStore(
+    sp.GetRequiredService<VaultCatalog>(), sp.GetRequiredService<ICredential>(), sp.GetService<SearchIndex>(), sp.GetService<ApiKeys>(),
+    sp.GetService<PdfAnalysisRunner>(), sp.GetRequiredService<Publications>()));
 builder.Services.AddScoped<WriterLabels>();
 builder.Services.AddScoped<IWriterLabels>(sp => sp.GetRequiredService<WriterLabels>());
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
@@ -153,6 +163,7 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
+builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
@@ -223,9 +234,10 @@ var webApp = new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
+        // The reader page, s.html, is never cached (publish spec §3.12).
         context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/assets")
             ? "public, max-age=31536000, immutable"
-            : "no-cache";
+            : ReaderPaths.Is(context.Context.Request.Path) ? "no-store" : "no-cache";
     },
 };
 app.UseDefaultFiles();
@@ -263,6 +275,13 @@ app.MapSyncApi();
 app.MapPairingApi();
 app.MapExportApi();
 app.MapSharingApi();
+app.MapPublicationApi();
+app.MapReaderApi();
+// The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
+// HEAD too, which would otherwise fall through to the web app's shell.
+app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
+    ? Results.Stream(page.CreateReadStream(), "text/html")
+    : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.

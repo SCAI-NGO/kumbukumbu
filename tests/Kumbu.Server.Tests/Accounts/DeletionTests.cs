@@ -20,7 +20,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     private const string Password = "correct horse battery staple";
 
     /// <summary>Every collection that holds a vault's documents under their "vault" field.</summary>
-    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash", "blobs", "pdf_analyses", "pdf_jobs"];
+    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash", "blobs", "pdf_analyses", "pdf_jobs", "publishing", "publications", "publication_files"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -78,7 +78,14 @@ public sealed class DeletionTests(MongoFixture fixture)
         Assert.True(await store.TryCreateAsync(new StoredNote(P($"/{name}/plan.md"), "Geheim: wir kaufen Acme.", 1, user.Username, Now, [], Ref: WriterRef.Server), Ct));
         foreach (var collection in ContentCollections.Skip(1))
         {
-            await Raw(collection).InsertOneAsync(new BsonDocument { ["vault"] = vault.Id, ["pid"] = new BsonBinaryData([1, 2, 3]), ["blob"] = new BsonBinaryData([4]) }, cancellationToken: Ct);
+            // A lookup and a publication of its own, for the unique indexes of the publications and their files.
+            await Raw(collection).InsertOneAsync(
+                new BsonDocument
+                {
+                    ["vault"] = vault.Id, ["pid"] = new BsonBinaryData([1, 2, 3]), ["blob"] = new BsonBinaryData([4]),
+                    ["lookup"] = new BsonBinaryData(Guid.NewGuid().ToByteArray()), ["publication"] = ObjectId.GenerateNewId(), ["n"] = 0,
+                },
+                cancellationToken: Ct);
         }
 
         return vault;

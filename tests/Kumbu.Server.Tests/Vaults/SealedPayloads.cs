@@ -11,7 +11,7 @@ namespace Kumbu.Server.Tests.Vaults;
 public static class SealedPayloads
 {
     /// <summary>The collections whose payloads carry a writer.</summary>
-    public static readonly string[] WithWriter = ["notes", "trash", "moves", "attachments", "attachment_trash", "checkpoints"];
+    public static readonly string[] WithWriter = ["notes", "trash", "moves", "attachments", "attachment_trash", "checkpoints", "publishing"];
 
     /// <summary>The vault key of <paramref name="vaultId"/> from the dev token's slot.</summary>
     public static async Task<byte[]> KeyOfTokenVaultAsync(IMongoDatabase db, string vaultId, string token, CancellationToken ct)
@@ -69,6 +69,7 @@ public static class SealedPayloads
         "attachments" => $"attachment:{vaultId}:{doc.Id}:{doc.Revision}",
         "attachment_trash" => $"attachtrash:{vaultId}:{doc.Id}",
         "checkpoints" => $"checkpoint:{vaultId}:{doc.Id}",
+        "publishing" => $"publishing:{vaultId}:{doc.Id}:{doc.Revision}",
         "checkpoint_texts" => $"cptext:{vaultId}:{Convert.ToBase64String(doc.PathId)}",
         _ => throw new ArgumentException(collection, nameof(collection)),
     };
