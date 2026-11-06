@@ -88,7 +88,7 @@ public sealed partial record MarkdownLink(
             if (line[start] != '[' || code.Concat(wikilinks).Any(s => start >= s.Start && start < s.End)) continue;
             if (Escaped(line, start)) continue;
             var embed = start > 0 && line[start - 1] == '!' && !Escaped(line, start - 1) && !code.Any(s => start - 1 >= s.Start && start - 1 < s.End);
-            if (TryParse(index, line, start, embed) is not { } link) continue;
+            if (TryParse(index, line, start, embed, external: false) is not { } link) continue;
             // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the
             // wikilink, not a Markdown link.
             var end = link.Start + link.Raw.Length;
@@ -98,7 +98,9 @@ public sealed partial record MarkdownLink(
         }
     }
 
-    private static MarkdownLink? TryParse(int index, string line, int start, bool embed)
+    /// <summary>The inline link or embed whose '[' is at <paramref name="start"/>, or null. With
+    /// <paramref name="external"/>, links with a scheme or "//" are read too.</summary>
+    internal static MarkdownLink? TryParse(int index, string line, int start, bool embed, bool external)
     {
         // Link text: brackets balance, backslash escapes don't count.
         var i = start + 1;
@@ -155,7 +157,7 @@ public sealed partial record MarkdownLink(
         }
 
         if (i >= line.Length || line[i] != ')') return null;
-        if (inner.Length == 0 || SchemeRegex().IsMatch(inner) || inner.StartsWith("//", StringComparison.Ordinal)) return null;
+        if (inner.Length == 0 || (!external && (SchemeRegex().IsMatch(inner) || inner.StartsWith("//", StringComparison.Ordinal)))) return null;
 
         // The fragment starts at the first raw '#', so an encoded "%23" stays part of the name.
         var hash = inner.IndexOf('#');
@@ -180,7 +182,7 @@ public sealed partial record MarkdownLink(
         return backslashes % 2 == 1;
     }
 
-    private static string Decode(string path) => Uri.UnescapeDataString(EscapeRegex().Replace(path, "$1"));
+    internal static string Decode(string path) => Uri.UnescapeDataString(EscapeRegex().Replace(path, "$1"));
 
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:")]
     private static partial Regex SchemeRegex();
