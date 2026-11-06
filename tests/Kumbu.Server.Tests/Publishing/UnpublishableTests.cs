@@ -216,5 +216,19 @@ public sealed class UnpublishableTests(KumbuAppFactory app)
 
         Assert.Empty(await MarksAsync(bob, "alices-work"));
         Assert.Equal([P("/Work/Notes/a.md")], await MarksAsync(alice));
+
+        // The owner's own key without "May publish" neither sets nor lifts one.
+        var vaultId = await alice.VaultIdAsync();
+        var (key, info) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct);
+        var keyNotes = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new ApiKeyCredential(info.Id, key));
+        var keys = (await keyNotes.UnlockedVaultsAsync(Ct)).Single(a => a.Name == "Work");
+        Assert.True(keys.IsOwner);
+        var by = WriterRef.ForOwner(WriterRef.Agent, info.Id);
+        await RefusedAsync(
+            () => Publications.SetUnpublishableAsync(keys, keyNotes, P("/Work/Notes"), true, "Claude", by, Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
+        await RefusedAsync(
+            () => Publications.SetUnpublishableAsync(keys, keyNotes, P("/Work/Notes/a.md"), false, "Claude", by, Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
+        Assert.Equal([P("/Work/Notes/a.md")], await MarksAsync(alice));
     }
 }

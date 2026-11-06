@@ -35,7 +35,7 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     }
 
     /// <summary>The vault's record with nothing but the database, for the owner's event texts (<see cref="Sharing.VaultEvents"/>).</summary>
-    internal static async Task<PublishingRecord> ReadAsync(IMongoDatabase db, UnlockedVault vault, CancellationToken ct)
+    internal static async Task<PublishingRecord> ReadRecordAsync(IMongoDatabase db, UnlockedVault vault, CancellationToken ct)
     {
         var doc = await db.GetCollection<SealedDocument>(RecordCollection).Find(RecordOf(vault)).FirstOrDefaultAsync(ct);
         return doc is null ? PublishingRecord.Empty : vault.OpenPublishing(doc);

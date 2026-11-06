@@ -132,9 +132,9 @@ public static class VaultEvents
         return await Docs(db).Find(f.Eq(e => e.Vault, vaultId) & (own | vaultWide)).SortByDescending(e => e.At).ToListAsync(ct);
     }
 
-    /// <summary>Every event of the vault, for its owner, newest first.</summary>
+    /// <summary>Every event of the vault, for its owner, newest first; of one instant, the later recorded first.</summary>
     internal static async Task<IReadOnlyList<VaultEventDocument>> OfOwnerAsync(IMongoDatabase db, string vaultId, CancellationToken ct) =>
-        await Docs(db).Find(e => e.Vault == vaultId).SortByDescending(e => e.At).ToListAsync(ct);
+        await Docs(db).Find(e => e.Vault == vaultId).SortByDescending(e => e.At).ThenByDescending(e => e.Id).ToListAsync(ct);
 
     /// <summary>
     /// The events of <paramref name="access"/>'s vault its caller sees, with their texts, newest first: the owner all of
@@ -194,9 +194,9 @@ public static class VaultEvents
     /// ("Bob", or "a former member" once the membership is gone); to a member, the owner by her display name, sanitised
     /// and quoted, and himself as "you". Never anything of another member. <paramref name="keysEnded"/>: whether a
     /// re-encryption ended keys or apps of the member's (<see cref="KeysEnded"/>).
-    /// </summary>
     /// <para>A publication's event: <paramref name="person"/> is who did it (<see cref="WriterLabels.You"/> for the owner's
     /// session), <paramref name="note"/> the note as the owner sees it, null when the record no longer has the entry.</para>
+    /// </summary>
     internal static string TextFor(
         string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null) => (toOwner, kind) switch
     {
@@ -291,7 +291,8 @@ public static class VaultEvents
         }
 
         /// <summary>The owner's session as "You", any other writer by its label, sanitised and quoted (“Claude”).</summary>
-        private static string Who(PublishingLogEntry log) => log.ByRef.Kind == WriterRef.Session ? WriterLabels.You : $"“{WriterLabels.Sanitise(log.By)}”";
+        private static string Who(PublishingLogEntry log) =>
+            log.ByRef is { Owner: true, Kind: WriterRef.Session } ? WriterLabels.You : $"“{WriterLabels.Sanitise(log.By)}”";
 
         private string? NoteOf(PublishingLogEntry log) => VaultPath.TryParse(log.Note, out var note) ? access.ToCaller(note).Value : null;
 
@@ -301,7 +302,7 @@ public static class VaultEvents
             if (_log is not null) return _log;
             try
             {
-                return _log = (await PublicationStore.ReadAsync(db, access.Vault, ct)).Log.ToDictionary(l => l.Id, StringComparer.Ordinal);
+                return _log = (await PublicationStore.ReadRecordAsync(db, access.Vault, ct)).Log.ToDictionary(l => l.Id, StringComparer.Ordinal);
             }
             catch (Exception e) when (e is CryptographicException or InvalidDataException)
             {
