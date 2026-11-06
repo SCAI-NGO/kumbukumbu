@@ -791,4 +791,57 @@ describe("vaults shared with the user", () => {
     expect(items).not.toContain("Share…");
     expect(items).not.toContain("Search by meaning…");
   });
+
+  describe("publishing", () => {
+    const publishApi = (publishEnabled: boolean, published: string[] = []) =>
+      signedInApi({
+        "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled }),
+        "GET /api/vaults": () => json(200, sharedVaults),
+        "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+        "GET /api/publications/*": (r) => {
+          const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/publications".length));
+          return published.includes(path)
+            ? json(200, { path, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: "you", link: "https://kumbu.example.org/s#x" })
+            : json(404, { error: `${path.slice(1)} is not published.` });
+        },
+      });
+    const noteMenu = async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+      const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+      await userEvent.keyboard("{Escape}");
+      return items;
+    };
+
+    it("offers Publish… for her own unpublished note, and opens the dialog", async () => {
+      publishApi(true);
+      renderApp("/notes/Work/inbox.md");
+      expect(await screen.findByRole("heading", { name: "inbox" })).toBeInTheDocument();
+      await waitFor(async () => expect(await noteMenu()).toContain("Publish…"));
+      await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Publish…" }));
+      expect(await screen.findByRole("dialog", { name: "Publish this note" })).toBeInTheDocument();
+    });
+
+    it("offers no Publish… on a vault shared with her, even with maintain", async () => {
+      publishApi(true);
+      renderApp("/notes/Beete/plan.md");
+      expect(await screen.findByRole("heading", { name: "plan" })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+      expect(await noteMenu()).not.toContain("Publish…");
+    });
+
+    it("offers no Publish… for a published note, which has its bar, nor while publishing is off", async () => {
+      publishApi(true, ["/Work/inbox.md"]);
+      renderApp("/notes/Work/inbox.md");
+      expect(await screen.findByText("Published, up to date")).toBeInTheDocument();
+      expect(await noteMenu()).not.toContain("Publish…");
+      cleanup();
+
+      publishApi(false);
+      renderApp("/notes/Work/readme.md");
+      expect(await screen.findByRole("heading", { name: "readme" })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+      expect(await noteMenu()).not.toContain("Publish…");
+    });
+  });
 });

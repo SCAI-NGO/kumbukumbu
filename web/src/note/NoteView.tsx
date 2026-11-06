@@ -16,6 +16,7 @@ import { useEditor } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
+import PublicationBar from "./PublicationBar";
 import AgentBanner, { ago, shownWriter, useAgentChange, useAgentHighlight } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
@@ -79,7 +80,8 @@ export default function NoteView({ path }: { path: string }) {
   const save = useSaveNote(path);
   // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
   const vaults = useVaults();
-  const changes = !vaults.data || mayChange(levelOf(vaults.data.find((v) => v.name === vaultOf(path))), path);
+  const vault = vaults.data?.find((v) => v.name === vaultOf(path));
+  const changes = !vaults.data || mayChange(levelOf(vault), path);
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
@@ -321,6 +323,8 @@ export default function NoteView({ path }: { path: string }) {
           </Link>
         </nav>
       )}
+      {/* Once the vault list says whose vault it is: the owner's bar and a member's differ. */}
+      {vault && <PublicationBar path={path} owner={vault.owner == null} />}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
         {bannerHasIt && failedText}
       </AgentBanner>

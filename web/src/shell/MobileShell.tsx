@@ -5,8 +5,9 @@ import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
-import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
+import { FolderInput, History, Share2, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
+import { usePublication, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -46,6 +47,7 @@ const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
 const ActivitySheet = lazy(() => import("./ActivitySheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
+const PublishDialog = lazy(() => import("./PublishDialog"));
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -137,6 +139,7 @@ export default function MobileShell() {
   const [deleting, setDeleting] = useState<DeleteSubject | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "activity" | "checkpoints"; vault: string } | null>(null);
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
@@ -218,6 +221,13 @@ export default function MobileShell() {
   const queryClient = useQueryClient();
   useEffect(() => onRefusal(() => void queryClient.invalidateQueries({ queryKey: ["vaults"] })), [queryClient]);
 
+  // Only the owner publishes, only while the server does, and a published note has its bar instead (publish spec §3.11).
+  const publishEnabled = usePublishEnabled();
+  const noteVault = path ? vaults.data?.find((v) => v.name === vaultOf(path)) : undefined;
+  const ownNote = !!noteVault && noteVault.owner == null;
+  const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
+  const mayPublish = ownNote && publishEnabled === true && publication.data === null;
+
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
@@ -265,6 +275,7 @@ export default function MobileShell() {
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
+                      ...(mayPublish ? [{ label: "Publish…", icon: Share2, onSelect: () => setPublishing(path) }] : []),
                       ...(noteChanges
                         ? [
                             { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
@@ -309,6 +320,13 @@ export default function MobileShell() {
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setHistory(null)} />}>
           <Suspense>
             <HistorySheet path={history} onClose={() => setHistory(null)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
+      {publishing && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setPublishing(null)} />}>
+          <Suspense>
+            <PublishDialog path={publishing} onClose={() => setPublishing(null)} />
           </Suspense>
         </LoadBoundary>
       )}
