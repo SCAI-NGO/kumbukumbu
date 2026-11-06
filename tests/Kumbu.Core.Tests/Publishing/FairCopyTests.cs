@@ -171,6 +171,9 @@ public class FairCopyTests
     [InlineData("[[", "", "", 500_000)]
     [InlineData("x<y ", "", "", 250_000)]
     [InlineData("- ```\n", "", "", 100_000)]
+    [InlineData("[file:](x)", "", "", 100_000)]
+    [InlineData("[https://kumbu.example.org/](x)", "", "", 35_000)]
+    [InlineData("[obsidian://a](x)", "", "", 60_000)]
     public void Deep_nesting_finishes_quickly(string before, string middle, string after, int n)
     {
         var input = string.Concat(Enumerable.Repeat(before, n)) + middle + string.Concat(Enumerable.Repeat(after, n));
@@ -203,13 +206,90 @@ public class FairCopyTests
     }
 
     [Fact]
-    public void Fences_in_lists_and_quotes_are_code()
+    public void Fences_in_lists_and_quotes_are_text()
     {
-        Assert.Equal("- ```sh\n  echo [[x]]\n  ```\n\n Plan", Text("- ```sh\n  echo [[x]]\n  ```\n\n%% private %% [[Private/Plan]]"));
-        Assert.Equal("> ```\n> [[x]]\n> ```\nafter y", Text("> ```\n> [[x]]\n> ```\nafter [[y]]"));
-        Assert.Equal("1. ```js\n   a [[x]]\n   ```\n2. y", Text("1. ```js\n   a [[x]]\n   ```\n2. [[y]]"));
+        // Where a fence in a container ends depends on the container: the copy reads what it holds, and escapes the
+        // fence so the reader doesn't open one either.
+        Assert.Equal("- \\```sh\n  echo x\n  \\```\n\n Plan", Text("- ```sh\n  echo [[x]]\n  ```\n\n%% private %% [[Private/Plan]]"));
+        Assert.Equal("> \\```\n> x\n> \\```\nafter y", Text("> ```\n> [[x]]\n> ```\nafter [[y]]"));
+        Assert.Equal("1. \\```js\n   a x\n   \\```\n2. y", Text("1. ```js\n   a [[x]]\n   ```\n2. [[y]]"));
+        foreach (var note in new[]
+        {
+            "- a\n  ```\n[x](/Work/Private/Plan.md)\n```",
+            "> ```\n[x](/Work/Private/Plan.md)\n> ```",
+            "- ```\n[x](/Work/Private/Plan.md)\n- ```",
+            "> - ```\n> [x](/Work/Private/Plan.md)\n> - ```",
+            "-     ```\n[x](/Work/Private/Plan.md)\n```",
+            "1. a\n\n   ```\n   [x](/Work/Private/Plan.md)\n   ```",
+        })
+        {
+            Assert.DoesNotContain("Private", Text(note), StringComparison.Ordinal);
+        }
+
         // A fence never closed is text.
-        Assert.Equal("```\nPlan", Text("```\n[[Private/Plan]]"));
+        Assert.Equal("\\```\nPlan", Text("```\n[[Private/Plan]]"));
+        // A top-level fence closes with at most three spaces in, as CommonMark has it.
+        Assert.Equal("```\n    ```\n```\nx\n\\```", Text("```\n    ```\n```\n[x](/Work/Private/Plan.md)\n```"));
+    }
+
+    [Fact]
+    public void Raw_html_blocks_hold_no_code()
+    {
+        foreach (var note in new[]
+        {
+            "<pre>\n```\n</pre>\n[x](/Work/Private/Plan.md)\n```",
+            "<pre>\n\n    [x](/Work/Private/Plan.md)\n</pre>",
+            "<?php\n```\n?>\n[x](/Work/Private/Plan.md)\n```",
+            "<!DOCTYPE html\n```\n>\n[x](/Work/Private/Plan.md)\n```",
+            "<![CDATA[\n```\n]]>\n[x](/Work/Private/Plan.md)\n```",
+            "<custom-tag>\n```\n</custom-tag>\n[x](/Work/Private/Plan.md)\n```",
+            "<div>\n```\n</div>\n[x](/Work/Private/Plan.md)\n```",
+        })
+        {
+            var copy = Text(note);
+            Assert.DoesNotContain("](/Work", copy, StringComparison.Ordinal);
+        }
+
+        // The fence after the block is code, as it is in the note; the one inside it, now text, is escaped, or it would
+        // pair with the first and turn that code into a link.
+        Assert.Equal("\\```\n```\n[x](/Work/Private/Plan.md)\n```\ny", Text("<style>\n```\n</style>\n```\n[x](/Work/Private/Plan.md)\n```\n[y](/Work/Private/Plan.md)"));
+    }
+
+    [Fact]
+    public void Pipes_split_table_cells_before_anything_else()
+    {
+        const string head = "| a | b |\n|---|---|\n";
+        Assert.DoesNotContain("Private", Text(head + "| [x](https://example.org/?q=|[y](/Work/Private/Plan.md)) | c |"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text(head + "| `x|[y](/Work/Private/Plan.md)` | c |"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text(head + "| <https://example.org/|[y](/Work/Private/Plan.md)> | c |"), StringComparison.Ordinal);
+        Assert.Equal("x", Text("[x](https://example.org/ \"a|b\")"));
+    }
+
+    [Fact]
+    public void Line_endings_are_read_as_line_feeds()
+    {
+        Assert.Equal("a\nb", Text("---\r\nstatus: draft\r\n---\r\na\r\n%% x %%\r\nb"));
+        Assert.Equal("a\nb", Text("a\r%% x %%\rb"));
+        Assert.Equal("Questions on routing", Copy("# Questions on routing #routing\r\n\r\nx").Title);
+    }
+
+    [Fact]
+    public void A_definition_label_may_run_over_lines()
+    {
+        Assert.Equal("see Private Plan", Text("[Private\nPlan]: /Work/Private/Plan.md\n\nsee [Private Plan]"));
+        Assert.Equal("see Private Plan", Text("> [Private\n> Plan]: /Work/Private/Plan.md\n\nsee [Private Plan]"));
+        Assert.Equal("x", Text("x\n[a\nb]:\n/Work/Private/Plan.md"));
+        // Left shaped like one over lines, with no destination to read, the safety net takes it out.
+        Assert.Equal("x", Text("x\n[a\nb]:"));
+    }
+
+    [Fact]
+    public void Removals_join_no_new_way_out()
+    {
+        const string own = "https://kumbu.example.org";
+        Assert.DoesNotContain("kumbu", Text("https://kumbu<b></b>.example.org/notes/Work and www.kumbu<i></i>.example.org/Work", own), StringComparison.Ordinal);
+        Assert.DoesNotContain("](/Work", Text("[x]<b>(/Work/Private/Plan.md)</b>"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Private", Text("a ` b\n`%% Private secret %%` c"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -314,6 +394,14 @@ public class FairCopyTests
         Assert.Equal("a  b", Text("a https://alice@kumbu.example.org/notes/Work/x.md b", own));
         Assert.Equal("a  b", Text("a https://kumbu.example.org&#47;notes&#47;Work b", own));
         Assert.Equal("a  b x", Text("a https://kumbu。example。org/notes/Work b [x](https://kumbu｡example｡org/a)", own));
+        // Full width, a soft hyphen, a zero-width space: the browser reads the same host.
+        foreach (var host in new[] { "ｋｕｍｂｕ.example.org", "kum­bu.example.org", "kumbu​.example.org" })
+        {
+            Assert.Equal("a  b x", Text($"a https://{host}/notes/Work b [x](https://{host}/a)", own));
+        }
+
+        Assert.Equal("x", Text("[x](https://example.org/login?next=https%3A%2F%2Fkumbu.example.org%2FWork)", own));
+        Assert.Equal("x", Text("[x](https://example.org/#&#107;umbu.example.org/Work)", own));
         // The same host is the same server, whatever the scheme or port.
         Assert.Equal("x", Text("[x](https://kumbu.example.org:8443/)", own));
         Assert.Equal("x", Text("[x](http://kumbu.example.org/)", own));

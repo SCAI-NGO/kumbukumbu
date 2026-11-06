@@ -36,6 +36,7 @@ public static partial class FairCopies
     /// ownOrigin: the server's own origin ("https://kumbu.example.org"), whose links count as vault links; null for none.
     public static FairCopy Make(VaultPath note, string content, Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? ownOrigin = null)
     {
+        content = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var all = Lines.Split(content);
         var lines = WithoutComments([.. all.Skip(Outline.FrontmatterEnd(all))]);
         var code = CodeLines(lines);
@@ -80,7 +81,7 @@ public static partial class FairCopies
             for (var k = 0; k < filtered.Length; k++)
             {
                 if (Empty(filtered[k]) && !(aligned && filtered[k] == paragraph[k])) continue;
-                result.Add(filtered[k]);
+                result.Add(Unfenced(filtered[k]));
             }
 
             i = end;
@@ -94,43 +95,97 @@ public static partial class FairCopies
 
     private static bool[] CodeLines(IReadOnlyList<string> lines)
     {
-        var fenced = FencedLines(lines);
+        var (fenced, html) = FencesAndHtml(lines);
         var indented = TagReader.IndentedCode(lines, 0, fenced);
-        return [.. fenced.Zip(indented, (f, i) => f || i)];
+        var code = new bool[lines.Count];
+        for (var i = 0; i < code.Length; i++) code[i] = fenced[i] || (indented[i] && !html[i]);
+        return code;
     }
 
     /// <summary>
-    /// Fenced code as <see cref="Outline.CodeLines"/> reads it, also behind quote and list markers (<c>- ```sh</c>,
-    /// <c>&gt; ```</c>). A closing fence may stand at any indent: closing early only filters more. A fence never closed
-    /// is text, not code.
+    /// Fenced code as CommonMark reads it at the top level (opened at the margin, closed with at most three spaces in),
+    /// and the lines of raw HTML blocks, where neither a fence nor indented code opens. A fence inside a list or a quote
+    /// is text to the copy: where it ends depends on the container, so the copy reads what it holds. A fence never
+    /// closed is text too.
     /// </summary>
-    private static bool[] FencedLines(IReadOnlyList<string> lines)
+    private static (bool[] Fenced, bool[] Html) FencesAndHtml(IReadOnlyList<string> lines)
     {
-        var code = new bool[lines.Count];
+        var fenced = new bool[lines.Count];
+        var html = new bool[lines.Count];
         string? fence = null;
         var opened = -1;
+        // What ends the HTML block: its closing text, or "" for a blank line.
+        string? htmlEnd = null;
+        var afterBlank = true;
         for (var i = 0; i < lines.Count; i++)
         {
-            var inner = ContainerRegex().Replace(lines[i], "", 1);
-            if (fence is null)
+            var line = lines[i];
+            if (fence is not null)
             {
-                if (FenceRegex().Match(inner) is { Success: true } f && !(f.Groups[1].Value[0] == '`' && f.Groups[2].Value.Contains('`')))
+                fenced[i] = true;
+                if (FenceRegex().Match(line) is { Success: true } c && c.Groups[1].Value[0] == fence[0]
+                    && c.Groups[1].Value.Length >= fence.Length && c.Groups[2].Value.Trim().Length == 0)
                 {
-                    fence = f.Groups[1].Value;
-                    opened = i;
-                    code[i] = true;
+                    fence = null;
+                    afterBlank = true;
                 }
 
                 continue;
             }
 
-            code[i] = true;
-            if (FenceRegex().Match(inner.TrimStart()) is { Success: true } c && c.Groups[1].Value[0] == fence[0]
-                && c.Groups[1].Value.Length >= fence.Length && c.Groups[2].Value.Trim().Length == 0) fence = null;
+            if (htmlEnd is not null)
+            {
+                if (htmlEnd.Length == 0 && line.Trim().Length == 0)
+                {
+                    htmlEnd = null;
+                    afterBlank = true;
+                    continue;
+                }
+
+                html[i] = true;
+                if (htmlEnd.Length > 0 && line.Contains(htmlEnd, StringComparison.OrdinalIgnoreCase)) htmlEnd = null;
+                continue;
+            }
+
+            // An opening fence stands at the margin: one indented a little may belong to a list item above.
+            if (line.Length > 0 && line[0] is '`' or '~' && FenceRegex().Match(line) is { Success: true } f
+                && !(f.Groups[1].Value[0] == '`' && f.Groups[2].Value.Contains('`')))
+            {
+                fence = f.Groups[1].Value;
+                opened = i;
+                fenced[i] = true;
+                continue;
+            }
+
+            if (HtmlBlockEnd(line, afterBlank) is { } end)
+            {
+                html[i] = true;
+                // A block that closes on its own line ends there.
+                var rest = line.TrimStart()[1..];
+                htmlEnd = end.Length > 0 && rest.Contains(end, StringComparison.OrdinalIgnoreCase) ? null : end;
+                afterBlank = false;
+                continue;
+            }
+
+            afterBlank = line.Trim().Length == 0;
         }
 
-        if (fence is not null) Array.Fill(code, false, opened, lines.Count - opened);
-        return code;
+        if (fence is not null) Array.Fill(fenced, false, opened, lines.Count - opened);
+        return (fenced, html);
+    }
+
+    /// <summary>What ends the raw HTML block <paramref name="line"/> starts (CommonMark's seven kinds), or null if it
+    /// starts none. The seventh, a lone tag, can't interrupt a paragraph.</summary>
+    private static string? HtmlBlockEnd(string line, bool afterBlank)
+    {
+        if (!line.TrimStart().StartsWith('<') || line.Length - line.TrimStart().Length > 3) return null;
+        if (HtmlRawBlockRegex().Match(line) is { Success: true } raw) return $"</{raw.Groups[1].Value}>";
+        if (line.TrimStart().StartsWith("<!--", StringComparison.Ordinal)) return "-->";
+        if (line.TrimStart().StartsWith("<?", StringComparison.Ordinal)) return "?>";
+        if (line.TrimStart().StartsWith("<![CDATA[", StringComparison.Ordinal)) return "]]>";
+        if (line.TrimStart() is { Length: > 2 } t && t[1] == '!' && char.IsAsciiLetter(t[2])) return ">";
+        if (HtmlBlockTagRegex().IsMatch(line)) return "";
+        return afterBlank && HtmlLoneTagRegex().IsMatch(line) ? "" : null;
     }
 
     /// <summary>The lines without <c>%%…%%</c> and <c>&lt;!-- … --&gt;</c> outside code, and without the lines they
@@ -144,18 +199,35 @@ public static partial class FairCopies
             var code = anywhere ? new bool[lines.Count] : CodeLines(lines);
             var result = new List<string>(lines.Count);
             string? comment = null;
-            for (var i = 0; i < lines.Count; i++)
+            for (var i = 0; i < lines.Count;)
             {
                 var open = comment is not null;
                 if (!open && code[i])
                 {
-                    result.Add(lines[i]);
+                    result.Add(lines[i++]);
                     continue;
                 }
 
-                var line = StripComments(lines[i], ref comment, anywhere);
-                if (Empty(line) && (open || line != lines[i])) continue;
-                result.Add(line);
+                if (lines[i].Trim().Length == 0)
+                {
+                    if (!open) result.Add(lines[i]);
+                    i++;
+                    continue;
+                }
+
+                // Code spans run over the lines of a paragraph, as the scanner reads them.
+                var end = i + 1;
+                while (end < lines.Count && !code[end] && lines[end].Trim().Length > 0 && !Breaks(lines[end - 1], lines[end])) end++;
+                var block = lines.GetRange(i, end - i);
+                var parts = StripComments(string.Join('\n', block), ref comment, anywhere).Split('\n');
+                var aligned = parts.Length == block.Count;
+                for (var k = 0; k < parts.Length; k++)
+                {
+                    if (Empty(parts[k]) && !(aligned && parts[k] == block[k])) continue;
+                    result.Add(parts[k]);
+                }
+
+                i = end;
             }
 
             if (result.SequenceEqual(lines)) return result;
@@ -256,7 +328,10 @@ public static partial class FairCopies
                 continue;
             }
 
-            spans[start] = runs[closer].Start + runs[closer].Length;
+            // In a table row GFM splits the cells first, at every '|', so a span holding one is no code: the pair is
+            // read as text, and neither backtick run opens another span.
+            var end = runs[closer].Start + runs[closer].Length;
+            if (s.IndexOf('|', start, end - start) < 0) spans[start] = end;
             k = closer + 1;
         }
 
@@ -272,53 +347,101 @@ public static partial class FairCopies
         var taken = new Dictionary<int, bool>();
         for (var i = 0; i < lines.Count; i++)
         {
-            if (code[i] || DefinitionRegex().Match(lines[i]) is not { Success: true } m || m.Groups["label"].Value.StartsWith('^')) continue;
-            var used = new List<int> { i };
-            var rest = m.Groups["rest"].Value.Trim();
-            var j = i;
-            // The destination may stand on the next line, the title too.
-            if (rest.Length == 0)
-            {
-                if (i + 1 >= lines.Count || code[i + 1] || Continuation(lines[i + 1]).Length == 0) continue;
-                rest = Continuation(lines[++j]);
-                used.Add(j);
-            }
-
-            var d = DestinationRegex().Match(rest);
-            var title = d.Groups[2].Value.Trim();
-            if (title.Length == 0 && j + 1 < lines.Count && !code[j + 1] && Continuation(lines[j + 1]) is { Length: > 0 } next && next[0] is '"' or '\'' or '(')
-            {
-                title = next;
-                used.Add(++j);
-            }
-
-            if (title.Length > 0 && title[0] is '"' or '\'' or '(')
-            {
-                var close = title[0] == '(' ? ')' : title[0];
-                var closed = title.IndexOf(close, 1) >= 0;
-                while (!closed && j + 1 < lines.Count && !code[j + 1] && lines[j + 1].Trim().Length > 0)
-                {
-                    closed = lines[++j].Contains(close);
-                    used.Add(j);
-                }
-            }
-
-            var destination = Unbracket(d.Groups[1].Value);
-            var web = Classify(destination, own) == Kind.Web;
-            var keep = web && !Mentions(string.Join('\n', used.Select(u => lines[u])), own);
+            if (code[i] || Definition(lines, code, i) is not { } d) continue;
+            var web = Classify(d.Destination, own) == Kind.Web;
+            var keep = web && d.Clean && !Mentions(string.Join('\n', lines.GetRange(i, d.Last - i + 1)), own);
             // A web link that names the server is its text: an empty destination makes it one to the note itself.
-            references.TryAdd(Label(m.Groups["label"].Value), web && !keep ? "" : destination);
-            foreach (var line in used) taken[line] = keep;
-            i = j;
+            references.TryAdd(Label(d.Label), web && !keep ? "" : d.Destination);
+            for (var j = i; j <= d.Last; j++) taken[j] = keep;
+            i = d.Last;
         }
 
         return (references, taken);
     }
 
+    // How many lines below its first a definition may reach: label, destination and title over lines.
+    private const int DefinitionLines = 32;
+
+    private const int DefinitionChars = 8192;
+
+    /// <param name="Last">The definition's last line.</param>
+    /// <param name="Clean">Nothing but whitespace follows it on that line, as CommonMark wants.</param>
+    private sealed record DefinitionAt(string Label, string Destination, int Last, bool Clean);
+
+    /// <summary>
+    /// The reference definition starting on line <paramref name="first"/>, behind any quote or list markers: its label
+    /// and title may run over lines, its destination may stand on the next. Read wherever a line starts with one, not
+    /// only where a paragraph does, and also when something follows it: either way it goes.
+    /// </summary>
+    private static DefinitionAt? Definition(List<string> lines, bool[] code, int first)
+    {
+        if (DefinitionStartRegex().Match(lines[first]) is not { Success: true } head) return null;
+        // From the label on, the lines below without their markers, up to a blank line or code.
+        var text = new StringBuilder(lines[first][head.Length..]);
+        for (var j = first + 1; j < lines.Count && j <= first + DefinitionLines && text.Length < DefinitionChars && !code[j] && lines[j].Trim().Length > 0; j++)
+        {
+            text.Append('\n').Append(Continuation(lines[j]));
+        }
+
+        var t = text.ToString();
+        if (t.Length < 2 || t[1] == '^') return null;
+        var p = 1;
+        for (; p < t.Length && t[p] != ']'; p++)
+        {
+            if (t[p] == '[' || p > MaxLabel) return null;
+            if (t[p] == '\\') p++;
+        }
+
+        if (p + 1 >= t.Length || t[p + 1] != ':' || t[1..p].Trim().Length == 0) return null;
+        var label = t[1..p];
+        p = SkipBlanks(t, p + 2, newline: true);
+        if (p >= t.Length || t[p] == '\n') return null;
+        string destination;
+        if (t[p] == '<')
+        {
+            var close = t.IndexOfAny(['>', '<', '\n'], p + 1);
+            if (close < 0 || t[close] != '>') return null;
+            destination = t[(p + 1)..close];
+            p = close + 1;
+        }
+        else
+        {
+            var start = p;
+            while (p < t.Length && !char.IsWhiteSpace(t[p])) p++;
+            destination = t[start..p];
+        }
+
+        var end = p;
+        var q = SkipBlanks(t, p, newline: true);
+        if (q < t.Length && t[q] is '"' or '\'' or '(' && q > p)
+        {
+            var close = t.IndexOf(t[q] == '(' ? ')' : t[q], q + 1);
+            if (close > 0) end = close + 1;
+        }
+
+        var lineEnd = t.IndexOf('\n', end) is >= 0 and var e ? e : t.Length;
+        var clean = t[end..lineEnd].Trim().Length == 0;
+        return new DefinitionAt(label, destination, first + t[..lineEnd].Count(c => c == '\n'), clean);
+    }
+
+    private static int SkipBlanks(string t, int p, bool newline)
+    {
+        while (p < t.Length && t[p] is ' ' or '\t') p++;
+        if (newline && p < t.Length && t[p] == '\n')
+        {
+            p++;
+            while (p < t.Length && t[p] is ' ' or '\t') p++;
+        }
+
+        return p;
+    }
+
     /// <summary>A line without its container markers ('>' and indentation).</summary>
     private static string Continuation(string line) => line.TrimStart(' ', '\t', '>').Trim();
 
-    private static string Label(string label) => WhitespaceRegex().Replace(label.Trim(), " ").ToUpperInvariant().ToLowerInvariant();
+    // A label may run over lines, each behind its quote markers.
+    private static string Label(string label) =>
+        WhitespaceRegex().Replace(LabelBreakRegex().Replace(label, " ").Trim(), " ").ToUpperInvariant().ToLowerInvariant();
 
     private static string Unbracket(string destination) =>
         destination.Length >= 2 && destination[0] == '<' && destination[^1] == '>' ? destination[1..^1] : destination;
@@ -332,6 +455,20 @@ public static partial class FairCopies
         ListItemRegex().IsMatch(line) || HeadingLineRegex().IsMatch(line) || HeadingLineRegex().IsMatch(previous)
         || ThematicRegex().IsMatch(line) || ThematicRegex().IsMatch(previous) || FenceShaped(line) || FenceShaped(previous)
         || QuoteDepth(previous) != QuoteDepth(line);
+
+    /// <summary>
+    /// A line the copy reads as text that looks like a fence (from a raw HTML block, a list or quote, a fence never
+    /// closed) with its first fence character escaped: unescaped, it would open or close code in the reader's view
+    /// and turn what the copy filtered into code, or what it kept as code into links.
+    /// </summary>
+    private static string Unfenced(string line)
+    {
+        var prefix = ContainerRegex().Match(line).Length;
+        var rest = line[prefix..];
+        if (!FenceRegex().IsMatch(rest)) return line;
+        var at = prefix + rest.Length - rest.TrimStart(' ').Length;
+        return line[..at] + "\\" + line[at..];
+    }
 
     private static bool FenceShaped(string line) => FenceRegex().IsMatch(ContainerRegex().Replace(line, "", 1).TrimStart());
 
@@ -362,7 +499,7 @@ public static partial class FairCopies
             var pattern = Regex.Escape(host).Replace(@"\.", Dot, StringComparison.Ordinal);
             var end = $@"{Dot}?(?![A-Za-z0-9-])(?!{Dot}[A-Za-z0-9-])";
             Url = new Regex(
-                $@"\G(?<![A-Za-z0-9.@/-])(?:(?<scheme>(?:https?:)?//)(?:[^\s/?#@<>]+@)?)?(?<www>www{Dot})?{pattern}{end}(?<port>:[0-9]{{1,5}})?"
+                $@"\G(?:(?<scheme>(?:https?:)?//)(?:[^\s/?#@<>]+@)?)?(?<www>www{Dot})?{pattern}{end}(?<port>:[0-9]{{1,5}})?"
                 + @"(?<path>(?:[/?#]|&#0*47;|&#x0*2f;|&sol;|%2f)[^\s<>]*)?",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             Mention = new Regex($@"(?<![A-Za-z0-9-]|{Dot}){pattern}{end}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -379,20 +516,113 @@ public static partial class FairCopies
         public static Own? Of(string? origin) => origin is not null && Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? new Own(HostOf(uri)) : null;
     }
 
-    // The same host is the same server: scheme and port don't count, nor a trailing dot or "www.".
+    // The same host is the same server: scheme and port don't count, nor a trailing dot or "www.". Compared as IDNA
+    // writes it, so "ｋｕｍｂｕ" is "kumbu".
     private static string HostOf(Uri uri)
     {
-        var host = Dots(uri.Host).TrimEnd('.').ToLowerInvariant();
+        var host = Dots(uri.IdnHost).TrimEnd('.').ToLowerInvariant();
         return host.StartsWith("www.", StringComparison.Ordinal) ? host[4..] : host;
     }
 
     private static string Dots(string text) => text.Replace('。', '.').Replace('．', '.').Replace('｡', '.');
 
+    /// <summary>A URL or text as a browser reads a host in it: character references and percent-encoding decoded
+    /// (twice encoded too), folded as NFKC, without the characters it ignores.</summary>
+    private static string Readable(string text)
+    {
+        for (var i = 0; i < 3 && (text.Contains('%') || text.Contains('&')); i++)
+        {
+            var decoded = Uri.UnescapeDataString(System.Net.WebUtility.HtmlDecode(text));
+            if (decoded == text) break;
+            text = decoded;
+        }
+
+        return Dots(new Folded(text).Text);
+    }
+
     /// <summary>Whether the server's host stands in <paramref name="text"/>.</summary>
-    private static bool Mentions(string text, Own? own) => own is not null && text.Length > 0 && own.Mention.IsMatch(text);
+    private static bool Mentions(string text, Own? own) => own is not null && text.Length > 0 && own.Mention.IsMatch(Readable(text));
+
+    /// <summary>
+    /// A text folded as NFKC character by character, without default-ignorable characters (soft hyphen, zero-width
+    /// space and joiner, …), with the way back to the original's positions. Only the hosts of the server are sought in
+    /// it; the copy keeps the original. ASCII text is its own folding.
+    /// </summary>
+    private sealed class Folded
+    {
+        private readonly int[]? _toOriginal;
+        private readonly int[]? _toFolded;
+
+        public Folded(string s)
+        {
+            Text = s;
+            if (Ascii.IsValid(s)) return;
+            var text = new StringBuilder(s.Length);
+            var toOriginal = new List<int>(s.Length + 1);
+            _toFolded = new int[s.Length + 1];
+            for (var i = 0; i < s.Length;)
+            {
+                if (Rune.DecodeFromUtf16(s.AsSpan(i), out var rune, out var length) != System.Buffers.OperationStatus.Done) rune = new Rune(s[i] is var c && char.IsSurrogate(c) ? '�' : c);
+                length = Math.Max(length, 1);
+                for (var k = 0; k < length; k++) _toFolded[i + k] = text.Length;
+                if (!Ignorable(rune.Value))
+                {
+                    var folded = rune.IsAscii ? rune.ToString() : rune.ToString().Normalize(NormalizationForm.FormKC);
+                    foreach (var c in folded)
+                    {
+                        text.Append(c);
+                        toOriginal.Add(i);
+                    }
+                }
+
+                i += length;
+            }
+
+            _toFolded[s.Length] = text.Length;
+            toOriginal.Add(s.Length);
+            _toOriginal = [.. toOriginal];
+            Text = text.ToString();
+        }
+
+        public string Text { get; }
+
+        public int ToFolded(int original) => _toFolded?[original] ?? original;
+
+        public int ToOriginal(int folded) => _toOriginal?[folded] ?? folded;
+
+        // Unicode's Default_Ignorable_Code_Point, as browsers drop them from a host name.
+        private static bool Ignorable(int c) =>
+            c is 0xAD or 0x34F or 0x61C or 0x3164 or 0xFEFF or 0xFFA0 or (>= 0x115F and <= 0x1160) or (>= 0x17B4 and <= 0x17B5)
+                or (>= 0x180B and <= 0x180F) or (>= 0x200B and <= 0x200F) or (>= 0x202A and <= 0x202E) or (>= 0x2060 and <= 0x206F)
+                or (>= 0xFE00 and <= 0xFE0F) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A) or (>= 0xE0000 and <= 0xE0FFF);
+    }
 
     /// <summary>A destination's query and fragment, where another site may carry a URL of the server.</summary>
     private static string QueryOf(string destination) => destination.IndexOfAny(['?', '#']) is >= 0 and var at ? destination[at..] : "";
+
+    /// <summary>The end of a URL to the server itself starting at <paramref name="p"/>, or 0. A bare host name in
+    /// running text is none; one with a scheme, "www.", a port or a path is, wherever it starts. It is sought in the
+    /// folded text, and only up to <paramref name="limit"/>, so a link's text is read once.</summary>
+    private static int OwnUrl(Own? own, Folded folded, int p, int limit)
+    {
+        if (own is null) return 0;
+        var s = folded.Text;
+        var at = folded.ToFolded(p);
+        var to = folded.ToFolded(limit);
+        if (at >= to || s[at] is not ('h' or 'H' or '/' or 'w' or 'W') && char.ToLowerInvariant(s[at]) != own.Host[0]) return 0;
+        var m = own.Url.Match(s, at, to - at);
+        if (!m.Success || m.Index != at) return 0;
+        if (!m.Groups["scheme"].Success && !m.Groups["www"].Success && !m.Groups["port"].Success && !m.Groups["path"].Success) return 0;
+        var hostEnd = m.Groups["port"].Success ? m.Groups["port"].Index : m.Groups["path"].Success ? m.Groups["path"].Index : at + m.Length;
+        return Math.Max(folded.ToOriginal(TrimEnd(s, hostEnd, at + m.Length)), p + 1);
+    }
+
+    // Trailing punctuation is the sentence's, as for GFM's autolinks.
+    private static int TrimEnd(string s, int floor, int end)
+    {
+        while (end > floor && "?!.,:;*_~)'\"".Contains(s[end - 1])) end--;
+        return end;
+    }
 
     private enum Kind { Vault, Web, Own, Other }
 
@@ -405,7 +635,7 @@ public static partial class FairCopies
         if (!protocolRelative && name.Equals("mailto", StringComparison.OrdinalIgnoreCase)) return Kind.Web;
         if (!protocolRelative && !name.Equals("http", StringComparison.OrdinalIgnoreCase) && !name.Equals("https", StringComparison.OrdinalIgnoreCase)) return Kind.Other;
         // What doesn't parse can't be shown to be elsewhere.
-        var url = Dots(protocolRelative ? "https:" + destination : destination);
+        var url = Readable(protocolRelative ? "https:" + destination : destination);
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Host.Length == 0) return Kind.Other;
         return own is not null && HostOf(uri) == own.Host ? Kind.Own : Kind.Web;
     }
@@ -452,42 +682,25 @@ public static partial class FairCopies
             var scanner = new Scanner(this, text);
             var output = new Output();
             scanner.Scan(0, text.Length, flat, output);
-            return SafetyNet(output);
+            return SafetyNet(output, own);
         }
 
         public string Alt(Scanner scanner, int from, int to)
         {
             var output = new Output();
             scanner.Scan(from, to, true, output);
-            return SafetyNet(output);
+            return SafetyNet(output, own);
         }
 
-        /// <summary>The end of a URL to the server itself starting at <paramref name="p"/>, or 0. A bare host name in
-        /// running text is none; one with a scheme, "www.", a port or a path is.</summary>
-        public int OwnUrl(string s, int p, int limit)
-        {
-            if (own is null || s[p] is not ('h' or 'H' or '/' or 'w' or 'W') && char.ToLowerInvariant(s[p]) != own.Host[0]) return 0;
-            var m = own.Url.Match(s, p);
-            if (!m.Success || m.Index != p) return 0;
-            if (!m.Groups["scheme"].Success && !m.Groups["www"].Success && !m.Groups["port"].Success && !m.Groups["path"].Success) return 0;
-            var hostEnd = m.Groups["port"].Success ? m.Groups["port"].Index : m.Groups["path"].Success ? m.Groups["path"].Index : p + m.Length;
-            return TrimEnd(s, hostEnd, Math.Min(p + m.Length, limit));
-        }
 
         /// <summary>The end of a bare URL of another scheme than the web's (<c>obsidian://…</c>, <c>file:…</c>)
-        /// starting at <paramref name="p"/>, or 0: it goes whole, as its text is its target.</summary>
+        /// starting at <paramref name="p"/>, or 0: it goes whole, as its text is its target. Sought only up to
+        /// <paramref name="limit"/>.</summary>
         public static int OtherUrl(string s, int p, int limit)
         {
             if (!char.IsAsciiLetter(s[p]) || (p > 0 && (char.IsAsciiLetterOrDigit(s[p - 1]) || s[p - 1] is '+' or '.' or '-'))) return 0;
-            if (OtherUrlRegex().Match(s, p) is not { Success: true } m || m.Index != p) return 0;
-            return TrimEnd(s, p + m.Groups[1].Length, Math.Min(p + m.Length, limit));
-        }
-
-        // Trailing punctuation is the sentence's, as for GFM's autolinks.
-        private static int TrimEnd(string s, int floor, int end)
-        {
-            while (end > floor && "?!.,:;*_~)'\"".Contains(s[end - 1])) end--;
-            return end;
+            if (OtherUrlRegex().Match(s, p, limit - p) is not { Success: true } m || m.Index != p) return 0;
+            return TrimEnd(s, p + m.Groups[1].Length, p + m.Length);
         }
 
         /// <summary>The text a wikilink or wiki embed leaves, or null for one that names nothing.</summary>
@@ -551,11 +764,13 @@ public static partial class FairCopies
         private readonly Dictionary<int, Match> _wikilinks;
         private readonly Dictionary<string, (int From, int Found)> _next = [];
         private int _budget;
+        private readonly Folded? _folded;
 
         public Scanner(Copier copier, string s)
         {
             _copier = copier;
             _s = s;
+            _folded = copier.Own is null ? null : new Folded(s);
             _budget = 2 * s.Length + 8192;
             _code = CodeSpans(s);
             _wikilinks = s.Contains("[[", StringComparison.Ordinal) ? WikiLink.LinkRegex().Matches(s).ToDictionary(m => m.Index) : [];
@@ -616,7 +831,8 @@ public static partial class FairCopies
                 {
                     if (angle.Url is null) htmlEnd = angle.End;
                     // An autolink's text is its URL: a web one stays whole, any other goes whole.
-                    else if (Classify(angle.Url, _copier.Own) == Kind.Web && !angle.Url.Any(char.IsWhiteSpace) && !Mentions(QueryOf(angle.Url), _copier.Own))
+                    else if (Classify(angle.Url, _copier.Own) == Kind.Web && !angle.Url.Any(c => char.IsWhiteSpace(c) || c == '|')
+                        && !Mentions(QueryOf(angle.Url), _copier.Own))
                     {
                         if (plain) o.Append(angle.Url);
                         else o.Append(s[p..angle.End], kept: true);
@@ -634,6 +850,8 @@ public static partial class FairCopies
                     var kind = Classify(link.Destination, _copier.Own);
                     // Another site's link that carries the server's host in its query or title is its text too.
                     if (kind == Kind.Web && Mentions(QueryOf(link.Destination) + "\n" + link.Title, _copier.Own)) kind = Kind.Own;
+                    // In a table row GFM would split a kept destination or title at its '|', and read what follows anew.
+                    if (kind == Kind.Web && (link.Destination.Contains('|') || link.Title.Contains('|'))) kind = Kind.Other;
                     if (plain || (!link.Embed && kind != Kind.Web))
                     {
                         limits.Push((link.Close, link.End, "", false));
@@ -691,7 +909,7 @@ public static partial class FairCopies
                     else o.Append(s[(p + 1)..end]);
                     p = end;
                 }
-                else if (_copier.OwnUrl(s, p, limit) is > 0 and var ownEnd) p = ownEnd;
+                else if (_folded is not null && OwnUrl(_copier.Own, _folded, p, limit) is > 0 and var ownEnd) p = ownEnd;
                 else if (Copier.OtherUrl(s, p, limit) is > 0 and var otherEnd) p = otherEnd;
                 else
                 {
@@ -885,38 +1103,73 @@ public static partial class FairCopies
 
     /// <summary>
     /// The last line of defence, outside what stays as it is: what is left of an inline link loses its destination,
-    /// what is left of a tag goes, and a line shaped like a reference definition goes.
+    /// what is left of a tag or a comment goes, and what is shaped like a reference definition goes, its label over lines
+    /// too, with the next line when its destination would stand there. A URL of the server that the removals joined
+    /// together (<c>https://kumbu&lt;b&gt;&lt;/b&gt;.example.org/…</c>) goes too.
     /// </summary>
-    private static string SafetyNet(Output output)
+    private static string SafetyNet(Output output, Own? own)
     {
         var s = output.Text.ToString();
+        var folded = own is null ? null : new Folded(s);
         var result = new StringBuilder(s.Length);
         var at = 0;
         foreach (var (start, end) in output.Kept)
         {
-            Clean(s, at, start, result);
+            Clean(s, at, start, result, own, folded);
             result.Append(s, start, end - start);
             at = end;
         }
 
-        Clean(s, at, s.Length, result);
+        Clean(s, at, s.Length, result, own, folded);
         var text = result.ToString();
         if (!text.Contains("]:", StringComparison.Ordinal)) return text;
-        var lines = text.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
+        var cleaned = new StringBuilder(text.Length);
+        var from = 0;
+        foreach (Match m in DefinitionShapeRegex().Matches(text))
         {
-            if (DefinitionShapeRegex().IsMatch(lines[i])) lines[i] = "";
+            if (m.Index < from) continue;
+            cleaned.Append(text, from, m.Index - from);
+            var lineEnd = text.IndexOf('\n', m.Index + m.Length) is >= 0 and var e ? e : text.Length;
+            // Nothing after the ':' on its line: the destination stands on the next, and goes with it.
+            if (text.AsSpan(m.Index + m.Length, lineEnd - m.Index - m.Length).Trim().Length == 0 && lineEnd < text.Length)
+            {
+                lineEnd = text.IndexOf('\n', lineEnd + 1) is >= 0 and var n ? n : text.Length;
+            }
+
+            // The lines stay, empty, so the caller drops them as lines a removal emptied.
+            cleaned.Append('\n', text.AsSpan(m.Index, lineEnd - m.Index).Count('\n'));
+            from = lineEnd;
         }
 
-        return string.Join('\n', lines);
+        cleaned.Append(text, from, text.Length - from);
+        return cleaned.ToString();
     }
 
-    private static void Clean(string s, int from, int to, StringBuilder result)
+    private static void Clean(string s, int from, int to, StringBuilder result, Own? own, Folded? folded)
     {
-        (int From, int Found) pairs = (-1, -1), opens = (-1, -1), breaks = (-1, -1);
+        (int From, int Found) pairs = (-1, -1), opens = (-1, -1), breaks = (-1, -1), comments = (-1, -1), htmlComments = (-1, -1);
         for (var i = from; i < to; i++)
         {
             var c = s[i];
+            if (own is not null && OwnUrl(own, folded!, i, to) is > 0 and var ownEnd)
+            {
+                i = ownEnd - 1;
+                continue;
+            }
+
+            // A comment the comment pass read as code, as it drew the paragraphs a little wider: up to its close.
+            if (c == '%' && i + 1 < to && s[i + 1] == '%')
+            {
+                i = Find(s, "%%", i + 2, to, ref comments) is >= 0 and var close ? close + 1 : to - 1;
+                continue;
+            }
+
+            if (c == '<' && string.CompareOrdinal(s, i, "<!--", 0, 4) == 0 && i + 4 <= to)
+            {
+                i = Find(s, "-->", i + 4, to, ref htmlComments) is >= 0 and var close ? close + 2 : to - 1;
+                continue;
+            }
+
             // A wikilink the scanner didn't read, "[[Private/Plan]" or "[[a|[b]]]": its alias or last segment.
             if (c == '[' && i + 1 < to && s[i + 1] == '[')
             {
@@ -1006,15 +1259,25 @@ public static partial class FairCopies
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})(.*)$")]
     private static partial Regex FenceRegex();
 
-    // Inside quotes and list items too, at any depth.
-    [GeneratedRegex(@"^(?:[ \t]*(?:>|[-*+](?=[ \t])|[0-9]{1,9}[.)](?=[ \t])))*[ \t]*\[(?<label>(?:[^\[\]\\]|\\.){1,999})\]:(?<rest>.*)$")]
-    private static partial Regex DefinitionRegex();
+    [GeneratedRegex(@"^ {0,3}<(script|pre|style|textarea)(?=[\s>]|$)", RegexOptions.IgnoreCase)]
+    private static partial Regex HtmlRawBlockRegex();
 
-    [GeneratedRegex(@"^(?:[ \t>]|[-*+]|[0-9]{1,9}[.)])*\[(?!\^)[^\]]*\]:")]
+    [GeneratedRegex(@"^ {0,3}</?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[\s/>]|$)", RegexOptions.IgnoreCase)]
+    private static partial Regex HtmlBlockTagRegex();
+
+    [GeneratedRegex(@"^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s""'=<>`]+|'[^']*'|""[^""]*""))?)*\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>)\s*$")]
+    private static partial Regex HtmlLoneTagRegex();
+
+    // A definition's start, inside quotes and list items too, at any depth: what comes before its '['.
+    [GeneratedRegex(@"^(?:[ \t]*(?:>|[-*+](?=[ \t])|[0-9]{1,9}[.)](?=[ \t])))*[ \t]*(?=\[)")]
+    private static partial Regex DefinitionStartRegex();
+
+    // Shaped like a definition, its label over lines too.
+    [GeneratedRegex(@"^(?:[ \t>]|[-*+]|[0-9]{1,9}[.)])*\[(?!\^)[^\[\]]{0,999}\]:", RegexOptions.Multiline)]
     private static partial Regex DefinitionShapeRegex();
 
-    [GeneratedRegex(@"^(<[^<>]*>|\S+)(.*)$")]
-    private static partial Regex DestinationRegex();
+    [GeneratedRegex(@"\n[ \t>]*")]
+    private static partial Regex LabelBreakRegex();
 
     [GeneratedRegex(@"\G<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\n]*)>")]
     private static partial Regex AutolinkRegex();
