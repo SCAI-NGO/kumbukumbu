@@ -6,7 +6,7 @@ namespace Kumbu.Server.Publishing;
 /// <summary>
 /// A vault's record of what it publishes (publish spec §4), sealed under the vault key, one document per vault in
 /// <c>publishing</c> (<see cref="UnlockedVault.SealPublishing"/>): its publications with their keys, the unpublishable
-/// marks and an append-only log. Paths as the vault stores them, under its own name.
+/// marks and a log of the newest <see cref="Publications.LogLimit"/> changes. Paths as the vault stores them, under its own name.
 /// </summary>
 internal sealed record PublishingRecord(IReadOnlyList<PublicationEntry> Publications, IReadOnlyList<string> Unpublishable, IReadOnlyList<PublishingLogEntry> Log)
 {

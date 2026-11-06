@@ -45,6 +45,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
     private const string ConflictSentence = "the vault's publications changed meanwhile; try again";
 
+    /// <summary>The most entries the record's log keeps, the newest: the record is one document, and the full history
+    /// stays in the vault's events (an event whose entry is gone reads as a publication that changed).</summary>
+    internal const int LogLimit = 500;
+
     // A record that changes under each attempt is a vault being worked on hard; then the caller tries again.
     private const int Attempts = 3;
 
@@ -82,7 +86,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var next = record with
             {
                 Publications = [.. record.Publications, entry],
-                Log = [.. record.Log, LogEntry(PublishingKinds.Published, stored, at, by, byRef, null)],
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Published, stored, at, by, byRef, null)),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
@@ -112,7 +116,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var next = record with
             {
                 Publications = [.. record.Publications.Select(p => p.Id == entry.Id ? updated : p)],
-                Log = [.. record.Log, LogEntry(PublishingKinds.Updated, stored, at, by, byRef, null)],
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Updated, stored, at, by, byRef, null)),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
@@ -137,7 +141,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var next = record with
             {
                 Publications = [.. record.Publications.Where(p => p.Id != entry.Id)],
-                Log = [.. record.Log, LogEntry(PublishingKinds.Withdrawn, stored, Now, by, byRef, WithdrawalReasons.ByRight)],
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Withdrawn, stored, Now, by, byRef, WithdrawalReasons.ByRight)),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
@@ -184,7 +188,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             {
                 Publications = [.. record.Publications.Except(withdrawn)],
                 Unpublishable = marks,
-                Log = [.. record.Log, .. logged],
+                Log = Appended(record.Log, [.. logged]),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
@@ -254,7 +258,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             await EventAsync(session, access, log, ct);
         }
 
-        await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = [.. record.Log, .. logged] }, ct);
+        await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = Appended(record.Log, [.. logged]) }, ct);
     }
 
     /// <summary>
@@ -516,6 +520,13 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
     private static PublicationEntry? Find(PublishingRecord record, VaultPath stored) =>
         record.Publications.FirstOrDefault(p => string.Equals(p.Note, stored.Value, StringComparison.Ordinal));
+
+    /// <summary>The log with <paramref name="entries"/> after it, cut to its newest <see cref="LogLimit"/>.</summary>
+    private static IReadOnlyList<PublishingLogEntry> Appended(IReadOnlyList<PublishingLogEntry> log, params PublishingLogEntry[] entries)
+    {
+        PublishingLogEntry[] all = [.. log, .. entries];
+        return all.Length > LogLimit ? all[^LogLimit..] : all;
+    }
 
     private static PublishingLogEntry LogEntry(string kind, VaultPath stored, DateTime at, string by, WriterRef byRef, string? reason) =>
         new(NewId(), kind, stored.Value, at, by, Ref(byRef), reason);

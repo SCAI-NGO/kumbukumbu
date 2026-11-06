@@ -494,6 +494,36 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_log_keeps_its_most_recent_entries()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        await PublishAsync(alice);
+        var (notes, access) = await AliceAsync(alice);
+        // As if the note had been updated 600 times: the record is one document, so its log can't grow without end.
+        var (doc, record) = await Store.ReadAsync(null, access.Vault, Ct);
+        var old = Enumerable.Range(0, 600).Select(i => record.Log[0] with { Id = $"old-{i}", Kind = PublishingKinds.Updated, At = record.Log[0].At.AddSeconds(i + 1) });
+        using (var session = await Catalog.StartSessionAsync(Ct))
+        {
+            await Store.WriteAsync(session, access.Vault, doc, record with { Log = [.. record.Log, .. old] }, Ct);
+        }
+
+        await UpdateAsync(alice);
+
+        var log = (await Store.ReadAsync(null, access.Vault, Ct)).Record.Log;
+        Assert.Equal(Publications.LogLimit, log.Count);
+        Assert.Equal(PublishingKinds.Updated, log[^1].Kind);
+        Assert.DoesNotContain(log, l => l.Kind == PublishingKinds.Published);
+        Assert.Equal($"old-{600 - Publications.LogLimit + 1}", log[0].Id);
+
+        await Publications.WithdrawAsync(access, notes, P(Questions), alice.Username, BySession, Ct);
+
+        log = (await Store.ReadAsync(null, access.Vault, Ct)).Record.Log;
+        Assert.Equal(Publications.LogLimit, log.Count);
+        Assert.Equal((PublishingKinds.Withdrawn, WithdrawalReasons.ByRight), (log[^1].Kind, log[^1].Reason));
+        Assert.Equal($"old-{600 - Publications.LogLimit + 2}", log[0].Id);
+    }
+
+    [Fact]
     public async Task A_member_sees_the_path_alone()
     {
         var alice = await AliceWithQuestionsAsync();
