@@ -96,6 +96,22 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         var lookup = ShareCode.Lookup(code);
         var l = Convert.ToHexStringLower(lookup);
         var doc = await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) ?? throw new PublishingConflictException();
+        // The reader slot stays: a copy under another key than the slot's would never open for a reader.
+        var readerKey = ShareCode.ReaderKey(code);
+        try
+        {
+            var slot = JsonSerializer.Deserialize<ReaderSlot>(VaultCrypto.Open(readerKey, doc.Reader, ReaderContext(l)));
+            if (slot?.Key is not { } slotKey || !CryptographicOperations.FixedTimeEquals(slotKey, key)) throw new PublishingConflictException();
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            throw new PublishingConflictException();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(readerKey);
+        }
+
         var updated = await catalog.Publications.UpdateOneAsync(
             session, P.Eq(d => d.Id, doc.Id) & P.Eq(d => d.Blob, doc.Blob), Builders<PublicationDocument>.Update.Set(d => d.Blob, SealCopy(key, l, copy)), cancellationToken: ct);
         if (updated.MatchedCount == 0) throw new PublishingConflictException();

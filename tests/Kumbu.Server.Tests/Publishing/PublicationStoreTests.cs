@@ -124,6 +124,35 @@ public sealed class PublicationStoreTests(MongoFixture fixture)
         await Assert.ThrowsAnyAsync<CryptographicException>(() => Store().ReadAsync(null, work, Ct));
     }
 
+    [Fact]
+    public async Task A_write_over_a_changed_blob_at_the_same_revision_conflicts()
+    {
+        var a = await AccountAsync("Work");
+        var work = a.Vaults["Work"];
+        await WriteAsync(work, null, Record(ShareCode.New(), VaultCrypto.NewKey()));
+        var (doc, _) = await Store().ReadAsync(null, work, Ct);
+        await Raw("publishing").UpdateOneAsync(new BsonDocument("_id", doc!.Id), new BsonDocument("$set", new BsonDocument("blob", new BsonBinaryData([1, 2, 3]))), cancellationToken: Ct);
+
+        await Assert.ThrowsAsync<PublishingConflictException>(() => WriteAsync(work, doc, PublishingRecord.Empty));
+        Assert.Equal(1, (await Raw("publishing").Find(new BsonDocument("_id", doc.Id)).SingleAsync(Ct))["rev"].ToInt64());
+    }
+
+    [Fact]
+    public async Task A_record_does_not_open_in_another_document_of_its_vault()
+    {
+        var a = await AccountAsync("Work");
+        var work = a.Vaults["Work"];
+        await WriteAsync(work, null, Record(ShareCode.New(), VaultCrypto.NewKey()));
+        var raw = await Raw("publishing").Find(new BsonDocument("vault", work.Id)).SingleAsync(Ct);
+
+        // The same vault, pid, revision and blob, planted under another _id.
+        await Raw("publishing").DeleteOneAsync(new BsonDocument("_id", raw["_id"]), Ct);
+        raw["_id"] = ObjectId.GenerateNewId();
+        await Raw("publishing").InsertOneAsync(raw, cancellationToken: Ct);
+
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => Store().ReadAsync(null, work, Ct));
+    }
+
     private async Task<(long?, string)> ReadJsonAsync(UnlockedVault vault)
     {
         var (doc, record) = await Store().ReadAsync(null, vault, Ct);
@@ -252,6 +281,21 @@ public sealed class PublicationStoreTests(MongoFixture fixture)
         Assert.Equal(bytes[0], (await Store().OpenFileAsync(code, 0, Ct))!.Value.Bytes);
         Assert.Null(await Store().OpenFileAsync(code, 1, Ct));
         Assert.Equal(1, await CountAsync("publication_files", a.Vaults["Work"].Id));
+    }
+
+    [Fact]
+    public async Task Replacing_a_copy_with_another_key_is_refused()
+    {
+        var a = await AccountAsync("Work");
+        var code = ShareCode.New();
+        var copy = Copy();
+        await InsertCopyAsync(a.Vaults["Work"].Id, code, VaultCrypto.NewKey(), a.User.Id, copy, Files(1));
+
+        await Assert.ThrowsAsync<PublishingConflictException>(
+            () => InTransactionAsync(s => Store().ReplaceCopyAsync(s, code, VaultCrypto.NewKey(), Copy("Answers on routing", files: 1), Files(1), Ct)));
+
+        Assert.Equal(Json(copy), Json((await Store().OpenCopyAsync(code, Ct))!.Value.Copy));
+        Assert.NotNull(await Store().OpenFileAsync(code, 0, Ct));
     }
 
     [Fact]
