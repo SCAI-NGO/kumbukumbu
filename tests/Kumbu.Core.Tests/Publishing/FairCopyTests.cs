@@ -169,6 +169,14 @@ public class FairCopyTests
     }
 
     [Fact]
+    public void An_autolink_of_another_scheme_goes_even_with_spaces()
+    {
+        Assert.Equal("a  b", Text("a <obsidian://open?vault=Work&file=Private Plan> b"));
+        // Read as an autolink, it binds more tightly than the brackets around it.
+        Assert.Equal("[a ](https://example.org)", Text("[a <obsidian://x y]>](https://example.org)"));
+    }
+
+    [Fact]
     public void Footnotes_stay() => Assert.Equal("Note[^1].\n\n[^1]: A footnote.", Text("Note[^1].\n\n[^1]: A footnote."));
 
     [Fact]
