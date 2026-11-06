@@ -7907,6 +7907,7 @@ export interface components {
             /** Format: date-time */
             expiresAt: null | string;
             kind: string;
+            publish: string[];
         };
         BacklinkView: {
             path: string;
@@ -8019,6 +8020,7 @@ export interface components {
             state: string;
             reason: null | string;
             client: null | components["schemas"]["ClientView"];
+            publish: string[];
         };
         ConsentConnectionView: {
             name: string;
@@ -8031,6 +8033,7 @@ export interface components {
             /** Format: date-time */
             expiresAt: null | string;
             currentClient: null | components["schemas"]["ClientView"];
+            publish: string[];
         };
         ConsentDecisionRequest: {
             allow: boolean;
@@ -8073,6 +8076,7 @@ export interface components {
             };
             /** Format: int32 */
             expiresInDays?: null | number | string;
+            publish?: null | string[];
         };
         CreateCheckpointRequest: {
             name: string;
@@ -8084,6 +8088,7 @@ export interface components {
             };
             /** Format: int32 */
             expiresInDays?: null | number | string;
+            publish?: null | string[];
         };
         CreatedApiKeyView: {
             key: string;
@@ -8512,6 +8517,7 @@ export interface components {
             vaults: {
                 [key: string]: string;
             };
+            publish?: null | string[];
         };
         SetEmbeddingsRequest: {
             provider: string;

@@ -61,14 +61,16 @@ public sealed record ReencryptRequest(string Password);
 
 /// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
 /// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.
-/// <c>kind</c>: <c>agent</c>, or <c>device</c> for a key paired from Obsidian.</summary>
+/// <c>kind</c>: <c>agent</c>, or <c>device</c> for a key paired from Obsidian. <c>publish</c>: the names of the vaults
+/// it may publish on ("May publish"), all among <c>vaults</c>.</summary>
 public sealed record ApiKeyView(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt, string Kind);
+    DateTime? ExpiresAt, string Kind, string[] Publish);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
-/// out or null, the key doesn't expire.</summary>
-public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
+/// out or null, the key doesn't expire. <c>publish</c>: the names of the vaults it may publish on, among <c>vaults</c>
+/// and her own; left out or null, none.</summary>
+public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null, IReadOnlyList<string>? Publish = null);
 
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
@@ -386,7 +388,8 @@ public static class AccountApi
     {
         var names = await VaultNamesAsync(caller, ct);
         var vaults = RightsByVaultId(body.Vaults, names);
-        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
+        var (key, info) = await keys.CreateAsync(
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, publish: PublishByVaultId(body.Publish, names));
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 
@@ -515,6 +518,20 @@ public static class AccountApi
         return vaults;
     }
 
+    /// <summary>A request's "May publish" (vault names) by vault id; 400 for a vault the caller has no such name for.
+    /// Whether it may be given there is for the service to say (an <see cref="ArgumentException"/>, a 400 too).</summary>
+    internal static HashSet<string> PublishByVaultId(IReadOnlyList<string>? requested, Dictionary<string, string> names)
+    {
+        var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
+        var publish = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var name in requested ?? []) publish.Add(idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'."));
+        return publish;
+    }
+
+    /// <summary>"May publish" by vault name, in order; as for the rights, a vault that no longer opens for the user isn't listed.</summary>
+    internal static string[] PublishNames(IReadOnlySet<string> publish, Dictionary<string, string> names) =>
+        [.. publish.Where(names.ContainsKey).Select(id => names[id]).Order(StringComparer.Ordinal)];
+
     /// <summary>The caller's vaults, id → name. Opening them is what a session does on every vault request anyway.</summary>
     internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
@@ -529,7 +546,8 @@ public static class AccountApi
         info.LastUsedAt,
         info.RevokedAt,
         info.ExpiresAt,
-        info.Kind == ApiKeyKind.Device ? "device" : "agent");
+        info.Kind == ApiKeyKind.Device ? "device" : "agent",
+        PublishNames(info.Publish, names));
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

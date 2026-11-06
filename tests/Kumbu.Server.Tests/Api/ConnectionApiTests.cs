@@ -5,7 +5,11 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Tests.Sharing;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -135,6 +139,108 @@ public sealed class ConnectionApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, unknownOnChange.StatusCode);
         using var noSuch = await user.SendAsync(HttpMethod.Put, "/api/connections/aaaaaaaaaaaaaaaa/vaults", new { vaults = Vaults(user.Vault, "read") });
         Assert.Equal(HttpStatusCode.NotFound, noSuch.StatusCode);
+    }
+
+    private static string[] Publish(JsonNode view) => [.. view["publish"]!.AsArray().Select(n => n!.GetValue<string>())];
+
+    /// <summary>A user with vaults <c>Work</c> and <c>Gartenarbeit</c>.</summary>
+    private static async Task<RestClient> WorkAndGartenAsync(WebApplicationFactory<Program> api, bool remember = false)
+    {
+        var user = await RestClient.NewAsync(api, vault: "Work", remember: remember);
+        using var second = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        return user;
+    }
+
+    private static Dictionary<string, string> BothAtWrite => new() { ["Work"] = "write", ["Gartenarbeit"] = "write" };
+
+    [Fact]
+    public async Task The_connection_view_lists_may_publish()
+    {
+        var user = await WorkAndGartenAsync(Api);
+
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "phone", vaults = BothAtWrite, publish = new[] { "Work" } });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await JsonAsync(created))["id"]!.GetValue<string>();
+        Assert.Equal(["Work"], Publish(await JsonAsync(created)));
+        using var list = await user.GetAsync("/api/connections");
+        Assert.Equal(["Work"], Publish(Assert.Single((await JsonAsync(list)).AsArray())!));
+
+        using var moved = await user.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = BothAtWrite, publish = new[] { "Gartenarbeit" } });
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        Assert.Equal(["Gartenarbeit"], Publish(await JsonAsync(moved)));
+        using var dropped = await user.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = BothAtWrite });
+        Assert.Equal(HttpStatusCode.OK, dropped.StatusCode);
+        Assert.Empty(Publish(await JsonAsync(dropped)));
+
+        using var withoutRight = await user.SendAsync(
+            HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = Vaults("Work", "read"), publish = new[] { "Gartenarbeit" } });
+        Assert.Equal(HttpStatusCode.BadRequest, withoutRight.StatusCode);
+        Assert.Equal(VaultCatalog.MayPublishOnlyOwned, await RestClient.ErrorAsync(withoutRight));
+        using var notHers = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "tablet", vaults = BothAtWrite, publish = new[] { "Fremd" } });
+        Assert.Equal(HttpStatusCode.BadRequest, notHers.StatusCode);
+        Assert.Equal("You have no vault named 'Fremd'.", await RestClient.ErrorAsync(notHers));
+    }
+
+    [Fact]
+    public async Task May_publish_on_a_shared_vault_is_400()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "Garten", MemberRole.Write);
+
+        using var shared = await bob.SendAsync(HttpMethod.Post, "/api/connections", new { name = "phone", vaults = Vaults("Garten", "write"), publish = new[] { "Garten" } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, shared.StatusCode);
+        Assert.Equal(VaultCatalog.MayPublishOnlyOwned, await RestClient.ErrorAsync(shared));
+        using var list = await bob.GetAsync("/api/connections");
+        Assert.Empty((await JsonAsync(list)).AsArray());
+    }
+
+    [Fact]
+    public async Task The_consent_view_shows_may_publish()
+    {
+        var user = await WorkAndGartenAsync(Api);
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "phone", vaults = BothAtWrite, publish = new[] { "Work" } });
+        var id = (await JsonAsync(created))["id"]!.GetValue<string>();
+        var client = await OAuthFlow.RegisterAsync(Api, "https://claude.test/cb");
+
+        var full = await OAuthFlow.StartAsync(Api, user, id, client, "https://claude.test/cb");
+        using var consent = await full.GetConsentAsync();
+        var readOnly = await OAuthFlow.StartAsync(Api, user, id, client, "https://claude.test/cb", scope: "kumbu:read");
+        using var readOnlyConsent = await readOnly.GetConsentAsync();
+
+        Assert.Equal(HttpStatusCode.OK, consent.StatusCode);
+        Assert.Equal(["Work"], Publish((await JsonAsync(consent))["connection"]!));
+        Assert.Equal(HttpStatusCode.OK, readOnlyConsent.StatusCode);
+        var capped = (await JsonAsync(readOnlyConsent))["connection"]!;
+        Assert.Equal("read", capped["vaults"]!["Work"]!.GetValue<string>());
+        Assert.Empty(Publish(capped));
+    }
+
+    [Fact]
+    public async Task Raising_may_publish_needs_the_password_window()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        var user = await WorkAndGartenAsync(api, remember: true);
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "phone", vaults = BothAtWrite });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await JsonAsync(created))["id"]!.GetValue<string>();
+
+        // 31 minutes without a request: the remembered session's window closes, the session stays.
+        time.Advance(TimeSpan.FromMinutes(31));
+        using var raised = await user.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = BothAtWrite, publish = new[] { "Work" } });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, raised.StatusCode);
+        Assert.Equal("password-required", (await JsonAsync(raised))["type"]?.GetValue<string>());
+        using var list = await user.GetAsync("/api/connections");
+        Assert.Empty(Publish(Assert.Single((await JsonAsync(list)).AsArray())!));
     }
 
     [Fact]

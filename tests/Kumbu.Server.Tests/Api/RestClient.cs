@@ -76,12 +76,13 @@ public sealed class RestClient
         return new RestClient(_api, Username, cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0], User, UserKey, Vault);
     }
 
-    /// <summary>An API key of this user for its vault, with <paramref name="right"/>.</summary>
-    public async Task<string> KeyAsync(string name, KeyRight right, ApiKeyKind kind = ApiKeyKind.Agent)
+    /// <summary>An API key of this user for its vault, with <paramref name="right"/>, and "May publish" there if <paramref name="mayPublish"/>.</summary>
+    public async Task<string> KeyAsync(string name, KeyRight right, ApiKeyKind kind = ApiKeyKind.Agent, bool mayPublish = false)
     {
         var vault = (await _api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(User.Id, UserKey, Ct)).Single(v => v.Name == Vault);
         var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(
-            User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct, kind: kind);
+            User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct, kind: kind,
+            publish: mayPublish ? new HashSet<string> { vault.Id } : null);
         return key;
     }
 
