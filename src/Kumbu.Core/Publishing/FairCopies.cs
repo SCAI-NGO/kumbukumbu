@@ -39,9 +39,9 @@ public static partial class FairCopies
         var all = Lines.Split(content);
         var lines = WithoutComments([.. all.Skip(Outline.FrontmatterEnd(all))]);
         var code = CodeLines(lines);
-        var host = OwnHost(ownOrigin);
-        var (references, definitions) = References(lines, code, host);
-        var copier = new Copier(attachment, mayCopy, host, references);
+        var own = Own.Of(ownOrigin);
+        var (references, definitions) = References(lines, code, own);
+        var copier = new Copier(attachment, mayCopy, own, references);
 
         var title = StripMd(note.Name);
         var start = 0;
@@ -94,9 +94,43 @@ public static partial class FairCopies
 
     private static bool[] CodeLines(IReadOnlyList<string> lines)
     {
-        var fenced = Outline.CodeLines(lines);
+        var fenced = FencedLines(lines);
         var indented = TagReader.IndentedCode(lines, 0, fenced);
         return [.. fenced.Zip(indented, (f, i) => f || i)];
+    }
+
+    /// <summary>
+    /// Fenced code as <see cref="Outline.CodeLines"/> reads it, also behind quote and list markers (<c>- ```sh</c>,
+    /// <c>&gt; ```</c>). A closing fence may stand at any indent: closing early only filters more. A fence never closed
+    /// is text, not code.
+    /// </summary>
+    private static bool[] FencedLines(IReadOnlyList<string> lines)
+    {
+        var code = new bool[lines.Count];
+        string? fence = null;
+        var opened = -1;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var inner = ContainerRegex().Replace(lines[i], "", 1);
+            if (fence is null)
+            {
+                if (FenceRegex().Match(inner) is { Success: true } f && !(f.Groups[1].Value[0] == '`' && f.Groups[2].Value.Contains('`')))
+                {
+                    fence = f.Groups[1].Value;
+                    opened = i;
+                    code[i] = true;
+                }
+
+                continue;
+            }
+
+            code[i] = true;
+            if (FenceRegex().Match(inner.TrimStart()) is { Success: true } c && c.Groups[1].Value[0] == fence[0]
+                && c.Groups[1].Value.Length >= fence.Length && c.Groups[2].Value.Trim().Length == 0) fence = null;
+        }
+
+        if (fence is not null) Array.Fill(code, false, opened, lines.Count - opened);
+        return code;
     }
 
     /// <summary>The lines without <c>%%…%%</c> and <c>&lt;!-- … --&gt;</c> outside code, and without the lines they
@@ -230,8 +264,9 @@ public static partial class FairCopies
     }
 
     /// <summary>The reference definitions outside code, by normalised label (the first one counts), and every line a
-    /// definition takes, with whether it stays: only one to a web link does. Footnotes (<c>[^1]:</c>) are none.</summary>
-    private static (Dictionary<string, string> References, Dictionary<int, bool> Lines) References(List<string> lines, bool[] code, string? host)
+    /// definition takes, with whether it stays: only one to a web link that names nowhere the server does. Footnotes
+    /// (<c>[^1]:</c>) are none.</summary>
+    private static (Dictionary<string, string> References, Dictionary<int, bool> Lines) References(List<string> lines, bool[] code, Own? own)
     {
         var references = new Dictionary<string, string>(StringComparer.Ordinal);
         var taken = new Dictionary<int, bool>();
@@ -269,8 +304,10 @@ public static partial class FairCopies
             }
 
             var destination = Unbracket(d.Groups[1].Value);
-            references.TryAdd(Label(m.Groups["label"].Value), destination);
-            var keep = Classify(destination, host) == Kind.Web;
+            var web = Classify(destination, own) == Kind.Web;
+            var keep = web && !Mentions(string.Join('\n', used.Select(u => lines[u])), own);
+            // A web link that names the server is its text: an empty destination makes it one to the note itself.
+            references.TryAdd(Label(m.Groups["label"].Value), web && !keep ? "" : destination);
             foreach (var line in used) taken[line] = keep;
             i = j;
         }
@@ -289,10 +326,14 @@ public static partial class FairCopies
     private static string StripMd(string name) => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? name[..^3] : name;
 
     /// <summary>Whether <paramref name="line"/> starts a block of its own after <paramref name="previous"/>: a list
-    /// item, a heading, a thematic break, another depth of quote.</summary>
+    /// item, a heading, a thematic break, a fence (even one that opens nothing, so no code span runs over it), another
+    /// depth of quote.</summary>
     private static bool Breaks(string previous, string line) =>
         ListItemRegex().IsMatch(line) || HeadingLineRegex().IsMatch(line) || HeadingLineRegex().IsMatch(previous)
-        || ThematicRegex().IsMatch(line) || ThematicRegex().IsMatch(previous) || QuoteDepth(previous) != QuoteDepth(line);
+        || ThematicRegex().IsMatch(line) || ThematicRegex().IsMatch(previous) || FenceShaped(line) || FenceShaped(previous)
+        || QuoteDepth(previous) != QuoteDepth(line);
+
+    private static bool FenceShaped(string line) => FenceRegex().IsMatch(ContainerRegex().Replace(line, "", 1).TrimStart());
 
     private static int QuoteDepth(string line)
     {
@@ -306,21 +347,56 @@ public static partial class FairCopies
         return depth;
     }
 
-    /// <summary>Nothing but whitespace, quote and list markers, a task box.</summary>
+    /// <summary>Nothing but whitespace, quote, list and heading markers, a task box.</summary>
     private static bool Empty(string line) => line.Trim().Length == 0 || MarkersRegex().IsMatch(line);
 
-    private static string? OwnHost(string? origin) => origin is not null && Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? Host(uri) : null;
+    /// <summary>The server's own host, and how to find it in text.</summary>
+    private sealed class Own
+    {
+        // Browsers read the ideographic full stops in a host name as dots.
+        private const string Dot = "[.。．｡]";
+
+        public Own(string host)
+        {
+            Host = host;
+            var pattern = Regex.Escape(host).Replace(@"\.", Dot, StringComparison.Ordinal);
+            var end = $@"{Dot}?(?![A-Za-z0-9-])(?!{Dot}[A-Za-z0-9-])";
+            Url = new Regex(
+                $@"\G(?<![A-Za-z0-9.@/-])(?:(?<scheme>(?:https?:)?//)(?:[^\s/?#@<>]+@)?)?(?<www>www{Dot})?{pattern}{end}(?<port>:[0-9]{{1,5}})?"
+                + @"(?<path>(?:[/?#]|&#0*47;|&#x0*2f;|&sol;|%2f)[^\s<>]*)?",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            Mention = new Regex($@"(?<![A-Za-z0-9-]|{Dot}){pattern}{end}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        public string Host { get; }
+
+        /// <summary>A URL to the host, anchored where the match starts.</summary>
+        public Regex Url { get; }
+
+        /// <summary>The host's name anywhere, as in another link's query or title.</summary>
+        public Regex Mention { get; }
+
+        public static Own? Of(string? origin) => origin is not null && Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? new Own(HostOf(uri)) : null;
+    }
 
     // The same host is the same server: scheme and port don't count, nor a trailing dot or "www.".
-    private static string Host(Uri uri)
+    private static string HostOf(Uri uri)
     {
-        var host = uri.Host.TrimEnd('.').ToLowerInvariant();
+        var host = Dots(uri.Host).TrimEnd('.').ToLowerInvariant();
         return host.StartsWith("www.", StringComparison.Ordinal) ? host[4..] : host;
     }
 
+    private static string Dots(string text) => text.Replace('。', '.').Replace('．', '.').Replace('｡', '.');
+
+    /// <summary>Whether the server's host stands in <paramref name="text"/>.</summary>
+    private static bool Mentions(string text, Own? own) => own is not null && text.Length > 0 && own.Mention.IsMatch(text);
+
+    /// <summary>A destination's query and fragment, where another site may carry a URL of the server.</summary>
+    private static string QueryOf(string destination) => destination.IndexOfAny(['?', '#']) is >= 0 and var at ? destination[at..] : "";
+
     private enum Kind { Vault, Web, Own, Other }
 
-    private static Kind Classify(string destination, string? host)
+    private static Kind Classify(string destination, Own? own)
     {
         var protocolRelative = destination.StartsWith("//", StringComparison.Ordinal);
         var scheme = SchemeRegex().Match(destination);
@@ -329,8 +405,9 @@ public static partial class FairCopies
         if (!protocolRelative && name.Equals("mailto", StringComparison.OrdinalIgnoreCase)) return Kind.Web;
         if (!protocolRelative && !name.Equals("http", StringComparison.OrdinalIgnoreCase) && !name.Equals("https", StringComparison.OrdinalIgnoreCase)) return Kind.Other;
         // What doesn't parse can't be shown to be elsewhere.
-        if (!Uri.TryCreate(protocolRelative ? "https:" + destination : destination, UriKind.Absolute, out var uri) || uri.Host.Length == 0) return Kind.Other;
-        return host is not null && Host(uri) == host ? Kind.Own : Kind.Web;
+        var url = Dots(protocolRelative ? "https:" + destination : destination);
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Host.Length == 0) return Kind.Other;
+        return own is not null && HostOf(uri) == own.Host ? Kind.Own : Kind.Web;
     }
 
     /// <summary>Text with ranges that stay as they are: code, kept web links and autolinks, numbered embeds.</summary>
@@ -356,12 +433,9 @@ public static partial class FairCopies
         }
     }
 
-    private sealed class Copier(Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? host, Dictionary<string, string> references)
+    private sealed class Copier(Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, Own? own, Dictionary<string, string> references)
     {
         private readonly Dictionary<VaultPath, int> _numbers = [];
-        private readonly Regex? _own = host is null ? null : new Regex(
-            $@"\G(?<![A-Za-z0-9.@/-])(?<scheme>(?:https?:)?//)?(?<www>www\.)?{Regex.Escape(host)}\.?(?![A-Za-z0-9-])(?!\.[A-Za-z0-9-])(?<port>:[0-9]{{1,5}})?(?<path>[/?#][^\s<>]*)?",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public List<VaultPath> Files { get; } = [];
 
@@ -369,7 +443,7 @@ public static partial class FairCopies
 
         public Dictionary<string, string> References => references;
 
-        public string? HostName => host;
+        public Own? Own => own;
 
         /// <summary>A paragraph, or with <paramref name="flat"/> a title or an alt, filtered; flat, every link and
         /// image is its text.</summary>
@@ -392,14 +466,27 @@ public static partial class FairCopies
         /// running text is none; one with a scheme, "www.", a port or a path is.</summary>
         public int OwnUrl(string s, int p, int limit)
         {
-            if (_own is null || s[p] is not ('h' or 'H' or '/' or 'w' or 'W') && char.ToLowerInvariant(s[p]) != host![0]) return 0;
-            var m = _own.Match(s, p);
+            if (own is null || s[p] is not ('h' or 'H' or '/' or 'w' or 'W') && char.ToLowerInvariant(s[p]) != own.Host[0]) return 0;
+            var m = own.Url.Match(s, p);
             if (!m.Success || m.Index != p) return 0;
             if (!m.Groups["scheme"].Success && !m.Groups["www"].Success && !m.Groups["port"].Success && !m.Groups["path"].Success) return 0;
-            var end = Math.Min(p + m.Length, limit);
             var hostEnd = m.Groups["port"].Success ? m.Groups["port"].Index : m.Groups["path"].Success ? m.Groups["path"].Index : p + m.Length;
-            // Trailing punctuation is the sentence's, as for GFM's autolinks.
-            while (end > hostEnd && "?!.,:;*_~)'\"".Contains(s[end - 1])) end--;
+            return TrimEnd(s, hostEnd, Math.Min(p + m.Length, limit));
+        }
+
+        /// <summary>The end of a bare URL of another scheme than the web's (<c>obsidian://…</c>, <c>file:…</c>)
+        /// starting at <paramref name="p"/>, or 0: it goes whole, as its text is its target.</summary>
+        public static int OtherUrl(string s, int p, int limit)
+        {
+            if (!char.IsAsciiLetter(s[p]) || (p > 0 && (char.IsAsciiLetterOrDigit(s[p - 1]) || s[p - 1] is '+' or '.' or '-'))) return 0;
+            if (OtherUrlRegex().Match(s, p) is not { Success: true } m || m.Index != p) return 0;
+            return TrimEnd(s, p + m.Groups[1].Length, Math.Min(p + m.Length, limit));
+        }
+
+        // Trailing punctuation is the sentence's, as for GFM's autolinks.
+        private static int TrimEnd(string s, int floor, int end)
+        {
+            while (end > floor && "?!.,:;*_~)'\"".Contains(s[end - 1])) end--;
             return end;
         }
 
@@ -463,11 +550,13 @@ public static partial class FairCopies
         private readonly int[] _close;
         private readonly Dictionary<int, Match> _wikilinks;
         private readonly Dictionary<string, (int From, int Found)> _next = [];
+        private int _budget;
 
         public Scanner(Copier copier, string s)
         {
             _copier = copier;
             _s = s;
+            _budget = 2 * s.Length + 8192;
             _code = CodeSpans(s);
             _wikilinks = s.Contains("[[", StringComparison.Ordinal) ? WikiLink.LinkRegex().Matches(s).ToDictionary(m => m.Index) : [];
             _close = new int[s.Length];
@@ -527,7 +616,7 @@ public static partial class FairCopies
                 {
                     if (angle.Url is null) htmlEnd = angle.End;
                     // An autolink's text is its URL: a web one stays whole, any other goes whole.
-                    else if (Classify(angle.Url, _copier.HostName) == Kind.Web && !angle.Url.Any(char.IsWhiteSpace))
+                    else if (Classify(angle.Url, _copier.Own) == Kind.Web && !angle.Url.Any(char.IsWhiteSpace) && !Mentions(QueryOf(angle.Url), _copier.Own))
                     {
                         if (plain) o.Append(angle.Url);
                         else o.Append(s[p..angle.End], kept: true);
@@ -542,7 +631,9 @@ public static partial class FairCopies
                 }
                 else if ((c == '[' || (c == '!' && p + 1 < limit && s[p + 1] == '[')) && Link(p, limit) is { } link)
                 {
-                    var kind = Classify(link.Destination, _copier.HostName);
+                    var kind = Classify(link.Destination, _copier.Own);
+                    // Another site's link that carries the server's host in its query or title is its text too.
+                    if (kind == Kind.Web && Mentions(QueryOf(link.Destination) + "\n" + link.Title, _copier.Own)) kind = Kind.Own;
                     if (plain || (!link.Embed && kind != Kind.Web))
                     {
                         limits.Push((link.Close, link.End, "", false));
@@ -601,6 +692,7 @@ public static partial class FairCopies
                     p = end;
                 }
                 else if (_copier.OwnUrl(s, p, limit) is > 0 and var ownEnd) p = ownEnd;
+                else if (Copier.OtherUrl(s, p, limit) is > 0 and var otherEnd) p = otherEnd;
                 else
                 {
                     o.Append(c);
@@ -609,7 +701,7 @@ public static partial class FairCopies
             }
         }
 
-        private sealed record LinkAt(bool Embed, int Open, int Close, int End, string Destination);
+        private sealed record LinkAt(bool Embed, int Open, int Close, int End, string Destination, string Title = "");
 
         /// <summary>The inline or reference link or image starting at <paramref name="p"/>, within the limit.</summary>
         private LinkAt? Link(int p, int limit)
@@ -620,7 +712,7 @@ public static partial class FairCopies
             var close = _close[open];
             if (close < 0 || close >= limit) return null;
             var after = close + 1;
-            if (after < limit && s[after] == '(' && Tail(after, limit) is { } tail) return new LinkAt(embed, open, close, tail.End, tail.Destination);
+            if (after < limit && s[after] == '(' && Tail(after, limit) is { } tail) return new LinkAt(embed, open, close, tail.End, tail.Destination, tail.Title);
             if (close - open - 1 > MaxLabel) return null;
             string label;
             int end;
@@ -638,8 +730,10 @@ public static partial class FairCopies
             return _copier.References.TryGetValue(Label(label), out var destination) ? new LinkAt(embed, open, close, end, destination) : null;
         }
 
-        /// <summary>"(destination title)" from the '(' at <paramref name="paren"/>; line breaks may stand in it.</summary>
-        private (int End, string Destination)? Tail(int paren, int limit)
+        /// <summary>"(destination title)" from the '(' at <paramref name="paren"/>; line breaks may stand in it. All
+        /// tails of one text together read at most a budget linear in its length; past it, none is a link, and the
+        /// safety net takes out what is left.</summary>
+        private (int End, string Destination, string Title)? Tail(int paren, int limit)
         {
             var s = _s;
             var i = SkipSpace(paren + 1, limit);
@@ -647,7 +741,7 @@ public static partial class FairCopies
             if (i < limit && s[i] == '<')
             {
                 var j = i + 1;
-                while (j < limit && s[j] is not ('>' or '<' or '\n')) j++;
+                while (j < limit && s[j] is not ('>' or '<' or '\n') && --_budget > 0) j++;
                 if (j >= limit || s[j] != '>') return null;
                 destination = s[(i + 1)..j];
                 i = j + 1;
@@ -657,7 +751,7 @@ public static partial class FairCopies
                 var start = i;
                 for (var depth = 0; i < limit && !char.IsWhiteSpace(s[i]) && !char.IsControl(s[i]); i++)
                 {
-                    if (i - start > MaxDestination) return null;
+                    if (i - start > MaxDestination || --_budget <= 0) return null;
                     if (s[i] == '\\') i++;
                     else if (s[i] == '(') depth++;
                     else if (s[i] == ')' && depth-- == 0) break;
@@ -669,19 +763,21 @@ public static partial class FairCopies
 
             var afterDestination = i;
             i = SkipSpace(i, limit);
+            var title = "";
             if (i > afterDestination && i < limit && s[i] is '"' or '\'' or '(')
             {
                 var close = Next(s[i] == '(' ? ")" : s[i].ToString(), i + 1);
                 if (close < 0 || close >= limit) return null;
+                title = s[(i + 1)..close];
                 i = SkipSpace(close + 1, limit);
             }
 
-            return i < limit && s[i] == ')' ? (i + 1, Unbracket(destination)) : null;
+            return i < limit && s[i] == ')' ? (i + 1, Unbracket(destination), title) : null;
         }
 
         private int SkipSpace(int i, int limit)
         {
-            while (i < limit && _s[i] is ' ' or '\t' or '\n') i++;
+            while (i < limit && _s[i] is ' ' or '\t' or '\n' && --_budget > 0) i++;
             return i;
         }
 
@@ -689,6 +785,7 @@ public static partial class FairCopies
         private (int End, string? Url)? Angle(int i)
         {
             if (AutolinkRegex().Match(_s, i) is { Success: true } autolink) return (i + autolink.Length, autolink.Groups[1].Value);
+            if (EmailAutolinkRegex().Match(_s, i) is { Success: true } email) return (i + email.Length, "mailto:" + email.Groups[1].Value);
             return HtmlEnd(i) is > 0 and var end ? (end, null) : null;
         }
 
@@ -816,9 +913,32 @@ public static partial class FairCopies
 
     private static void Clean(string s, int from, int to, StringBuilder result)
     {
+        (int From, int Found) pairs = (-1, -1), opens = (-1, -1), breaks = (-1, -1);
         for (var i = from; i < to; i++)
         {
             var c = s[i];
+            // A wikilink the scanner didn't read, "[[Private/Plan]" or "[[a|[b]]]": its alias or last segment.
+            if (c == '[' && i + 1 < to && s[i + 1] == '[')
+            {
+                if (i > from && s[i - 1] == '!' && result.Length > 0 && result[^1] == '!') result.Length--;
+                var lineEnd = Find(s, "\n", i, to, ref breaks) is >= 0 and var b ? b : to;
+                var pair = Find(s, "]]", i + 2, to, ref pairs);
+                var open = Find(s, "[[", i + 2, to, ref opens);
+                if (pair >= 0 && pair < lineEnd && (open < 0 || open > pair))
+                {
+                    result.Append(WikiRest(s[(i + 2)..pair], alias: true));
+                    i = pair + 1;
+                }
+                else
+                {
+                    var stop = s.IndexOfAny(['|', ']', '[', '\n'], i + 2, to - i - 2) is >= 0 and var k ? k : to;
+                    result.Append(WikiRest(s[(i + 2)..stop], alias: false));
+                    i = stop - 1;
+                }
+
+                continue;
+            }
+
             if (c == ']' && i + 1 < to && s[i + 1] == '(')
             {
                 var j = i + 2;
@@ -832,13 +952,18 @@ public static partial class FairCopies
                 continue;
             }
 
-            // What is left of a tag the scanner couldn't close, or one cut by a block's end, goes to its '>' or the
-            // end of its line.
+            // What is left of a tag the scanner couldn't close, or one cut by a block's end: with an attribute, it goes
+            // to its '>' or the end of its line; else its '<' is only text.
             if (c == '<' && i + 1 < to && (char.IsAsciiLetter(s[i + 1]) || s[i + 1] is '/' or '!' or '?'))
             {
-                var j = i + 1;
-                while (j < to && s[j] is not ('>' or '\n')) j++;
-                i = j < to && s[j] == '>' ? j : j - 1;
+                if (TagWithAttributeRegex().Match(s, i) is { Success: true })
+                {
+                    var j = i + 1;
+                    while (j < to && s[j] is not ('>' or '\n')) j++;
+                    i = j < to && s[j] == '>' ? j : j - 1;
+                }
+                else result.Append("\\<");
+
                 continue;
             }
 
@@ -846,8 +971,40 @@ public static partial class FairCopies
         }
     }
 
+    /// <summary>The first <paramref name="what"/> in [<paramref name="start"/>, <paramref name="to"/>), or -1,
+    /// remembering the last answer so searches from ever later places stay linear together.</summary>
+    private static int Find(string s, string what, int start, int to, ref (int From, int Found) last)
+    {
+        if (last.From >= 0 && last.From <= start && (last.Found < 0 || last.Found >= start)) return last.Found;
+        var found = start < to ? s.IndexOf(what, start, to - start, StringComparison.Ordinal) : -1;
+        last = (start, found);
+        return found;
+    }
+
+    /// <summary>What a wikilink's inside leaves: its alias if it has one, else its target's last segment.</summary>
+    private static string WikiRest(string inside, bool alias)
+    {
+        var bar = alias ? inside.IndexOf('|') : -1;
+        string text;
+        if (bar >= 0) text = inside[(bar + 1)..];
+        else
+        {
+            var hash = inside.IndexOf('#');
+            text = StripMd((hash >= 0 ? inside[..hash] : inside).TrimEnd('/', '\\').Split('/')[^1]);
+        }
+
+        return text.Replace("[", "", StringComparison.Ordinal).Replace("]", "", StringComparison.Ordinal);
+    }
+
     [GeneratedRegex(@"^ {0,3}#[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")]
     private static partial Regex TitleRegex();
+
+    // Quote and list markers before a block, at any depth.
+    [GeneratedRegex(@"^(?:[ \t]*(?:>[ \t]?|(?:[-*+]|[0-9]{1,9}[.)])[ \t]+))*")]
+    private static partial Regex ContainerRegex();
+
+    [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})(.*)$")]
+    private static partial Regex FenceRegex();
 
     // Inside quotes and list items too, at any depth.
     [GeneratedRegex(@"^(?:[ \t]*(?:>|[-*+](?=[ \t])|[0-9]{1,9}[.)](?=[ \t])))*[ \t]*\[(?<label>(?:[^\[\]\\]|\\.){1,999})\]:(?<rest>.*)$")]
@@ -861,6 +1018,17 @@ public static partial class FairCopies
 
     [GeneratedRegex(@"\G<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\n]*)>")]
     private static partial Regex AutolinkRegex();
+
+    // CommonMark's email autolink.
+    [GeneratedRegex(@"\G<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>")]
+    private static partial Regex EmailAutolinkRegex();
+
+    [GeneratedRegex(@"\G((?!https?:)[A-Za-z][A-Za-z0-9+.-]{0,31}://|file:)[^\s<>]*", RegexOptions.IgnoreCase)]
+    private static partial Regex OtherUrlRegex();
+
+    // What is left of a tag with an attribute: "<a href=", up to the end of its line.
+    [GeneratedRegex(@"\G</?[A-Za-z][A-Za-z0-9-]*[ \t]+[^\s=<>""']+[ \t]*=")]
+    private static partial Regex TagWithAttributeRegex();
 
     [GeneratedRegex(@"^([A-Za-z][A-Za-z0-9+.-]*):")]
     private static partial Regex SchemeRegex();
@@ -880,6 +1048,6 @@ public static partial class FairCopies
     [GeneratedRegex(@"^[ \t>]*([-*_])(?:[ \t]*\1){2,}[ \t]*$")]
     private static partial Regex ThematicRegex();
 
-    [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)])(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
+    [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
 }

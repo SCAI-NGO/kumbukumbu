@@ -121,11 +121,30 @@ public class FairCopyTests
             "",
             "Unparsed [a](Private/Plan.md and [b]",
             "",
+            "Shapes [[Private/Plan] [[Private/Plan|[q]]] ![[Private/Plan|[q]]] [[Private/[Plan]]] [[Private/Plan#a[b]c]]",
+            "[[Private/Plan|a]b]] [[Private/Plan",
+            "]]",
+            "",
+            "Bare obsidian://open?vault=Work&file=Private%2FPlan and file:///home/alice/Work/Private/Plan.md.",
+            "Query [x](https://example.org/r?u=https://kumbu.example.org/notes/Work/Plan.md) <https://example.org/?u=kumbu.example.org/Work>",
+            "[t](https://example.org/r \"https://kumbu.example.org/notes/Work/Plan.md\") [r][q]",
+            "",
+            "[q]: https://example.org/#kumbu.example.org/notes/Work",
+            "",
+            "User https://alice@kumbu.example.org/notes/Work/Plan.md, entity https://kumbu.example.org&#47;notes&#47;Work&#47;Plan.md,",
+            "dots https://kumbu。example。org/notes/Work/Plan.md [d](https://kumbu．example．org/notes/Work/Plan.md).",
+            "",
+            "- ```sh",
+            "  echo",
+            "  ```",
+            "",
+            "%% private %% [[Private/Plan]]",
+            "",
             "``` a`b",
             "[[Private/Plan.md]] [x](Private/Plan.md)",
             "```");
         var copy = FairCopies.Make(Note, content, _ => null, _ => true, "https://kumbu.example.org");
-        foreach (var leak in new[] { "Private/", "Plan.md", "obsidian", "file:", "Work", "[[" })
+        foreach (var leak in new[] { "Private/", "Plan.md", "obsidian", "file:", "Work", "[[", "private", "kumbu" })
         {
             Assert.DoesNotContain(leak, copy.Markdown, StringComparison.Ordinal);
         }
@@ -134,31 +153,30 @@ public class FairCopyTests
     }
 
     [Theory]
-    [InlineData(20000)]
-    public void Deep_nesting_finishes_quickly(int n)
+    // Each about 1 MB or 20,000 nestings; the time stays linear, so each is quick.
+    [InlineData("[", "a", "](x)", 20_000)]
+    [InlineData("![", "a", "](x.png)", 20_000)]
+    [InlineData("[](", "", "", 20_000)]
+    [InlineData("[a](x \"", "", "", 20_000)]
+    [InlineData("<a x='", "", "", 20_000)]
+    [InlineData("<?", "", "", 20_000)]
+    [InlineData("`` ` ", "", "", 20_000)]
+    [InlineData("#a ", "b", "", 20_000)]
+    [InlineData("[[a|[x](y)]] ", "", "", 20_000)]
+    [InlineData("https://kumbu.example.org", "", "", 20_000)]
+    [InlineData("[a](", "", "", 250_000)]
+    [InlineData("![a](", "", "", 200_000)]
+    [InlineData("[[", "", "", 500_000)]
+    [InlineData("x<y ", "", "", 250_000)]
+    [InlineData("- ```\n", "", "", 100_000)]
+    public void Deep_nesting_finishes_quickly(string before, string middle, string after, int n)
     {
-        var inputs = new[]
-        {
-            string.Concat(Enumerable.Repeat("[", n)) + "a" + string.Concat(Enumerable.Repeat("](x)", n)),
-            string.Concat(Enumerable.Repeat("![", n)) + "a" + string.Concat(Enumerable.Repeat("](x.png)", n)),
-            string.Concat(Enumerable.Repeat("[](", n)),
-            string.Concat(Enumerable.Repeat("[a](x \"", n)),
-            string.Concat(Enumerable.Repeat("<a x='", n)),
-            string.Concat(Enumerable.Repeat("<?", n)),
-            string.Concat(Enumerable.Repeat("`` ` ", n)),
-            string.Concat(Enumerable.Repeat("#a ", n)) + "b",
-            string.Concat(Enumerable.Repeat("[[a|[x](y)]] ", n)),
-            string.Concat(Enumerable.Repeat("https://kumbu.example.org", n)),
-        };
+        var input = string.Concat(Enumerable.Repeat(before, n)) + middle + string.Concat(Enumerable.Repeat(after, n));
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        foreach (var input in inputs)
-        {
-            var copy = FairCopies.Make(Note, input, _ => null, _ => true, "https://kumbu.example.org");
-            Assert.DoesNotContain("](x", copy.Markdown, StringComparison.Ordinal);
-        }
-
-        Assert.Equal("a", FairCopies.Make(Note, inputs[0], _ => null, _ => true).Markdown);
+        var copy = FairCopies.Make(Note, input, _ => null, _ => true, "https://kumbu.example.org");
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"took {clock.Elapsed}");
+        Assert.DoesNotContain("](x", copy.Markdown, StringComparison.Ordinal);
+        if (before == "[") Assert.Equal("a", copy.Markdown);
     }
 
     [Fact]
@@ -175,6 +193,32 @@ public class FairCopyTests
         // Read as an autolink, it binds more tightly than the brackets around it.
         Assert.Equal("[a ](https://example.org)", Text("[a <obsidian://x y]>](https://example.org)"));
     }
+
+    [Fact]
+    public void Fences_in_lists_and_quotes_are_code()
+    {
+        Assert.Equal("- ```sh\n  echo [[x]]\n  ```\n\n Plan", Text("- ```sh\n  echo [[x]]\n  ```\n\n%% private %% [[Private/Plan]]"));
+        Assert.Equal("> ```\n> [[x]]\n> ```\nafter y", Text("> ```\n> [[x]]\n> ```\nafter [[y]]"));
+        Assert.Equal("1. ```js\n   a [[x]]\n   ```\n2. y", Text("1. ```js\n   a [[x]]\n   ```\n2. [[y]]"));
+        // A fence never closed is text.
+        Assert.Equal("```\nPlan", Text("```\n[[Private/Plan]]"));
+    }
+
+    [Fact]
+    public void Odd_wikilinks_leave_their_text()
+    {
+        Assert.Equal("Plan] q] q] Plan] Plan ab Plan\n]]", Text("[[Private/Plan] [[Private/Plan|[q]]] ![[Private/Plan|[q]]] [[Private/[Plan]]] [[Private/Plan#a[b]c]] [[Private/Plan|a]b]] [[Private/Plan\n]]"));
+    }
+
+    [Fact]
+    public void Bare_urls_of_other_schemes_go()
+    {
+        Assert.Equal("open  or .", Text("open obsidian://open?vault=Work or file:///home/alice/Work/a.md."));
+        Assert.Equal("note: this", Text("note: this"));
+    }
+
+    [Fact]
+    public void A_heading_of_tags_alone_goes() => Assert.Equal(("Questions", "x"), (Copy("# #Work\n\nx").Title, Copy("# #Work\n\nx").Markdown));
 
     [Fact]
     public void Footnotes_stay() => Assert.Equal("Note[^1].\n\n[^1]: A footnote.", Text("Note[^1].\n\n[^1]: A footnote."));
@@ -218,7 +262,8 @@ public class FairCopyTests
     {
         Assert.Equal("[a", Text("[a](Private/Plan.md"));
         Assert.Equal("text", Text("[d]:\n\ntext"));
-        Assert.Equal("a ", Text("a <b"));
+        Assert.Equal("a \\<b", Text("a <b"));
+        Assert.Equal("use x\\<y here", Text("use x<y here"));
         Assert.Equal("x \n> y", Text("x <a href=\"Private/Plan.md\"\n> y"));
         Assert.Equal("[r](https://example.org) ![x](f/0) <https://example.org>", Copy("[r](https://example.org) ![x](x.png) <https://example.org>").Markdown);
     }
@@ -242,6 +287,7 @@ public class FairCopyTests
     [InlineData("[Router docs](https://example.org/router)")]
     [InlineData("<https://example.org>")]
     [InlineData("[mail](mailto:alice@example.org)")]
+    [InlineData("<alice@example.org>")]
     [InlineData("[r][web]\n\n[web]: https://example.org/router")]
     public void Web_links_stay(string link) => Assert.Equal(link, Text(link));
 
@@ -255,6 +301,11 @@ public class FairCopyTests
         Assert.Equal("a", Text("a\n![](https://kumbu.example.org/api/files/Work/a.png)", own));
         Assert.Equal("[x](https://kumbu.example.org.evil.example/)", Text("[x](https://kumbu.example.org.evil.example/)", own));
         Assert.Equal("[x](https://evil.example/kumbu.example.org/)", Text("[x](https://evil.example/kumbu.example.org/)", own));
+        Assert.Equal("x", Text("[x](https://example.org/r?u=https://kumbu.example.org/a)", own));
+        Assert.Equal("x", Text("[x](https://example.org/r \"kumbu.example.org\")", own));
+        Assert.Equal("a  b", Text("a https://alice@kumbu.example.org/notes/Work/x.md b", own));
+        Assert.Equal("a  b", Text("a https://kumbu.example.org&#47;notes&#47;Work b", own));
+        Assert.Equal("a  b x", Text("a https://kumbu。example。org/notes/Work b [x](https://kumbu｡example｡org/a)", own));
         // The same host is the same server, whatever the scheme or port.
         Assert.Equal("x", Text("[x](https://kumbu.example.org:8443/)", own));
         Assert.Equal("x", Text("[x](http://kumbu.example.org/)", own));

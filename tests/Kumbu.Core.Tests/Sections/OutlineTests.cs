@@ -45,6 +45,14 @@ public class OutlineTests
         Assert.Equal("#Real 5-6/6", Summary("---\na: 1\n---\n```\n```\n# Real\n"));
 
     [Fact]
+    public void ABacktickFenceWithABacktickInItsInfoStringIsNoFence()
+    {
+        Assert.Equal([false, false, true, true, true], Outline.CodeLines(["``` a`b", "x", "```", "y", "```"]));
+        Assert.Equal([true, true, true], Outline.CodeLines(["~~~ a`b", "x", "~~~"]));
+        Assert.Equal("#H 1-2/2", Summary("``` a`b\n# H\n"));
+    }
+
+    [Fact]
     public void UnclosedFrontmatterIsJustText() => Assert.Equal("#H 1-2/2", Summary("---\n# H\n"));
 
     [Fact]
