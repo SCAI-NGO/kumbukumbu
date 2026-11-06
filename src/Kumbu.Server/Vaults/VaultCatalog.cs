@@ -484,6 +484,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, IReadOnlySet<string> publish,
         CancellationToken ct)
     {
+        // An early exit, before the database is asked for anything; the vaults' owners are checked once their keys are open.
         RequirePublishable(vaults, publish, null);
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
         RequirePublishable(vaults, publish, vaultKeys);
@@ -508,8 +509,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// The slots one token of a connection gets when the user consents (the code): one per vault in
     /// <paramref name="vaults"/> (vault id → right), sealing the vault key and the right together as an API key's slot
-    /// does, and "May publish" on the vaults in <paramref name="publish"/> that are her own, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the
-    /// token's id, so a slot can't be moved to another token or connection, nor read as an API key's. With
+    /// does, and "May publish" on the vaults in <paramref name="publish"/> that are her own, under
+    /// <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the token's id, so a
+    /// slot can't be moved to another token or connection, nor read as an API key's. With
     /// <paramref name="expiresAt"/> the slot carries it for the TTL index. The vault keys come from the user's own
     /// slots, so <see cref="ArgumentException"/> if a vault isn't the user's. Not stored here: the caller inserts them
     /// with the token's record, in one transaction, after checking the returned vault keys again there

@@ -411,8 +411,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return new ConnectionInfo(
             doc.Id,
             meta.Name,
-            // A vault deleted since is gone from the clear list, not from the sealed meta: it isn't listed.
-            meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
+            VaultsOf(doc, meta),
             doc.CreatedAt,
             doc.LastUsedAt,
             doc.ExpiresAt,
@@ -425,14 +424,24 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         };
     }
 
-    /// <summary>The vaults the meta may publish on, among those it lists and the connection still has; none for a meta
-    /// sealed before publishing existed.</summary>
-    internal static HashSet<string> PublishOf(ConnectionDocument doc, ConnectionMeta meta) =>
-        meta.Publish is { } publish ? publish.Where(v => meta.Vaults.ContainsKey(v) && doc.Vaults.Contains(v)).ToHashSet(StringComparer.Ordinal) : [];
+    /// <summary>The rights the meta lists, each parsed: a vault deleted since is gone from the clear list, not from the
+    /// sealed meta, and isn't listed; nor is one whose right doesn't parse.</summary>
+    private static Dictionary<string, KeyRight> VaultsOf(ConnectionDocument doc, ConnectionMeta meta) =>
+        meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value);
+
+    /// <summary>The vaults the meta may publish on, among those listed (<see cref="VaultsOf"/>); none for a meta sealed
+    /// before publishing existed.</summary>
+    internal static HashSet<string> PublishOf(ConnectionDocument doc, ConnectionMeta meta)
+    {
+        if (meta.Publish is not { } publish) return [];
+        var vaults = VaultsOf(doc, meta);
+        return publish.Where(vaults.ContainsKey).ToHashSet(StringComparer.Ordinal);
+    }
 
     /// <summary>The vaults must be the user's, and "May publish" only on those she owns (<see cref="VaultCatalog.RequirePublishable"/>).</summary>
     private async Task CheckVaultsAsync(User user, byte[] userKey, IReadOnlyDictionary<string, KeyRight> vaults, IReadOnlySet<string> publish, CancellationToken ct)
     {
+        // An early exit, before the database is asked for anything.
         VaultCatalog.RequirePublishable(vaults, publish, null);
         VaultCatalog.RequirePublishable(vaults, publish, await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct));
     }

@@ -422,7 +422,8 @@ public sealed class ConnectionTests(MongoFixture fixture)
         const string tokenId = "token-1";
         var token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
         var (slots, vaultKeys) = await Catalog().ConnectionSlotsFromUserAsync(
-            user.Id, userKey, created.Id, tokenId, token, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write }, new HashSet<string>(), null, Ct);
+            user.Id, userKey, created.Id, tokenId, token, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write },
+            new HashSet<string> { vaults["Notes"] }, null, Ct);
         Assert.All(slots, s => Assert.Equal(2, LegacySlot.OpenConnection(token, s.Vault, created.Id, tokenId, s.Wrapped).V));
         // Notes as a slot sealed before 0.3.0 (no version); Diary as one sealed now.
         var legacy = slots.Single(s => s.Vault == vaults["Notes"]);
@@ -433,6 +434,52 @@ public sealed class ConnectionTests(MongoFixture fixture)
 
         Assert.Equal(KeyRight.Maintain, opened.Single(k => k.Vault == vaults["Notes"]).Right);
         Assert.Equal(KeyRight.Write, opened.Single(k => k.Vault == vaults["Diary"]).Right);
+        // Notes was given "May publish", but its legacy payload has no such field; Diary wasn't given it.
+        var accesses = await Catalog().OpenForConnectionAsync(created.Id, tokenId, token, Ct);
+        Assert.Equal(2, accesses.Count);
+        Assert.All(accesses, a => Assert.False(a.MayPublish));
+    }
+
+    [Fact]
+    public async Task May_publish_on_a_vault_shared_with_the_user_is_refused()
+    {
+        var (alice, aliceKey, aliceVaults) = await UserWithVaultsAsync("Work");
+        var (bob, bobKey, bobVaults) = await UserWithVaultsAsync("Gartenarbeit");
+        var memberships = new Kumbu.Server.Sharing.Memberships(
+            _db, Catalog(), new ServerSecret(_db), Options.Create(new KumbuOptions()), _time, NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
+        await memberships.GrantAsync(alice.Id, aliceKey, aliceVaults["Work"], bob.Id, bobKey, "alices-work", "Bob", Kumbu.Server.Sharing.MemberRole.Write, Ct);
+        var both = new Dictionary<string, KeyRight> { [aliceVaults["Work"]] = KeyRight.Write, [bobVaults["Gartenarbeit"]] = KeyRight.Write };
+        var shared = new HashSet<string> { aliceVaults["Work"] };
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().CreateAsync(bob, bobKey, JustRead, "phone", both, Ct, publish: shared));
+        Assert.Empty(await Connections().ListAsync(bob, bobKey, Ct));
+
+        var created = await Connections().CreateAsync(bob, bobKey, JustRead, "phone", both, Ct);
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(bob, bobKey, JustRead, created.Id, both, Ct, publish: shared));
+        // His own vault may.
+        var own = await Connections().SetVaultsAsync(bob, bobKey, JustRead, created.Id, both, Ct, publish: new HashSet<string> { bobVaults["Gartenarbeit"] });
+        Assert.Equal(new[] { bobVaults["Gartenarbeit"] }, own!.Publish);
+    }
+
+    [Fact]
+    public async Task A_publish_vault_whose_right_does_not_parse_is_not_listed_as_may_publish()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes", "Diary");
+        var created = await Connections().CreateAsync(
+            user, userKey, JustRead, "phone", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct,
+            publish: new HashSet<string> { vaults["Notes"], vaults["Diary"] });
+        // Notes with a right from a later version, say: it isn't among the vaults, so not among May publish either.
+        var meta = Encoding.UTF8.GetBytes(
+            $$$"""{"name":"phone","vaults":{"{{{vaults["Notes"]}}}":"admin","{{{vaults["Diary"]}}}":"read"},"v":2,"publish":["{{{vaults["Notes"]}}}","{{{vaults["Diary"]}}}"]}""");
+        var sealedMeta = Kumbu.Core.Crypto.VaultCrypto.Seal(
+            Kumbu.Core.Crypto.VaultCrypto.Derive(userKey, "kumbu/v1/connection-meta", Encoding.UTF8.GetBytes(user.Id)), meta, $"connection:{created.Id}:meta");
+        await _db.GetCollection<BsonDocument>("connections").UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id), Builders<BsonDocument>.Update.Set("meta", sealedMeta), cancellationToken: Ct);
+
+        var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
+
+        Assert.Equal(new[] { vaults["Diary"] }, listed.Vaults.Keys);
+        Assert.Equal(new[] { vaults["Diary"] }, listed.Publish);
     }
 
     [Fact]

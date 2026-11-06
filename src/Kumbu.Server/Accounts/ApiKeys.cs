@@ -422,20 +422,24 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     public static bool LooksLikeKey(string presented) => presented.StartsWith(KeyPrefix, StringComparison.Ordinal);
 
-    private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta) => new(
-        doc.Id,
-        meta.Name,
-        doc.Prefix,
-        meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
-        doc.CreatedAt,
-        doc.LastUsedAt,
-        doc.RevokedAt,
-        doc.ExpiresAt,
-        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent, Resumption(doc))
+    private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta)
     {
-        // A meta sealed before publishing existed has none: it may not.
-        Publish = meta.Publish is { } publish ? publish.Where(meta.Vaults.ContainsKey).ToHashSet(StringComparer.Ordinal) : new HashSet<string>(),
-    };
+        var vaults = meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value);
+        return new(
+            doc.Id,
+            meta.Name,
+            doc.Prefix,
+            vaults,
+            doc.CreatedAt,
+            doc.LastUsedAt,
+            doc.RevokedAt,
+            doc.ExpiresAt,
+            meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent, Resumption(doc))
+        {
+            // Only among the vaults listed; a meta sealed before publishing existed has none: it may not.
+            Publish = meta.Publish is { } publish ? publish.Where(vaults.ContainsKey).ToHashSet(StringComparer.Ordinal) : new HashSet<string>(),
+        };
+    }
 
     private const string DeviceKind = "device";
 

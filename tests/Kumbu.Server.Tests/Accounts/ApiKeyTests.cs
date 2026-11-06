@@ -656,6 +656,16 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
             Builders<BsonDocument>.Filter.Eq("_id", created.Id), Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, oldMeta)), cancellationToken: Ct);
 
         Assert.Empty((await Keys.ListAsync(user, userKey, Ct)).Single(k => k.Id == created.Id).Publish);
+
+        // A right that doesn't parse (from a later version, say): the vault isn't listed, nor as May publish.
+        var unknown = Encoding.UTF8.GetBytes(
+            $$$"""{"name":"agent","vaults":{"{{{vaults["Work"]}}}":"admin","{{{vaults["Diary"]}}}":"read"},"v":2,"publish":["{{{vaults["Work"]}}}","{{{vaults["Diary"]}}}"]}""");
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id), Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, unknown)), cancellationToken: Ct);
+
+        var parsed = (await Keys.ListAsync(user, userKey, Ct)).Single(k => k.Id == created.Id);
+        Assert.Equal(new[] { vaults["Diary"] }, parsed.Vaults.Keys);
+        Assert.Equal(Publish(vaults["Diary"]), parsed.Publish);
     }
 
     [Fact]
