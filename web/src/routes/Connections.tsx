@@ -171,7 +171,8 @@ function RightsDialog({ connection, onClose }: { connection: Connection; onClose
   const dialog = useDialog<HTMLFormElement>(onClose);
   const vaults = useVaults();
   const [chosen, setChosen] = useState<Record<string, Right>>(connection.vaults as Record<string, Right>);
-  // Sent back as it is unless changed: a change of rights without it takes May publish away.
+  // Sent back as it is unless changed: a change of rights without it takes May publish away. Kept on purpose also
+  // while its box is hidden (publishing switched off, or the session not loaded yet).
   const [publish, setPublish] = useState<string[]>(connection.publish);
   const granted = grant(chosen);
 

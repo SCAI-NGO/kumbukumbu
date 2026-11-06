@@ -305,6 +305,23 @@ describe("May publish of a connection", () => {
   });
 });
 
+describe("May publish while publishing is off", () => {
+  it("sends a connection's May publish back unchanged while its box is hidden", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, vaults: { Arbeit: "write" }, publish: ["Arbeit"] }], {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: false }),
+      "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/keys");
+    const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
+    await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
+    const dialog = screen.getByRole("dialog", { name: "Change rights" });
+    expect(within(dialog).queryByLabelText("May publish")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "write" }, publish: ["Arbeit"] }]));
+  });
+});
+
 describe("connections and vaults shared with the user", () => {
   it("shows a capped connection as acts as read, and warns that it also reaches a private vault", async () => {
     const shared = [

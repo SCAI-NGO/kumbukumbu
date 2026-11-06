@@ -102,12 +102,13 @@ export function RightsPicker({
                 <input
                   type="checkbox"
                   checked={publish.includes(vault.name)}
+                  aria-describedby={publish.includes(vault.name) ? `${id}-${vault.name}-publish` : undefined}
                   onChange={(e) => onPublishChange(e.target.checked ? [...publish, vault.name] : publish.filter((v) => v !== vault.name))}
                   className="size-5 accent-accent"
                 />
                 May publish
               </label>
-              {publish.includes(vault.name) && <p className="text-sm text-muted">Can publish this vault's notes behind a secret link, update and withdraw them.</p>}
+              {publish.includes(vault.name) && <p id={`${id}-${vault.name}-publish`} className="text-sm text-muted">Can publish this vault's notes behind a secret link, update and withdraw them.</p>}
             </>
           )}
           {chosen[vault.name] && isCapped(chosen[vault.name], vault) && (
