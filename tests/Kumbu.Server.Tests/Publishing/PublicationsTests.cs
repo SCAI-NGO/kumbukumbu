@@ -629,6 +629,9 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
     public async Task Parallel_publishes_of_one_note_give_one_copy()
     {
         var alice = await AliceWithQuestionsAsync();
+        // The record exists, so each publish replaces it rather than inserting the first one.
+        await alice.CreateAsync("Other.md", "x");
+        await PublishAsync(alice, "/Work/Other.md");
         var (_, access) = await AliceAsync(alice);
 
         var attempts = await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
@@ -647,8 +650,8 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         Assert.All(
             attempts.Where(a => a.Refused is not null),
             a => Assert.Equal((ShellErrorKind.Conflict, $"{Questions} is already published; publish update makes a new copy under the same link"), (a.Refused!.Kind, a.Refused.Message)));
-        Assert.Equal(1, await CountAsync("publications", access.Id));
-        Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications);
+        Assert.Equal(2, await CountAsync("publications", access.Id));
+        Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications, p => p.Note == Questions);
     }
 
     [Fact]
