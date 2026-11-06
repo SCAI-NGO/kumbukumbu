@@ -798,6 +798,8 @@ describe("vaults shared with the user", () => {
         "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled }),
         "GET /api/vaults": () => json(200, sharedVaults),
         "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+        // Publish… waits for her marks: one could cover the note.
+        "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
         "GET /api/publications/*": (r) => {
           const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/publications".length));
           return published.includes(path)

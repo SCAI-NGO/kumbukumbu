@@ -287,7 +287,8 @@ export function useMove() {
       const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
       for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
       // Rewritten links changed other notes' text: every note, link and backlink is asked again.
-      for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search"]) void queryClient.invalidateQueries({ queryKey: [key] });
+      // Marks and publications move with their notes and folders.
+      for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search", "publications", "publication"]) void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }
@@ -320,6 +321,8 @@ export function useDeleteNote() {
       void queryClient.invalidateQueries({ queryKey: ["links"] });
       void queryClient.invalidateQueries({ queryKey: ["backlinks"] });
       void queryClient.invalidateQueries({ queryKey: ["changes"] });
+      // Its publication is withdrawn: the publications and the marks are asked again.
+      for (const key of ["publications", "publication"]) void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }
@@ -398,7 +401,9 @@ export function useDeleteFile() {
       call(api.DELETE("/api/files/{vault}/{path}", { params: { ...params(path), query: { version } } })),
     onSuccess: (_, { path }) => {
       queryClient.removeQueries({ queryKey: ["version", path] });
-      for (const key of ["tree", "vaults", "trash", "links", "backlinks", "activity", "history"]) void queryClient.invalidateQueries({ queryKey: [key] });
+      // Its mark, and whatever the publications say of it, are asked again.
+      for (const key of ["tree", "vaults", "trash", "links", "backlinks", "activity", "history", "publications", "publication"])
+        void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }

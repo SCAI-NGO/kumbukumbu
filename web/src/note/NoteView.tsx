@@ -9,7 +9,7 @@ import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
 import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
 import { boardUrl, crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
-import { usePublication } from "../api/publications";
+import { usePublications } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -454,7 +454,8 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
   // Only the owner learns what a deletion withdraws; a member's question would only tell her it is published.
   const vaults = useVaults();
   const own = !!vaults.data?.some((v) => v.name === vaultOf(path) && v.owner == null);
-  const published = !!usePublication(path, own).data;
+  // The vault's list, which holds no link: this question needs none.
+  const published = !!usePublications(vaultOf(path), own).data?.publications.some((p) => p.path === path);
 
   const confirm = () =>
     remove.mutate(path, {

@@ -10,25 +10,55 @@ import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 const note = (path: string) => ({ name: path.split("/").at(-1)!, path, size: 10, kind: "note", mediaType: "text/markdown" });
 const folder = (path: string, folders: TreeFolder[] = [], notes: ReturnType<typeof note>[] = []): TreeFolder => ({ name: path.split("/").at(-1)!, path, folders, notes });
 
-/** `/Work/Private` holds `secret.md`, `/Work/Routing` holds `Questions.md`; `inbox.md` sits at the root. */
-const workTree = () =>
-  folder("/Work", [folder("/Work/Private", [], [note("/Work/Private/secret.md")]), folder("/Work/Routing", [], [note("/Work/Routing/Questions.md")])], [note("/Work/inbox.md")]);
+/**
+ * `/Work/Private` holds `secret.md`, `/Work/Routing` holds `Questions.md`; `inbox.md` sits at the root. `moved`:
+ * `Private` has been moved into `Routing`.
+ */
+const workTree = (moved = false) => {
+  const secret = (at: string) => folder(at, [], [note(`${at}/secret.md`)]);
+  return folder(
+    "/Work",
+    [...(moved ? [] : [secret("/Work/Private")]), folder("/Work/Routing", moved ? [secret("/Work/Routing/Private")] : [], [note("/Work/Routing/Questions.md")])],
+    [note("/Work/inbox.md")],
+  );
+};
+
+const publication = (path: string) => ({ path, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: "ada", link: null });
 
 const owned = { name: "Work", notes: 3, embeddings: "internal" };
 const shared = { ...owned, owner: '"Alice"', level: "maintain", shared: true, membership: "m1" };
 
 const publishingItems = ["Publish…", "Publish… (unpublishable)", "Mark unpublishable", "Allow publishing"];
 
-/** The server's state: the marks change with the PUTs and DELETEs on `/api/unpublishable`. */
-function api({ publishEnabled = true, vault = owned as Record<string, unknown>, marks = [] as string[] } = {}) {
-  const state = { marks: [...marks] };
+/**
+ * The server's state: the marks change with the PUTs and DELETEs on `/api/unpublishable`, and follow `Private`'s move.
+ * `published`: the notes published. `marksFail`: the vault's publications can't be read.
+ */
+function api({
+  publishEnabled = true,
+  vault = owned as Record<string, unknown>,
+  marks = [] as string[],
+  published = [] as string[],
+  marksFail = false,
+} = {}) {
+  const state = { marks: [...marks], moved: false };
   const fetch = fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled }),
     "GET /api/vaults": () => json(200, [vault]),
     "GET /api/embeddings": () => json(200, []),
-    "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: workTree() }),
-    "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: vault.owner ? [] : state.marks }),
-    "GET /api/publications/*": (r) => json(404, { error: `${decodeURIComponent(new URL(r.url).pathname.slice("/api/publications/".length))} is not published.` }),
+    "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: workTree(state.moved) }),
+    "GET /api/vaults/Work/publications": () =>
+      marksFail ? json(500, { error: "Something went wrong." }) : json(200, { publications: published.map(publication), unpublishable: vault.owner ? [] : state.marks }),
+    "GET /api/publications/*": (r) => {
+      const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/publications".length));
+      return published.includes(path) ? json(200, publication(path)) : json(404, { error: `${path.slice(1)} is not published.` });
+    },
+    "POST /api/move": async (r) => {
+      const { from, to } = (await r.json()) as { from: string; to: string };
+      state.moved = true;
+      state.marks = state.marks.map((m) => (`${m}/` === from ? to : m));
+      return json(200, { message: `moved ${from} to ${to}/ (1); no links needed rewriting`, path: null, version: null });
+    },
     "PUT /api/unpublishable/*": (r) => {
       state.marks.push(decodeURIComponent(new URL(r.url).pathname.slice("/api/unpublishable".length)));
       return noContent();
@@ -192,5 +222,85 @@ describe("publishing in the tree", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Allow publishing" }));
     await waitFor(() => expect(within(row("Private")).queryByRole("img", { name: "Unpublishable" })).toBeNull());
     expect(requests(fetch, "DELETE", "/api/unpublishable").map((r) => new URL(r.url).pathname)).toEqual(["/api/unpublishable/Work/Private"]);
+  });
+
+  it("offers no Publish for a published note, nor while the marks are unknown", async () => {
+    api({ published: ["/Work/inbox.md"] });
+    await openDrawer();
+    await openFolder("Routing", "Questions");
+    await waitFor(async () => expect(await labels("Questions")).toContain("Publish…"));
+    const inbox = await labels("inbox");
+    expect(inbox).not.toContain("Publish…");
+    expect(inbox).toContain("Mark unpublishable");
+    cleanup();
+
+    // Unknown marks could hold one that covers the note: the dock offers Publish only once they are in, as the tree does.
+    const { fetch } = api({ marksFail: true });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await waitFor(() => expect(requests(fetch, "GET", "/api/publications/Work/inbox.md")).toHaveLength(1));
+    await waitFor(() => expect(requests(fetch, "GET", "/api/vaults/Work/publications").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
+    const actions = (await noteMenu()).map((i) => i.label);
+    expect(actions).not.toContain("Publish…");
+    expect(actions).not.toContain("Publish… (unpublishable)");
+  });
+
+  it("asks before a mark withdraws a published link, and only then", async () => {
+    const { fetch, state } = api({ published: ["/Work/Private/secret.md", "/Work/inbox.md"] });
+    const question = "Marking it unpublishable withdraws its published link: whoever has it can't read the note any more.";
+    await openDrawer();
+
+    // The folder covers a published note: asked, and Keep is where the focus starts.
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Private" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Mark unpublishable" }));
+    let ask = await screen.findByRole("alertdialog", { name: question });
+    expect(within(ask).getByRole("button", { name: "Keep" })).toHaveFocus();
+    await userEvent.click(within(ask).getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(requests(fetch, "PUT", "/api/unpublishable")).toHaveLength(0);
+
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Private" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Mark unpublishable" }));
+    ask = await screen.findByRole("alertdialog", { name: question });
+    await userEvent.click(within(ask).getByRole("button", { name: "Mark unpublishable" }));
+    await waitFor(() => expect(state.marks).toEqual(["/Work/Private"]));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    // Nothing published below Routing: no question.
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Routing" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Mark unpublishable" }));
+    await waitFor(() => expect(state.marks).toEqual(["/Work/Private", "/Work/Routing"]));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // The dock's entry for the open, published note asks the same.
+    await userEvent.click(screen.getByRole("button", { name: "Close file tree" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Mark unpublishable" }));
+    ask = await screen.findByRole("alertdialog", { name: question });
+    expect(within(ask).getByRole("button", { name: "Keep" })).toHaveFocus();
+    await userEvent.click(within(ask).getByRole("button", { name: "Mark unpublishable" }));
+    await waitFor(() => expect(state.marks).toEqual(["/Work/Private", "/Work/Routing", "/Work/inbox.md"]));
+  });
+
+  it("shows the mark at a folder's new place after a move in the docked tree", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+    window.innerWidth = 1280;
+    api({ marks: ["/Work/Private"] });
+    renderApp("/notes/Work/inbox.md");
+    const sidebar = await screen.findByRole("complementary", { name: "File tree" });
+    const inSidebar = (name: string) => within(sidebar).getByRole("button", { name: new RegExp(`^${name}`) });
+    await waitFor(() => expect(within(inSidebar("Private")).getByRole("img", { name: "Unpublishable" })).toBeInTheDocument());
+
+    await userEvent.click(within(sidebar).getByRole("button", { name: "Actions for Private" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move Private" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("Folder"), "/Work/Routing");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    await within(dialog).findByRole("status");
+
+    // The folder it went into is open now, to show it.
+    await waitFor(() => expect(within(sidebar).getByRole("button", { name: "Actions for Questions" })).toBeInTheDocument());
+    await waitFor(() => expect(within(inSidebar("Private")).getByRole("img", { name: "Unpublishable" })).toBeInTheDocument());
   });
 });

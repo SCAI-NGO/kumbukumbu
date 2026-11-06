@@ -8,7 +8,7 @@ import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
-import { usePublications, usePublishEnabled, useSetUnpublishable } from "../api/publications";
+import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
@@ -22,6 +22,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
+import { useMarking } from "./ConfirmMark";
 import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
@@ -434,15 +435,16 @@ export default function TreeDrawer(props: {
   const ownVault = !!active && active.owner == null && level === "owner";
   const publishEnabled = usePublishEnabled();
   const publications = usePublications(activeVault ?? "", ownVault && !!activeVault);
-  const setMark = useSetUnpublishable();
+  const published = publications.data?.publications.map((p) => p.path);
+  const marking = useMarking(published);
   const [publishing, setPublishing] = useState<string | null>(null);
   const publishingActions: Publishing | null = ownVault
     ? {
         marks: publications.data?.unpublishable,
-        published: publications.data?.publications.map((p) => p.path),
+        published,
         enabled: publishEnabled === true,
         onPublish: setPublishing,
-        onMark: (path, marked) => setMark.mutate({ path, marked }),
+        onMark: marking.mark,
       }
     : null;
   const marks = ownVault ? publications.data?.unpublishable : undefined;
@@ -531,9 +533,9 @@ export default function TreeDrawer(props: {
           <FormError>{errorText(removeFolder.error)}</FormError>
         </div>
       )}
-      {setMark.isError && (
+      {marking.error && (
         <div className="flex-none px-[18px] pb-2.5">
-          <FormError>{errorText(setMark.error)}</FormError>
+          <FormError>{errorText(marking.error)}</FormError>
         </div>
       )}
 
@@ -598,6 +600,7 @@ export default function TreeDrawer(props: {
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
+      {marking.question}
       {publishing && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setPublishing(null)} />}>
           <Suspense>

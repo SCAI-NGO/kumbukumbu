@@ -7,7 +7,7 @@ import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
-import { usePublication, usePublications, usePublishEnabled, useSetUnpublishable } from "../api/publications";
+import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -21,6 +21,7 @@ import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
+import { useMarking } from "./ConfirmMark";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -229,11 +230,11 @@ export default function MobileShell() {
   const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
   const mayPublish = ownNote && publishEnabled === true && publication.data === null;
   // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20).
-  const marks = usePublications(noteVault?.name ?? "", ownNote).data?.unpublishable;
-  const setMark = useSetUnpublishable();
+  const publications = usePublications(noteVault?.name ?? "", ownNote).data;
+  const marking = useMarking(publications?.publications.map((p) => p.path));
   const publishingActions =
     path && ownNote
-      ? publishingItems({ path, note: true, marks, mayPublish, onPublish: () => setPublishing(path), onMark: (marked) => setMark.mutate({ path, marked }) })
+      ? publishingItems({ path, note: true, marks: publications?.unpublishable, mayPublish, onPublish: () => setPublishing(path), onMark: (marked) => marking.mark(path, marked) })
       : [];
 
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
@@ -272,9 +273,9 @@ export default function MobileShell() {
               {errorText(createUntitled.error)}
             </p>
           )}
-          {setMark.isError && (
+          {marking.error && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
-              {errorText(setMark.error)}
+              {errorText(marking.error)}
             </p>
           )}
           {path && mode === "read" && noteTool === "find" && <FindBar />}
@@ -336,6 +337,7 @@ export default function MobileShell() {
           </Suspense>
         </LoadBoundary>
       )}
+      {marking.question}
       {publishing && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setPublishing(null)} />}>
           <Suspense>

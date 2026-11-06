@@ -58,7 +58,7 @@ describe("PublishDialog", () => {
         body = await r.json();
         return json(201, published);
       },
-      "GET /api/publications/*": () => json(200, []),
+      "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderDialog();
@@ -77,7 +77,7 @@ describe("PublishDialog", () => {
     fakeApi({
       "GET /api/session": session(true),
       "POST /api/publications/Work/Questions.md": () => json(201, published),
-      "GET /api/publications/*": () => json(200, []),
+      "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     const onClose = renderDialog();
@@ -98,7 +98,7 @@ describe("PublishDialog", () => {
     fakeApi({
       "GET /api/session": session(true),
       "POST /api/publications/Work/Questions.md": () => json(201, { ...published, plain: ["report.pdf", "Private.png", "PDFs are not published yet"] }),
-      "GET /api/publications/*": () => json(200, []),
+      "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderDialog();
@@ -113,7 +113,7 @@ describe("PublishDialog", () => {
     fakeApi({
       "GET /api/session": session(true),
       "POST /api/publications/Work/Questions.md": () => json(403, { error: "Work/Questions.md is unpublishable.", code: "unpublishable" }),
-      "GET /api/publications/*": () => json(200, []),
+      "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderDialog();
@@ -129,7 +129,7 @@ describe("PublishDialog", () => {
     fakeApi({
       "GET /api/session": session(false),
       "POST /api/publications/Work/Questions.md": () => (refuse ? json(403, { error: "The password is wrong." }) : json(201, published)),
-      "GET /api/publications/*": () => json(200, []),
+      "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
