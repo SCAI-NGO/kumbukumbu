@@ -40,11 +40,15 @@ export const usePublications = (vault: string, enabled = true) =>
     queryFn: () => call(api.GET("/api/vaults/{vault}/publications", { params: { path: { vault } } })),
   });
 
-/** The note's publication, with the link for the owner; null when it isn't published. Asked only while `enabled`. */
+/**
+ * The note's publication, with the link for the owner; null when it isn't published. Asked only while `enabled`. The
+ * link holds the code: once nothing shows it, it is gone from the cache (as the share dialog's links are).
+ */
 export const usePublication = (path: string, enabled = true) =>
   useQuery({
     queryKey: ["publication", path],
     enabled,
+    gcTime: 0,
     queryFn: async () => {
       try {
         return await call(api.GET("/api/publications/{vault}/{path}", { params: params(path) }));

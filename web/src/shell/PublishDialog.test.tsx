@@ -123,4 +123,31 @@ describe("PublishDialog", () => {
     expect(await screen.findByText("Work/Questions.md is unpublishable.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Link")).not.toBeInTheDocument();
   });
+
+  it("keeps the password in no cache, refused or not", async () => {
+    let refuse = true;
+    fakeApi({
+      "GET /api/session": session(false),
+      "POST /api/publications/Work/Questions.md": () => (refuse ? json(403, { error: "The password is wrong." }) : json(201, published)),
+      "GET /api/publications/*": () => json(200, []),
+      "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PublishDialog path={NOTE} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const cached = () => JSON.stringify(queryClient.getMutationCache().getAll().map((m) => [m.state.variables, m.state.data]));
+    await userEvent.type(await screen.findByLabelText("Your password"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    expect(await screen.findByText("The password is wrong.")).toBeInTheDocument();
+    expect(cached()).not.toContain("correct horse");
+
+    refuse = false;
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    expect(await screen.findByLabelText("Link")).toHaveValue(link);
+    expect(cached()).not.toContain("correct horse");
+    expect(cached()).not.toContain(link);
+  });
 });

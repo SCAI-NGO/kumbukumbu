@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState } from "react";
+import { useId, useState } from "react";
 import { errorText } from "../api/error-text";
 import { usePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
-
-const buttonClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
-const barClass = "flex min-h-11 flex-none flex-wrap items-center gap-x-1 border-b border-line bg-surface pr-1.5 pl-4 text-[13px] text-muted";
+import { barButtonClass as buttonClass, barClass } from "./ChangedElsewhere";
 
 const dayAndTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const timeOnly = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -54,18 +52,20 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
   return (
     <>
       <section aria-label="Publication" data-tone={tone} className={barClass}>
-        <span aria-hidden className={`size-2 flex-none rounded-full ${tone === "green" ? "bg-emerald-500" : tone === "yellow" ? "bg-warning" : "bg-dim"}`} />
-        <span className="min-w-0 flex-1 py-2 pl-1.5">
+        <span aria-hidden className={`size-2 flex-none rounded-full ${tone === "green" ? "bg-success" : tone === "yellow" ? "bg-warning" : "bg-dim"}`} />
+        {/* A status, as the bar about a write elsewhere: a failure or a changed state is announced. */}
+        <span role="status" className="min-w-0 flex-1 py-2 pl-1.5">
           {!enabled
             ? "Published. Publishing is switched off on this server, so the link reads nothing until it is on again."
-            : older && p.snapshotAt
-              ? `Published copy is older than this note. ${olderText(p.snapshotAt, p.changedAt)}`
+            : older
+              ? `Published copy is older than this note.${p.snapshotAt ? ` ${olderText(p.snapshotAt, p.changedAt)}` : ""}`
               : "Published, up to date"}
           {error && <span className="block text-text">{errorText(error)}</span>}
           {copyFailed && <span className="block text-text">Copying didn't work. Try again.</span>}
         </span>
+        {/* The answer holds the link: reset once in, so the mutation keeps none. */}
         {enabled && older && (
-          <button type="button" disabled={update.isPending} onClick={() => update.mutate()} className={buttonClass}>
+          <button type="button" disabled={update.isPending} onClick={() => update.mutate(undefined, { onSuccess: () => update.reset() })} className={buttonClass}>
             Update copy
           </button>
         )}
@@ -87,16 +87,17 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
 
 function ConfirmWithdraw({ busy, onKeep, onWithdraw }: { busy: boolean; onKeep(): void; onWithdraw(): void }) {
   const dialog = useDialog<HTMLDivElement>(onKeep);
+  const id = useId();
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
       <div
         ref={dialog}
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="withdraw-title"
+        aria-labelledby={`${id}-title`}
         className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
       >
-        <p id="withdraw-title" className="text-text-body">
+        <p id={`${id}-title`} className="text-text-body">
           Withdraw the link? Whoever has it can't read the note any more.
         </p>
         <div className="flex gap-3">

@@ -15,9 +15,11 @@ export default function PublishDialog({ path, onClose }: { path: string; onClose
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const passwordWindow = usePasswordWindowOpen();
-  // Read through the closure of the submit, and cleared once used.
+  // The field's own state, cleared once used. The mutation holds it as its variables until it settles, then is reset
+  // (the link, its answer, too): the refusal is kept here instead.
   const [password, setPassword] = useState("");
   const [published, setPublished] = useState<{ link: string; plain: string[] } | null>(null);
+  const [refusal, setRefusal] = useState<Error | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const publish = usePublish(path);
   const asks = passwordWindow.known && !passwordWindow.open;
@@ -25,10 +27,15 @@ export default function PublishDialog({ path, onClose }: { path: string; onClose
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!passwordWindow.known || publish.isPending || (asks && password === "")) return;
+    setRefusal(null);
     publish.mutate(asks ? { password } : {}, {
       onSuccess: (view) => {
         setPassword("");
         setPublished({ link: view.link, plain: view.plain });
+        publish.reset();
+      },
+      onError: (error) => {
+        setRefusal(error);
         publish.reset();
       },
     });
@@ -72,7 +79,7 @@ export default function PublishDialog({ path, onClose }: { path: string; onClose
           <form onSubmit={submit} className="flex flex-col gap-4" aria-busy={publish.isPending}>
             <p className="text-text-body">Anyone with the link can read a copy of this note as it is now. Links to other notes become plain text.</p>
             {asks && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
-            {publish.isError && <FormError>{errorText(publish.error)}</FormError>}
+            {refusal && <FormError>{errorText(refusal)}</FormError>}
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className={secondaryButtonClass}>
                 Cancel

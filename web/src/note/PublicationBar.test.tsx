@@ -89,6 +89,57 @@ describe("PublicationBar", () => {
     expect(writeText).toHaveBeenCalledWith(link);
   });
 
+  it("keeps the link in no cache once the bar is gone, nor after an update", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [`GET ${API}`]: () => json(200, older),
+      [`PUT ${API}`]: () => json(200, { link, snapshotAt: changedAt, plain: [] }),
+      "GET /api/publications": () => json(200, []),
+      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <PublicationBar path={NOTE} owner />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(within(await bar()).getByRole("button", { name: "Update copy" }));
+    await waitFor(() => expect(queryClient.getMutationCache().getAll()).toHaveLength(0));
+    expect(queryClient.getQueryData(["publication", NOTE])).toBeDefined();
+    unmount();
+    await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: ["publication", NOTE] })).toBeUndefined());
+  });
+
+  it("reads older, never up to date, also without the times", async () => {
+    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, { ...older, snapshotAt: null, changedAt: null }) });
+    renderBar();
+    const region = await bar();
+    expect(region).toHaveAttribute("data-tone", "yellow");
+    expect(region).toHaveTextContent("Published copy is older than this note.");
+    expect(region).not.toHaveTextContent("up to date");
+    expect(region.textContent).not.toMatch(/\d/);
+  });
+
+  it("shows the green of its own, and says a failure as a status", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [`GET ${API}`]: () => json(200, current),
+      [`DELETE ${API}`]: () => json(409, { error: "Work/Questions.md changed meanwhile." }),
+      "GET /api/publications": () => json(200, []),
+      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+    });
+    renderBar();
+    const region = await bar();
+    expect(region.querySelector("[aria-hidden]")).toHaveClass("bg-success");
+    await userEvent.click(within(region).getByRole("button", { name: "Unpublish" }));
+    const ask = screen.getByRole("alertdialog");
+    expect(ask).toHaveAccessibleName("Withdraw the link? Whoever has it can't read the note any more.");
+    await userEvent.click(within(ask).getByRole("button", { name: "Unpublish" }));
+    expect((await within(region).findByText("Work/Questions.md changed meanwhile.")).closest("[role=status]")).toBeInTheDocument();
+  });
+
   it("is neutral for a member", async () => {
     fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, asMember) });
     renderBar(false);
