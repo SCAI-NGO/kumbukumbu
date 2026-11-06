@@ -245,5 +245,5 @@ public static partial class TagReader
     private static partial Regex ListItemRegex();
 
     [GeneratedRegex(@"</?[A-Za-z][A-Za-z0-9-]*(\s[^<>]*)?/?>")]
-    internal static partial Regex HtmlTagRegex();
+    private static partial Regex HtmlTagRegex();
 }
