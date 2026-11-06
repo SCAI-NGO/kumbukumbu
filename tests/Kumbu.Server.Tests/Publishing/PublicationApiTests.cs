@@ -191,7 +191,8 @@ public sealed class PublicationApiTests(KumbuAppFactory app)
 
         var note = JsonNode.Parse(bobsNote)!;
         Assert.Equal("/alices-work/Routing/Questions.md", note["path"]!.GetValue<string>());
-        Assert.All(new[] { "snapshotAt", "older", "changedAt", "publishedBy", "link" }, field => Assert.Null(note[field]));
+        // Not Assert.Null: its failure would print the link.
+        Assert.All(new[] { "snapshotAt", "older", "changedAt", "publishedBy", "link" }, field => Assert.True(note[field] is null, $"a member sees {field}"));
         Assert.Equal("/alices-work/Routing/Questions.md", JsonNode.Parse(bobsList)!["publications"]!.AsArray().Single()!["path"]!.GetValue<string>());
         foreach (var text in new[] { bobsNote, bobsList, overview })
         {
