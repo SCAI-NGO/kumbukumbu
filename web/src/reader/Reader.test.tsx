@@ -131,6 +131,8 @@ describe("Reader", () => {
     expect(container.querySelector('a[href^="javascript"]')).toBeNull();
     expect(container.querySelector("a")).toBeNull();
     expect(container.querySelector("[onerror]")).toBeNull();
+    // Skipped, not shown as text either.
+    expect(container.textContent).not.toMatch(/onerror|<a /);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
