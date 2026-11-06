@@ -533,6 +533,30 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_read_without_a_cookie_takes_no_allowance()
+    {
+        var published = await PublishedAsync();
+        await using var api = Limited(readsPerServer: 1, filesPerServer: 1);
+        using var stranger = new Reader(api, "203.0.113.110");
+
+        // More than an address's reads, from more networks than the server allows reads for.
+        for (var i = 0; i <= ReadsPerAddress; i++)
+        {
+            stranger.Address = $"198.51.{100 + i}.110";
+            using var read = await stranger.GetAsync();
+            await AssertNotFoundAsync(read);
+            Assert.StartsWith($"{ReaderApi.Cookie}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/api/s", SetCookie(read, ReaderApi.Cookie));
+            using var file = await stranger.FileAsync(0, published.Copy);
+            await AssertNotFoundAsync(file);
+        }
+
+        using var reader = new Reader(api, "192.0.2.110");
+        using (var read = await reader.PostAsync(published.Formatted)) await AssertCopyAsync(read);
+        using var image = await reader.FileAsync(0);
+        Assert.Equal(HttpStatusCode.OK, image.StatusCode);
+    }
+
+    [Fact]
     public async Task A_file_reads_only_with_its_copys_id()
     {
         var x = await PublishedAsync();

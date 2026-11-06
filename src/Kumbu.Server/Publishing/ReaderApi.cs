@@ -68,7 +68,7 @@ public static class ReaderApi
     private static async Task<Ok<ReaderView>> ReadWithCodeAsync(
         ReaderCodeRequest body, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
-        var (code, opened) = await OpenAsync(body.Code, limits.ReaderRead(http), http, store, users, limits, options, logs, ct);
+        var (code, opened) = await OpenAsync(body.Code, limits.ReaderRead, http, store, users, limits, options, logs, ct);
         http.Response.Cookies.Append(Cookie, code, CookieOptions());
         return TypedResults.Ok(View(code, opened.Copy));
     }
@@ -76,7 +76,7 @@ public static class ReaderApi
     private static async Task<Ok<ReaderView>> ReadAgainAsync(
         HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
-        var (code, opened) = await OpenAsync(http.Request.Cookies[Cookie], limits.ReaderRead(http), http, store, users, limits, options, logs, ct);
+        var (code, opened) = await OpenAsync(http.Request.Cookies[Cookie], limits.ReaderRead, http, store, users, limits, options, logs, ct);
         return TypedResults.Ok(View(code, opened.Copy));
     }
 
@@ -86,7 +86,7 @@ public static class ReaderApi
         string index, [FromHeader(Name = CopyHeader)] string? copy, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits,
         IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
-        var (code, opened) = await OpenAsync(http.Request.Cookies[Cookie], limits.ReaderFileRead(http), http, store, users, limits, options, logs, ct);
+        var (code, opened) = await OpenAsync(http.Request.Cookies[Cookie], limits.ReaderFileRead, http, store, users, limits, options, logs, ct);
         // Another copy's id or a bad index with a live cookie is no guess: the same answer, but the cookie stays and
         // nothing is counted.
         if (!string.Equals(copy, ShareCode.CopyId(code), StringComparison.Ordinal)
@@ -102,25 +102,33 @@ public static class ReaderApi
     /// <summary>
     /// The limits first, as pairing's redeem: the read's own (<paramref name="allowance"/>: a copy's or a file's,
     /// each per address, network and server), then the wrong codes per network and server-wide; then the switch.
-    /// The copy opens only if its owner's account is active (spec §3.7): deactivation hides it.
+    /// No cookie at all is no guess and opens nothing: it takes no allowance, so that it can't use up the server's,
+    /// and answers alike all the same. The copy opens only if its owner's account is active (spec §3.7): deactivation
+    /// hides it.
     /// </summary>
     private static async Task<(string Code, OpenedPublication Opened)> OpenAsync(
-        string? typed, TimeSpan? allowance, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options,
-        ILoggerFactory logs, CancellationToken ct)
+        string? typed, Func<HttpContext, TimeSpan?> allowance, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits,
+        IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
-        if (allowance is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (limits.ReadersBlocked(http)) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
-        if (!options.Value.Publish.Enabled) throw new ApiException(StatusCodes.Status404NotFound, OffSentence, type: OffType);
-
-        var code = typed is null ? null : ShareCode.Parse(typed);
-        if (code is not null && await store.OpenPublicationAsync(code, ct) is { } opened
-            && await users.Users.Find(u => u.Id == opened.Owner).FirstOrDefaultAsync(ct) is { Active: true })
+        if (typed is not null)
         {
-            return (code, opened);
+            if (allowance(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (limits.ReadersBlocked(http)) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
         }
 
-        // No cookie at all is no guess; it answers alike all the same.
-        if (typed is not null) Failed(http, limits, logs);
+        if (!options.Value.Publish.Enabled) throw new ApiException(StatusCodes.Status404NotFound, OffSentence, type: OffType);
+
+        if (typed is not null)
+        {
+            if (ShareCode.Parse(typed) is { } code && await store.OpenPublicationAsync(code, ct) is { } opened
+                && await users.Users.Find(u => u.Id == opened.Owner).FirstOrDefaultAsync(ct) is { Active: true })
+            {
+                return (code, opened);
+            }
+
+            Failed(http, limits, logs);
+        }
+
         http.Response.Cookies.Delete(Cookie, CookieOptions());
         throw ApiErrors.NotFound(NotFoundSentence);
     }
