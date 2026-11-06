@@ -114,6 +114,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "POST /api/vaults/{vault}/invitations",
         "POST /api/vaults/{vault}/memberships/{id}/confirm",
         "PUT /api/connections/{id}/vaults",
+        "PUT /api/publications/{vault}/{**path}",
     ];
 
     private const string Reading = "reading: the session reads anyway";
@@ -175,6 +176,13 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["PATCH /api/admin/users/{id}"] = "guarded inline: every change to another account needs the window",
         ["POST /api/admin/invitations"] = GrantingInline,
         ["PUT /api/vaults/{vault}/memberships/{id}/role"] = GrantingInline,
+        ["GET /api/publications"] = Reading,
+        ["GET /api/vaults/{vault}/publications"] = Reading,
+        ["GET /api/publications/{vault}/{**path}"] = Reading,
+        ["POST /api/publications/{vault}/{**path}"] = "guarded inline: the password in the body, else the window (publish decision 9)",
+        ["DELETE /api/publications/{vault}/{**path}"] = "withdrawing reduces what is out: never guarded",
+        ["PUT /api/unpublishable/{vault}/{**path}"] = "a mark reduces what can go out: never guarded",
+        ["DELETE /api/unpublishable/{vault}/{**path}"] = "the owner's own mark, lifted in her session: it publishes nothing",
     };
 
     [Fact]
@@ -570,6 +578,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     [InlineData("delete-vault")]
     [InlineData("delete-user")]
     [InlineData("repeat-deletions")]
+    [InlineData("publish")]
     public async Task Every_password_check_opens_the_window(string action)
     {
         await using var api = Timed();
@@ -581,6 +590,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.Created, second.StatusCode);
         }
 
+        if (action == "publish") await user.CreateAsync("plan.md", "# Plan\n");
         var other = action == "delete-user" ? await OtherUserAsync(api) : default;
         CloseWindow();
         var password = RestClient.Password;
@@ -595,6 +605,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "delete-vault" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Alt/delete", new { password, confirm = "Alt" }),
             "delete-user" => await user.SendAsync(HttpMethod.Post, $"/api/admin/users/{other.Id}/delete", new { password, confirm = other.Username }),
             "repeat-deletions" => await user.SendAsync(HttpMethod.Post, "/api/admin/deletions/repeat", new { password }),
+            "publish" => await user.SendAsync(HttpMethod.Post, "/api/publications/Arbeit/plan.md", new { password }),
             _ => throw new ArgumentOutOfRangeException(nameof(action)),
         };
 
@@ -719,6 +730,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     [InlineData("password")]
     [InlineData("delete-account")]
     [InlineData("raise-to-maintain")]
+    [InlineData("publish")]
     public async Task A_wrong_password_on_any_check_counts_towards_the_five(string action)
     {
         await using var api = Timed();
@@ -746,6 +758,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "password" => await user.SendAsync(HttpMethod.Post, "/api/password", new { oldPassword = password, newPassword = "another long passphrase here" }),
             "delete-account" => await user.SendAsync(HttpMethod.Post, "/api/account/delete", new { password, confirm = user.Username }),
             "raise-to-maintain" => await user.SendAsync(HttpMethod.Put, $"/api/vaults/Arbeit/memberships/{membership}/role", new { role = "maintain", password }),
+            "publish" => await user.SendAsync(HttpMethod.Post, "/api/publications/Arbeit/plan.md", new { password }),
             _ => throw new ArgumentOutOfRangeException(nameof(action)),
         })
         {

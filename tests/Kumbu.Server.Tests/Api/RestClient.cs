@@ -76,6 +76,9 @@ public sealed class RestClient
         return new RestClient(_api, Username, cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0], User, UserKey, Vault);
     }
 
+    /// <summary>The same session on another factory of the same database, e.g. one with other settings.</summary>
+    public RestClient On(WebApplicationFactory<Program> api) => new(api, Username, Session, User, UserKey, Vault);
+
     /// <summary>An API key of this user for its vault, with <paramref name="right"/>, and "May publish" there if <paramref name="mayPublish"/>.</summary>
     public async Task<string> KeyAsync(string name, KeyRight right, ApiKeyKind kind = ApiKeyKind.Agent, bool mayPublish = false)
     {
