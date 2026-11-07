@@ -29,6 +29,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     private const string UserKekLabel = "kumbu/v1/user-slot-kek";
     private const string VaultNameLabel = "kumbu/v1/vault-name-id";
     private const string ApiKeyKekLabel = "kumbu/v1/api-key-kek";
+    private const string DavKekLabel = "kumbu/v1/dav-slot-kek";
     private const string ConnectionKekLabel = "kumbu/v1/oauth-kek";
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
@@ -480,28 +481,45 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction, after checking
     /// the returned vault keys again there (<see cref="RequireSameVaultKeysAsync"/>).
     /// </summary>
-    internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> ApiKeySlotsAsync(
+    internal Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> ApiKeySlotsAsync(
         string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, IReadOnlySet<string> publish,
-        CancellationToken ct)
+        CancellationToken ct) =>
+        RightSlotsAsync(ApiKeySlots, userId, userKey, keyId, apiKey, vaults, publish, ct);
+
+    /// <summary>
+    /// The slots a new WebDAV share gets (WebDAV design §4): one per vault in <paramref name="vaults"/> (vault id → right),
+    /// sealed as an API key's are (<see cref="ApiKeySlotsAsync"/>), but under <c>HKDF(token, "kumbu/v1/dav-slot-kek",
+    /// vault id)</c>, bound to the vault and the share's id, and never with "May publish". <see cref="ArgumentException"/>
+    /// if a vault isn't the user's. Not stored here: the caller inserts them with the share, in one transaction, after
+    /// checking the returned vault keys again there (<see cref="RequireSameVaultKeysAsync"/>).
+    /// </summary>
+    internal Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> DavSlotsAsync(
+        string userId, byte[] userKey, string shareId, string token, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct) =>
+        RightSlotsAsync(DavSlots, userId, userKey, shareId, token, vaults, new HashSet<string>(), ct);
+
+    /// <summary>The slots of a credential of <paramref name="kind"/> (an API key or a WebDAV share), as
+    /// <see cref="ApiKeySlotsAsync"/> describes them.</summary>
+    private async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> RightSlotsAsync(
+        RightSlotKind kind, string userId, byte[] userKey, string id, string secret, IReadOnlyDictionary<string, Accounts.KeyRight> vaults,
+        IReadOnlySet<string> publish, CancellationToken ct)
     {
         // An early exit, before the database is asked for anything; the vaults' owners are checked once their keys are open.
         RequirePublishable(vaults, publish, null);
-        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
+        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], kind.Noun, ct);
         RequirePublishable(vaults, publish, vaultKeys);
-        IReadOnlyList<SlotDocument> slots = [.. vaults.Select(v => new SlotDocument
+        IReadOnlyList<SlotDocument> slots = [.. vaults.Select(v => kind.WithId(new SlotDocument
         {
             Vault = v.Key,
-            Kind = SlotDocument.ApiKey,
-            KeyId = keyId,
+            Kind = kind.Kind,
             GrantedVia = vaultKeys[v.Key].Membership,
             Wrapped = VaultCrypto.Seal(
-                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(
+                kind.Kek(secret, v.Key), JsonSerializer.SerializeToUtf8Bytes(
                     new ApiKeySlotPayload(
                         vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].AliasKey,
                         PublishField(publish.Contains(v.Key)))),
-                ApiKeySlotContext(v.Key, keyId)),
+                kind.Context(v.Key, id)),
             CreatedAt = Now,
-        })];
+        }, id))];
         await IssueFaultAsync("after-wrap");
         return (slots, vaultKeys);
     }
@@ -663,23 +681,35 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// through a membership opens its vault only while the membership is active, read in one query on every call before
     /// any vault is loaded or taken from memory (collab design §3.1), and its right is capped by the role.
     /// </summary>
-    internal async Task<IReadOnlyList<VaultAccess>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct)
+    internal Task<IReadOnlyList<VaultAccess>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct) =>
+        OpenRightSlotsAsync(ApiKeySlots, keyId, apiKey, ct);
+
+    /// <summary>
+    /// The vaults a WebDAV share has slots for, unlocked, each with the right sealed into its slot: opened afresh on every
+    /// request, with the membership check and the role's cap, as <see cref="OpenForApiKeyAsync"/>. A share never
+    /// publishes: "May publish" planted into a slot counts for nothing.
+    /// </summary>
+    internal async Task<IReadOnlyList<VaultAccess>> OpenForDavShareAsync(string shareId, string token, CancellationToken ct) =>
+        [.. (await OpenRightSlotsAsync(DavSlots, shareId, token, ct)).Select(a => a with { MayPublish = false })];
+
+    /// <summary>The vaults a credential of <paramref name="kind"/> opens, as <see cref="OpenForApiKeyAsync"/> describes.</summary>
+    private async Task<IReadOnlyList<VaultAccess>> OpenRightSlotsAsync(RightSlotKind kind, string id, string secret, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId)).ToListAsync(ct);
+        var slots = await Slots.Find(kind.Of(id)).ToListAsync(ct);
 
         var opened = new List<(SlotDocument Slot, ApiKeySlotPayload Payload, Accounts.KeyRight Right)>();
         foreach (var slot in slots)
         {
             try
             {
-                var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(ApiKeyKek(apiKey, slot.Vault), slot.Wrapped, ApiKeySlotContext(slot.Vault, keyId)))!;
+                var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(kind.Kek(secret, slot.Vault), slot.Wrapped, kind.Context(slot.Vault, id)))!;
                 if (!SameGrant(slot, payload)) throw new JsonException("membership changed");
                 opened.Add((slot, payload, RightOf(payload)));
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
-                log.LogWarning("A slot of API key {KeyId} on vault {VaultId} did not open", keyId, slot.Vault);
+                kind.NotOpened(log, id, slot.Vault);
             }
         }
 
@@ -699,7 +729,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault)
             {
-                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId, payload.Publish == true) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
+                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, id, payload.Publish == true) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
                 if (membership is null) OwnerActive(vault.Id, true);
             }
         }
@@ -920,12 +950,18 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>Deletes an API key's slots, outside a transaction (an expired key, on its first use after expiry).</summary>
-    internal Task DeleteApiKeySlotsAsync(string keyId, CancellationToken ct) =>
-        Slots.DeleteManyAsync(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), ct);
+    internal Task DeleteApiKeySlotsAsync(string keyId, CancellationToken ct) => Slots.DeleteManyAsync(ApiKeySlots.Of(keyId), ct);
 
     /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
     internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
-        Slots.DeleteManyAsync(session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), cancellationToken: ct);
+        Slots.DeleteManyAsync(session, ApiKeySlots.Of(keyId), cancellationToken: ct);
+
+    /// <summary>Deletes a WebDAV share's slots, outside a transaction (an expired share, on its first use after expiry).</summary>
+    internal Task DeleteDavSlotsAsync(string shareId, CancellationToken ct) => Slots.DeleteManyAsync(DavSlots.Of(shareId), ct);
+
+    /// <summary>Deletes a WebDAV share's slots, inside the caller's transaction (revoking the share).</summary>
+    internal Task DeleteDavSlotsAsync(IClientSessionHandle session, string shareId, CancellationToken ct) =>
+        Slots.DeleteManyAsync(session, DavSlots.Of(shareId), cancellationToken: ct);
 
     /// <summary>Opens every vault <paramref name="recoveryKeyText"/> belongs to and gives <paramref name="secret"/>
     /// a slot there, if it has none. Returns those vaults' names, and whether a slot was added.</summary>
@@ -1478,10 +1514,41 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 
-    private static byte[] ApiKeyKek(string apiKey, string vaultId) => VaultCrypto.Derive(apiKey, ApiKeyKekLabel, Encoding.UTF8.GetBytes(vaultId));
+    /// <summary>
+    /// A credential its user makes for vaults she chooses, each slot sealing the vault key with a right
+    /// (<see cref="ApiKeySlotPayload"/>): an API key, or a WebDAV share. The key is <c>HKDF(secret, label, vault id)</c>,
+    /// and the context is bound to the kind and the credential's id, so a slot can't be moved to another credential, nor
+    /// read as one of another kind or as a dev-token slot. A share's id is in a field of its own (<c>share</c>), so no
+    /// query for API keys ever finds a share's slot.
+    /// </summary>
+    private sealed record RightSlotKind(string Kind, string KekLabel, string Noun)
+    {
+        public byte[] Kek(string secret, string vaultId) => VaultCrypto.Derive(secret, KekLabel, Encoding.UTF8.GetBytes(vaultId));
 
-    /// <summary>Also bound to the key's id, so a slot can't be moved to another key, nor read as a dev-token slot.</summary>
-    private static string ApiKeySlotContext(string vaultId, string keyId) => $"slot:{vaultId}:{SlotDocument.ApiKey}:{keyId}";
+        public string Context(string vaultId, string id) => $"slot:{vaultId}:{Kind}:{id}";
+
+        /// <summary>Every slot of the credential <paramref name="id"/>.</summary>
+        public FilterDefinition<SlotDocument> Of(string id) =>
+            Builders<SlotDocument>.Filter.Eq(s => s.Kind, Kind)
+            & (Kind == SlotDocument.Dav ? Builders<SlotDocument>.Filter.Eq(s => s.ShareId, id) : Builders<SlotDocument>.Filter.Eq(s => s.KeyId, id));
+
+        public SlotDocument WithId(SlotDocument slot, string id)
+        {
+            if (Kind == SlotDocument.Dav) slot.ShareId = id;
+            else slot.KeyId = id;
+            return slot;
+        }
+
+        public void NotOpened(ILogger log, string id, string vaultId)
+        {
+            if (Kind == SlotDocument.Dav) log.LogWarning("A slot of WebDAV share {ShareId} on vault {VaultId} did not open", id, vaultId);
+            else log.LogWarning("A slot of API key {KeyId} on vault {VaultId} did not open", id, vaultId);
+        }
+    }
+
+    private static readonly RightSlotKind ApiKeySlots = new(SlotDocument.ApiKey, ApiKeyKekLabel, "An API key");
+
+    private static readonly RightSlotKind DavSlots = new(SlotDocument.Dav, DavKekLabel, "A WebDAV share");
 
     private static byte[] ConnectionKek(string token, string vaultId) => VaultCrypto.Derive(token, ConnectionKekLabel, Encoding.UTF8.GetBytes(vaultId));
 
@@ -1631,6 +1698,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.KeyId),
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.KeyId) }),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.ShareId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.ShareId) }),
                 // A connection's token finds its slots by its id; revoking a connection finds them by the connection.
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.TokenId),

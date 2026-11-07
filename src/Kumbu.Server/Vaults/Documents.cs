@@ -71,6 +71,11 @@ public sealed class SlotDocument
     /// <summary>A pending invitation's slot, wrapped under a key from the invite secret; expires with it.</summary>
     public const string Invite = "invite";
 
+    /// <summary>A WebDAV share's slot (WebDAV design §4): sealed as an <see cref="ApiKey"/> slot is, under a key of its own
+    /// and with the share's id in <see cref="ShareId"/>, never in <see cref="KeyId"/>, so nothing that looks for API keys
+    /// finds it. Never "May publish".</summary>
+    public const string Dav = "dav";
+
     [BsonId]
     public ObjectId Id { get; set; }
 
@@ -101,6 +106,11 @@ public sealed class SlotDocument
     /// </summary>
     [BsonElement("apiKey"), BsonIgnoreIfNull]
     public string? KeyId { get; set; }
+
+    /// <summary>Slots of a WebDAV share (kind <see cref="Dav"/>) only: the share's id. Sealed with the right, as an API
+    /// key's slot.</summary>
+    [BsonElement("share"), BsonIgnoreIfNull]
+    public string? ShareId { get; set; }
 
     /// <summary>Slots of a connection's token (kind <see cref="Connection"/>) only: the connection, so its revocation
     /// finds every slot of it; such a slot seals the vault key with the right, as an API key's does.</summary>
