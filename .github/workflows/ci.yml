@@ -57,3 +57,59 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+
+  # The litmus WebDAV compliance suites against a running server (WebDAV design §7), in a dot-folder of a vault, so
+  # through the parking area; tools/litmus/expected-failures.txt lists the deliberate deviations.
+  litmus:
+    name: WebDAV (litmus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://127.0.0.1:8080
+      Kumbu__PublicUrl: http://127.0.0.1:8080
+      Kumbu__Mongo__ConnectionString: mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true
+      Kumbu__Mongo__Database: litmus
+      Kumbu__Search__Enabled: "false"
+      Kumbu__Metrics__Enabled: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - run: sudo apt-get update && sudo apt-get install -y litmus
+      # A service container can't be given --replSet, so MongoDB runs from a step, as a single-node replica set
+      # (the server's change streams and transactions need one), initiated as the tests' TestImages does it.
+      - name: Start MongoDB
+        run: |
+          docker run -d --name mongo -p 127.0.0.1:27017:27017 mongo:7.0 --replSet rs0 --bind_ip_all
+          for i in $(seq 60); do
+            docker exec mongo mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]}).ok }' 2>/dev/null | grep -q 1 && break
+            sleep 1
+          done
+          for i in $(seq 60); do
+            docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null | grep -q true && exit 0
+            sleep 1
+          done
+          exit 1
+      - run: dotnet restore --locked-mode src/Kumbu.Server
+      - run: dotnet build --configuration Release --no-restore src/Kumbu.Server
+      - name: Start the server
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          echo "KUMBU_ADMIN_PASSWORD=$password" >> "$GITHUB_ENV"
+          link="$(dotnet run --no-build --configuration Release --project src/Kumbu.Server -- bootstrap-admin)"
+          echo "::add-mask::$link"
+          echo "KUMBU_INVITATION=$link" >> "$GITHUB_ENV"
+          nohup dotnet run --no-build --configuration Release --project src/Kumbu.Server > server.log 2>&1 &
+          for i in $(seq 120); do
+            curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - run: tools/litmus/run.sh http://127.0.0.1:8080 litmus
+      - name: Server log
+        if: failure()
+        run: cat server.log
