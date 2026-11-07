@@ -132,7 +132,6 @@ public sealed class DerivedShareTests(KumbuAppFactory app)
             .Select(c => (c!["name"]!.GetValue<string>(), c["kind"]!.GetValue<string>())).ToList();
 
         Assert.Equal([("Claude", MemberCredentialKinds.Key), ("Garden PC (dav)", MemberCredentialKinds.Share)], credentials);
-        Assert.Equal("share", MemberCredentialKinds.Share);
     }
 
     [Fact]
@@ -143,7 +142,12 @@ public sealed class DerivedShareTests(KumbuAppFactory app)
         var both = await ShareAsync(alice, "Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write, [privat] = KeyRight.Read });
         var elsewhere = await ShareAsync(alice, "Desktop", new Dictionary<string, KeyRight> { [privat] = KeyRight.Write });
 
-        await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+            // She is told, as of her API keys.
+            Assert.Equal(1, (await RestClient.JsonAsync(rekeyed))["revokedShares"]!.GetValue<int>());
+        }
 
         // The server can't seal the new key for a share without its password: it goes whole, its other vault too.
         Assert.NotNull((await ShareDocAsync(both.Id)).RevokedAt);

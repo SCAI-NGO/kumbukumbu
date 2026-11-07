@@ -585,8 +585,7 @@ public sealed partial class Memberships(
                 var derived = sl.Eq(x => x.GrantedVia, membershipId);
                 var keyIds = await (await catalog.Slots.DistinctAsync(s, x => x.KeyId, derived & sl.Eq(x => x.Kind, SlotDocument.ApiKey) & sl.Exists(x => x.KeyId), cancellationToken: token))
                     .ToListAsync(token);
-                var shareIds = await (await catalog.Slots.DistinctAsync(
-                    s, x => x.ShareId, derived & sl.Eq(x => x.Kind, SlotDocument.Dav) & sl.Exists(x => x.ShareId), cancellationToken: token)).ToListAsync(token);
+                var shareIds = await catalog.ShareIdsAsync(s, derived, token);
                 // Only the connections this membership granted the vault: the same person may hold a later membership
                 // of it, whose connections a retried cleanup of this one must leave alone.
                 var connectionIds = await (await catalog.Slots.DistinctAsync(
@@ -596,7 +595,7 @@ public sealed partial class Memberships(
                 if (doc.Member is { } member)
                 {
                     keys = await catalog.RevokeKeysWithoutVaultsAsync(s, keyIds, token);
-                    shares = await catalog.RevokeSharesWithoutVaultsAsync(s, [.. shareIds.OfType<string>()], token);
+                    shares = await catalog.RevokeSharesWithoutVaultsAsync(s, shareIds, token);
                     connections = await ConnectionRevocation.RemoveVaultsAsync(
                         db, s, [doc.Vault], Now, token, user: member, reason: ConnectionReasons.SharingEnded, only: [.. connectionIds.OfType<string>()]);
                 }

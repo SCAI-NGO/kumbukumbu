@@ -64,7 +64,7 @@ public sealed class Rekeying(
         {
             revoked = false;
             log.LogError(
-                e, "Revoking the WebDAV shares of user {Username} after their user key was rotated failed; each goes with the re-keying of her own vaults", user.Username);
+                e, "Revoking the WebDAV shares of user {Username} after their user key was rotated failed; those on their own vaults go with those vaults' re-keying, those on vaults shared with them are not revoked", user.Username);
         }
 
         foreach (var vaultId in rotated.VaultIds) runner.Start(vaultId, user.Id, rotated.NewUserKey);
@@ -89,8 +89,8 @@ public sealed class Rekeying(
         // Through the runner, never RekeyAsync directly: a run of its own would race the runner's.
         var summary = await runner.RunAsync(vaultId, user.Id, userKey).WaitAsync(ct);
         log.LogInformation(
-            "User {Username} re-encrypted vault {VaultId}: {Keys} API keys revoked, {Apps} apps disconnected",
-            user.Username, vaultId, summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count);
+            "User {Username} re-encrypted vault {VaultId}: {Keys} API keys and {Shares} WebDAV shares revoked, {Apps} apps disconnected",
+            user.Username, vaultId, summary.RevokedApiKeys.Count, summary.RevokedShares.Count, summary.DisconnectedConnections.Count);
         return summary;
     }
 
