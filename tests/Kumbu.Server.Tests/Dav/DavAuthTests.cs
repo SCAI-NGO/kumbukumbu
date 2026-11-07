@@ -8,9 +8,11 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -25,30 +27,9 @@ namespace Kumbu.Server.Tests.Dav;
 [Collection("app")]
 public sealed class DavAuthTests(KumbuAppFactory app)
 {
-    private const string Challenge = "Basic realm=\"Kumbu²\", charset=\"UTF-8\"";
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static readonly HttpMethod Propfind = DavClient.Propfind;
-
-    private static readonly HttpMethod Options = HttpMethod.Options;
-
     private WebApplicationFactory<Program> Api => app.PublicApi;
-
-    private static string Header(HttpResponseMessage response, string name) =>
-        response.Headers.TryGetValues(name, out var values) || response.Content.Headers.TryGetValues(name, out values) ? string.Join(", ", values) : "";
-
-    private static void AssertChallenge(HttpResponseMessage response)
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Equal(Challenge, Header(response, "WWW-Authenticate"));
-    }
-
-    private static void AssertPrivateWithoutCookie(HttpResponseMessage response)
-    {
-        Assert.Equal("private", Header(response, "Cache-Control"));
-        Assert.False(response.Headers.Contains("Set-Cookie"));
-    }
 
     private IMongoCollection<BsonDocument> SlotDocs => app.Database.GetCollection<BsonDocument>("slots");
 
@@ -62,17 +43,17 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         foreach (var path in new[] { "/dav", "/dav/", "/dav/Work/", "/dav/Work/plan.md" })
         {
-            using var response = await DavClient.SendAsync(Api, Options, path, authorization: null);
+            using var response = await DavClient.SendAsync(Api, HttpMethod.Options, path, authorization: null);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal("1, 2", Header(response, "DAV"));
-            Assert.Equal("DAV", Header(response, "MS-Author-Via"));
-            Assert.Contains("PROPFIND", Header(response, "Allow"), StringComparison.Ordinal);
+            Assert.Equal("1, 2", DavAssert.Header(response, "DAV"));
+            Assert.Equal("DAV", DavAssert.Header(response, "MS-Author-Via"));
+            Assert.Contains("PROPFIND", DavAssert.Header(response, "Allow"), StringComparison.Ordinal);
             Assert.Empty(response.Headers.WwwAuthenticate);
-            AssertPrivateWithoutCookie(response);
+            DavAssert.PrivateWithoutCookie(response);
         }
 
-        using var withCredentials = await dav.SendAsync(Options, "/dav/Work/");
+        using var withCredentials = await dav.SendAsync(HttpMethod.Options, "/dav/Work/");
         Assert.Equal(HttpStatusCode.OK, withCredentials.StatusCode);
     }
 
@@ -81,16 +62,16 @@ public sealed class DavAuthTests(KumbuAppFactory app)
     {
         var dav = await DavClient.NewAsync(Api);
 
-        using var existing = await dav.SendAsync(Options, "/dav/Work/");
-        using var missing = await dav.SendAsync(Options, "/dav/Nowhere/");
-        using var anonymous = await DavClient.SendAsync(Api, Options, "/dav/Nowhere/", authorization: null);
+        using var existing = await dav.SendAsync(HttpMethod.Options, "/dav/Work/");
+        using var missing = await dav.SendAsync(HttpMethod.Options, "/dav/Nowhere/");
+        using var anonymous = await DavClient.SendAsync(Api, HttpMethod.Options, "/dav/Nowhere/", authorization: null);
 
         foreach (var other in new[] { missing, anonymous })
         {
             Assert.Equal(existing.StatusCode, other.StatusCode);
             foreach (var name in new[] { "DAV", "MS-Author-Via", "Allow", "Cache-Control", "Content-Length" })
             {
-                Assert.Equal(Header(existing, name), Header(other, name));
+                Assert.Equal(DavAssert.Header(existing, name), DavAssert.Header(other, name));
             }
 
             Assert.Equal(await existing.Content.ReadAsStringAsync(Ct), await other.Content.ReadAsStringAsync(Ct));
@@ -101,11 +82,11 @@ public sealed class DavAuthTests(KumbuAppFactory app)
     public async Task Oauth_cors_never_answers_dav()
     {
         using var preflight = await DavClient.SendAsync(
-            Api, Options, "/dav/", authorization: null,
+            Api, HttpMethod.Options, "/dav/", authorization: null,
             headers: new Dictionary<string, string> { ["Origin"] = "https://elsewhere.example.org", ["Access-Control-Request-Method"] = "PROPFIND" });
 
         Assert.Equal(HttpStatusCode.OK, preflight.StatusCode);
-        Assert.Equal("1, 2", Header(preflight, "DAV"));
+        Assert.Equal("1, 2", DavAssert.Header(preflight, "DAV"));
         Assert.DoesNotContain(preflight.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -129,14 +110,14 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit + 4; i++)
         {
-            using var busy = await dav.SendAsync(Propfind, "/dav/", ip: ip);
+            using var busy = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, busy.StatusCode);
             Assert.NotNull(busy.Headers.RetryAfter);
-            AssertPrivateWithoutCookie(busy);
+            DavAssert.PrivateWithoutCookie(busy);
         }
 
-        using var wrong = await dav.SendWithPasswordAsync(Propfind, "/dav/", DavTokens.Format(DavTokens.New()), ip);
-        AssertChallenge(wrong);
+        using var wrong = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/", DavTokens.Format(DavTokens.New()), ip: ip);
+        DavAssert.Challenged(wrong);
     }
 
     [Fact]
@@ -144,16 +125,16 @@ public sealed class DavAuthTests(KumbuAppFactory app)
     {
         foreach (var path in new[] { "/dav", "/dav/", "/dav/Work/plan.md" })
         {
-            using var response = await DavClient.SendAsync(Api, Propfind, path, authorization: null);
+            using var response = await DavClient.SendAsync(Api, DavClient.Propfind, path, authorization: null);
 
-            AssertChallenge(response);
-            AssertPrivateWithoutCookie(response);
+            DavAssert.Challenged(response);
+            DavAssert.PrivateWithoutCookie(response);
         }
 
         foreach (var malformed in new[] { "Basic", "Basic !!!", "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("no-colon")), "Digest username=\"x\"" })
         {
-            using var response = await DavClient.SendAsync(Api, Propfind, "/dav/", malformed);
-            AssertChallenge(response);
+            using var response = await DavClient.SendAsync(Api, DavClient.Propfind, "/dav/", malformed);
+            DavAssert.Challenged(response);
         }
     }
 
@@ -166,16 +147,69 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         await using var factory = app.WithWebHostBuilder(b => b.UseUrls("http://127.0.0.1:0"));
         factory.UseKestrel();
         factory.StartServer();
+        var response = await RawAsync(factory, "PROPFIND /dav/ HTTP/1.1");
+
+        Assert.StartsWith("HTTP/1.1 401", response, StringComparison.Ordinal);
+        Assert.Contains($"WWW-Authenticate: {DavAssert.Challenge}\r\n", response, StringComparison.Ordinal);
+    }
+
+    /// <summary>The encoding given for the challenge changes no other header: a value outside ASCII in a header Kestrel
+    /// knows (<c>Content-Disposition</c>) or in another (<c>X-Probe</c>) is refused when it is set, as it was before
+    /// (a 500, the value never sent), and an ASCII value goes out as it is.</summary>
+    [Fact]
+    public async Task Other_headers_go_out_over_kestrel_as_before()
+    {
+        await using var factory = app.WithWebHostBuilder(b => b.UseUrls("http://127.0.0.1:0").ConfigureServices(s => s.AddSingleton<IStartupFilter>(new HeaderProbe())));
+        factory.UseKestrel();
+        factory.StartServer();
+
+        var known = await RawAsync(factory, $"GET {HeaderProbe.Path}/known HTTP/1.1");
+        var own = await RawAsync(factory, $"GET {HeaderProbe.Path}/own HTTP/1.1");
+        var ascii = await RawAsync(factory, $"GET {HeaderProbe.Path}/ascii HTTP/1.1");
+
+        // Refused when set, as without the encoding: the value never goes out.
+        Assert.StartsWith("HTTP/1.1 500", known, StringComparison.Ordinal);
+        Assert.StartsWith("HTTP/1.1 500", own, StringComparison.Ordinal);
+        Assert.StartsWith("HTTP/1.1 200", ascii, StringComparison.Ordinal);
+        Assert.Contains("\r\nContent-Disposition: attachment; filename=\"Plan\"\r\n", ascii, StringComparison.Ordinal);
+    }
+
+    /// <summary>A request over a socket to a factory that runs Kestrel, and the whole answer, read as ISO-8859-1 so each
+    /// byte is one character.</summary>
+    private static async Task<string> RawAsync(WebApplicationFactory<Program> factory, string requestLine)
+    {
         var address = new Uri(factory.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First());
         using var tcp = new TcpClient();
         await tcp.ConnectAsync(address.Host, address.Port, Ct);
         await using var stream = tcp.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"PROPFIND /dav/ HTTP/1.1\r\nHost: {address.Authority}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), Ct);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"{requestLine}\r\nHost: {address.Authority}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), Ct);
         using var reader = new StreamReader(stream, Encoding.Latin1);
-        var response = await reader.ReadToEndAsync(Ct);
+        return await reader.ReadToEndAsync(Ct);
+    }
 
-        Assert.StartsWith("HTTP/1.1 401", response, StringComparison.Ordinal);
-        Assert.Contains($"WWW-Authenticate: {Challenge}\r\n", response, StringComparison.Ordinal);
+    /// <summary>Answers below <see cref="Path"/> ahead of the app: <c>/known</c> and <c>/own</c> set a header outside ASCII
+    /// (with the realm's <c>²</c> among it), <c>/ascii</c> an ASCII one.</summary>
+    private sealed class HeaderProbe : IStartupFilter
+    {
+        public const string Path = "/header-probe";
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => builder =>
+        {
+            builder.Use(async (context, inner) =>
+            {
+                if (!context.Request.Path.StartsWithSegments(Path, out var which))
+                {
+                    await inner();
+                    return;
+                }
+
+                if (which == "/known") context.Response.Headers.ContentDisposition = "attachment; filename=\"Pläne ²\"";
+                else if (which == "/own") context.Response.Headers["X-Probe"] = "Größe ²";
+                else context.Response.Headers.ContentDisposition = "attachment; filename=\"Plan\"";
+                await context.Response.WriteAsync("ok");
+            });
+            next(builder);
+        };
     }
 
     [Fact]
@@ -185,15 +219,17 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         foreach (var path in new[] { "/dav", "/dav/", "/dav/Work/plan.md" })
         {
-            using var response = await dav.SendAsync(Propfind, path);
+            using var response = await dav.SendAsync(DavClient.Propfind, path);
 
-            Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
-            AssertPrivateWithoutCookie(response);
+            DavAssert.Through(response);
+            DavAssert.PrivateWithoutCookie(response);
         }
 
+        using (var withDepth = await dav.PropfindAsync("/dav/", depth: "0")) DavAssert.Through(withDepth);
+
         // Typed in by hand: lower case, without hyphens, O for 0.
-        using var typed = await dav.SendWithPasswordAsync(Propfind, "/dav/", dav.Password.Replace("-", "", StringComparison.Ordinal).Replace('0', 'O').ToLowerInvariant());
-        Assert.Equal(HttpStatusCode.NotImplemented, typed.StatusCode);
+        using var typed = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/", dav.Password.Replace("-", "", StringComparison.Ordinal).Replace('0', 'O').ToLowerInvariant());
+        DavAssert.Through(typed);
     }
 
     [Fact]
@@ -204,17 +240,17 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i < WrongKeyLimiter.PermitLimit; i++)
         {
-            using var wrong = await dav.SendWithPasswordAsync(Propfind, "/dav/", DavTokens.Format(DavTokens.New()), ip);
-            AssertChallenge(wrong);
+            using var wrong = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/", DavTokens.Format(DavTokens.New()), ip: ip);
+            DavAssert.Challenged(wrong);
         }
 
-        using var limited = await dav.SendAsync(Propfind, "/dav/", ip: ip);
+        using var limited = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.NotNull(limited.Headers.RetryAfter);
-        AssertPrivateWithoutCookie(limited);
+        DavAssert.PrivateWithoutCookie(limited);
 
-        using var elsewhere = await dav.SendAsync(Propfind, "/dav/");
-        Assert.Equal(HttpStatusCode.NotImplemented, elsewhere.StatusCode);
+        using var elsewhere = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        DavAssert.Through(elsewhere);
     }
 
     [Fact]
@@ -227,12 +263,12 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i < 30; i++)
         {
-            using var refused = await revoked.SendAsync(Propfind, "/dav/", ip: ip);
-            AssertChallenge(refused);
+            using var refused = await revoked.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            DavAssert.Challenged(refused);
         }
 
-        using var right = await dav.SendAsync(Propfind, "/dav/", ip: ip);
-        Assert.Equal(HttpStatusCode.NotImplemented, right.StatusCode);
+        using var right = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+        DavAssert.Through(right);
     }
 
     [Fact]
@@ -244,12 +280,12 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i < WrongKeyLimiter.PermitLimit; i++)
         {
-            using var crossed = await first.SendWithPasswordAsync(Propfind, "/dav/", second.Password, ip);
-            AssertChallenge(crossed);
+            using var crossed = await first.SendWithPasswordAsync(DavClient.Propfind, "/dav/", second.Password, ip: ip);
+            DavAssert.Challenged(crossed);
         }
 
         // Refused like a wrong token: counted.
-        using var limited = await second.SendAsync(Propfind, "/dav/", ip: ip);
+        using var limited = await second.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
     }
 
@@ -265,11 +301,11 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         var dav = await DavClient.NewAsync(timed, expiresInDays: 30);
 
         time.Advance(TimeSpan.FromDays(30) - TimeSpan.FromMinutes(1));
-        using (var before = await dav.SendAsync(Propfind, "/dav/")) Assert.Equal(HttpStatusCode.NotImplemented, before.StatusCode);
+        using (var before = await dav.SendAsync(DavClient.Propfind, "/dav/")) DavAssert.Through(before);
         time.Advance(TimeSpan.FromMinutes(1));
 
-        using var expired = await dav.SendAsync(Propfind, "/dav/");
-        AssertChallenge(expired);
+        using var expired = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        DavAssert.Challenged(expired);
     }
 
     [Fact]
@@ -280,8 +316,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         Assert.True(await Api.Services.GetRequiredService<Admin>().SetActiveAsync(admin.User, dav.Owner.User.Id, false, Ct));
 
-        using var refused = await dav.SendAsync(Propfind, "/dav/");
-        AssertChallenge(refused);
+        using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        DavAssert.Challenged(refused);
     }
 
     /// <summary>A re-keying of the owner's vault revokes a share that had only that vault (it is made again from the web
@@ -296,8 +332,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit; i++)
         {
-            using var refused = await dav.SendAsync(Propfind, "/dav/", ip: ip);
-            AssertChallenge(refused);
+            using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            DavAssert.Challenged(refused);
         }
     }
 
@@ -312,8 +348,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit; i++)
         {
-            using var refused = await dav.SendAsync(Propfind, "/dav/", ip: ip);
-            AssertChallenge(refused);
+            using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            DavAssert.Challenged(refused);
         }
     }
 
@@ -323,18 +359,18 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         await using var production = Api.WithWebHostBuilder(b => b.UseEnvironment("Production"));
         var dav = (await DavClient.NewAsync(Api)).On(production);
 
-        foreach (var method in new[] { Propfind, Options })
+        foreach (var method in new[] { DavClient.Propfind, HttpMethod.Options })
         {
             using var plain = await DavClient.SendAsync(production, method, "/dav/", dav.Authorization, https: false);
 
             Assert.Equal(HttpStatusCode.Forbidden, plain.StatusCode);
             Assert.Equal("text/plain", plain.Content.Headers.ContentType?.MediaType);
             Assert.Equal("WebDAV needs HTTPS.", await plain.Content.ReadAsStringAsync(Ct));
-            AssertPrivateWithoutCookie(plain);
+            DavAssert.PrivateWithoutCookie(plain);
         }
 
-        using var https = await dav.SendAsync(Propfind, "/dav/");
-        Assert.Equal(HttpStatusCode.NotImplemented, https.StatusCode);
+        using var https = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        DavAssert.Through(https);
     }
 
     [Fact]
@@ -345,14 +381,14 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         foreach (var bearer in new[] { key, KumbuAppFactory.Token })
         {
-            using var refused = await DavClient.SendAsync(Api, Propfind, "/dav/", $"Bearer {bearer}");
-            AssertChallenge(refused);
+            using var refused = await DavClient.SendAsync(Api, DavClient.Propfind, "/dav/", $"Bearer {bearer}");
+            DavAssert.Challenged(refused);
         }
 
         // Nor the session cookie.
         using var cookie = await DavClient.SendAsync(
-            Api, Propfind, "/dav/", authorization: null, headers: new Dictionary<string, string> { ["Cookie"] = $"{CallerMiddleware.SessionCookie}={dav.Owner.Session}" });
-        AssertChallenge(cookie);
+            Api, DavClient.Propfind, "/dav/", authorization: null, headers: new Dictionary<string, string> { ["Cookie"] = $"{CallerMiddleware.SessionCookie}={dav.Owner.Session}" });
+        DavAssert.Challenged(cookie);
     }
 
     [Fact]
@@ -377,7 +413,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         await using var off = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Dav:Enabled", "false"));
         var dav = (await DavClient.NewAsync(Api)).On(off);
 
-        foreach (var method in new[] { Propfind, Options })
+        foreach (var method in new[] { DavClient.Propfind, HttpMethod.Options })
         {
             using var response = await dav.SendAsync(method, "/dav/");
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -385,8 +421,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         }
 
         // The shares stay, and work again once it is on.
-        using var on = await dav.On(Api).SendAsync(Propfind, "/dav/");
-        Assert.Equal(HttpStatusCode.NotImplemented, on.StatusCode);
+        using var on = await dav.On(Api).SendAsync(DavClient.Propfind, "/dav/");
+        DavAssert.Through(on);
     }
 
     [Fact]
@@ -394,14 +430,14 @@ public sealed class DavAuthTests(KumbuAppFactory app)
     {
         var dav = await DavClient.NewAsync(Api);
 
-        using var anonymous = await DavClient.SendAsync(Api, Propfind, "/DAV/", authorization: null);
-        AssertChallenge(anonymous);
+        using var anonymous = await DavClient.SendAsync(Api, DavClient.Propfind, "/DAV/", authorization: null);
+        DavAssert.Challenged(anonymous);
 
-        using var right = await dav.SendAsync(Propfind, "/Dav/Work/");
-        Assert.Equal(HttpStatusCode.NotImplemented, right.StatusCode);
+        using var right = await dav.SendAsync(DavClient.Propfind, "/Dav/Work/");
+        DavAssert.Through(right);
 
-        using var options = await DavClient.SendAsync(Api, Options, "/DAV/", authorization: null);
-        Assert.Equal("1, 2", Header(options, "DAV"));
+        using var options = await DavClient.SendAsync(Api, HttpMethod.Options, "/DAV/", authorization: null);
+        Assert.Equal("1, 2", DavAssert.Header(options, "DAV"));
     }
 
     [Fact]
@@ -412,8 +448,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         var dav = await DavClient.NewAsync(logged);
         var wrong = DavTokens.Format(DavTokens.New());
 
-        using (var right = await dav.SendAsync(Propfind, "/dav/Work/")) Assert.Equal(HttpStatusCode.NotImplemented, right.StatusCode);
-        using (var refused = await dav.SendWithPasswordAsync(Propfind, "/dav/Work/", wrong)) AssertChallenge(refused);
+        using (var right = await dav.SendAsync(DavClient.Propfind, "/dav/Work/")) DavAssert.Through(right);
+        using (var refused = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/Work/", wrong)) DavAssert.Challenged(refused);
 
         Assert.Contains(log.Lines, l => l.StartsWith("Trace", StringComparison.Ordinal));
         Assert.Contains(log.Lines, l => l.Contains("/dav/Work/", StringComparison.Ordinal));
@@ -429,18 +465,35 @@ public sealed class DavAuthTests(KumbuAppFactory app)
     [Fact]
     public async Task Options_on_root_answers_the_DAV_headers()
     {
-        using var response = await DavClient.SendAsync(Api, Options, "/", authorization: null);
+        using var response = await DavClient.SendAsync(Api, HttpMethod.Options, "/", authorization: null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("1, 2", Header(response, "DAV"));
-        Assert.Equal("DAV", Header(response, "MS-Author-Via"));
+        Assert.Equal("1, 2", DavAssert.Header(response, "DAV"));
+        Assert.Equal("DAV", DavAssert.Header(response, "MS-Author-Via"));
         Assert.Empty(await response.Content.ReadAsStringAsync(Ct));
+    }
+
+    /// <summary>Switched off, <c>/</c> advertises no WebDAV: <c>OPTIONS</c> there is answered as on any page of the web app.</summary>
+    [Fact]
+    public async Task Options_on_root_says_nothing_of_DAV_when_it_is_switched_off()
+    {
+        await using var off = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Dav:Enabled", "false"));
+
+        using var root = await DavClient.SendAsync(off, HttpMethod.Options, "/", authorization: null);
+        using var page = await DavClient.SendAsync(off, HttpMethod.Options, "/settings", authorization: null);
+
+        Assert.Equal(page.StatusCode, root.StatusCode);
+        foreach (var name in new[] { "DAV", "MS-Author-Via", "Allow" })
+        {
+            Assert.Equal("", DavAssert.Header(root, name));
+            Assert.Equal(DavAssert.Header(page, name), DavAssert.Header(root, name));
+        }
     }
 
     [Fact]
     public async Task Propfind_on_root_is_not_the_web_app()
     {
-        using var response = await DavClient.SendAsync(Api, Propfind, "/", authorization: null);
+        using var response = await DavClient.SendAsync(Api, DavClient.Propfind, "/", authorization: null);
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
         Assert.NotEqual("text/html", response.Content.Headers.ContentType?.MediaType);

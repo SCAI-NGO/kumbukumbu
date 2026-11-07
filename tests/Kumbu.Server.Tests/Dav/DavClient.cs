@@ -70,14 +70,26 @@ public sealed class DavClient
         HttpMethod method, string path, HttpContent? content = null, IReadOnlyDictionary<string, string>? headers = null, string? ip = null) =>
         SendAsync(Api, method, path, Authorization, content, headers, ip);
 
+    /// <summary>A <c>PROPFIND</c> with this share's credentials and <c>Depth</c> (none if null); <paramref name="headers"/>
+    /// go beside it.</summary>
+    public Task<HttpResponseMessage> PropfindAsync(
+        string path, string? depth = "1", HttpContent? body = null, IReadOnlyDictionary<string, string>? headers = null, string? ip = null) =>
+        SendAsync(Propfind, path, body, WithDepth(headers, depth), ip);
+
     /// <summary>A request with this share's username and another password.</summary>
-    public Task<HttpResponseMessage> SendWithPasswordAsync(HttpMethod method, string path, string password, string? ip = null) =>
-        SendAsync(Api, method, path, Basic(Username, password), ip: ip);
+    public Task<HttpResponseMessage> SendWithPasswordAsync(
+        HttpMethod method, string path, string password, HttpContent? content = null, IReadOnlyDictionary<string, string>? headers = null, string? ip = null) =>
+        SendAsync(Api, method, path, Basic(Username, password), content, headers, ip);
+
+    /// <summary><paramref name="headers"/> with <c>Depth</c> set to <paramref name="depth"/>, or left as they are if it is null.</summary>
+    public static IReadOnlyDictionary<string, string>? WithDepth(IReadOnlyDictionary<string, string>? headers, string? depth) =>
+        depth is null ? headers : new Dictionary<string, string>(headers ?? new Dictionary<string, string>()) { ["Depth"] = depth };
 
     /// <summary>
     /// A request to <paramref name="api"/> with <paramref name="authorization"/> as it is (none if null), from
     /// <paramref name="ip"/> (a fresh address if null, so no other test's wrong attempts count against it), and with
-    /// <c>X-Forwarded-Proto: https</c> unless <paramref name="https"/> is false.
+    /// <c>X-Forwarded-Proto: https</c> unless <paramref name="https"/> is false. <paramref name="headers"/> go on the request
+    /// or, for a content header (<c>Content-Type</c>, say), on <paramref name="content"/>; one that fits neither throws.
     /// </summary>
     public static async Task<HttpResponseMessage> SendAsync(
         WebApplicationFactory<Program> api, HttpMethod method, string path, string? authorization, HttpContent? content = null,
@@ -89,20 +101,32 @@ public sealed class DavClient
         request.Headers.Add("X-Forwarded-For", ip ?? NewIp());
         foreach (var (name, value) in headers ?? new Dictionary<string, string>())
         {
-            if (!request.Headers.TryAddWithoutValidation(name, value)) request.Content?.Headers.TryAddWithoutValidation(name, value);
+            if (request.Headers.TryAddWithoutValidation(name, value) || request.Content?.Headers.TryAddWithoutValidation(name, value) == true) continue;
+            throw new ArgumentException($"The header {name} needs content to go on.", nameof(headers));
         }
 
         using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = false, BaseAddress = new Uri("http://localhost") });
         return await client.SendAsync(request, Ct);
     }
 
-    /// <summary>An address of its own, for a test that counts attempts against one.</summary>
-    public static string NewIp() => $"198.18.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
+    private static int _ips;
 
-    /// <summary>A WebDAV method HttpMethod has no constant for, such as <c>PROPFIND</c>.</summary>
-    public static HttpMethod Method(string name) => new(name);
+    /// <summary>An address of its own, for a test that counts attempts against one: each call the next of
+    /// 198.18.0.1 to 198.18.255.254, so no two tests of a run share one.</summary>
+    public static string NewIp()
+    {
+        var n = Interlocked.Increment(ref _ips) - 1;
+        return $"198.18.{n / 254 % 256}.{n % 254 + 1}";
+    }
 
+    // The WebDAV methods HttpMethod has no constant for, in one place.
     public static readonly HttpMethod Propfind = new("PROPFIND");
+    public static readonly HttpMethod Proppatch = new("PROPPATCH");
+    public static readonly HttpMethod Mkcol = new("MKCOL");
+    public static readonly HttpMethod Copy = new("COPY");
+    public static readonly HttpMethod Move = new("MOVE");
+    public static readonly HttpMethod Lock = new("LOCK");
+    public static readonly HttpMethod Unlock = new("UNLOCK");
 
     /// <summary>A body with a content type, for <see cref="SendAsync(HttpMethod, string, HttpContent?, IReadOnlyDictionary{string, string}?, string?)"/>.</summary>
     public static HttpContent Body(string text, string contentType = "application/xml") =>

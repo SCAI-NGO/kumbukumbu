@@ -48,6 +48,9 @@ public sealed class CallerMiddleware(
 
     private const string BasicScheme = "Basic ";
 
+    /// <summary>For a Basic header's credentials: bytes that aren't UTF-8 make the header malformed.</summary>
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
     private readonly string? _devToken = string.IsNullOrEmpty(options.Value.DevToken) ? null : options.Value.DevToken;
 
     private readonly byte[]? _devTokenHash = string.IsNullOrEmpty(options.Value.DevToken) ? null : Hash(options.Value.DevToken);
@@ -319,8 +322,6 @@ public sealed class CallerMiddleware(
         var colon = text.IndexOf(':', StringComparison.Ordinal);
         return colon <= 0 ? null : (text[..colon], text[(colon + 1)..]);
     }
-
-    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private static void DavUnauthorised(HttpContext context)
     {

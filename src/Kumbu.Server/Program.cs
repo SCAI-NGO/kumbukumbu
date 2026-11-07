@@ -141,10 +141,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.RespectRequiredConstructorParameters = true;
 });
 builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
-// The WebDAV challenge's realm, "Kumbu²" (CallerMiddleware.DavChallenge), isn't ASCII: without an encoding Kestrel sends
-// a "?" for it. ISO-8859-1 is what clients read a realm in. Every other header is still checked to be ASCII when it is
-// set (Kestrel asks by its name then); writing the headers Kestrel knows, it asks with an empty name, and ISO-8859-1
-// writes ASCII as ASCII.
+// The WebDAV challenge's realm, "Kumbu²" (CallerMiddleware.DavChallenge), isn't ASCII, which Kestrel refuses in a header
+// unless the selector gives an encoding: ISO-8859-1, which clients read a realm in. Kestrel asks twice. When a header is
+// set, by its name: only WWW-Authenticate gets one, so every other header outside ASCII is still refused (a 500), as
+// without the selector. When it writes the headers it knows, WWW-Authenticate among them, with an empty name (Kestrel 10):
+// that must give ISO-8859-1 too, or the realm goes out as "Kumbu?"; the values it writes then all passed the check by
+// name, so the others are ASCII, which ISO-8859-1 writes unchanged. DavAuthTests pins both over Kestrel.
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.ResponseHeaderEncodingSelector = name =>
     name.Length == 0 || name.Equals(Microsoft.Net.Http.Headers.HeaderNames.WWWAuthenticate, StringComparison.OrdinalIgnoreCase) ? System.Text.Encoding.Latin1 : null);
 builder.Services.AddOpenApi();
@@ -292,7 +294,12 @@ app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment e
     : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 
 // WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
-app.MapMethods("/", [HttpMethods.Options], (HttpContext http) => DavHeaders.Options(http.Response, DavHeaders.RootMethods)).AllowAnonymous().ExcludeFromDescription();
+// With WebDAV switched off, / advertises nothing and OPTIONS there is answered as on any other page.
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Dav.Enabled)
+{
+    app.MapMethods("/", [HttpMethods.Options], (HttpContext http) => DavHeaders.Options(http.Response, DavHeaders.RootMethods)).AllowAnonymous().ExcludeFromDescription();
+}
+
 app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
 {
     http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
