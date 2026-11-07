@@ -112,6 +112,14 @@ public static class FileApi
     internal static async Task<FileStreamHttpResult> ServeAsync(
         HttpResponse response, IAttachmentStore files, VaultPath path, AttachmentState state, string? download, CancellationToken ct)
     {
+        var bytes = await OpenAsync(files, path, state, ct);
+        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true");
+        return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
+    }
+
+    /// <summary>One state's bytes; <see cref="ContentMissingException"/> if they are gone or don't open.</summary>
+    internal static async Task<Stream> OpenAsync(IAttachmentStore files, VaultPath path, AttachmentState state, CancellationToken ct)
+    {
         Stream? bytes;
         try
         {
@@ -123,9 +131,7 @@ public static class FileApi
         }
 
         // The file exists, its bytes don't: a fault of the server, not a 404, which a client takes for a deletion.
-        if (bytes is null) throw new ContentMissingException($"The content of {path.Value} doesn't open: it was changed or removed outside Kumbu².");
-        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true");
-        return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
+        return bytes ?? throw new ContentMissingException($"The content of {path.Value} doesn't open: it was changed or removed outside Kumbu².");
     }
 
     /// <summary>

@@ -39,6 +39,16 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
         return await IsFolderAsync(path, ct) ? new DavResource(path, true) : null;
     }
 
+    /// <summary>The content of the note or attachment at <paramref name="path"/>, or null if there is none there (a
+    /// collection, a folder marker, nothing).</summary>
+    public async Task<DavContent?> ContentAsync(VaultPath path, CancellationToken ct)
+    {
+        if (path.Segments.Count < 2 || FolderMarker.Is(path)) return null;
+        if (path.IsNote && await notes.GetAsync(path, ct) is { } note) return DavContent.Note(note);
+        if (path.IsAttachment && await attachments.GetAttachmentAsync(path, ct) is { } attachment) return DavContent.Attachment(attachments, attachment);
+        return null;
+    }
+
     /// <summary>What <paramref name="collection"/> holds, folders first, each group in the app's text order.</summary>
     public async Task<IReadOnlyList<DavResource>> ChildrenAsync(DavResource collection, CancellationToken ct)
     {

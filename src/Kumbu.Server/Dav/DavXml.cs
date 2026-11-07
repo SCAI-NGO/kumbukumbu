@@ -101,6 +101,21 @@ public static class DavXml
         };
     }
 
+    /// <summary>The properties a <c>PROPPATCH</c> body (RFC 4918 §14.19) sets or removes, in its order, each once. Nothing
+    /// is stored: the names are all the answer needs (WebDAV design §3.4).</summary>
+    public static IReadOnlyList<XName> ParsePropertyUpdate(XDocument? body)
+    {
+        if (body?.Root is not { } root || root.Name != Dav + "propertyupdate") throw BadBody("A PROPPATCH body is a DAV:propertyupdate.");
+        var names = root.Elements()
+            .Where(e => e.Name == Dav + "set" || e.Name == Dav + "remove")
+            .SelectMany(e => e.Elements(Dav + "prop"))
+            .SelectMany(p => p.Elements())
+            .Select(e => e.Name)
+            .Distinct()
+            .ToList();
+        return names.Count > 0 ? names : throw BadBody("A DAV:propertyupdate sets or removes at least one property.");
+    }
+
     private static DavException BadBody(string message) => new(StatusCodes.Status400BadRequest, message);
 
     /// <summary>The propstats of a resource with <paramref name="properties"/> (its live properties, by name, each a

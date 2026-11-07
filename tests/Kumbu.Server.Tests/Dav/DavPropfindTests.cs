@@ -201,7 +201,7 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
     }
 
-    /// <summary>One reader for every XML body: Tasks 6 and 7 add <c>PROPPATCH</c> and <c>LOCK</c> to this test.</summary>
+    /// <summary>One reader for every XML body, <c>PROPFIND</c>'s and <c>PROPPATCH</c>'s; Task 7 adds <c>LOCK</c> to this test.</summary>
     [Fact]
     public async Task A_doctype_in_the_body_is_refused()
     {
@@ -216,6 +216,18 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         foreach (var body in bodies)
         {
             using var response = await dav.PropfindAsync("/dav/Work/", depth: "0", body: DavClient.Body(body));
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        string[] updates =
+        [
+            "<?xml version=\"1.0\"?><!DOCTYPE propertyupdate [<!ENTITY x \"y\">]><D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop><D:x>&x;</D:x></D:prop></D:set></D:propertyupdate>",
+            "<?xml version=\"1.0\"?><!DOCTYPE propertyupdate [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop><D:x>&x;</D:x></D:prop></D:set></D:propertyupdate>",
+            "<?xml version=\"1.0\"?><!DOCTYPE propertyupdate SYSTEM \"http://127.0.0.1/evil.dtd\"><D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop><D:x/></D:prop></D:set></D:propertyupdate>",
+        ];
+        foreach (var body in updates)
+        {
+            using var response = await dav.SendAsync(DavClient.Proppatch, "/dav/Work/", DavClient.Body(body));
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
 

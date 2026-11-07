@@ -11,6 +11,11 @@ public static class DavHeaders
     /// <summary>The methods <c>/dav</c> answers.</summary>
     public static readonly string DavMethods = string.Join(", ", DavMethod.All);
 
+    /// <summary>The methods a collection (the root, a vault, a folder) answers: not those that read or write a file's
+    /// bytes.</summary>
+    public static readonly string CollectionMethods =
+        string.Join(", ", DavMethod.All.Except([DavMethod.Get, DavMethod.Head, DavMethod.Put]));
+
     /// <summary>The methods <c>/</c> answers: the web app, and a client's probe.</summary>
     public const string RootMethods = "OPTIONS, GET, HEAD";
 

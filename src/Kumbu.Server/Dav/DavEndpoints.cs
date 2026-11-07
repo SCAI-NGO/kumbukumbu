@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Xml.Linq;
 using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
+using Microsoft.Net.Http.Headers;
 
 namespace Kumbu.Server.Dav;
 
@@ -9,20 +11,22 @@ namespace Kumbu.Server.Dav;
 /// <see cref="Auth.CallerMiddleware"/> has run first: it lets <c>OPTIONS</c> through without a caller and everything
 /// else only with a share's. <c>OPTIONS</c> is answered before anything else, the same on every path, so it touches no
 /// store and needs no caller. A method that comes in a later step answers 501 until then; one WebDAV doesn't have, 405
-/// with the methods it does.
+/// with the methods it does. Every answer carries <see cref="Security.FileContentPolicy"/>, as an attachment's bytes on
+/// <c>/api/files</c> do (brief open point 1): what a share serves is a file's, and a file opened in a tab runs nothing
+/// at the app's origin, whatever its name or bytes.
 /// </summary>
 public static class DavEndpoints
 {
     public static IEndpointRouteBuilder MapDav(this IEndpointRouteBuilder app)
     {
         // The pattern matches /dav itself too, so the web app never answers there.
-        app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync).ExcludeFromDescription();
+        app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
         // Any other method, after the ones above (a higher order loses when both match).
         app.Map(DavPaths.Prefix + "/{**path}", (HttpContext http) =>
         {
             http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
             http.Response.Headers.Allow = DavHeaders.DavMethods;
-        }).WithOrder(1).ExcludeFromDescription();
+        }).WithOrder(1).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
         return app;
     }
 
@@ -53,8 +57,14 @@ public static class DavEndpoints
                 case DavMethod.Propfind:
                     await PropfindAsync(http, target, ct);
                     break;
+                case DavMethod.Proppatch:
+                    await ProppatchAsync(http, target, ct);
+                    break;
+                case DavMethod.Get or DavMethod.Head:
+                    await GetAsync(http, target, ct);
+                    break;
                 default:
-                    // GET, PUT, DELETE, MKCOL, COPY, MOVE, PROPPATCH, LOCK, UNLOCK: the steps after this one.
+                    // PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK: the steps after this one.
                     response.StatusCode = StatusCodes.Status501NotImplemented;
                     break;
             }
@@ -73,6 +83,11 @@ public static class DavEndpoints
         {
             await DavXml.WriteTextAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
         }
+        // An attachment's bytes are gone or don't open: the server's fault, not a deletion, as on /api/files.
+        catch (ContentMissingException e) when (!response.HasStarted)
+        {
+            await DavXml.WriteTextAsync(response, StatusCodes.Status500InternalServerError, e.Message, ct);
+        }
     }
 
     /// <summary><c>PROPFIND</c> (RFC 4918 §9.1) with <c>Depth: 0</c> or <c>1</c>. <c>infinity</c>, which a missing header
@@ -88,6 +103,67 @@ public static class DavEndpoints
         var responses = new List<DavResponse>(resources.Count);
         foreach (var r in resources) responses.Add(DavXml.Response(r.Href, await properties.PropertiesAsync(r, ct), propfind));
         await DavXml.WriteMultistatusAsync(http.Response, responses, ct);
+    }
+
+    /// <summary>
+    /// <c>PROPPATCH</c> (RFC 4918 §9.2): 207 with every property it sets or removes reported 200, and nothing stored
+    /// (WebDAV design §3.4). Windows and Finder set times and properties of their own after a copy, and a refusal breaks
+    /// the copy. A share that may only read may ask too: it changes nothing.
+    /// </summary>
+    private static async Task ProppatchAsync(HttpContext http, DavTarget target, CancellationToken ct)
+    {
+        var names = DavXml.ParsePropertyUpdate(await DavXml.ReadBodyAsync(http.Request, ct));
+        var resource = await Tree(http).FindAsync(target.Path, ct) ?? throw NotFound();
+        await DavXml.WriteMultistatusAsync(
+            http.Response, [new DavResponse(resource.Href, [(StatusCodes.Status200OK, [.. names.Select(n => new XElement(n))])])], ct);
+    }
+
+    /// <summary><c>GET</c> and <c>HEAD</c> of a note or an attachment; a collection has no bytes to give (405).</summary>
+    private static async Task GetAsync(HttpContext http, DavTarget target, CancellationToken ct)
+    {
+        var tree = Tree(http);
+        if (await tree.ContentAsync(target.Path, ct) is { } content)
+        {
+            await ServeAsync(http, content);
+            return;
+        }
+
+        if (await tree.FindAsync(target.Path, ct) is not { IsCollection: true }) throw NotFound();
+        http.Response.Headers.Allow = DavHeaders.CollectionMethods;
+        await DavXml.WriteTextAsync(http.Response, StatusCodes.Status405MethodNotAllowed, "A folder has no content to read; PROPFIND lists it.", ct);
+    }
+
+    /// <summary>
+    /// The one place a <c>GET</c> or <c>HEAD</c> under <c>/dav</c> is answered. The headers are those of
+    /// <c>GET /api/files</c> for the same file: the type the server decided, <see cref="FileApi.Disposition"/>, and
+    /// (through the endpoint's <see cref="FileContentMetadata"/>) <see cref="Security.FileContentPolicy"/> and
+    /// <c>nosniff</c>; then the <c>ETag</c> of the version and <c>Last-Modified</c>. <c>If-None-Match</c> naming the
+    /// version (weakly compared, RFC 9110 §13.1.2) or <c>*</c> is a 304. <c>HEAD</c> gets the length and no bytes, and
+    /// never opens them.
+    /// </summary>
+    public static async Task ServeAsync(HttpContext http, DavContent content)
+    {
+        var (request, response) = (http.Request, http.Response);
+        var etag = new EntityTagHeaderValue($"\"{content.Version}\"");
+        var headers = response.GetTypedHeaders();
+        response.Headers.ContentDisposition = FileApi.Disposition(content.Name, content.Download);
+        headers.ETag = etag;
+        headers.LastModified = new DateTimeOffset(DateTime.SpecifyKind(content.LastWrite, DateTimeKind.Utc));
+
+        if (EntityTagHeaderValue.TryParseList(request.Headers.IfNoneMatch, out var tags)
+            && tags.Any(t => t.Equals(EntityTagHeaderValue.Any) || t.Compare(etag, useStrongComparison: false)))
+        {
+            response.StatusCode = StatusCodes.Status304NotModified;
+            return;
+        }
+
+        response.StatusCode = StatusCodes.Status200OK;
+        response.ContentType = content.ContentType;
+        response.ContentLength = content.Length;
+        if (HttpMethods.IsHead(request.Method)) return;
+
+        await using var bytes = await content.Open(http.RequestAborted);
+        await bytes.CopyToAsync(response.Body, http.RequestAborted);
     }
 
     /// <summary>The <c>Depth</c> header, 0 or 1; <c>infinity</c> or none is 403 with <c>propfind-finite-depth</c>
