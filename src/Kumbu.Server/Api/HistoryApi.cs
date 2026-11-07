@@ -5,6 +5,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -36,6 +37,16 @@ public sealed record TrashEntryView(
 
 /// <summary>The vault's removed notes and attachments (both in <c>notes</c>), most recently removed first; each stays <c>retentionDays</c>.</summary>
 public sealed record TrashView(int RetentionDays, IReadOnlyList<TrashEntryView> Notes);
+
+/// <summary>A trash entry to delete for good, as the trash lists it: its <c>path</c> (with the vault) and <c>version</c>.</summary>
+public sealed record TrashEntryRequest(string Path, string Version);
+
+/// <summary><c>password</c>: the owner's, unless her session's password window is open. <c>entries</c>: the entries to
+/// delete for good; left out, the whole trash.</summary>
+public sealed record PurgeTrashRequest(string? Password = null, IReadOnlyList<TrashEntryRequest>? Entries = null);
+
+/// <summary>How many entries went for good; an entry that was no longer there isn't counted.</summary>
+public sealed record PurgedTrashView(int Deleted);
 
 /// <summary>A named checkpoint; <c>scope</c> what it covers (a folder or vault ends in '/'), <c>notes</c> and
 /// <c>attachments</c> how many of each it holds (folder markers aren't counted).</summary>
@@ -103,7 +114,7 @@ public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More
 /// <summary>A sharing event (collab design §8.3). <c>kind</c>: <c>invitation-created</c>, <c>invitation-withdrawn</c>,
 /// <c>invitation-declined</c>, <c>invitation-expired</c>, <c>invitation-accepted</c>, <c>invitation-confirmed</c>,
 /// <c>member-export</c>, <c>membership-revoked</c>, <c>membership-left</c>, <c>role-changed</c> (<c>role</c> the new
-/// one), <c>provider-changed</c>, <c>rekey-finished</c>, <c>closing-started</c> or <c>owner-inactive</c>. <c>text</c>: the
+/// one), <c>provider-changed</c>, <c>rekey-finished</c>, <c>closing-started</c>, <c>owner-inactive</c> or <c>trash-emptied</c> (the owner's). <c>text</c>: the
 /// sentence for the caller ("\"Alice\" changed your role to write."); names in it are the owner's labels for her members
 /// to the owner, the owner's display name, sanitised and quoted, to a member, and never another member's.
 /// <c>vault</c>: the caller's name for the vault, null when she has no access to it any more.</summary>
@@ -134,6 +145,7 @@ public static class HistoryApi
             });
         api.MapGet("/version/{vault}/{**path}", VersionAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404, 503);
         api.MapGet("/vaults/{vault}/trash", TrashAsync).Errors(400, 401, 404, 503);
+        api.MapPost("/vaults/{vault}/trash/purge", PurgeTrashAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/vaults/{vault}/checkpoints", ListCheckpointsAsync).Errors(400, 401, 404, 503);
         api.MapPost("/vaults/{vault}/checkpoints", CreateCheckpointAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         api.MapGet("/vaults/{vault}/checkpoints/{name}/tree", CheckpointTreeAsync).Errors(400, 401, 404, 503);
@@ -255,6 +267,43 @@ public static class HistoryApi
 
         // Stable: entries removed at one instant keep the order each list gives them.
         return TypedResults.Ok(new TrashView(NoteWriter.TrashRetention.Days, [.. notes.Concat(files).OrderByDescending(e => e.DeletedAt)]));
+    }
+
+    /// <summary>
+    /// Deletes the vault's trash, or the entries named, for good (WebDAV design §3.11): the owner alone, in her session,
+    /// never a member, a key, a connection, the dev token or a share, so that no agent can delete permanently. The password
+    /// in the body is checked as an invitation's (and opens the window); without it, the session's window must be open.
+    /// Allowed over the quota: it adds nothing, and the owner's figure is counted again at once.
+    /// </summary>
+    private static async Task<Ok<PurgedTrashView>> PurgeTrashAsync(
+        string vault, PurgeTrashRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits,
+        EncryptedNoteStore store, StorageQuota quota, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(body.Password))
+        {
+            // The same budget as the other password checks behind a session.
+            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+            await AccountApi.PasswordGivenAsync(http, sessions, ct);
+        }
+        else Security.RequirePasswordWindow(caller);
+
+        var root = ApiPaths.Parse(vault, null, note: false);
+        await NoteApi.RequireVaultAsync(store, root, ct);
+        var name = root.Segments[0];
+        if (caller.Level(name) != AccessLevel.Owner) throw new NotPermittedException($"Only the owner of {name} can empty its trash.");
+        var entries = body.Entries?.Select(e => Entry(name, e)).ToList();
+        var deleted = await store.PurgeTrashAsync(name, entries, ct);
+        if (deleted > 0) quota.Recount(caller.User!.Id);
+        return TypedResults.Ok(new PurgedTrashView(deleted));
+
+        static TrashEntryRef Entry(string vault, TrashEntryRequest entry)
+        {
+            var prefix = "/" + vault + "/";
+            if (entry.Path is not { } path || !path.StartsWith(prefix, StringComparison.Ordinal)) throw ApiErrors.BadRequest($"An entry's path is in {vault}, e.g. {prefix}note.md.");
+            if (string.IsNullOrEmpty(entry.Version)) throw ApiErrors.BadRequest("An entry names its version, as the trash lists it.");
+            return new TrashEntryRef(ApiPaths.Parse(vault, path[prefix.Length..], PathKind.NoteOrAttachment), entry.Version);
+        }
     }
 
     public const int DefaultActivityRows = 50;

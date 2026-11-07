@@ -137,6 +137,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>A session for one transaction over several documents.</summary>
     internal Task<IClientSessionHandle> StartSessionAsync(CancellationToken ct) => db.Client.StartSessionAsync(cancellationToken: ct);
 
+    /// <summary>The owner's event of an emptying of the trash, in the transaction that deleted the entries.</summary>
+    internal Task RecordTrashEmptiedAsync(IClientSessionHandle session, string vaultId, int count, CancellationToken ct) =>
+        VaultEvents.RecordAsync(db, session, vaultId, VaultEvents.TrashEmptied, null, Now, null, ct, count: count);
+
     /// <summary>A session whose reads all see one point in time (snapshot read concern), for reads of several collections
     /// that must agree with each other.</summary>
     internal Task<IClientSessionHandle> StartSnapshotSessionAsync(CancellationToken ct) =>

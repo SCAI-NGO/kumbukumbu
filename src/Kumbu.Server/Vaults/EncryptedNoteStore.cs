@@ -7,6 +7,9 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Vaults;
 
+/// <summary>A trash entry as the trash lists it and a restore names it: its path in the caller's view, and its version.</summary>
+internal sealed record TrashEntryRef(VaultPath Path, string Version);
+
 /// <summary>
 /// <see cref="INoteStore"/> and <see cref="IAttachmentStore"/> over encrypted vaults, for one credential (one request).
 /// Reads come from the unlocked working set, but for attachments' bytes, which are read from MongoDB on demand; every
@@ -846,6 +849,55 @@ public sealed class EncryptedNoteStore(
             };
         }, ct, adding);
         return written ? Shown(access, restored!) : null;
+    }
+
+    /// <summary>
+    /// Deletes entries of the vault's trash for good (WebDAV design §3.11): every note and attachment entry, or those
+    /// <paramref name="entries"/> names, each as a restore finds it (the most recently removed at its path with that
+    /// version); one that isn't there any more is passed over. A note's entry carries its history, which goes with it;
+    /// the blobs only an attachment's entry held go with the next <see cref="BlobSweep"/>. One transaction under the
+    /// vault's gate, with the owner's event; it adds nothing, so it passes over the quota. Returns how many went.
+    /// </summary>
+    internal async Task<int> PurgeTrashAsync(string vault, IReadOnlyList<TrashEntryRef>? entries, CancellationToken ct)
+    {
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } access) return 0;
+        var v = access.Vault;
+        var count = 0;
+        await WriteAsync(v, [], async session =>
+        {
+            var wanted = entries?.Select(e => (Path: access.ToVault(e.Path), e.Version)).ToList();
+            var notes = wanted is null ? [.. v.Trash] : wanted.Where(e => e.Path.IsNote)
+                .Select(e => v.Trash.Where(t => t.Trashed.Note.Path == e.Path && t.Trashed.Note.Version == e.Version).OrderByDescending(t => t.Trashed.DeletedAt).FirstOrDefault())
+                .Where(t => t.Trashed is not null).Distinct().ToList();
+            var files = wanted is null ? [.. v.AttachmentTrash] : wanted.Where(e => !e.Path.IsNote)
+                .Select(e => v.AttachmentTrash.Where(t => t.Trashed.Attachment.Path == e.Path && t.Trashed.Attachment.Version == e.Version).OrderByDescending(t => t.Trashed.DeletedAt).FirstOrDefault())
+                .Where(t => t.Trashed is not null).Distinct().ToList();
+            if (notes.Count + files.Count == 0) return null;
+
+            var noteIds = notes.Select(t => t.Id).ToHashSet();
+            var fileIds = files.Select(t => t.Id).ToHashSet();
+            // The trash's TTL index may have taken one meanwhile: what MongoDB deleted is what counts.
+            var deleted = noteIds.Count == 0 ? 0 : (await catalog.Trash.DeleteManyAsync(session, F.Eq(d => d.Vault, v.Id) & F.In(d => d.Id, noteIds), cancellationToken: ct)).DeletedCount;
+            deleted += fileIds.Count == 0 ? 0 : (await catalog.AttachmentTrash.DeleteManyAsync(session, F.Eq(d => d.Vault, v.Id) & F.In(d => d.Id, fileIds), cancellationToken: ct)).DeletedCount;
+            if (deleted == 0) return null;
+            count = (int)deleted;
+            await catalog.RecordTrashEmptiedAsync(session, v.Id, count, ct);
+            var paths = notes.Select(t => t.Trashed.Note.Path).Concat(files.Select(t => t.Trashed.Attachment.Path)).Distinct().ToList();
+            return () =>
+            {
+                // Also on a newer object of the vault (one locked and opened again meanwhile): the ids are the documents'.
+                foreach (var target in new[] { v, catalog.Current(v.Id) }.OfType<UnlockedVault>().Distinct())
+                {
+                    target.Trash = target.Trash.RemoveAll(t => noteIds.Contains(t.Id));
+                    target.AttachmentTrash = target.AttachmentTrash.RemoveAll(t => fileIds.Contains(t.Id));
+                }
+
+                // Embeddings belong to a path's current note or PDF; one left for a removed path goes now.
+                index?.Enqueue(v, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
+                catalog.RaiseNotesChanged(v.Id);
+            };
+        }, ct);
+        return count;
     }
 
     /// <summary>

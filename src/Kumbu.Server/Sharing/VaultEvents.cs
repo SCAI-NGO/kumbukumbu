@@ -73,6 +73,10 @@ public static class VaultEvents
     /// may, and the note stayed (WebDAV design §3.6 case 6). Its entry names the note and the share.</summary>
     public const string PublishedNoteKept = "published-note-kept";
 
+    /// <summary>The owner's alone (WebDAV design §3.11): she deleted entries of the trash for good, all of them or one;
+    /// <see cref="VaultEventDocument.Count"/> is how many.</summary>
+    public const string TrashEmptied = "trash-emptied";
+
     /// <summary>The kinds a member sees of her own membership; the owner sees every kind.</summary>
     private static readonly HashSet<string> MemberKinds = [MembershipRevoked, MembershipLeft, RoleChanged];
 
@@ -87,10 +91,12 @@ public static class VaultEvents
     /// <paramref name="membershipId"/> is null for a vault-wide one.</summary>
     internal static Task RecordAsync(
         IMongoDatabase db, IClientSessionHandle session, string vaultId, string kind, string? membershipId, DateTime at, string? role, CancellationToken ct,
-        DateTime? until = null, IReadOnlyCollection<string>? credentials = null, IReadOnlyCollection<string>? endedMembers = null, string? entry = null)
+        DateTime? until = null, IReadOnlyCollection<string>? credentials = null, IReadOnlyCollection<string>? endedMembers = null, string? entry = null,
+        int? count = null)
     {
         var e = New(vaultId, kind, membershipId, at, role, until);
         e.Entry = entry;
+        e.Count = count;
         if (credentials is { Count: > 0 }) e.Credentials = [.. credentials];
         if (endedMembers is not null) e.EndedMembers = [.. endedMembers];
         return Docs(db).InsertOneAsync(session, e, cancellationToken: ct);
@@ -202,7 +208,8 @@ public static class VaultEvents
     /// session), <paramref name="note"/> the note as the owner sees it, null when the record no longer has the entry.</para>
     /// </summary>
     internal static string TextFor(
-        string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null) => (toOwner, kind) switch
+        string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null,
+        int? count = null) => (toOwner, kind) switch
     {
         (true, NotePublished or PublicationUpdated or PublicationWithdrawn or PublishedNoteKept) when note is null => "A publication of this vault changed.",
         (true, NotePublished) => $"{person} published {note}.",
@@ -225,6 +232,7 @@ public static class VaultEvents
         (true, RoleChanged) => $"You changed {person}'s role to {role}.",
         (true, ProviderChanged) => "You changed the embedding provider.",
         (true, VaultRenamed) => "You renamed this vault.",
+        (true, TrashEmptied) => $"Emptied the trash: {Entries(count ?? 0)}.",
         (true, RekeyFinished) => $"{vault} was re-encrypted; members' keys and apps for it were revoked.",
         (true, ClosingStarted) => $"{vault} is closing{Until(until)}.",
         (true, OwnerInactive) => "Your account was deactivated; members can only read.",
@@ -269,6 +277,8 @@ public static class VaultEvents
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
     private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";
 
+    private static string Entries(int count) => count == 1 ? "1 entry" : $"{count.ToString(CultureInfo.InvariantCulture)} entries";
+
     private static string Until(DateTime? until) => until is { } at ? " on " + at.ToString("d MMMM yyyy", CultureInfo.InvariantCulture) : "";
 
     /// <summary>The names an event's text takes, read once per request.</summary>
@@ -289,7 +299,7 @@ public static class VaultEvents
             if (access.IsOwner)
             {
                 var person = e.Membership is { } id ? (await LabelsAsync(ct)).GetValueOrDefault(id) ?? WriterLabels.FormerMember : "";
-                return TextFor(e.Kind, toOwner: true, person, access.Name, e.Role, e.Until);
+                return TextFor(e.Kind, toOwner: true, person, access.Name, e.Role, e.Until, count: e.Count);
             }
 
             var membership = access.Membership!;
@@ -382,4 +392,9 @@ public sealed class VaultEventDocument
     /// <summary>Of a publication's event: the id of its entry in the vault's sealed publishing log, nothing else of it.</summary>
     [BsonElement("entry"), BsonIgnoreIfNull]
     public string? Entry { get; set; }
+
+    /// <summary>Of an emptying of the trash: how many entries went. A number only, in the clear as the trash's own
+    /// documents are counted by anyone who reads the database.</summary>
+    [BsonElement("count"), BsonIgnoreIfNull]
+    public int? Count { get; set; }
 }
