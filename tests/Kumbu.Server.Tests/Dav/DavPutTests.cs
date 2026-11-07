@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text;
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Notes;
 using Kumbu.Server.Tests.Api;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -298,6 +299,9 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         using var refused = await writer.SendAsync(HttpMethod.Put, "/dav/Work/Board/Board.md", Text("# Mine\n"));
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         Assert.Equal("# Board\n", await NoteAsync(writer, "Board/Board.md"));
+        // The right comes first, before the body is read or judged.
+        using var large = await writer.SendAsync(HttpMethod.Put, "/dav/Work/Board/Board.md", Bytes(new byte[NoteWriter.MaxBytes + 1]));
+        Assert.Equal(HttpStatusCode.Forbidden, large.StatusCode);
 
         using var allowed = await maintainer.SendAsync(HttpMethod.Put, "/dav/Work/Board/Board.md", Text("# Board\n\nMore\n"));
         Assert.Equal(HttpStatusCode.NoContent, allowed.StatusCode);
