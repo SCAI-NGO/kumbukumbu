@@ -39,7 +39,7 @@ public static class ConsoleApi
     internal static readonly FrozenSet<string> Allowed = FrozenSet.Create(
         StringComparer.Ordinal,
         "ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort",
-        "history", "diff", "trash", "lscp", "publish", "uname", "help");
+        "history", "diff", "trash", "df", "du", "lscp", "publish", "uname", "help");
 
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>

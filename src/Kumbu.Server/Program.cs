@@ -179,6 +179,7 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
+builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.

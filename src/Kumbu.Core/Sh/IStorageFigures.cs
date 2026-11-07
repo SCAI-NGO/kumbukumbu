@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+namespace Kumbu.Core.Sh;
+
+/// <summary>One vault of the caller's own in <c>df</c>: what it takes in the database (history, trash, moves, embeddings,
+/// checkpoints and attachments included, the storage quota's figure), and its current notes and attachments, without
+/// those in the trash.</summary>
+public sealed record VaultFigure(string Vault, long Used, int Notes, int Attachments);
+
+/// <summary>
+/// What <c>df</c> reports (WebDAV design §3.12): the vaults the caller owns, never one shared with her, since data in a
+/// shared vault counts against its owner. The server's figures are those of the storage quota; a shell without a server
+/// has none (<see cref="NoStorageFigures"/>).
+/// </summary>
+public interface IStorageFigures
+{
+    /// <summary>The caller's own vaults that this credential opens, counted now.</summary>
+    Task<IReadOnlyList<VaultFigure>> OwnedAsync(CancellationToken ct);
+
+    /// <summary>The caller's storage limit in bytes; null: none.</summary>
+    Task<long?> LimitAsync(CancellationToken ct);
+}
+
+/// <summary>No figures: no vault of one's own, no limit.</summary>
+public sealed class NoStorageFigures : IStorageFigures
+{
+    public static readonly NoStorageFigures Instance = new();
+
+    public Task<IReadOnlyList<VaultFigure>> OwnedAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<VaultFigure>>([]);
+
+    public Task<long?> LimitAsync(CancellationToken ct) => Task.FromResult<long?>(null);
+}

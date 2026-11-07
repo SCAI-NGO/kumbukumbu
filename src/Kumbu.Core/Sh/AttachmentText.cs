@@ -7,14 +7,16 @@ namespace Kumbu.Core.Sh;
 /// <summary>How the shell words an attachment: kind, displayed size in pixels, and its size in bytes.</summary>
 internal static class AttachmentText
 {
-    /// <summary>"512 B", "412 KB", "2.1 MB".</summary>
+    /// <summary>"512 B", "412 KB", "2.1 MB", "2.0 GB": binary, as the code calls 15 MiB "15 MB" (one decimal from MB on).</summary>
     public static string Size(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
         var kilobytes = Math.Round(bytes / 1024.0);
-        return kilobytes < 1024
-            ? $"{kilobytes.ToString(CultureInfo.InvariantCulture)} KB"
-            : $"{(bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture)} MB";
+        if (kilobytes < 1024) return $"{kilobytes.ToString(CultureInfo.InvariantCulture)} KB";
+        var megabytes = bytes / 1048576.0;
+        return Math.Round(megabytes, 1, MidpointRounding.AwayFromZero) < 1024
+            ? $"{megabytes.ToString("0.0", CultureInfo.InvariantCulture)} MB"
+            : $"{(bytes / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture)} GB";
     }
 
     public static string? Dimensions(AttachmentState state) => state is { Width: { } w, Height: { } h } ? $"{w}×{h}" : null;

@@ -31,6 +31,8 @@ public static class Manual
           mkdir <path>                    make a folder; an empty folder stays until you remove it
           rm <path>                       move a note or an empty folder to the trash (kept 30 days)
           trash [path]                    list removed notes and folders
+          df [-h] [/vault]                what your own vaults take, history and trash included, against your limit
+          du [-s] [-d N] [path]           sizes of what is below a path now, largest first
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
