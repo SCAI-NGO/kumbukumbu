@@ -135,7 +135,7 @@ public static class DavXml
             new XElement(Dav + "locktype", new XElement(Dav + "write")),
             new XElement(Dav + "lockscope", new XElement(Dav + (l.Lock.Exclusive ? "exclusive" : "shared"))),
             new XElement(Dav + "depth", l.Lock.Deep ? "infinity" : "0"),
-            l.Lock.Owner,
+            l.Lock.Owner is { } owner ? XElement.Parse(owner) : null,
             new XElement(Dav + "timeout", $"Second-{l.SecondsLeft}"),
             new XElement(Dav + "locktoken", new XElement(Dav + "href", l.Lock.Token)),
             new XElement(Dav + "lockroot", new XElement(Dav + "href", l.Lock.Href)))));

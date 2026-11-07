@@ -6,9 +6,10 @@ namespace Kumbu.Server.Dav;
 /// <summary>A lock as <c>LOCK</c> granted it: on <paramref name="Path"/> below the vault <paramref name="VaultId"/>
 /// (both <c>""</c> for nothing below one), and with <paramref name="Deep"/> everything below it (<c>Depth: infinity</c>).
 /// <paramref name="Href"/> is the URL it was asked for, its <c>lockroot</c>; <paramref name="Owner"/> the client's
-/// <c>DAV:owner</c>, given back as it came.</summary>
+/// <c>DAV:owner</c> as XML text, given back as it came: text, so that no response shares a node of the singleton's, and
+/// small (<see cref="DavRules.LockOwnerMax"/>).</summary>
 public sealed record DavLock(
-    string Token, string VaultId, string Path, string Href, bool Deep, bool Exclusive, XElement? Owner, TimeSpan Timeout, DateTimeOffset Expires);
+    string Token, string VaultId, string Path, string Href, bool Deep, bool Exclusive, string? Owner, TimeSpan Timeout, DateTimeOffset Expires);
 
 /// <summary>
 /// Fake locks (WebDAV design §3.7): class 2 is advertised because Windows, Finder and Office won't write without it, but
@@ -24,7 +25,8 @@ public sealed class DavLocks(TimeProvider time)
     private readonly Dictionary<string, Dictionary<string, DavLock>> _byShare = new(StringComparer.Ordinal);
 
     /// <summary>A new lock for <paramref name="timeout"/>, at most <see cref="DavRules.LockDefault"/>. Past
-    /// <see cref="DavRules.LockCap"/> locks of the share, the one that expires first goes.</summary>
+    /// <see cref="DavRules.LockCap"/> locks of the share, the one that expires first goes. An owner longer than
+    /// <see cref="DavRules.LockOwnerMax"/> is left out.</summary>
     public DavLock Lock(string shareId, string vaultId, string path, string href, bool deep, bool exclusive, XElement? owner, TimeSpan? timeout)
     {
         lock (_gate)
@@ -32,7 +34,9 @@ public sealed class DavLocks(TimeProvider time)
             var locks = Of(shareId, create: true)!;
             while (locks.Count >= DavRules.LockCap) locks.Remove(locks.Values.MinBy(l => l.Expires)!.Token);
             var granted = Granted(timeout);
-            var created = new DavLock(TokenScheme + Guid.NewGuid().ToString("D"), vaultId, path, href, deep, exclusive, owner, granted, time.GetUtcNow() + granted);
+            var text = owner?.ToString(SaveOptions.DisableFormatting);
+            if (text?.Length > DavRules.LockOwnerMax) text = null;
+            var created = new DavLock(TokenScheme + Guid.NewGuid().ToString("D"), vaultId, path, href, deep, exclusive, text, granted, time.GetUtcNow() + granted);
             locks[created.Token] = created;
             return created;
         }

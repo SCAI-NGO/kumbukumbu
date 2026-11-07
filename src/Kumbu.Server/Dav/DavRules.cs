@@ -22,15 +22,30 @@ public static class DavRules
     /// than the write failing: an error would abort a Finder copy of a folder with a <c>.git</c> in it.</summary>
     public const long ParkingCap = 64L * 1024 * 1024;
 
+    /// <summary>What every parked entry is charged beyond its bytes and its name: roughly what its objects take on the
+    /// heap (the entry, its item, two index nodes, the strings). Without it, a share's empty files and folders would
+    /// cost nothing against <see cref="ParkingCap"/> and could fill memory one MKCOL at a time.</summary>
+    public const int ParkingEntryCost = 512;
+
+    /// <summary>The entries one share may hold parked. A notes repository's <c>.git</c> has a few thousand files (its
+    /// objects mostly packed); a listing scans a share's entries, so the count, not only the bytes, has to stay small.
+    /// Beyond it the oldest files go, as for <see cref="ParkingCap"/>.</summary>
+    public const int ParkingEntries = 10_000;
+
     /// <summary>A lock's timeout when the client asks for none or for more (WebDAV design §3.7): ten minutes, as Apache's
     /// mod_dav and Go's x/net/webdav give, which Windows and Office refresh well before. Nothing is enforced, so a longer
     /// one would only keep it in memory longer.</summary>
     public static readonly TimeSpan LockDefault = TimeSpan.FromSeconds(600);
 
     /// <summary>The locks one share may hold at a time. A client holds a lock per file it has open, a few at a time; the
-    /// cap only bounds the memory a share's <c>LOCK</c>s take, each with an owner of up to 64 KB. Beyond it the lock that
-    /// expires first goes: nothing is enforced, so that costs nothing.</summary>
+    /// cap only bounds the memory a share's <c>LOCK</c>s take, each with an owner of up to <see cref="LockOwnerMax"/>.
+    /// Beyond it the lock that expires first goes: nothing is enforced, so that costs nothing.</summary>
     public const int LockCap = 256;
+
+    /// <summary>The longest <c>DAV:owner</c> a lock keeps, in characters of its XML. Clients send a name or a URL (Office
+    /// a user name, litmus a short string); a longer one is left out of the lock, which still is granted, rather than
+    /// held in memory.</summary>
+    public const int LockOwnerMax = 4096;
 
     /// <summary>
     /// The names client junk goes under, matched case-insensitively against a path's last segment (WebDAV design §3.8,

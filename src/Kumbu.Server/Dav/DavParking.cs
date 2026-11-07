@@ -17,7 +17,8 @@ public sealed record ParkedItem(string Path, byte[]? Bytes, DateTime Modified, s
 /// so a share never sees another's, not even one of the same user, and a vault's renaming or a member's alias changes
 /// nothing. A file lives <see cref="DavRules.ParkingTtl"/> after its last write, checked on every call (no timer); a
 /// folder as long as what is below it, since a write below one counts as a write of the folders above it. A share holds
-/// at most <see cref="DavRules.ParkingCap"/>, its oldest files evicted to make room. A restart forgets everything, which
+/// at most <see cref="DavRules.ParkingCap"/> and <see cref="DavRules.ParkingEntries"/> entries, its oldest files
+/// evicted to make room. A restart forgets everything, which
 /// is harmless for junk.
 /// </summary>
 public sealed class DavParking(TimeProvider time)
@@ -34,18 +35,18 @@ public sealed class DavParking(TimeProvider time)
         }
     }
 
-    /// <summary>Whether <paramref name="path"/> or a folder above it is parked: then what goes there is parked too.</summary>
-    public bool Holds(string shareId, string vaultId, string path)
+    /// <summary>The nearest of <paramref name="path"/> and the folders above it that is parked, or null if none is.</summary>
+    public string? Holder(string shareId, string vaultId, string path)
     {
         lock (_gate)
         {
-            if (AreaOf(shareId) is not { } area) return false;
+            if (AreaOf(shareId) is not { } area) return null;
             for (var p = path; p.Length > 0; p = Parent(p))
             {
-                if (area.Find(vaultId, p) is not null) return true;
+                if (area.Find(vaultId, p) is not null) return p;
             }
 
-            return false;
+            return null;
         }
     }
 
@@ -70,7 +71,7 @@ public sealed class DavParking(TimeProvider time)
             var area = Open(shareId);
             var existing = area.Find(vaultId, path);
             var item = new ParkedItem(path, bytes, Now, NewVersion());
-            MakeRoom(area, Cost(item) - (existing is null ? 0 : Cost(existing.Item)), existing);
+            MakeRoom(area, Cost(item) - (existing is null ? 0 : Cost(existing.Item)), existing is null ? 1 : 0, existing is null ? [] : [existing]);
             Store(area, vaultId, item);
             return (item, existing is null);
         }
@@ -84,7 +85,7 @@ public sealed class DavParking(TimeProvider time)
             var area = Open(shareId);
             if (area.Find(vaultId, path) is not null) return false;
             var item = new ParkedItem(path, null, Now, NewVersion());
-            MakeRoom(area, Cost(item), null);
+            MakeRoom(area, Cost(item), 1, []);
             Store(area, vaultId, item);
             return true;
         }
@@ -105,32 +106,34 @@ public sealed class DavParking(TimeProvider time)
     }
 
     /// <summary>Moves what is parked at <paramref name="from"/>, with everything below it, to <paramref name="to"/>,
-    /// which the caller made sure is free. A move counts as a write of what it moves.</summary>
-    public void Move(string shareId, string vaultId, string from, string to) => Transfer(shareId, vaultId, from, to, move: true, deep: true);
+    /// which the caller made sure is free and not above it; false if nothing is parked at <paramref name="from"/> (any
+    /// more). A move counts as a write of what it moves.</summary>
+    public bool Move(string shareId, string vaultId, string from, string to) => Transfer(shareId, vaultId, from, to, move: true, deep: true);
 
     /// <summary>Copies what is parked at <paramref name="from"/> to <paramref name="to"/>, which the caller made sure is
-    /// free; a folder with everything below it if <paramref name="deep"/>, else the folder alone.</summary>
-    public void Copy(string shareId, string vaultId, string from, string to, bool deep) => Transfer(shareId, vaultId, from, to, move: false, deep);
+    /// free and not above it; a folder with everything below it if <paramref name="deep"/>, else the folder alone. False
+    /// if nothing is parked at <paramref name="from"/>; a 507 <see cref="DavException"/> if the copy doesn't fit beside
+    /// its source, which is never evicted for it.</summary>
+    public bool Copy(string shareId, string vaultId, string from, string to, bool deep) => Transfer(shareId, vaultId, from, to, move: false, deep);
 
-    private void Transfer(string shareId, string vaultId, string from, string to, bool move, bool deep)
+    private bool Transfer(string shareId, string vaultId, string from, string to, bool move, bool deep)
     {
         lock (_gate)
         {
-            if (AreaOf(shareId) is not { } area || area.Find(vaultId, from) is not { } source) return;
+            if (AreaOf(shareId) is not { } area || area.Find(vaultId, from) is not { } source) return false;
             List<Entry> entries = [source, .. deep ? area.Below(vaultId, from) : []];
             var now = Now;
             var moved = entries.Select(e => e.Item with { Path = to + e.Item.Path[from.Length..], Modified = now, Version = move ? e.Item.Version : NewVersion() }).ToList();
+            // Room first, with the source kept, so that a refusal leaves everything as it was.
+            MakeRoom(area, moved.Sum(Cost) - (move ? entries.Sum(e => Cost(e.Item)) : 0), move ? 0 : moved.Count, [.. entries]);
             if (move)
             {
                 foreach (var e in entries) area.Remove(e);
             }
-            else
-            {
-                MakeRoom(area, moved.Sum(Cost), null);
-            }
 
             // Parents first, so each finds its folder when it touches the folders above it.
             foreach (var item in moved.OrderBy(i => i.Path.Length)) Store(area, vaultId, item);
+            return true;
         }
     }
 
@@ -138,8 +141,9 @@ public sealed class DavParking(TimeProvider time)
 
     private static string NewVersion() => Guid.NewGuid().ToString("N");
 
-    /// <summary>What an item takes of the cap: its bytes and, roughly, its path, so that empty files and folders count too.</summary>
-    private static long Cost(ParkedItem item) => (item.Bytes?.LongLength ?? 0) + item.Path.Length * sizeof(char);
+    /// <summary>What an item takes of the cap: its bytes, its path and <see cref="DavRules.ParkingEntryCost"/>, so that
+    /// empty files and folders cost what they take.</summary>
+    private static long Cost(ParkedItem item) => (item.Bytes?.LongLength ?? 0) + item.Path.Length * sizeof(char) + DavRules.ParkingEntryCost;
 
     private static string Parent(string path) => path.LastIndexOf('/') is var slash and >= 0 ? path[..slash] : "";
 
@@ -178,13 +182,14 @@ public sealed class DavParking(TimeProvider time)
         }
     }
 
-    /// <summary>Evicts the share's oldest files, never <paramref name="keep"/> nor a folder, until <paramref name="adding"/>
-    /// more bytes fit under the cap.</summary>
-    private static void MakeRoom(Area area, long adding, Entry? keep)
+    /// <summary>Evicts the share's oldest files, never one of <paramref name="keep"/> nor a folder, until
+    /// <paramref name="adding"/> more bytes and <paramref name="entries"/> more entries fit under
+    /// <see cref="DavRules.ParkingCap"/> and <see cref="DavRules.ParkingEntries"/>.</summary>
+    private static void MakeRoom(Area area, long adding, int entries, HashSet<Entry> keep)
     {
-        while (area.Bytes + adding > DavRules.ParkingCap)
+        while (area.Bytes + adding > DavRules.ParkingCap || area.Count + entries > DavRules.ParkingEntries)
         {
-            var oldest = area.OldestFiles().FirstOrDefault(e => e != keep)
+            var oldest = area.OldestFiles().FirstOrDefault(e => !keep.Contains(e))
                 ?? throw new DavException(StatusCodes.Status507InsufficientStorage, "This share has no room left for parked files.");
             area.Remove(oldest);
         }

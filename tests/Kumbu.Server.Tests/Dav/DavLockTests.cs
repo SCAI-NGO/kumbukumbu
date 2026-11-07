@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using System.Xml.Linq;
+using Kumbu.Server.Dav;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -253,5 +254,37 @@ public sealed class DavLockTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.BadRequest, depth.StatusCode);
         using var noToken = await dav.SendAsync(DavClient.Lock, "/dav/Work/plan.md");
         Assert.Equal(HttpStatusCode.BadRequest, noToken.StatusCode);
+    }
+
+    /// <summary>The owner is kept as text and given out as a new element each time: no response tree shares a node of
+    /// the singleton's, and a change to the element the lock was made of changes nothing.</summary>
+    [Fact]
+    public void The_owner_is_never_the_stored_node()
+    {
+        var locks = new DavLocks(new FakeTimeProvider());
+        var owner = new XElement(D + "owner", new XElement(D + "href", "mailto:alice@kumbu.example.org"));
+        var held = locks.Lock("s", "v", "a", "/dav/Work/a", deep: false, exclusive: true, owner, timeout: null);
+        owner.Add(new XElement(D + "note", "changed"));
+
+        var first = DavXml.LockDiscovery([(held, 1)]).Descendants(D + "owner").Single();
+        var second = DavXml.LockDiscovery([(held, 1)]).Descendants(D + "owner").Single();
+        Assert.Null(first.Element(D + "note"));
+        Assert.Equal("mailto:alice@kumbu.example.org", first.Element(D + "href")?.Value);
+        Assert.NotSame(first, second);
+        Assert.NotSame(owner, first);
+    }
+
+    [Fact]
+    public async Task An_owner_over_4_KB_is_left_out()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# Plan");
+        var big = $"<D:owner>{new string('x', 5000)}</D:owner>";
+        using var response = await dav.SendAsync(DavClient.Lock, "/dav/Work/plan.md", DavClient.Body(
+            $"<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype>{big}</D:lockinfo>"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var active = XDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).Descendants(D + "activelock").Single();
+        Assert.Null(active.Element(D + "owner"));
     }
 }

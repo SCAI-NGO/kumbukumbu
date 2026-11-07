@@ -38,6 +38,9 @@ public static class DavDestination
         }
     }
 
+    /// <summary>Whether the URL is on the request's origin. Only a client's own mistakes are caught here: what keeps a
+    /// copy or move inside what the share may touch is the caller's check that the destination is in the source's vault
+    /// (by id), as every path is resolved through the share's own vaults.</summary>
     private static bool SameOrigin(HttpRequest request, Uri uri) =>
         uri.Scheme.Equals(request.Scheme, StringComparison.OrdinalIgnoreCase)
         && uri.Host.Equals(request.Host.Host, StringComparison.OrdinalIgnoreCase)

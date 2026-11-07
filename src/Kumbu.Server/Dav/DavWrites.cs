@@ -46,7 +46,8 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         await ParentAsync(target.Path, ct);
         if (!await ParkedAsync(target.Path, place, ct)) throw NotYet();
 
-        parking.MakeFolder(caller.ShareId, place.VaultId, place.Path);
+        // Another request of the share may have made it meanwhile.
+        if (!parking.MakeFolder(caller.ShareId, place.VaultId, place.Path)) throw new DavException(StatusCodes.Status405MethodNotAllowed, "Something exists there already.");
         Response.StatusCode = StatusCodes.Status201Created;
     }
 
@@ -85,6 +86,8 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         var overwrite = Overwrite();
         if (to.Path == from.Path) throw new DavException(StatusCodes.Status403Forbidden, "The source and the destination are the same.");
         if (to.Path.StartsWith(from.Path + "/", StringComparison.Ordinal)) throw new DavException(StatusCodes.Status403Forbidden, "A folder can't go into itself.");
+        // Over a folder above it, the destination's removal would take the source with it.
+        if (from.Path.StartsWith(to.Path + "/", StringComparison.Ordinal)) throw new DavException(StatusCodes.Status403Forbidden, "Nothing can go onto a folder it is in.");
 
         if (await tree.FindAsync(source.Path, ct) is null) throw NotFound();
         await ParentAsync(destination.Path, ct);
@@ -93,8 +96,9 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         if (!await ParkedAsync(source.Path, from, ct) || !await ParkedAsync(destination.Path, to, ct)) throw NotYet();
 
         if (existing is not null) parking.Remove(caller.ShareId, to.VaultId, to.Path);
-        if (move) parking.Move(caller.ShareId, from.VaultId, from.Path, to.Path);
-        else parking.Copy(caller.ShareId, from.VaultId, from.Path, to.Path, deep);
+        var done = move ? parking.Move(caller.ShareId, from.VaultId, from.Path, to.Path) : parking.Copy(caller.ShareId, from.VaultId, from.Path, to.Path, deep);
+        // Expired or removed by another request of the share since it was found.
+        if (!done) throw NotFound();
         Response.StatusCode = existing is null ? StatusCodes.Status201Created : StatusCodes.Status204NoContent;
     }
 
@@ -172,11 +176,21 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         return place;
     }
 
-    /// <summary>Whether a write at <paramref name="path"/> goes to the parking area: its name is parked or a parked folder
-    /// is above it, and the store has nothing there (what the store has stays the store's).</summary>
-    private async Task<bool> ParkedAsync(VaultPath path, DavPlace place, CancellationToken ct) =>
-        (DavRules.IsParked([.. path.Segments.Skip(1)]) || parking.Holds(caller.ShareId, place.VaultId, place.Path))
-        && await tree.FindStoredAsync(path, ct) is null;
+    /// <summary>
+    /// Whether a write at <paramref name="path"/> goes to the parking area: the store has nothing there (what the store
+    /// has stays the store's), and its name is parked, or it is parked already, or a parked folder is above it. Such a
+    /// folder holds what goes into it only while the store has no folder of that name: once the store has one (a note
+    /// written into it from elsewhere), what goes there is the store's, unless its own name is parked.
+    /// </summary>
+    private async Task<bool> ParkedAsync(VaultPath path, DavPlace place, CancellationToken ct)
+    {
+        if (await tree.FindStoredAsync(path, ct) is not null) return false;
+        if (DavRules.IsParked([.. path.Segments.Skip(1)])) return true;
+        if (parking.Holder(caller.ShareId, place.VaultId, place.Path) is not { } holder) return false;
+        if (holder == place.Path) return true;
+        var folder = path.Segments.Take(2 + holder.Count(c => c == '/')).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
+        return await tree.FindStoredAsync(folder, ct) is null;
+    }
 
     /// <summary>A 409 if the folder <paramref name="path"/> would be in doesn't exist (RFC 4918 §9.3.1, §9.7.1).</summary>
     private async Task ParentAsync(VaultPath path, CancellationToken ct)
@@ -202,12 +216,13 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
     };
 
     /// <summary>The timeout the client's first <c>Timeout</c> choice asks for (RFC 4918 §10.7); null for
-    /// <c>Infinite</c>, none, or one that doesn't read, which all get the default.</summary>
+    /// <c>Infinite</c>, none, or one that doesn't read, which all get the default. <see cref="DavLocks"/> decides what is
+    /// granted; the bound here only keeps a huge number a <see cref="TimeSpan"/>.</summary>
     private TimeSpan? Timeout()
     {
         var first = Request.Headers["Timeout"].ToString().Split(',')[0].Trim();
         return first.StartsWith("Second-", StringComparison.OrdinalIgnoreCase) && long.TryParse(first["Second-".Length..], out var seconds) && seconds > 0
-            ? TimeSpan.FromSeconds(Math.Min(seconds, (long)DavRules.LockDefault.TotalSeconds))
+            ? TimeSpan.FromSeconds(Math.Min(seconds, int.MaxValue))
             : null;
     }
 

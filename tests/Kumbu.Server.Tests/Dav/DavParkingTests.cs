@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Api;
 using Kumbu.Server.Dav;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -353,11 +354,89 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         using (var mkcol = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git")) Assert.Equal(HttpStatusCode.Forbidden, mkcol.StatusCode);
         using (var delete = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/.DS_Store")) Assert.Equal(HttpStatusCode.Forbidden, delete.StatusCode);
         using (var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a", headers: Headers(("Destination", "https://localhost/dav/Work/.b")))) Assert.Equal(HttpStatusCode.Forbidden, copy.StatusCode);
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/.a", headers: Headers(("Destination", "https://localhost/dav/Work/.b")))) Assert.Equal(HttpStatusCode.Forbidden, move.StatusCode);
 
         // It still reads and lists.
         using var listing = await dav.PropfindAsync("/dav/Work/");
         Assert.Equal(HttpStatusCode.MultiStatus, listing.StatusCode);
         using var nothing = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store");
         Assert.Equal(HttpStatusCode.NotFound, nothing.StatusCode);
+    }
+
+    [Fact]
+    public async Task Nothing_goes_onto_a_folder_above_its_source()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        using (var made = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.x")) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.x/y", Text("y"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        // Over its own folder: the target's removal would take the source with it (RFC 4918 §9.8.5 lets a server refuse).
+        foreach (var method in new[] { DavClient.Move, DavClient.Copy })
+        {
+            using var up = await dav.SendAsync(method, "/dav/Work/.x/y", headers: Headers(("Destination", "https://localhost/dav/Work/.x"), ("Overwrite", "T")));
+            Assert.Equal(HttpStatusCode.Forbidden, up.StatusCode);
+        }
+
+        using var still = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.x/y");
+        Assert.Equal("y", await still.Content.ReadAsStringAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_parked_folder_never_takes_what_goes_into_a_store_folder_of_its_name()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        using (var made = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/x.tmp")) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        // Later the store gets a folder of that name, from elsewhere.
+        await dav.Owner.CreateAsync("x.tmp/n.md", "# N");
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/x.tmp/m.md", Text("# M"))) Assert.NotEqual(HttpStatusCode.Created, put.StatusCode);
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/x.tmp/m.md");
+        Assert.NotEqual("application/octet-stream", DavAssert.Header(get, "Content-Type"));
+
+        // A parked name below it is parked all the same.
+        using var junk = await dav.SendAsync(HttpMethod.Put, "/dav/Work/x.tmp/.DS_Store", Text("finder"));
+        Assert.Equal(HttpStatusCode.Created, junk.StatusCode);
+    }
+
+    private static DavParking Parking() => new(new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+
+    /// <summary>Each entry costs memory whatever its size: past 10 000 entries in a share the oldest file goes, and if
+    /// only folders are left, a 507.</summary>
+    [Fact]
+    public void A_share_holds_at_most_ten_thousand_entries()
+    {
+        var parking = Parking();
+        for (var i = 0; i < 10_000; i++) parking.Put("s", "v", $"f{i}", []);
+        parking.Put("s", "v", "last", []);
+        Assert.Null(parking.Get("s", "v", "f0"));
+        Assert.NotNull(parking.Get("s", "v", "f1"));
+        Assert.NotNull(parking.Get("s", "v", "last"));
+
+        var folders = Parking();
+        for (var i = 0; i < 10_000; i++) folders.MakeFolder("s", "v", $".d{i}");
+        var full = Assert.Throws<DavException>(() => folders.MakeFolder("s", "v", ".one-more"));
+        Assert.Equal(StatusCodes.Status507InsufficientStorage, full.Status);
+    }
+
+    [Fact]
+    public void Folders_and_empty_files_cost_a_share_more_than_their_names()
+    {
+        var parking = Parking();
+        parking.Put("s", "v", "big", new byte[DavRules.ParkingCap - 2048]);
+        foreach (var name in new[] { "a", "b", "c", "d" }) parking.MakeFolder("s", "v", name);
+        Assert.Null(parking.Get("s", "v", "big"));
+    }
+
+    [Fact]
+    public void A_copy_never_evicts_its_own_source()
+    {
+        var parking = Parking();
+        parking.Put("s", "v", "a", new byte[40 * 1024 * 1024]);
+
+        var full = Assert.Throws<DavException>(() => parking.Copy("s", "v", "a", "b", deep: true));
+        Assert.Equal(StatusCodes.Status507InsufficientStorage, full.Status);
+        Assert.NotNull(parking.Get("s", "v", "a"));
+        Assert.Null(parking.Get("s", "v", "b"));
+        Assert.False(parking.Move("s", "v", "nothing", "c"));
     }
 }
