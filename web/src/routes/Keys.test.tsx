@@ -44,7 +44,7 @@ async function createKey(queryClient?: QueryClient) {
   const fetch = api({
     "POST /api/keys": () => json(201, { key: secret, apiKey: { ...listed, id: "k2", name: "Claude", vaults: { Work: "write" } } }),
   });
-  const router = renderApp("/keys", queryClient);
+  const router = renderApp("/access/keys", queryClient);
   const dialog = await openNewKey();
   await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
   await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read and write"));
@@ -63,7 +63,7 @@ afterEach(() => {
 describe("Keys", () => {
   it("lists name, prefix, vaults with rights, created and last used", async () => {
     api();
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     expect(item).toHaveTextContent("Ab12Cd");
     expect(item).toHaveTextContent("Work: read and write");
@@ -79,7 +79,7 @@ describe("Keys", () => {
 
   it("lists a maintain key as 'read, write and maintain', in the warning colour", async () => {
     api({ "GET /api/keys": () => json(200, [{ ...listed, vaults: { Work: "maintain", Home: "write" } }]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     expect(item).toHaveTextContent("Work: read, write and maintain");
     expect(item).toHaveTextContent("Home: read and write");
@@ -89,7 +89,7 @@ describe("Keys", () => {
 
   it("shows when a key was last used, to the minute", async () => {
     api({ "GET /api/keys": () => json(200, [{ ...listed, lastUsedAt: "2026-10-05T14:37:00Z" }]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     expect(item).toHaveTextContent(`Last used ${timeText("2026-10-05T14:37:00Z")}`);
   });
@@ -105,7 +105,7 @@ describe("Keys", () => {
           { ...listed, id: "e", name: "Echo", lastUsedAt: null },
         ]),
     });
-    renderApp("/keys");
+    renderApp("/access/keys");
     await screen.findByText("Alpha");
     const names = () => [...screen.getByRole("region", { name: "API keys" }).querySelectorAll("li h2")].map((h) => h.textContent);
     const sort = screen.getByRole("group", { name: "Sort API keys" });
@@ -123,7 +123,7 @@ describe("Keys", () => {
 
   it("marks a key paired from Obsidian as an Obsidian device", async () => {
     api({ "GET /api/keys": () => json(200, [{ ...listed, kind: "agent" }, { ...listed, id: "k5", name: "Work – Obsidian Laptop", kind: "device" }]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const device = (await screen.findByText("Work – Obsidian Laptop")).closest("li")!;
     expect(device).toHaveTextContent("Obsidian device");
     expect(screen.getByText("Laptop").closest("li")!).not.toHaveTextContent("Obsidian device");
@@ -132,7 +132,7 @@ describe("Keys", () => {
   it("revokes a key only after confirming", async () => {
     let revokedCalls = 0;
     api({ "DELETE /api/keys/k1": () => (revokedCalls++, noContent()) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     await userEvent.click(await screen.findByRole("button", { name: "Revoke Laptop" }));
     const confirm = screen.getByRole("alertdialog");
     expect(confirm).toHaveTextContent("Revoke Laptop?");
@@ -148,7 +148,7 @@ describe("Keys", () => {
 
   it("needs a name and at least one vault with a right", async () => {
     api();
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     const create = within(dialog).getByRole("button", { name: "Create key" });
     const work = within(dialog).getByRole("group", { name: "Work" });
@@ -168,7 +168,7 @@ describe("Keys", () => {
     api({
       "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "You already have a key named 'Claude'." })),
     });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
     await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read and write"));
@@ -182,7 +182,7 @@ describe("Keys", () => {
   it("offers maintain in the warning colour with its sentence, and sends it", async () => {
     const bodies: unknown[] = [];
     api({ "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "No." })) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
     const work = within(dialog).getByRole("group", { name: "Work" });
@@ -200,7 +200,7 @@ describe("Keys", () => {
 
   it("suggests write for a new key: no vault starts at maintain, and the hint says maintain is a deliberate choice", async () => {
     api();
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     for (const vault of ["Work", "Home"]) {
       const group = within(dialog).getByRole("group", { name: vault });
@@ -213,7 +213,7 @@ describe("Keys", () => {
   it("lets a key expire after 30, 90 or 365 days, 90 unless chosen otherwise, or never", async () => {
     const bodies: unknown[] = [];
     api({ "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "taken" })) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
     await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read"));
@@ -233,7 +233,7 @@ describe("Keys", () => {
     const soon = { ...listed, id: "k3", name: "Soon", expiresAt: "2099-01-31T09:00:00Z" };
     const gone = { ...listed, id: "k4", name: "Gone", expiresAt: "2026-01-31T09:00:00Z" };
     api({ "GET /api/keys": () => json(200, [listed, soon, gone]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
 
     expect((await screen.findByText("Laptop")).closest("li")).toHaveTextContent("Doesn't expire");
     const soonItem = screen.getByText("Soon").closest("li")!;
@@ -272,7 +272,7 @@ describe("Keys", () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument();
     expect(await screen.findByText("Laptop")).toBeInTheDocument();
     // Neither the URL nor storage nor the client-wide caches keep it.
-    expect(router.state.location.pathname + router.state.location.search + router.state.location.hash).toBe("/keys");
+    expect(router.state.location.pathname + router.state.location.search + router.state.location.hash).toBe("/access/keys");
     expect(JSON.stringify({ ...localStorage })).not.toContain(secret);
     expect(JSON.stringify({ ...sessionStorage })).not.toContain(secret);
     await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(secret));
@@ -285,7 +285,7 @@ describe("Keys", () => {
     await act(() => router.navigate("/settings"));
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your API key");
     await userEvent.click(screen.getByRole("button", { name: "Stay" }));
-    expect(router.state.location.pathname).toBe("/keys");
+    expect(router.state.location.pathname).toBe("/access/keys");
 
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your API key");
@@ -326,7 +326,7 @@ describe("May publish", () => {
 
   it("offers May publish only for owned vaults", async () => {
     publishing(true);
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     const work = within(dialog).getByRole("group", { name: "Work" });
     const shared = within(dialog).getByRole("group", { name: /^Gartenarbeit/ });
@@ -343,7 +343,7 @@ describe("May publish", () => {
   it("sends May publish", async () => {
     const bodies: unknown[] = [];
     publishing(true, bodies);
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
     const work = within(dialog).getByRole("group", { name: "Work" });
@@ -359,7 +359,7 @@ describe("May publish", () => {
   it("drops May publish with the right", async () => {
     const bodies: unknown[] = [];
     publishing(true, bodies);
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
     const work = within(dialog).getByRole("group", { name: "Work" });
@@ -379,7 +379,7 @@ describe("May publish", () => {
 
   it("hides May publish when publishing is off", async () => {
     publishing(false);
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     const work = within(dialog).getByRole("group", { name: "Work" });
     await userEvent.click(within(work).getByLabelText("Read and write"));
@@ -388,7 +388,7 @@ describe("May publish", () => {
 
   it("lists May publish on a key's vault line", async () => {
     api({ "GET /api/keys": () => json(200, [{ ...listed, publish: ["Work"] }]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     expect(item).toHaveTextContent("Work: read and write, may publish");
     expect(item).toHaveTextContent("Home: read");
@@ -404,7 +404,7 @@ describe("keys and vaults shared with the user", () => {
 
   it("shows a capped key as acts as read", async () => {
     api({ "GET /api/vaults": () => json(200, [own("Work"), garten]), "GET /api/keys": () => json(200, [key({ Gartenarbeit: "write", Work: "write" })]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
     expect(within(item).getByText(/acts as read/).querySelector("em")).toHaveTextContent("Gartenarbeit");
@@ -415,7 +415,7 @@ describe("keys and vaults shared with the user", () => {
   it("caps maintain at her role, and shows a right within it as it is", async () => {
     const writer = { ...garten, level: "write", canWrite: true };
     api({ "GET /api/vaults": () => json(200, [writer]), "GET /api/keys": () => json(200, [key({ Gartenarbeit: "maintain" }), { ...key({ Gartenarbeit: "read" }), id: "k9", name: "Reader" }]) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const item = (await screen.findByText("Laptop")).closest("li")!;
     await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: maintain, acts as write while you can only write Gartenarbeit"));
     expect(screen.getByText("Reader").closest("li")).toHaveTextContent("Gartenarbeit: read");
@@ -425,7 +425,7 @@ describe("keys and vaults shared with the user", () => {
   it("warns when one key covers a shared writable vault and a private one", async () => {
     const writable = { ...garten, level: "write", canWrite: true };
     api({ "GET /api/vaults": () => json(200, [own("Work"), own("Shared", { shared: true }), writable]), "GET /api/keys": () => json(200, []) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     await userEvent.click(within(within(dialog).getByRole("group", { name: /^Gartenarbeit/ })).getByLabelText("Read and write"));
     expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
@@ -447,14 +447,14 @@ describe("keys and vaults shared with the user", () => {
       "GET /api/vaults": () => json(200, [own("Work"), writable, closing]),
       "GET /api/keys": () => json(200, [key({ Gartenarbeit: "write", Work: "read" }), { ...key({ Beete: "read", Work: "read" }), id: "k8", name: "Closing" }]),
     });
-    renderApp("/keys");
+    renderApp("/access/keys");
     await waitFor(() => expect(screen.getByText("Laptop").closest("li")).toHaveTextContent(warning));
     expect(screen.getByText("Closing").closest("li")).not.toHaveTextContent("Others can write");
   });
 
   it("lists a shared vault in the new key's dialog with its owner, and shows a right above her role as capped", async () => {
     api({ "GET /api/vaults": () => json(200, [own("Work"), garten]), "GET /api/keys": () => json(200, []) });
-    renderApp("/keys");
+    renderApp("/access/keys");
     const dialog = await openNewKey();
     const group = within(dialog).getByRole("group", { name: /^Gartenarbeit/ });
     expect(group).toHaveTextContent('shared by "Alice" (alice)');

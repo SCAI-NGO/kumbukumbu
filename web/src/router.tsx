@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
-import { Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
+import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
@@ -120,7 +120,10 @@ export const routes: RouteObject[] = [
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
-          { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
+          { path: "/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
+          { path: "/access", element: <Navigate to="/access/keys" replace /> },
+          // The page's address before it had tabs, in bookmarks and older links.
+          { path: "/keys", element: <Navigate to="/access/keys" replace /> },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },

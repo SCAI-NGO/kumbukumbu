@@ -369,7 +369,7 @@ describe("the note view", () => {
     expect(banner).toHaveTextContent("Obsidian on Pixel 9 wrote here 2 hours ago, for the first time in 3 weeks. If that wasn't you, revoke the device in Access.");
     expect(within(banner).getByRole("button", { name: "Show" })).toBeInTheDocument();
     await userEvent.click(within(banner).getByRole("link", { name: "Access" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/keys"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/access/keys"));
   });
 
   it("on Show, tints the blocks changed since the version the user last saw, read through ?version=", async () => {

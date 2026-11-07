@@ -5,9 +5,8 @@ import { useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
-import { AccountScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { timeText } from "../components/Sheet";
-import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
 import RevokeDialog from "./RevokeDialog";
@@ -20,62 +19,56 @@ const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", y
 const date = (iso: string) => day.format(new Date(iso));
 
 /** The user's API keys for agents: made here, shown once, revoked here. */
-export default function Keys() {
+export default function Keys({ onRevealChange }: { onRevealChange?(revealing: boolean): void }) {
   const keys = useQuery({ queryKey: ["keys"], queryFn: () => call(api.GET("/api/keys")) });
   const [creating, setCreating] = useState(false);
   // The new key lives here, in component state only, until the reveal is done.
   const [created, setCreated] = useState<{ name: string; key: string } | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
-  // While a connector URL is shown, it has the page to itself, as a new key has.
-  const [revealing, setRevealing] = useState(false);
   const [order, setOrder] = useState<UsageOrder>("created");
   const vaults = useVaults();
 
-  if (created) {
-    return (
-      <AccountScreen title="Access">
-        <KeyReveal name={created.name} value={created.key} onDone={() => setCreated(null)} />
-      </AccountScreen>
-    );
-  }
+  const reveal = (c: { name: string; key: string } | null) => {
+    setCreated(c);
+    onRevealChange?.(c !== null);
+  };
+
+  if (created) return <KeyReveal name={created.name} value={created.key} onDone={() => reveal(null)} />;
 
   return (
-    <AccountScreen title="Access">
-      {!revealing && (
-        <section aria-labelledby="keys-title" className="flex min-w-0 flex-col gap-6">
-          <h2 id="keys-title" className="text-[22px] font-bold text-text">
-            API keys
-          </h2>
-          <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
-          <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
-            New key
-          </button>
+    <>
+      <section aria-labelledby="keys-title" className="flex min-w-0 flex-col gap-6">
+        <h2 id="keys-title" className="text-[22px] font-bold text-text">
+          API keys
+        </h2>
+        <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
+        <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
+          New key
+        </button>
 
-          {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
-          {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
-          {keys.data && keys.data.length > 1 && <UsageOrderSwitch label="Sort API keys" order={order} onOrder={setOrder} />}
-          {keys.data && keys.data.length > 0 && (
-            <ul className="flex flex-col gap-3">
-              {inUsageOrder(keys.data, order).map((key) => (
-                <KeyItem key={key.id} apiKey={key} vaults={vaults.data} onRevoke={() => setRevoking(key)} />
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
-      <Connections onRevealChange={setRevealing} />
+        {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
+        {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
+        {keys.data && keys.data.length > 1 && <UsageOrderSwitch label="Sort API keys" order={order} onOrder={setOrder} />}
+        {keys.data && keys.data.length > 0 && (
+          <ul className="flex flex-col gap-3">
+            {inUsageOrder(keys.data, order).map((key) => (
+              <KeyItem key={key.id} apiKey={key} vaults={vaults.data} onRevoke={() => setRevoking(key)} />
+            ))}
+          </ul>
+        )}
+      </section>
 
       {creating && (
         <NewKeyDialog
           onClose={() => setCreating(false)}
           onCreated={({ key, apiKey }) => {
             setCreating(false);
-            setCreated({ name: apiKey.name, key });
+            reveal({ name: apiKey.name, key });
           }}
         />
       )}
       {revoking && <RevokeDialog apiKey={revoking} onClose={() => setRevoking(null)} />}
-    </AccountScreen>
+    </>
   );
 }
 

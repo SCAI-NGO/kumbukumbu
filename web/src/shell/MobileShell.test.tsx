@@ -391,7 +391,7 @@ describe("the shell", () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
-    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/keys");
+    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/access/keys");
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(within(account).getByRole("link", { name: "Console" })).toHaveAttribute("href", "/console");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
@@ -514,7 +514,7 @@ describe("the shell", () => {
   });
 
   it.each([
-    ["/keys", "Access"],
+    ["/access/keys", "Access"],
     ["/settings", "Settings"],
     ["/admin/users", "Users"],
     ["/admin/invitations", "Invitations"],

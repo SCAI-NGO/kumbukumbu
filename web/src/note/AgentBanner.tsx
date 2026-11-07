@@ -113,7 +113,7 @@ export default function AgentBanner({ change, actions, children }: { change: Cha
           <>
             Obsidian on <strong className="font-semibold">{deviceOf(change.writer)}</strong> wrote here {ago(change.lastWriteAt)}, for the first time in{" "}
             {pauseText(resumed.from, resumed.to)}. If that wasn't you, revoke the device in{" "}
-            <Link to="/keys" className="font-medium text-accent-text underline underline-offset-2">
+            <Link to="/access/keys" className="font-medium text-accent-text underline underline-offset-2">
               Access
             </Link>
             .

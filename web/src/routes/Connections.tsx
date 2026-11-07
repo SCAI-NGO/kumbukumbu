@@ -57,7 +57,7 @@ function statusText(c: Connection) {
 const isOver = (c: Connection) => c.state === "revoked" || c.state === "expired";
 
 /** The user's connections for apps that sign in with OAuth: made here, their address shown, changed and revoked here. */
-export default function Connections({ onRevealChange }: { onRevealChange?(revealing: boolean): void }) {
+export default function Connections({ subtitle, onRevealChange }: { subtitle?: string; onRevealChange?(revealing: boolean): void }) {
   const connections = useQuery({ queryKey: ["connections"], queryFn: () => call(api.GET("/api/connections")) });
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<Connection | null>(null);
@@ -83,6 +83,7 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
       <h2 id="connections-title" className="text-[22px] font-bold text-text">
         Connections
       </h2>
+      {subtitle && <p className="-mt-4 text-sm text-muted">{subtitle}</p>}
       <p className="text-text-body">
         A connection lets an app such as Claude (claude.ai, Desktop and the mobile apps) read or write the vaults you choose. Each connection has its own address.
       </p>
