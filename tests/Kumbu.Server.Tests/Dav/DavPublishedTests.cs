@@ -47,6 +47,8 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
         if (_timed is not null) await _timed.DisposeAsync();
     }
 
+    private Publications Publications => Api.Services.GetRequiredService<Publications>();
+
     private PublicationStore Publishing => Api.Services.GetRequiredService<PublicationStore>();
 
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
@@ -68,10 +70,15 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
         var dav = await DavClient.NewAsync(Api);
         await dav.Owner.CreateAsync("Ideas/plan.md", "# Plan\n");
         foreach (var other in others) await dav.Owner.CreateAsync(other, $"# {other}\n");
-        var (store, access) = await OwnerAsync(dav.Owner);
-        var published = await Api.Services.GetRequiredService<Publications>().PublishAsync(
-            access, store, P("/Work/Ideas/plan.md"), dav.Owner.User.Id, dav.Owner.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
-        return (dav, ShareCode.Parse(published.Link[(published.Link.IndexOf('#') + 1)..])!);
+        return (dav, await PublishAsync(dav.Owner));
+    }
+
+    /// <summary>Publishes <paramref name="note"/> by its owner's session; the publication's code.</summary>
+    private async Task<string> PublishAsync(RestClient owner, string note = "/Work/Ideas/plan.md")
+    {
+        var (store, access) = await OwnerAsync(owner);
+        var published = await Publications.PublishAsync(access, store, P(note), owner.User.Id, owner.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+        return ShareCode.Parse(published.Link[(published.Link.IndexOf('#') + 1)..])!;
     }
 
     private async Task<PublishingRecord> RecordAsync(RestClient owner) => (await Publishing.ReadAsync(null, (await OwnerAsync(owner)).Access.Vault, Ct)).Record;
@@ -193,6 +200,91 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Single(await ActivityAsync(dav.Owner), t => t == Attempt);
     }
 
+    /// <summary>The owner withdraws the publication in the minute: the share's removal, asked for while the note was
+    /// published, stays refused, and there is no publication left to tell of.</summary>
+    [Fact]
+    public async Task A_publication_withdrawn_in_the_minute_leaves_the_note_and_records_nothing()
+    {
+        var (dav, _) = await PublishedAsync();
+        Assert.Equal(HttpStatusCode.NoContent, await SendAsync(dav, HttpMethod.Delete, "/dav/Work/Ideas/plan.md"));
+        var (store, access) = await OwnerAsync(dav.Owner);
+        await Publications.WithdrawAsync(access, store, P("/Work/Ideas/plan.md"), dav.Owner.Username, BySession, Ct);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+
+        Assert.Contains("/dav/Work/Ideas/plan.md", await ListingAsync(dav));
+        Assert.Equal("# Plan\n", await NoteAsync(dav.Owner, "Ideas/plan.md"));
+        Assert.Empty(await store.ListTrashAsync(P("/Work"), Ct));
+        Assert.DoesNotContain((await RecordAsync(dav.Owner)).Log, l => l.Kind == PublishingKinds.Kept);
+    }
+
+    /// <summary>A note held under a backup name (case 4) that the owner publishes in the minute: the store refuses its
+    /// trash, it stays, and the attempt is recorded at the ending as for case 6.</summary>
+    [Fact]
+    public async Task A_note_published_while_held_is_kept_and_the_attempt_recorded()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Ideas/plan.md", "# Plan\n");
+        Assert.Equal(HttpStatusCode.Created, await SendAsync(dav, DavClient.Move, "/dav/Work/Ideas/plan.md", headers: To("Ideas/plan.md~")));
+        var code = await PublishAsync(dav.Owner);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+
+        Assert.Contains("/dav/Work/Ideas/plan.md", await ListingAsync(dav));
+        Assert.Empty(await (await OwnerAsync(dav.Owner)).Store.ListTrashAsync(P("/Work"), Ct));
+        await AssertPublishedAsync(dav.Owner, code);
+        Assert.Equal(Attempt, (await ActivityAsync(dav.Owner))[0]);
+    }
+
+    /// <summary>A share that only reads when its hold ends gets the note back and writes nothing, the attempt's record
+    /// included: it is recorded with the ending request's rights.</summary>
+    [Fact]
+    public async Task A_share_that_only_reads_at_the_ending_records_nothing()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Ideas/plan.md", "# Plan\n");
+        var code = await PublishAsync(alice);
+        var bob = await RestClient.NewAsync(Api, vault: "Garden");
+        var membership = await alice.ShareWithAsync(bob, "alices-work");
+        var dav = await DavClient.NewAsync(Api, bob, vaults: new Dictionary<string, string> { ["alices-work"] = "write" });
+        Assert.Equal(HttpStatusCode.NoContent, await SendAsync(dav, HttpMethod.Delete, "/dav/alices-work/Ideas/plan.md"));
+        await Share.SetRoleAsync(app.Database, membership, Kumbu.Server.Sharing.MemberRole.Read);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+
+        Assert.Contains("/dav/alices-work/Ideas/plan.md", await ListingAsync(dav, "/dav/alices-work/Ideas/"));
+        await AssertPublishedAsync(alice, code);
+        Assert.DoesNotContain((await RecordAsync(alice)).Log, l => l.Kind == PublishingKinds.Kept);
+    }
+
+    /// <summary>A share that tries again and again fills the owner's log with one entry an hour per note, not one per
+    /// try: the log keeps only its newest entries, and older ones mustn't be pushed out.</summary>
+    [Fact]
+    public async Task Repeated_attempts_within_an_hour_are_recorded_once()
+    {
+        var (dav, _) = await PublishedAsync();
+
+        async Task AttemptAsync()
+        {
+            Assert.Equal(HttpStatusCode.NoContent, await SendAsync(dav, HttpMethod.Delete, "/dav/Work/Ideas/plan.md"));
+            _time.Advance(TimeSpan.FromSeconds(61));
+            await NextRequestAsync(dav);
+        }
+
+        await AttemptAsync();
+        await AttemptAsync();
+        await AttemptAsync();
+        Assert.Single((await RecordAsync(dav.Owner)).Log, l => l.Kind == PublishingKinds.Kept);
+        Assert.Single(await ActivityAsync(dav.Owner), t => t == Attempt);
+
+        _time.Advance(TimeSpan.FromHours(1));
+        await AttemptAsync();
+        Assert.Equal(2, (await RecordAsync(dav.Owner)).Log.Count(l => l.Kind == PublishingKinds.Kept));
+    }
+
     /// <summary>A hold its share doesn't come back for within the parking TTL is forgotten (<see cref="Kumbu.Server.Dav.DavHolds"/>):
     /// the note is simply there again, and no request ended it, so nothing is recorded.</summary>
     [Fact]
@@ -216,10 +308,7 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
     {
         var alice = await RestClient.NewAsync(Api, vault: "Work");
         await alice.CreateAsync("Ideas/plan.md", "# Plan\n");
-        var (store, access) = await OwnerAsync(alice);
-        var published = await Api.Services.GetRequiredService<Publications>().PublishAsync(
-            access, store, P("/Work/Ideas/plan.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
-        var code = ShareCode.Parse(published.Link[(published.Link.IndexOf('#') + 1)..])!;
+        var code = await PublishAsync(alice);
         var bob = await RestClient.NewAsync(Api, vault: "Garden");
         await alice.ShareWithAsync(bob, "alices-work");
         var dav = await DavClient.NewAsync(Api, bob, vaults: new Dictionary<string, string> { ["alices-work"] = "write" });
@@ -244,10 +333,8 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
         await dav.Owner.CreateAsync("Ideas/Deep/b.md", "# B\n");
         await dav.Owner.CreateAsync("Ideas/other.md", "# Other\n");
         await dav.Owner.CreateAsync("Kept.md", "# Kept\n");
-        var (store, access) = await OwnerAsync(dav.Owner);
-        var published = await Api.Services.GetRequiredService<Publications>().PublishAsync(
-            access, store, P("/Work/Ideas/Deep/plan.md"), dav.Owner.User.Id, dav.Owner.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
-        var code = ShareCode.Parse(published.Link[(published.Link.IndexOf('#') + 1)..])!;
+        var code = await PublishAsync(dav.Owner, "/Work/Ideas/Deep/plan.md");
+        var (store, _) = await OwnerAsync(dav.Owner);
 
         Assert.Equal(HttpStatusCode.NoContent, await SendAsync(dav, HttpMethod.Delete, "/dav/Work/Ideas/"));
 
@@ -301,7 +388,7 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
     {
         var (dav, code) = await PublishedAsync("Done/old.md");
         var (store, access) = await OwnerAsync(dav.Owner);
-        await Api.Services.GetRequiredService<Publications>().SetUnpublishableAsync(access, store, P("/Work/Done"), true, dav.Owner.Username, BySession, Ct);
+        await Publications.SetUnpublishableAsync(access, store, P("/Work/Done"), true, dav.Owner.Username, BySession, Ct);
 
         using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/Ideas/plan.md", headers: To("Done/plan.md"));
 

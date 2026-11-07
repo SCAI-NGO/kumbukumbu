@@ -49,6 +49,12 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// stays in the vault's events (an event whose entry is gone reads as a publication that changed).</summary>
     internal const int LogLimit = 500;
 
+    /// <summary>How long a kept removal of the same note by the same writer is folded into the last one recorded
+    /// (<see cref="RecordKeptAsync"/>): the log keeps only its newest <see cref="LogLimit"/> entries, and a share that
+    /// deletes a published note over and over mustn't push the owner's history out of it. An hour still tells her of a
+    /// client that keeps at it, without one entry a minute.</summary>
+    internal static readonly TimeSpan KeptFold = TimeSpan.FromHours(1);
+
     // A record that changes under each attempt is a vault being worked on hard; then the caller tries again.
     private const int Attempts = 3;
 
@@ -158,15 +164,24 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// where it is (WebDAV design §3.6 case 6: a share's <c>DELETE</c>, held and not carried out): the attempt in the log,
     /// and the owner's vault event for it, in one transaction; the publication is as it was. Nothing if the note isn't
     /// published (any longer). No check of who may publish: it changes nothing that is out, and it only tells the owner.
+    /// A share that tries again and again (a client retrying its sync) is recorded once per <see cref="KeptFold"/>.
     /// </summary>
     public async Task RecordKeptAsync(VaultAccess access, VaultPath note, string by, WriterRef byRef, CancellationToken ct)
     {
         var stored = access.ToVault(note);
+        var reference = Ref(byRef);
         for (var attempt = 1; ; attempt++)
         {
             var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
             if (Find(record, stored) is null) return;
-            var next = record with { Log = Appended(record.Log, LogEntry(PublishingKinds.Kept, stored, Now, by, byRef, null)) };
+            var now = Now;
+            if (record.Log.LastOrDefault(l => l.Kind == PublishingKinds.Kept) is { } last
+                && last.Note == stored.Value && last.By == by && last.ByRef == reference && now - last.At < KeptFold)
+            {
+                return;
+            }
+
+            var next = record with { Log = Appended(record.Log, LogEntry(PublishingKinds.Kept, stored, now, by, byRef, null)) };
             var written = await WriteAsync(access, attempt, async session =>
             {
                 await EventAsync(session, access, next.Log[^1], ct);

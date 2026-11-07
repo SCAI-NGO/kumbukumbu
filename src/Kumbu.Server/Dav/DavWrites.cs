@@ -5,8 +5,8 @@ using System.Xml.Linq;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
-using Kumbu.Core.Sh;
 using Kumbu.Core.Publishing;
+using Kumbu.Core.Sh;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.Publishing;
 using Microsoft.Net.Http.Headers;
@@ -184,19 +184,12 @@ internal sealed partial class DavWrites(
     /// it needs <c>maintain</c>). Each note it trashed is recorded for the share (<see cref="DavHolds"/>), so that an
     /// editor's save that deletes the original first gets it back (WebDAV design §3.6 case 3). A published note, which a
     /// share never may withdraw, isn't trashed but held (case 6): hidden from the share for the minute, and in a folder the
-    /// rest goes and the published notes stay, with the folders above them. One published meanwhile still makes the store
+    /// rest goes and the published notes stay, with the folders above them; the rights are the remover's, on all of it. One published meanwhile still makes the store
     /// refuse the whole batch (<see cref="PublishedNoteException"/>, a 403), and nothing goes.
     /// </summary>
     private async Task DeleteStoredAsync(VaultPath path, CancellationToken ct)
     {
         var published = await PublishedAsync(path, ct);
-        if (published.Contains(path))
-        {
-            if (writer.Caller.RefuseFolder("rm", path) is { } refused) throw Refusal(refused);
-            await HoldDeletedAsync(path, ct);
-            return;
-        }
-
         var removed = await trees.RemoveAsync(path, ct, keep: published);
         if (removed.Result.IsError) throw Refusal(removed.Result);
         foreach (var note in removed.Trashed)

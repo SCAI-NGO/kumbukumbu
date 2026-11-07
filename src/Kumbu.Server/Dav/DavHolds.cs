@@ -99,8 +99,7 @@ public sealed class DavHolds(TimeProvider time)
     internal DavHeld HoldDeleted(string shareId, string vaultId, VaultPath original, string version)
     {
         var place = string.Join('/', original.Segments.Skip(1));
-        var held = new DavHeld(shareId, vaultId, "", original, place, version, time.GetUtcNow() + DavRules.HoldWindow, Deleted: true, Published: true);
-        held = held with { HeldName = Unnamed(held) };
+        var held = new DavHeld(shareId, vaultId, Unnamed(place), original, place, version, time.GetUtcNow() + DavRules.HoldWindow, Deleted: true, Published: true);
         lock (_gate)
         {
             Expire();
@@ -223,7 +222,9 @@ public sealed class DavHolds(TimeProvider time)
 
     /// <summary>A key for a hold whose name is gone: no path has it (a path never holds a NUL), and it stays unique to
     /// the original.</summary>
-    private static string Unnamed(DavHeld held) => "\0" + held.OriginalPlace;
+    private static string Unnamed(DavHeld held) => Unnamed(held.OriginalPlace);
+
+    private static string Unnamed(string place) => "\0" + place;
 
     private static string Folder(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];
 

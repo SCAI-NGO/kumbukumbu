@@ -28,7 +28,8 @@ internal sealed record PublicationEntry(
 
 internal sealed record PublishedFile(string Path, string Version);
 
-/// <summary>An entry of the record's log: a publication, an update or a withdrawal, and why (<see cref="WithdrawalReasons"/>).</summary>
+/// <summary>An entry of the record's log: a publication, an update or a withdrawal, and why (<see cref="WithdrawalReasons"/>),
+/// or a removal that was kept (<see cref="PublishingKinds.Kept"/>).</summary>
 internal sealed record PublishingLogEntry(string Id, string Kind, string Note, DateTime At, string By, WriterRefPayload ByRef, string? Reason);
 
 internal static class PublishingKinds
