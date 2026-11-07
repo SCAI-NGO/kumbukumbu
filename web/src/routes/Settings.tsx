@@ -188,10 +188,10 @@ function PasswordSection() {
               aria-describedby={`${revokeId}-hint`}
               className="size-5 shrink-0 accent-accent"
             />
-            Also revoke all API keys and disconnect apps
+            Also revoke all API keys and WebDAV shares, and disconnect apps
           </label>
           <p id={`${revokeId}-hint`} className="pl-8 text-sm text-text-body">
-            Agents using them will need new keys, and apps will need to reconnect.
+            Agents using them will need new keys, drives mounted with a share stop working, and apps will need to reconnect.
           </p>
         </div>
         {change.isError && <FormError>{errorText(change.error)}</FormError>}
@@ -256,8 +256,8 @@ function RecoverySection() {
 }
 
 /**
- * New keys for the account and every vault. The server rotates the user key and revokes every API key and app before
- * it answers; the vaults are re-encrypted in the background, each showing as such in the vault list until it is done.
+ * New keys for the account and every vault. The server rotates the user key and revokes every API key, app and WebDAV
+ * share before it answers; the vaults are re-encrypted in the background, each showing as such in the vault list until it is done.
  */
 function ReencryptSection() {
   const queryClient = useQueryClient();
@@ -273,7 +273,7 @@ function ReencryptSection() {
       setPassword("");
       setDone(false);
       setRecoveryKey(view.recoveryKey);
-      void Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      void Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
     },
   });
 
@@ -296,8 +296,8 @@ function ReencryptSection() {
       ) : (
         <>
           <p className="text-text-body">
-            New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new
-            recovery key. If you think your password leaked, change it too.
+            New keys for your account and every vault. API keys, connected apps and WebDAV shares lose access and need to be set up or
+            reconnected; you get a new recovery key. If you think your password leaked, change it too.
           </p>
           <form onSubmit={submit} className="flex flex-col gap-4">
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
@@ -333,10 +333,11 @@ function VaultsSection() {
   return (
     <Section title="Vaults">
       <p className="text-text-body">
-        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults; a key that had only this one is revoked.
+        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys and WebDAV shares keep their other vaults; one that had only this one is revoked.
       </p>
       <p className="text-text-body">
-        Re-encrypting a vault gives it a new key. API keys and connected apps with access to it lose it and need to be set up or reconnected.
+        Re-encrypting a vault gives it a new key. API keys, connected apps and WebDAV shares with access to it lose it and need to be set up or
+        reconnected.
       </p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}

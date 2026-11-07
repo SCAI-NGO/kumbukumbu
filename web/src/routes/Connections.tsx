@@ -12,14 +12,13 @@ import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
+import { date } from "./dates";
 import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 import { useReveal } from "./useReveal";
 
 type Connection = components["schemas"]["ConnectionView"];
 
-const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-const date = (iso: string) => day.format(new Date(iso));
 
 /** Why the server ended or interrupted a connection, in the words the user would use. */
 const reasons: Record<string, string> = {

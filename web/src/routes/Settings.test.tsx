@@ -188,9 +188,9 @@ describe("Settings", () => {
     api({ "POST /api/password": async (r) => (bodies.push(await r.json()), json(200, { signedOut: true })) });
     const router = renderApp("/settings");
     const form = await screen.findByRole("region", { name: "Password" });
-    const revoke = within(form).getByLabelText("Also revoke all API keys and disconnect apps");
+    const revoke = within(form).getByLabelText("Also revoke all API keys and WebDAV shares, and disconnect apps");
     expect(revoke).toBeChecked();
-    expect(form).toHaveTextContent("Agents using them will need new keys, and apps will need to reconnect.");
+    expect(form).toHaveTextContent("Agents using them will need new keys, drives mounted with a share stop working, and apps will need to reconnect.");
 
     await userEvent.click(revoke);
     await userEvent.type(within(form).getByLabelText("Current password"), "old password here");
@@ -254,7 +254,7 @@ describe("Settings", () => {
     renderApp("/settings");
     const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
     expect(part).toHaveTextContent(
-      "New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new recovery key. If you think your password leaked, change it too.",
+      "New keys for your account and every vault. API keys, connected apps and WebDAV shares lose access and need to be set up or reconnected; you get a new recovery key. If you think your password leaked, change it too.",
     );
   });
 
@@ -263,6 +263,7 @@ describe("Settings", () => {
     const bodies: unknown[] = [];
     api({ "POST /api/account/reencrypt": async (r) => (bodies.push(await r.json()), json(200, { recoveryKey })) });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(queryClient, "invalidateQueries");
     renderApp("/settings", queryClient);
     const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
     await userEvent.type(within(part).getByLabelText("Current password"), "my password");
@@ -277,6 +278,8 @@ describe("Settings", () => {
     expect(screen.queryByText(recoveryKey)).not.toBeInTheDocument();
     expect(within(part).getByRole("status")).toHaveTextContent("Your vaults are being re-encrypted");
     expect(bodies).toHaveLength(1);
+    // The shares were revoked with the keys: the WebDAV tab must not show them as live.
+    expect(invalidated).toHaveBeenCalledWith({ queryKey: ["dav-shares"] });
     expect(JSON.stringify({ ...localStorage })).not.toContain(recoveryKey);
     await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(recoveryKey));
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(recoveryKey);
@@ -319,6 +322,7 @@ describe("Settings", () => {
       "POST /api/vaults/Diary/rekey": async (r) => (bodies.push(await r.json()), json(200, { revokedApiKeys: 2, disconnectedApps: 1, revokedShares: 1 })),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(queryClient, "invalidateQueries");
     renderApp("/settings", queryClient);
     const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
     await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
@@ -342,6 +346,7 @@ describe("Settings", () => {
     expect(within(vaultsSection).getByRole("status")).toHaveTextContent(
       "Diary is re-encrypted. 2 API keys were revoked and 1 app was disconnected. 1 WebDAV share was revoked.",
     );
+    expect(invalidated).toHaveBeenCalledWith({ queryKey: ["dav-shares"] });
     expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("my password");
   });
 
@@ -377,6 +382,16 @@ describe("Settings", () => {
     await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
     expect(await within(dialog).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+  });
+
+  it("the vaults section says what deleting and re-encrypting do to API keys and WebDAV shares", async () => {
+    api();
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    expect(vaultsSection).toHaveTextContent("API keys and WebDAV shares keep their other vaults; one that had only this one is revoked.");
+    expect(vaultsSection).toHaveTextContent(
+      "Re-encrypting a vault gives it a new key. API keys, connected apps and WebDAV shares with access to it lose it and need to be set up or reconnected.",
+    );
   });
 
   it("a pending vault shows as being re-encrypted", async () => {

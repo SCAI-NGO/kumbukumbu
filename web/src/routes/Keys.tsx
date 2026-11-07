@@ -7,6 +7,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { timeText } from "../components/Sheet";
+import { date, expiryText, isExpired } from "./dates";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
 import RevokeDialog from "./RevokeDialog";
@@ -16,8 +17,6 @@ import { useReveal } from "./useReveal";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
-const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-const date = (iso: string) => day.format(new Date(iso));
 
 /** The user's API keys for agents: made here, shown once, revoked here. */
 export default function Keys({ onRevealChange }: { onRevealChange?(revealing: boolean): void }) {
@@ -68,16 +67,9 @@ export default function Keys({ onRevealChange }: { onRevealChange?(revealing: bo
   );
 }
 
-/** "Expires …", "Expired …" or "Doesn't expire"; nothing for a revoked key, whose expiry no longer matters. */
-function expiryText(apiKey: ApiKey, expired: boolean) {
-  if (apiKey.revokedAt !== null) return "";
-  if (!apiKey.expiresAt) return " · Doesn't expire";
-  return ` · ${expired ? "Expired" : "Expires"} ${date(apiKey.expiresAt)}`;
-}
-
 function KeyItem({ apiKey, vaults, onRevoke }: { apiKey: ApiKey; vaults: VaultView[] | undefined; onRevoke(): void }) {
   const revoked = apiKey.revokedAt !== null;
-  const expired = apiKey.expiresAt !== null && new Date(apiKey.expiresAt).getTime() <= Date.now();
+  const expired = isExpired(apiKey);
   const mixed = !revoked && !expired ? mixedVault(vaults, Object.keys(apiKey.vaults)) : null;
   return (
     <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked || expired ? " opacity-75" : ""}`}>
@@ -100,7 +92,7 @@ function KeyItem({ apiKey, vaults, onRevoke }: { apiKey: ApiKey; vaults: VaultVi
       <p className="text-sm text-muted">
         Created {date(apiKey.createdAt)} · {apiKey.lastUsedAt ? `Last used ${timeText(apiKey.lastUsedAt)}` : "Never used"}
         {revoked && ` · Revoked ${date(apiKey.revokedAt!)}`}
-        {expiryText(apiKey, expired)}
+        {expiryText(apiKey)}
       </p>
       {/* An expired key opens nothing already; revoking it would change nothing. */}
       {!revoked && !expired && (

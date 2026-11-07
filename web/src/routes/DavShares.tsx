@@ -8,6 +8,7 @@ import type { components } from "../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { timeText } from "../components/Sheet";
 import DavConnect from "./DavConnect";
+import { date, expiryText, isExpired } from "./dates";
 import NewShareDialog from "./NewShareDialog";
 import RevokeDialog from "./RevokeDialog";
 import { CappedRight } from "./rights";
@@ -16,8 +17,6 @@ import { useReveal } from "./useReveal";
 
 type DavShare = components["schemas"]["DavShareView"];
 
-const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-const date = (iso: string) => day.format(new Date(iso));
 
 /**
  * The user's WebDAV shares (WebDAV design §3.2, §3.13): made here, the password shown once on the connect page,
@@ -38,6 +37,13 @@ export default function DavShares({ onRevealChange }: { onRevealChange?(revealin
   if (connecting) return <DavConnect share={connecting} onDone={() => setConnecting(null)} />;
 
   const list = shares.data?.shares;
+  // As for connections: what mounts nothing any more is out of the way, one click from view.
+  const isOver = (share: DavShare) => share.revokedAt !== null || isExpired(share);
+  const live = inUsageOrder(list?.filter((s) => !isOver(s)) ?? [], order);
+  const over = inUsageOrder(list?.filter(isOver) ?? [], order);
+  const item = (share: DavShare) => (
+    <ShareItem key={share.id} share={share} vaults={vaults.data} onConnect={() => setConnecting(share)} onRevoke={() => setRevoking(share)} />
+  );
   return (
     <>
       <section aria-labelledby="dav-title" className="flex min-w-0 flex-col gap-6">
@@ -60,12 +66,12 @@ export default function DavShares({ onRevealChange }: { onRevealChange?(revealin
         {shares.isError && <FormError>{errorText(shares.error)}</FormError>}
         {list?.length === 0 && <p className="text-muted">You have no WebDAV shares yet.</p>}
         {list && list.length > 1 && <UsageOrderSwitch label="Sort WebDAV shares" order={order} onOrder={setOrder} />}
-        {list && list.length > 0 && (
-          <ul className="flex flex-col gap-3">
-            {inUsageOrder(list, order).map((share) => (
-              <ShareItem key={share.id} share={share} vaults={vaults.data} onConnect={() => setConnecting(share)} onRevoke={() => setRevoking(share)} />
-            ))}
-          </ul>
+        {live.length > 0 && <ul className="flex flex-col gap-3">{live.map(item)}</ul>}
+        {over.length > 0 && (
+          <details className="flex flex-col gap-3">
+            <summary className="flex min-h-11 cursor-pointer items-center text-text-body">Revoked and expired ({over.length})</summary>
+            <ul className="mt-2 flex flex-col gap-3">{over.map(item)}</ul>
+          </details>
         )}
       </section>
 
@@ -83,17 +89,9 @@ export default function DavShares({ onRevealChange }: { onRevealChange?(revealin
   );
 }
 
-/** "Expires …", "Expired …" or "Doesn't expire"; nothing for a revoked share, whose expiry no longer matters. */
-function expiryText(share: DavShare, expired: boolean) {
-  if (share.revokedAt !== null) return "";
-  if (!share.expiresAt) return " · Doesn't expire";
-  return ` · ${expired ? "Expired" : "Expires"} ${date(share.expiresAt)}`;
-}
-
 function ShareItem({ share, vaults, onConnect, onRevoke }: { share: DavShare; vaults: VaultView[] | undefined; onConnect(): void; onRevoke(): void }) {
   const revoked = share.revokedAt !== null;
-  const expired = share.expiresAt !== null && new Date(share.expiresAt).getTime() <= Date.now();
-  const live = !revoked && !expired;
+  const live = !revoked && !isExpired(share);
   const lost = share.lostVaults.length;
   return (
     <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${live ? "" : " opacity-75"}`}>
@@ -118,7 +116,7 @@ function ShareItem({ share, vaults, onConnect, onRevoke }: { share: DavShare; va
       <p className="text-sm text-muted">
         Created {date(share.createdAt)} · {share.lastUsedAt ? `Last used ${timeText(share.lastUsedAt)}` : "Never used"}
         {revoked && ` · Revoked ${date(share.revokedAt!)}`}
-        {expiryText(share, expired)}
+        {expiryText(share)}
       </p>
       {/* A revoked or expired share mounts nothing: neither the steps nor revoking would help. */}
       {live && (

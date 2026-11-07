@@ -81,13 +81,19 @@ describe("DavShares", () => {
     expect(screen.getByText("Home").closest("li")).not.toHaveTextContent(/lost/);
   });
 
-  it("shows a revoked or expired share without its buttons", async () => {
+  it("tucks revoked and expired shares away, without their buttons", async () => {
+    const live = { ...workPc, id: "l1", label: "Laptop" };
     api({}, true, [
       { ...workPc, revokedAt: "2026-10-02T09:00:00Z" },
       { ...home, expiresAt: "2026-01-31T09:00:00Z" },
+      live,
     ]);
     renderApp("/access/dav");
-    const revoked = (await screen.findByText("Work PC")).closest("li")!;
+    const over = (await screen.findByText("Revoked and expired (2)")).closest("details")!;
+    expect(over).not.toHaveAttribute("open");
+    expect(within(over).getAllByRole("heading", { level: 3, hidden: true }).map((h) => h.textContent)).toEqual(["Work PC", "Home"]);
+    expect(screen.getByText("Laptop").closest("details")).toBeNull();
+    const revoked = screen.getByText("Work PC").closest("li")!;
     expect(revoked).toHaveTextContent("Revoked 2 Oct 2026");
     expect(within(revoked).queryByRole("button")).not.toBeInTheDocument();
     const expired = screen.getByText("Home").closest("li")!;
