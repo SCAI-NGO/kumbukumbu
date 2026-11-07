@@ -9,7 +9,9 @@ public static class DavRules
 {
     /// <summary>How long an editor's atomic save may take between its steps (WebDAV design §3.6): deleting or renaming
     /// the original and putting the new file in its place. Editors do both within a second or two; a minute is room for
-    /// a slow connection without holding a note back from the trash for long.</summary>
+    /// a slow connection without holding a note back from the trash for long. A held note's minute ends only on its
+    /// share's next request, with that request's rights (<see cref="DavHolds"/>): the server keeps no share's credentials
+    /// to act on later (spec §5).</summary>
     public static readonly TimeSpan HoldWindow = TimeSpan.FromSeconds(60);
 
     /// <summary>How long a parked file lives after its last write (WebDAV design §3.8). Swap and lock files are rewritten

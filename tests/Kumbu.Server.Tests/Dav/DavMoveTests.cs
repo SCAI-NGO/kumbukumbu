@@ -3,6 +3,8 @@ using System.Net;
 using System.Text;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Dav;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -78,8 +80,23 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.Created, put.StatusCode);
     }
 
-    /// <summary>What the minute's timer does, at once.</summary>
-    private Task SweepAsync() => Api.Services.GetRequiredService<DavHoldEndings>().SweepAsync(Ct);
+    /// <summary>Any request of the share: the one moment its holds whose minute is up end.</summary>
+    private static async Task NextRequestAsync(DavClient dav)
+    {
+        using var response = await dav.PropfindAsync("/dav/", depth: "0");
+    }
+
+    /// <summary>Every call of the clock moves it on a millisecond, so that two batches never share a time.</summary>
+    private IDisposable Ticking()
+    {
+        _time.AutoAdvanceAmount = TimeSpan.FromMilliseconds(1);
+        return new Reset(() => _time.AutoAdvanceAmount = TimeSpan.Zero);
+    }
+
+    private sealed class Reset(Action reset) : IDisposable
+    {
+        public void Dispose() => reset();
+    }
 
     /// <summary>Spec §6 step 5: Explorer renames <c>Questions.md</c>; the link follows, and the move and the rewrite are one batch.</summary>
     [Fact]
@@ -89,7 +106,9 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         await dav.Owner.CreateAsync("Ideas/Questions.md", "# Questions\n");
         await dav.Owner.CreateAsync("Ideas/Routing.md", "# Routing\n\nAsk [[Questions]]\n");
 
-        using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/Ideas/Questions.md", headers: To("Ideas/Open%20questions.md"));
+        HttpResponseMessage move;
+        using (Ticking()) move = await dav.SendAsync(DavClient.Move, "/dav/Work/Ideas/Questions.md", headers: To("Ideas/Open%20questions.md"));
+        using var _ = move;
 
         Assert.Equal(HttpStatusCode.Created, move.StatusCode);
         Assert.Null(await NoteAsync(dav.Owner, "Ideas/Questions.md"));
@@ -254,7 +273,7 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
 
         // The hold is over: the minute passing takes nothing to the trash.
         _time.Advance(TimeSpan.FromSeconds(61));
-        await SweepAsync();
+        await NextRequestAsync(dav);
         Assert.Equal("# v2\n", await NoteAsync(dav.Owner, "plan.md"));
         Assert.Empty(await store.ListTrashAsync(P("/Work"), Ct));
     }
@@ -284,11 +303,13 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
 
         _time.Advance(TimeSpan.FromSeconds(59));
-        await SweepAsync();
+        await NextRequestAsync(dav);
         Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
 
+        // Nothing ends it but a request of the share.
         _time.Advance(TimeSpan.FromSeconds(2));
-        await SweepAsync();
+        Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
+        await NextRequestAsync(dav);
         Assert.Null(await NoteAsync(dav.Owner, "plan.md"));
         var trashed = Assert.Single(await Store(dav.Owner).ListTrashAsync(P("/Work/plan.md"), Ct));
         Assert.Equal("# v1\n", trashed.Note.Content);
@@ -309,7 +330,7 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
 
         _time.Advance(TimeSpan.FromSeconds(61));
         using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("# v2\n"));
-        await SweepAsync();
+        await NextRequestAsync(dav);
 
         Assert.Equal(HttpStatusCode.Created, put.StatusCode);
         var store = Store(dav.Owner);
@@ -337,7 +358,7 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.DoesNotContain("/dav/Work/plan.md", listing);
 
         _time.Advance(TimeSpan.FromSeconds(61));
-        await SweepAsync();
+        await NextRequestAsync(dav);
         Assert.Null(await NoteAsync(dav.Owner, "plan.md"));
         Assert.Single(await store.ListTrashAsync(P("/Work"), Ct));
     }
@@ -376,9 +397,179 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.Created, back.StatusCode);
         Assert.Contains("/dav/Work/plan.md", await ListingAsync(dav));
         _time.Advance(TimeSpan.FromSeconds(61));
-        await SweepAsync();
+        await NextRequestAsync(dav);
         Assert.Equal(version, (await dav.Owner.ReadAsync("plan.md"))["version"]!.GetValue<string>());
         Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    /// <summary>Another share's request ends nothing of this one's: only the share's own request, with its own rights.</summary>
+    [Fact]
+    public async Task Case4_another_shares_request_ends_nothing()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var other = await DavClient.NewAsync(Api, dav.Owner, label: "Desk");
+        await dav.Owner.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(other);
+
+        Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
+        await NextRequestAsync(dav);
+        Assert.Null(await NoteAsync(dav.Owner, "plan.md"));
+    }
+
+    /// <summary>A hold its share doesn't come back for within the parking TTL is forgotten: the note stays where it is.</summary>
+    [Fact]
+    public async Task Case4_a_hold_past_the_parking_ttl_is_forgotten()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+
+        _time.Advance(DavRules.ParkingTtl + TimeSpan.FromSeconds(1));
+        var listing = await ListingAsync(dav);
+
+        Assert.Contains("/dav/Work/plan.md", listing);
+        Assert.DoesNotContain("/dav/Work/plan.md~", listing);
+        Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
+        Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    [Fact]
+    public async Task Case4_a_revoked_share_ends_nothing()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+        using (var revoke = await dav.Owner.SendAsync(HttpMethod.Delete, $"/api/dav-shares/{dav.Id}")) Assert.True(revoke.IsSuccessStatusCode, revoke.StatusCode.ToString());
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        using (var refused = await dav.PropfindAsync("/dav/", depth: "0")) DavAssert.Challenged(refused);
+        _time.Advance(DavRules.ParkingTtl);
+        using (var again = await dav.PropfindAsync("/dav/", depth: "0")) DavAssert.Challenged(again);
+
+        Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
+        Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    /// <summary>A member's share of a vault shared with her (alias "Work"), and the membership's id.</summary>
+    private async Task<(DavClient Dav, RestClient Alice, string Membership)> MembersShareAsync()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Garten");
+        var bob = await RestClient.NewAsync(Api, vault: "Own");
+        var membership = await alice.ShareWithAsync(bob, "Work");
+        var dav = await DavClient.NewAsync(Api, bob, vaults: new Dictionary<string, string> { ["Work"] = "write" });
+        await alice.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+        return (dav, alice, membership);
+    }
+
+    [Fact]
+    public async Task Case4_an_ended_membership_ends_nothing()
+    {
+        var (dav, alice, membership) = await MembersShareAsync();
+        await Api.Services.GetRequiredService<Memberships>().RevokeAsync(await alice.VaultIdAsync(), membership, Ct);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+
+        Assert.Equal("# v1\n", await NoteAsync(alice, "plan.md"));
+        Assert.Empty(await Store(alice).ListTrashAsync(P("/Garten"), Ct));
+    }
+
+    [Fact]
+    public async Task Case4_a_role_lowered_to_read_ends_nothing()
+    {
+        var (dav, alice, membership) = await MembersShareAsync();
+        await Api.Services.GetRequiredService<Memberships>().ChangeRoleAsync(alice.User.Id, alice.UserKey, await alice.VaultIdAsync(), membership, MemberRole.Read, () => { }, Ct);
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        var listing = await ListingAsync(dav);
+
+        Assert.Equal("# v1\n", await NoteAsync(alice, "plan.md"));
+        Assert.Empty(await Store(alice).ListTrashAsync(P("/Garten"), Ct));
+        Assert.Contains("/dav/Work/plan.md", listing);
+    }
+
+    /// <summary>The ending trashes only the version that was held: a note changed meanwhile by another hand stays.</summary>
+    [Fact]
+    public async Task Case4_a_note_changed_meanwhile_is_not_trashed()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var version = await dav.Owner.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+        using (var edit = await dav.Owner.SendAsync(HttpMethod.Put, dav.Owner.Url("plan.md"), new { content = "# Owner's\n", version })) Assert.True(edit.IsSuccessStatusCode, edit.StatusCode.ToString());
+
+        _time.Advance(TimeSpan.FromSeconds(61));
+        var listing = await ListingAsync(dav);
+
+        Assert.Equal("# Owner's\n", await NoteAsync(dav.Owner, "plan.md"));
+        Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+        Assert.Contains("/dav/Work/plan.md", listing);
+    }
+
+    /// <summary>An arrival the write refuses has taken the hold: the note is the share's again where it was, and stays.</summary>
+    [Fact]
+    public async Task Case4_a_refused_arrival_lets_the_note_reappear()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# v1\n");
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/plan.md", headers: To("plan.md~"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("# v2\n"), new Dictionary<string, string> { ["If-Match"] = "\"nope\"" });
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, put.StatusCode);
+        var listing = await ListingAsync(dav);
+        Assert.Contains("/dav/Work/plan.md", listing);
+        Assert.DoesNotContain("/dav/Work/plan.md~", listing);
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+        Assert.Equal("# v1\n", await NoteAsync(dav.Owner, "plan.md"));
+        Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    /// <summary>A hold whose ending fails is put back, for the share's next request; another share's holds aren't touched.</summary>
+    [Fact]
+    public async Task An_ending_that_fails_puts_its_holds_back()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var holds = new DavHolds(time);
+        holds.Hold("aaaa", "v", "a.md~", P("/Work/a.md"), "1");
+        holds.Hold("aaaa", "v", "b.md~", P("/Work/b.md"), "2");
+        holds.Hold("bbbb", "v", "c.md~", P("/Work/c.md"), "3");
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => holds.ExpireAsync("aaaa", _ => throw new InvalidOperationException()));
+        var ended = new List<string>();
+        await holds.ExpireAsync("aaaa", h =>
+        {
+            ended.Add(h.HeldName);
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal(["a.md~", "b.md~"], ended.Order(StringComparer.Ordinal));
+        Assert.Equal(["c.md"], holds.Hidden("bbbb", "v"));
+    }
+
+    [Fact]
+    public async Task Case5_overwrite_t_onto_a_folder_trashes_what_was_in_it()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Ideas/a.md", "# A");
+        await dav.Owner.CreateAsync("Ideas/b.md", "# B");
+        await dav.Owner.CreateAsync("Kept/a.md", "# Old A");
+        await dav.Owner.CreateAsync("Kept/gone.md", "# Gone");
+
+        using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/Ideas/", headers: To("Kept/", overwrite: "T"));
+
+        Assert.Equal(HttpStatusCode.NoContent, move.StatusCode);
+        Assert.Equal("# A", await NoteAsync(dav.Owner, "Kept/a.md"));
+        Assert.Equal("# B", await NoteAsync(dav.Owner, "Kept/b.md"));
+        Assert.Null(await NoteAsync(dav.Owner, "Kept/gone.md"));
+        var store = Store(dav.Owner);
+        Assert.Empty(await store.ListNotesUnderAsync(P("/Work/Ideas"), Ct));
+        Assert.Equal(["/Work/Kept/a.md", "/Work/Kept/gone.md"], (await store.ListTrashAsync(P("/Work/Kept"), Ct)).Select(t => t.Note.Path.Value).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -403,7 +594,9 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         await dav.Owner.CreateAsync("b.md", "# B\n");
         await dav.Owner.CreateAsync("Other.md", "See [[a]]\n");
 
-        using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/a.md", headers: To("b.md", overwrite: "T"));
+        HttpResponseMessage move;
+        using (Ticking()) move = await dav.SendAsync(DavClient.Move, "/dav/Work/a.md", headers: To("b.md", overwrite: "T"));
+        using var _ = move;
 
         Assert.Equal(HttpStatusCode.NoContent, move.StatusCode);
         Assert.Null(await NoteAsync(dav.Owner, "a.md"));

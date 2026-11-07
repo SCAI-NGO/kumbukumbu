@@ -45,8 +45,7 @@ public static class DavEndpoints
         {
             // The share's holds whose minute is up end before anything is asked of the tree (WebDAV design §3.6 case 4):
             // a file that comes after the minute is a new one, and never a write the ending then takes to the trash.
-            var services = http.RequestServices;
-            await services.GetRequiredService<DavHoldEndings>().EndForAsync(DavCaller.Of(http).ShareId, services.GetRequiredService<TreeWriter>(), ct);
+            await Writes(http).EndHoldsAsync();
 
             var target = DavPaths.Parse(request);
             // A client that names the root without its slash gets it with one, for what it reads; the query stays behind,
@@ -228,7 +227,7 @@ public static class DavEndpoints
     private static DavWrites Writes(HttpContext http) =>
         new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>(),
             http.RequestServices.GetRequiredService<NoteWriter>(), http.RequestServices.GetRequiredService<TreeWriter>(), http.RequestServices.GetRequiredService<NoteMover>(),
-            http.RequestServices.GetRequiredService<DavHolds>(), http.RequestServices.GetRequiredService<ICredential>());
+            http.RequestServices.GetRequiredService<DavHolds>(), http.RequestServices.GetRequiredService<ILogger<DavWrites>>());
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }

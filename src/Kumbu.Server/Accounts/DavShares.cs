@@ -374,17 +374,6 @@ public sealed class DavShares(IMongoDatabase db, VaultCatalog catalog, TimeProvi
         return new DavShareResolution(new ResolvedDavShare(user.ToUser(), doc.Id, label), false);
     }
 
-    /// <summary>Whether the share would still be let in: neither revoked nor expired, its owner active. For what the
-    /// server does later on a share's behalf, without its password (<see cref="Dav.DavHoldEndings"/>): a share revoked
-    /// meanwhile gets nothing more done.</summary>
-    public async Task<bool> IsLiveAsync(string shareId, CancellationToken ct)
-    {
-        await EnsureReadyAsync(ct);
-        var doc = await Shares.Find(d => d.Id == shareId).FirstOrDefaultAsync(ct);
-        if (doc is null || doc.RevokedAt is not null || Now >= doc.ExpiresAt) return false;
-        return await Users.Find(u => u.Id == doc.User && u.Active).AnyAsync(ct);
-    }
-
     /// <summary>Inside a share's creation: whether a share of the user that is neither revoked nor expired has the label
     /// with <paramref name="nameId"/>. An expired share's label is free even before it is retired.</summary>
     private Task<bool> LabelTakenAsync(IClientSessionHandle session, string userId, byte[]? nameId, DateTime now, CancellationToken ct)

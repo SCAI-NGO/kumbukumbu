@@ -108,8 +108,6 @@ builder.Services.AddSingleton<DavShares>();
 builder.Services.AddSingleton<DavParking>();
 builder.Services.AddSingleton<DavLocks>();
 builder.Services.AddSingleton<DavHolds>();
-builder.Services.AddSingleton<DavHoldEndings>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<DavHoldEndings>());
 builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();

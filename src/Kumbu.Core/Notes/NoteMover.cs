@@ -13,13 +13,13 @@ namespace Kumbu.Core.Notes;
 public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
     public Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct) =>
-        MoveAsync(source, target, rewriteLinks, card: false, ct);
+        MoveAsync(source, target, rewriteLinks, card: false, replacing: null, ct);
 
     /// <summary>A card's move by the board (to its archive): a card operation, so it needs <c>write</c> only, even where
     /// the move rewrites a link in <c>Board.md</c> (decided by the controller, after concept §7). A person's own
     /// <c>mv</c> that rewrites such a link is structural.</summary>
     internal Task<ShellResult> MoveCardAsync(VaultPath source, VaultPath target, CancellationToken ct) =>
-        MoveAsync(source, target, rewriteLinks: true, card: true, ct);
+        MoveAsync(source, target, rewriteLinks: true, card: true, replacing: null, ct);
 
     /// <summary>
     /// WebDAV's <c>MOVE</c> over what is at <paramref name="target"/> (<c>Overwrite: T</c>, WebDAV design §3.6 case 5;
@@ -35,13 +35,13 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var replaced = new NoteBatch();
         if (!await TreeWriter.TrashAsync(store, replaced, target, ct)) return Changed(target);
         return await store.GetAsync(source, ct) is not null || await StoreAttachments.GetAsync(store, source, ct) is not null
-            ? await MoveAsync(source, target, rewriteLinks: true, card: false, ct, replaced)
-            : await MoveFolderAsync(source, target, rewriteLinks: true, ct, replaced);
+            ? await MoveAsync(source, target, rewriteLinks: true, card: false, replaced, ct)
+            : await MoveFolderAsync(source, target, rewriteLinks: true, replaced, ct);
     }
 
     /// <summary>Moves a note or an attachment; <paramref name="replacing"/> holds what goes to the trash in its batch
     /// (<see cref="MoveOverAsync"/>), and then <paramref name="target"/> is the path itself, whatever is there.</summary>
-    private async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, bool card, CancellationToken ct, NoteBatch? replacing = null)
+    private async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, bool card, NoteBatch? replacing, CancellationToken ct)
     {
         // As a folder: a folder named without its '/' is refused below as one, but a structural refusal comes first.
         if (caller.RefuseFolder("mv", source) is { } refused) return refused;
@@ -65,15 +65,15 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (await CheckTargetAsync(source, target, Replaced(replacing), ct) is { } problem) return problem;
 
         return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
-            $"moved {source.Value} to {target.Value}", ct, card, replacing);
+            $"moved {source.Value} to {target.Value}", card, replacing, ct);
     }
 
     /// <summary>Moves every note and attachment below <paramref name="source"/>, keeping the structure below it. Like
     /// Unix mv, into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
     public Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct) =>
-        MoveFolderAsync(source, target, rewriteLinks, ct, replacing: null);
+        MoveFolderAsync(source, target, rewriteLinks, replacing: null, ct);
 
-    private async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct, NoteBatch? replacing)
+    private async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, NoteBatch? replacing, CancellationToken ct)
     {
         if (caller.RefuseFolder("mv", source) is { } refused) return refused;
         if (source.Segments.Count < 2) return ShellResult.Error($"mv: {source.Value}/ is a vault; a vault can't be moved");
@@ -115,7 +115,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
         // Kept folders' markers move along unmentioned, and a folder holding nothing else reports no file's version.
         var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count(a => !FolderMarker.Is(a)), "attachment") }.Where(c => c is not null));
-        var result = await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", ct, replacing: replacing);
+        var result = await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", card: false, replacing, ct);
         return map.Count == 1 && FolderMarker.Is(map.Keys.First()) ? result with { Version = null } : result;
     }
 
@@ -182,7 +182,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// notes get their own history entry, marked "(mv)". What <paramref name="replacing"/> trashes joins the batch, and
     /// neither links from it nor to it are rewritten: a link to it now leads to what took its place.</summary>
     private async Task<ShellResult> CommitAsync(
-        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct, bool card = false, NoteBatch? replacing = null)
+        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, bool card, NoteBatch? replacing, CancellationToken ct)
     {
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);

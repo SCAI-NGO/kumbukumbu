@@ -93,6 +93,9 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
 
         var folder = collection.Path;
         var depth = folder.Segments.Count;
+        // What the share holds in this vault under other names, asked once for the listing.
+        var hidden = caller.Place(folder) is { } at ? holds.Hidden(caller.ShareId, at.VaultId) : new HashSet<string>();
+        bool Hides(VaultPath p) => hidden.Contains(string.Join('/', p.Segments.Skip(1)));
         var notePaths = await notes.ListNotesUnderAsync(folder, ct);
         var files = await attachments.ListAttachmentsUnderAsync(folder, ct);
 
@@ -104,13 +107,13 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
             .ToList();
 
         var children = new List<DavResource>();
-        foreach (var path in notePaths.Where(p => p.Segments.Count == depth + 1 && !Hidden(p)))
+        foreach (var path in notePaths.Where(p => p.Segments.Count == depth + 1 && !Hides(p)))
         {
             if (await notes.GetAsync(path, ct) is { } note) children.Add(Note(note));
         }
 
         // A marker keeps its folder in the listing above (it is below it), but is never one of a folder's files.
-        children.AddRange(files.Where(a => a.Path.Segments.Count == depth + 1 && !FolderMarker.Is(a.Path) && !Hidden(a.Path)).Select(Attachment));
+        children.AddRange(files.Where(a => a.Path.Segments.Count == depth + 1 && !FolderMarker.Is(a.Path) && !Hides(a.Path)).Select(Attachment));
 
         // What this share parked in the folder, under a name the store doesn't have there.
         if (caller.Place(folder) is { } place)
@@ -138,12 +141,12 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
         path.Segments.Count >= 2 && caller.Place(path) is { } place ? parking.Get(caller.ShareId, place.VaultId, place.Path) : null;
 
     /// <summary>What the share holds under the name <paramref name="path"/>, or null.</summary>
-    public DavHeld? Held(VaultPath path) =>
+    internal DavHeld? Held(VaultPath path) =>
         path.Segments.Count >= 2 && caller.Place(path) is { } place ? holds.Held(caller.ShareId, place.VaultId, place.Path) : null;
 
     /// <summary>Whether <paramref name="path"/> is a file the share holds under another name, which it doesn't see here.</summary>
     private bool Hidden(VaultPath path) =>
-        path.Segments.Count >= 2 && caller.Place(path) is { } place && holds.Hides(caller.ShareId, place.VaultId, place.Path);
+        path.Segments.Count >= 2 && caller.Place(path) is { } place && holds.Hidden(caller.ShareId, place.VaultId).Contains(place.Path);
 
     /// <summary>The file the share holds under the name <paramref name="path"/>, as a resource of that name.</summary>
     private async Task<DavResource?> HeldAsync(VaultPath path, CancellationToken ct) =>
