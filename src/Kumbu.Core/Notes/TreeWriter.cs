@@ -154,10 +154,12 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
     private Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
         Changeset.ForAsync(store, path.Segments[0], caller.ReferenceIn(path.Segments[0]), caller.WriterIn(path.Segments[0]), caller.ChangesetIdle, Now, ct);
 
+    private Task<bool> TrashAsync(NoteBatch batch, VaultPath path, CancellationToken ct) => TrashAsync(store, batch, path, ct);
+
     /// <summary>Adds what is at <paramref name="path"/> to the batch's trash: the note, or the attachment (a folder may
     /// be named like a file: the path is the file only while one is stored there), or everything below the folder,
-    /// markers included. False if there is nothing.</summary>
-    private async Task<bool> TrashAsync(NoteBatch batch, VaultPath path, CancellationToken ct)
+    /// markers included. False if there is nothing. <see cref="NoteMover"/> trashes what a move replaces by it too.</summary>
+    internal static async Task<bool> TrashAsync(INoteStore store, NoteBatch batch, VaultPath path, CancellationToken ct)
     {
         if (await store.GetAsync(path, ct) is { } note)
         {

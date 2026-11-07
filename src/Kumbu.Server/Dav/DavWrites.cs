@@ -21,12 +21,13 @@ namespace Kumbu.Server.Dav;
 /// (spec §7). <c>PUT</c> and <c>MKCOL</c> write to the store through the writers every other path uses
 /// (<see cref="NoteWriter"/>, <see cref="AttachmentWriter"/>), with their checks and the share's caller, which gives
 /// the writer label and a person's changeset (§3.2); <c>DELETE</c> and <c>COPY</c> through <see cref="TreeWriter"/>, a
-/// folder with everything below it in one batch. The store's side of <c>MOVE</c> comes in a later step and answers 501
-/// until then. Locks are never enforced: <c>If</c> headers are read only to refresh a lock, and ignored
-/// everywhere else (§3.7).
+/// folder with everything below it in one batch; <c>MOVE</c> through <see cref="NoteMover"/>, as <c>sh mv</c>, with what
+/// an editor's atomic save does in between (§3.6 cases 1–5, <see cref="DavHolds"/>). Locks are never enforced:
+/// <c>If</c> headers are read only to refresh a lock, and ignored everywhere else (§3.7).
 /// </summary>
 public sealed partial class DavWrites(
-    HttpContext http, DavCaller caller, DavTree tree, DavParking parking, DavLocks locks, NoteWriter writer, TreeWriter trees, DavHolds holds)
+    HttpContext http, DavCaller caller, DavTree tree, DavParking parking, DavLocks locks, NoteWriter writer, TreeWriter trees, NoteMover mover,
+    DavHolds holds, Vaults.ICredential credential)
 {
     /// <summary>A note's bytes are UTF-8 or refused (WebDAV design §3.5): an invalid byte throws rather than becoming
     /// U+FFFD. Decoding with <see cref="Encoding.GetString(byte[])"/> keeps a BOM as the text's first character.</summary>
@@ -91,7 +92,12 @@ public sealed partial class DavWrites(
     {
         var place = Writable(target.Path);
         if (await tree.FindAsync(target.Path, ct) is null) throw NotFound();
-        if (await ParkedAsync(target.Path, place, ct)) parking.Remove(caller.ShareId, place.VaultId, place.Path);
+        // Not parked, a name the share holds a note under: the note goes in its minute as it would have, and the
+        // DELETE does nothing more (WebDAV design §3.6 case 4).
+        if (await ParkedAsync(target.Path, place, ct))
+        {
+            if (!parking.Remove(caller.ShareId, place.VaultId, place.Path)) holds.Delete(caller.ShareId, place.VaultId, place.Path);
+        }
         else await DeleteStoredAsync(target.Path, ct);
         Response.StatusCode = StatusCodes.Status204NoContent;
     }
@@ -119,7 +125,8 @@ public sealed partial class DavWrites(
     /// was there, which <c>Overwrite: F</c> refuses (412). A <c>Destination</c> that isn't on this server's
     /// <c>/dav/</c>, or in another vault, is a 502: the server won't go there, and a file manager falls back to copying
     /// and deleting (WebDAV design §3.5). <c>COPY</c> with <c>Depth: 0</c> copies a folder without what is in it;
-    /// <c>MOVE</c> always moves everything.
+    /// <c>MOVE</c> always moves everything. A <c>MOVE</c> of what the share holds under a backup name takes the held
+    /// note's place in it: back onto its own path, it ends the hold and writes nothing (an editor that gave up its save).
     /// </summary>
     public async Task TransferAsync(DavTarget source, bool move, CancellationToken ct)
     {
@@ -146,17 +153,37 @@ public sealed partial class DavWrites(
         await ParentAsync(destination.Path, ct);
         var existing = await tree.FindAsync(destination.Path, ct);
         if (existing is not null && !overwrite) throw new DavException(StatusCodes.Status412PreconditionFailed, "Something exists at the destination, and Overwrite is F.");
+        // A held name moved: the hold ends, and the held note is what moves on (WebDAV design §3.6 case 4).
+        if (move && tree.Held(source.Path) is { } held && await tree.FindStoredAsync(source.Path, ct) is null && tree.Parked(source.Path) is null)
+        {
+            holds.Release(caller.ShareId, from.VaultId, from.Path);
+            if (held.Original == destination.Path)
+            {
+                Response.StatusCode = StatusCodes.Status201Created;
+                return;
+            }
+
+            (source, from) = (new DavTarget(held.Original), caller.Place(held.Original) ?? throw NotFound());
+        }
+
         var stored = await tree.FindStoredAsync(source.Path, ct) is not null;
         var parked = await ParkedAsync(destination.Path, to, ct);
+        var replaced = existing is not null;
         if (!move && (stored || !parked))
         {
-            if (stored && !parked) await CopyStoredAsync(source.Path, destination.Path, deep, existing is not null, ct);
-            else if (stored) await CopyIntoParkingAsync(source.Path, to, deep, existing is not null, ct);
-            else await CopyOutOfParkingAsync(source.Path, destination, to, ct);
+            if (stored && !parked) await CopyStoredAsync(source.Path, destination.Path, deep, replaced, ct);
+            else if (stored) await CopyIntoParkingAsync(source.Path, to, deep, replaced, ct);
+            else await CopyOutOfParkingAsync(source.Path, destination, to, move: false, ct);
             return;
         }
 
-        if (stored || !parked) throw NotYet();
+        if (stored || !parked)
+        {
+            if (stored && !parked) await MoveStoredAsync(source.Path, destination.Path, replaced, ct);
+            else if (stored) await HoldAsync(source.Path, to, replaced, ct);
+            else await CopyOutOfParkingAsync(source.Path, destination, to, move: true, ct);
+            return;
+        }
 
         if (existing is not null) parking.Remove(caller.ShareId, to.VaultId, to.Path);
         var done = move ? parking.Move(caller.ShareId, from.VaultId, from.Path, to.Path) : parking.Copy(caller.ShareId, from.VaultId, from.Path, to.Path, deep);
@@ -176,6 +203,43 @@ public sealed partial class DavWrites(
         var copied = await trees.CopyAsync(from, to, deep, overwrite: true, ct);
         if (copied.Result.IsError) throw Refusal(copied.Result);
         if (copied.Result.Version is { } version) Response.Headers.ETag = $"\"{version.Token}\"";
+        Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
+    }
+
+    /// <summary>
+    /// A <c>MOVE</c> within the store (WebDAV design §3.6 cases 1 and 5): <see cref="NoteMover"/>, as <c>sh mv</c>, a
+    /// note, an attachment or a folder with everything below it, and every link the move changes rewritten, in one
+    /// batch. Over what is at the destination (<paramref name="replaced"/>, <c>Overwrite: T</c>), that goes to the trash
+    /// in the same batch, after every check of the move passed.
+    /// </summary>
+    private async Task MoveStoredAsync(VaultPath from, VaultPath to, bool replaced, CancellationToken ct)
+    {
+        var moved = replaced ? await mover.MoveOverAsync(from, to, ct)
+            : await tree.FindStoredAsync(from, ct) is { IsCollection: true } ? await mover.MoveFolderAsync(from, to, rewriteLinks: true, ct)
+            : await mover.MoveAsync(from, to, rewriteLinks: true, ct);
+        if (moved.IsError) throw Refusal(moved);
+        if (moved.Version is { } version) Response.Headers.ETag = $"\"{version.Token}\"";
+        Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
+    }
+
+    /// <summary>
+    /// A <c>MOVE</c> of a note or an attachment onto a parked name (WebDAV design §3.6 case 4: an editor renaming the
+    /// original to <c>plan.md~</c> before it writes the new one): held, not moved (<see cref="DavHolds"/>). The share
+    /// sees it under that name and no longer at its path; the store and everyone else still have it where it was. Its
+    /// ending is a <c>DELETE</c>'s, so a share that couldn't remove it (a structural file without <c>maintain</c>) is
+    /// refused now rather than left wondering in a minute. A folder is no editor's backup: 403. A published note is held
+    /// too; the store refuses its ending, and it stays (§3.6 case 7 says what more its ending does).
+    /// </summary>
+    private async Task HoldAsync(VaultPath from, DavPlace to, bool replaced, CancellationToken ct)
+    {
+        if (await tree.FindStoredAsync(from, ct) is not { IsCollection: false, Version: { } version })
+        {
+            throw new DavException(StatusCodes.Status403Forbidden, "A folder can't be moved onto a name Kumbu² doesn't keep.");
+        }
+
+        if (writer.Caller.RefuseFolder("rm", from) is { } refused) throw Refusal(refused);
+        if (replaced) parking.Remove(caller.ShareId, to.VaultId, to.Path);
+        holds.Hold(caller.ShareId, to.VaultId, to.Path, from, version, writer.Caller, credential);
         Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
     }
 
@@ -219,21 +283,25 @@ public sealed partial class DavWrites(
     }
 
     /// <summary>
-    /// A <c>COPY</c> of a parked file onto a path of the store: a <c>PUT</c> of its bytes there (brief open point 6),
-    /// with a <c>PUT</c>'s checks and statuses: a note's size and UTF-8, an attachment's format, the rights. Over a
-    /// file the store has, that is a content write of it, as a <c>PUT</c> would be, which is one write after every check:
-    /// a refusal leaves the target as it was. The parked file stays. A parked folder stays in the parking area: what
-    /// is in it was parked because Kumbu² doesn't keep it (403).
+    /// A <c>COPY</c> or <c>MOVE</c> of a parked file onto a path of the store: a <c>PUT</c> of its bytes there (brief
+    /// open point 6), with a <c>PUT</c>'s checks and statuses: a note's size and UTF-8, an attachment's format, the
+    /// rights. Over a file the store has, that is a content write of it, as a <c>PUT</c> would be, which is one write
+    /// after every check: a refusal leaves the target as it was. So an editor's temp file moved over its note is one
+    /// version of the note and rewrites no link (WebDAV design §3.6 case 2); one moved onto a free note path that the
+    /// share removed a note at within the minute brings that note back with it (case 3). A copied file stays parked, a
+    /// moved one goes once it is written, and stays parked if the write is refused. A parked folder stays in the parking
+    /// area: what is in it was parked because Kumbu² doesn't keep it (403).
     /// </summary>
-    private async Task CopyOutOfParkingAsync(VaultPath from, DavTarget destination, DavPlace to, CancellationToken ct)
+    private async Task CopyOutOfParkingAsync(VaultPath from, DavTarget destination, DavPlace to, bool move, CancellationToken ct)
     {
         if (tree.Parked(from) is not { } item) throw NotFound();
-        if (item.IsFolder) throw new DavException(StatusCodes.Status403Forbidden, "A parked folder can't be copied out of where it is parked; copy its files one at a time.");
+        if (item.IsFolder) throw new DavException(StatusCodes.Status403Forbidden, "A parked folder can't be copied or moved out of where it is parked; take its files one at a time.");
         if (await tree.FindAsync(destination.Path, ct) is { IsCollection: true }) throw new DavException(StatusCodes.Status405MethodNotAllowed, "A folder has no content to write.");
         var path = destination.Path;
-        if (path.IsNote) await PutNoteAsync(destination, ct, item.Bytes);
+        if (path.IsNote) await PutNoteAsync(destination, ct, item.Bytes, moved: move);
         else if (AttachmentFormat.ForName(path.Name) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(path, to, format, ct, item.Bytes);
         else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
+        if (move && caller.Place(from) is { } place) parking.Remove(caller.ShareId, place.VaultId, place.Path);
     }
 
     /// <summary>
@@ -301,10 +369,12 @@ public sealed partial class DavWrites(
     /// A note's <c>PUT</c>: at most <see cref="NoteWriter.MaxBytes"/> (413), UTF-8 (415), its preconditions (412), and
     /// written through <see cref="NoteWriter"/>, which makes <c>\r\n</c> <c>\n</c> as every write path does. Asked
     /// as <c>Plan.MD</c>, the answer says in <c>Location</c> where the note is. Every check runs before anything is
-    /// written. A <c>COPY</c> of a parked file passes its bytes as <paramref name="copied"/>: the request's preconditions
-    /// are then the source's, not the note's.
+    /// written. A <c>COPY</c> or <c>MOVE</c> of a parked file passes its bytes as <paramref name="copied"/>: the request's
+    /// preconditions are then the source's, not the note's; a <c>MOVE</c> says so in <paramref name="moved"/>.
+    /// At the path of a note the share holds under a backup name, the write is a content write of that note, which the
+    /// share saw as gone (WebDAV design §3.6 case 4).
     /// </summary>
-    private async Task PutNoteAsync(DavTarget target, CancellationToken ct, byte[]? copied = null)
+    private async Task PutNoteAsync(DavTarget target, CancellationToken ct, byte[]? copied = null, bool moved = false)
     {
         var path = target.Path;
         if (writer.Caller.Refuse("write", path) is { } refused) throw Refusal(refused);
@@ -321,12 +391,29 @@ public sealed partial class DavWrites(
             throw new DavException(StatusCodes.Status415UnsupportedMediaType, "A note is UTF-8 text; this one isn't.");
         }
 
+        var place = caller.Place(path) ?? throw NotFound();
+        var arrived = holds.TakeArrival(caller.ShareId, place.VaultId, place.Path) is not null;
         var existing = await tree.FindStoredAsync(path, ct);
-        if (copied is null) Preconditions(existing?.Version);
+        if (copied is null) Preconditions(arrived ? null : existing?.Version);
+        var restored = false;
+        if (moved && existing is null && await RestoreRemovedAsync(path, place, ct) is { } back) (existing, restored) = (back, true);
         var (result, replaced) = await WriteOnceMoreIfLostAsync(path, existing?.Version, v => writer.WriteAsync(path.Value, text, v, ct), ct);
         if (result.IsError) throw Refusal(result);
         if (target.Asked is not null) Response.Headers.Location = DavPaths.Href(path, collection: false);
-        Written(result.Version!.Token, created: !replaced);
+        Written(result.Version!.Token, created: !replaced || arrived || restored);
+    }
+
+    /// <summary>
+    /// The note this share removed at <paramref name="path"/> within <see cref="DavRules.HoldWindow"/> (WebDAV design
+    /// §3.6 case 3: an editor that deletes the original before it moves its temp file into place), back from the trash
+    /// at the version it was removed at, history and all, for the write that follows; null if there is none such or it
+    /// doesn't come back (the trash emptied meanwhile, say), and the write is then a new note. Another share's removal
+    /// never counts: its editor isn't this one.
+    /// </summary>
+    private async Task<DavResource?> RestoreRemovedAsync(VaultPath path, DavPlace place, CancellationToken ct)
+    {
+        if (holds.RecentRemoval(caller.ShareId, place.VaultId, place.Path) is not { } version) return null;
+        return (await writer.RestoreAsync(path, version, ct)).IsError ? null : await tree.FindStoredAsync(path, ct);
     }
 
     /// <summary>
@@ -334,8 +421,8 @@ public sealed partial class DavWrites(
     /// written through <see cref="AttachmentWriter"/>, whose check of the bytes against the format the name says is a
     /// 415 with its reason. An empty body is the placeholder a file manager writes before the content (WebDAV design
     /// §3.5): parked, for this share, unless the store has the file, which then stays as it is until the content
-    /// comes. The content goes to the store and takes the placeholder's place. <paramref name="copied"/> as for
-    /// <see cref="PutNoteAsync"/>.
+    /// comes. The content goes to the store and takes the placeholder's place. <paramref name="copied"/>, and a file the
+    /// share holds at the path, as for <see cref="PutNoteAsync"/>.
     /// </summary>
     private async Task PutAttachmentAsync(VaultPath path, DavPlace place, AttachmentFormat format, CancellationToken ct, byte[]? copied = null)
     {
@@ -344,9 +431,11 @@ public sealed partial class DavWrites(
         var bytes = (copied is null ? await DavBody.ReadLimitedAsync(Request, AttachmentFormat.MaxBytes, ct) : copied.Length <= AttachmentFormat.MaxBytes ? copied : null)
             ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A file can have at most {AttachmentFormat.MaxBytes / 1024 / 1024} MB.");
 
+        // An empty body leaves a held file held: the content that follows is its arrival.
+        var arrived = bytes.Length > 0 && holds.TakeArrival(caller.ShareId, place.VaultId, place.Path) is not null;
         var existing = await tree.FindStoredAsync(path, ct);
         var placeholder = existing is null ? tree.Parked(path) : null;
-        if (copied is null) Preconditions(existing?.Version ?? placeholder?.Version);
+        if (copied is null) Preconditions(arrived ? null : existing?.Version ?? placeholder?.Version);
         if (bytes.Length == 0)
         {
             if (existing is not null)
@@ -374,7 +463,7 @@ public sealed partial class DavWrites(
             path, existing?.Version, async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result, ct);
         if (result.IsError) throw matches ? Refusal(result) : new DavException(StatusCodes.Status415UnsupportedMediaType, result.Output);
         if (placeholder is not null) parking.Remove(caller.ShareId, place.VaultId, place.Path);
-        Written(result.Version!.Token, created: !replaced && placeholder is null);
+        Written(result.Version!.Token, created: (!replaced || arrived) && placeholder is null);
     }
 
     /// <summary>
@@ -531,7 +620,4 @@ public sealed partial class DavWrites(
     private static partial Regex LockToken();
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
-
-    /// <summary>Moving in the store over WebDAV: the step after this one.</summary>
-    private static DavException NotYet() => new(StatusCodes.Status501NotImplemented, "Moving notes over WebDAV isn't there yet.");
 }
