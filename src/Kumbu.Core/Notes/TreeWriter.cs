@@ -25,8 +25,10 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
     private const string Cp = "cp";
 
     /// <summary>The note, attachment or folder at <paramref name="path"/> to the trash, a folder with every note, file and
-    /// folder marker below it.</summary>
-    public async Task<TreeChange> RemoveAsync(VaultPath path, CancellationToken ct)
+    /// folder marker below it, except the notes in <paramref name="keep"/> and the markers of the folders above them,
+    /// which stay as they are (WebDAV's <c>DELETE</c> of a folder with a published note in it, WebDAV design §3.6 case 6).
+    /// The caller's rights are checked on the whole folder all the same.</summary>
+    public async Task<TreeChange> RemoveAsync(VaultPath path, CancellationToken ct, IReadOnlySet<VaultPath>? keep = null)
     {
         if (path.Segments.Count < 2) return Fail(ShellErrorKind.Invalid, $"{Rm}: {path.Value}: a vault can't be removed");
         if (caller.RefuseFolder(Rm, path) is { } refused) return TreeChange.Failed(refused);
@@ -36,6 +38,13 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
             return await store.IsDamagedAsync(path, ct)
                 ? Fail(ShellErrorKind.Conflict, Damage.Message(Rm, path))
                 : Fail(ShellErrorKind.NotFound, $"{Rm}: {path.Value}: No such file or directory");
+        }
+
+        if (keep is { Count: > 0 })
+        {
+            batch.Trashes.RemoveAll(n => keep.Contains(n.Path));
+            batch.AttachmentTrashes.RemoveAll(a => FolderMarker.Is(a.Path) && keep.Any(k => Below(k, FolderMarker.FolderOf(a.Path))));
+            if (batch.Trashes.Count == 0 && batch.AttachmentTrashes.Count == 0) return new TreeChange(ShellResult.Ok($"kept {path.Value}"), []);
         }
 
         if ((await CommitAsync(batch, path, ct)) is { } conflict) return Fail(ShellErrorKind.Conflict, $"{Rm}: nothing was removed: {conflict.Value} changed meanwhile; try again");

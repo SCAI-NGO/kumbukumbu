@@ -69,6 +69,10 @@ public static class VaultEvents
     public const string PublicationUpdated = "publication-updated";
     public const string PublicationWithdrawn = "publication-withdrawn";
 
+    /// <summary>The owner's alone, as the three above: a WebDAV share tried to remove a published note, which it never
+    /// may, and the note stayed (WebDAV design §3.6 case 6). Its entry names the note and the share.</summary>
+    public const string PublishedNoteKept = "published-note-kept";
+
     /// <summary>The kinds a member sees of her own membership; the owner sees every kind.</summary>
     private static readonly HashSet<string> MemberKinds = [MembershipRevoked, MembershipLeft, RoleChanged];
 
@@ -200,12 +204,15 @@ public static class VaultEvents
     internal static string TextFor(
         string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null) => (toOwner, kind) switch
     {
-        (true, NotePublished or PublicationUpdated or PublicationWithdrawn) when note is null => "A publication of this vault changed.",
+        (true, NotePublished or PublicationUpdated or PublicationWithdrawn or PublishedNoteKept) when note is null => "A publication of this vault changed.",
         (true, NotePublished) => $"{person} published {note}.",
         (true, PublicationUpdated) => $"{person} updated the published copy of {note}.",
         (true, PublicationWithdrawn) when reason == WithdrawalReasons.Removed => $"The publication of {note} was withdrawn: {Inside(person)} removed the note.",
         (true, PublicationWithdrawn) when reason == WithdrawalReasons.Unpublishable => $"The publication of {note} was withdrawn: {Inside(person)} made it unpublishable.",
         (true, PublicationWithdrawn) => $"{person} withdrew the publication of {note}.",
+        // A member's share writes no label of its own (WriterLabels: members store none).
+        (true, PublishedNoteKept) when person.Length == 0 => $"A member's WebDAV share tried to remove {note}; it is published, so it stays.",
+        (true, PublishedNoteKept) => $"{person} tried to remove {note}; it is published, so it stays.",
         (true, InvitationCreated) => $"You invited {person} to {role ?? "read"}.",
         (true, InvitationWithdrawn) => $"You withdrew the invitation for {person}.",
         (true, InvitationDeclined) => $"You declined {person}.",
@@ -257,7 +264,7 @@ public static class VaultEvents
     /// <summary>A person inside a sentence: <see cref="WriterLabels.You"/> as "you", a quoted name as it is.</summary>
     private static string Inside(string person) => person == WriterLabels.You ? "you" : person;
 
-    private static bool IsPublication(string kind) => kind is NotePublished or PublicationUpdated or PublicationWithdrawn;
+    private static bool IsPublication(string kind) => kind is NotePublished or PublicationUpdated or PublicationWithdrawn or PublishedNoteKept;
 
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
     private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";
@@ -290,9 +297,10 @@ public static class VaultEvents
             return TextFor(e.Kind, toOwner: false, _owner, access.Name, e.Role, e.Until, KeysEnded(e, [membership.Id]));
         }
 
-        /// <summary>The owner's session as "You", any other writer by its label, sanitised and quoted (“Claude”).</summary>
+        /// <summary>The owner's session as "You", any other writer by its label, sanitised and quoted (“Claude”); a member's,
+        /// who stores no label, as none.</summary>
         private static string Who(PublishingLogEntry log) =>
-            log.ByRef is { Owner: true, Kind: WriterRef.Session } ? WriterLabels.You : $"“{WriterLabels.Sanitise(log.By)}”";
+            log.ByRef is { Owner: true, Kind: WriterRef.Session } ? WriterLabels.You : log.By.Length == 0 ? "" : $"“{WriterLabels.Sanitise(log.By)}”";
 
         private string? NoteOf(PublishingLogEntry log) => VaultPath.TryParse(log.Note, out var note) ? access.ToCaller(note).Value : null;
 

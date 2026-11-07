@@ -6,7 +6,9 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Publishing;
 using Kumbu.Server.Attachments;
+using Kumbu.Server.Publishing;
 using Microsoft.Net.Http.Headers;
 
 namespace Kumbu.Server.Dav;
@@ -22,12 +24,14 @@ namespace Kumbu.Server.Dav;
 /// (<see cref="NoteWriter"/>, <see cref="AttachmentWriter"/>), with their checks and the share's caller, which gives
 /// the writer label and a person's changeset (§3.2); <c>DELETE</c> and <c>COPY</c> through <see cref="TreeWriter"/>, a
 /// folder with everything below it in one batch; <c>MOVE</c> through <see cref="NoteMover"/>, as <c>sh mv</c>, with what
-/// an editor's atomic save does in between (§3.6 cases 1–5, <see cref="DavHolds"/>). Locks are never enforced:
-/// <c>If</c> headers are read only to refresh a lock, and ignored everywhere else (§3.7).
+/// an editor's atomic save does in between (§3.6 cases 1–5, <see cref="DavHolds"/>). A share never may withdraw a
+/// publication (publish design §3.7), so a published note it removes is held and not carried out (cases 6 and 7,
+/// <see cref="Publications"/>). Locks are never enforced: <c>If</c> headers are read only to refresh a lock, and
+/// ignored everywhere else (§3.7).
 /// </summary>
-public sealed partial class DavWrites(
+internal sealed partial class DavWrites(
     HttpContext http, DavCaller caller, DavTree tree, DavParking parking, DavLocks locks, NoteWriter writer, TreeWriter trees, NoteMover mover,
-    DavHolds holds, ILogger<DavWrites> log)
+    DavHolds holds, Publications publications, ILogger<DavWrites> log)
 {
     /// <summary>A note's bytes are UTF-8 or refused (WebDAV design §3.5): an invalid byte throws rather than becoming
     /// U+FFFD. Decoding with <see cref="Encoding.GetString(byte[])"/> keeps a BOM as the text's first character.</summary>
@@ -74,8 +78,10 @@ public sealed partial class DavWrites(
     /// A held note to the trash as the share's <c>DELETE</c> would have sent it, through <see cref="NoteWriter.RemoveAsync"/>
     /// (or <see cref="AttachmentWriter.RemoveAsync"/>) with its rules, and only at the version it was held at: changed
     /// meanwhile (from the web app, say), moved, or in a vault the share now names otherwise, it stays as it is. Nothing new
-    /// is recorded for case 3. What the writer refuses stays too, which loses nothing: a right the share has lost, a
-    /// published note (which a share never may remove; §3.6 case 7 ends such a hold its own way), a busy vault.
+    /// is recorded for case 3. What the writer refuses stays too, which loses nothing: a right the share has lost, a busy
+    /// vault. A published note (§3.6 cases 6 and 7) is never trashed: the hold is over, so the share sees it where it is
+    /// again, and the attempt is recorded for the owner (<see cref="KeptAsync"/>); so too for one published in the minute,
+    /// which the store refuses to trash.
     /// </summary>
     private async Task EndAsync(DavHeld held)
     {
@@ -85,15 +91,22 @@ public sealed partial class DavWrites(
         {
             var path = held.Original;
             if (caller.Place(path)?.VaultId != held.VaultId) return;
+            if (held.Published)
+            {
+                await KeptAsync(path, ct);
+                return;
+            }
+
             var result = path.IsNote ? await writer.RemoveAsync(path, ct, held.Version)
                 : writer.ForAttachments() is { } files ? await files.RemoveAsync(path.Value, ct, held.Version)
                 : null;
             // The kind, not the sentence: that names the note, and a log names no note.
             if (result is { IsError: true }) log.LogInformation("A note WebDAV share {ShareId} held stays ({Kind})", held.ShareId, result.Kind);
         }
-        catch (Kumbu.Core.Publishing.PublishedNoteException)
+        catch (PublishedNoteException)
         {
             log.LogInformation("A published note WebDAV share {ShareId} held stays where it is", held.ShareId);
+            await KeptAsync(held.Original, ct);
         }
         // A vault busy or deleted, MongoDB away: the note stays, and the request goes on.
         catch (Exception e) when (e is not OperationCanceledException)
@@ -101,6 +114,31 @@ public sealed partial class DavWrites(
             log.LogWarning("A note WebDAV share {ShareId} held stays ({Error})", held.ShareId, e.GetType().Name);
         }
     }
+
+    /// <summary>
+    /// The owner's activity records that the share tried to remove the published note at <paramref name="path"/>, which
+    /// stays (WebDAV design §3.6 case 6), with the share's writer label, and only while the share may still write in the
+    /// vault: recorded with the ending request's rights, as anything the share writes. A failure is logged, and the note
+    /// stays all the same.
+    /// </summary>
+    private async Task KeptAsync(VaultPath path, CancellationToken ct)
+    {
+        var name = path.Segments[0];
+        if (!caller.CanWrite(name) || caller.Access(name) is not { } access) return;
+        try
+        {
+            await publications.RecordKeptAsync(access, path, writer.Caller.WriterIn(name), writer.Caller.ReferenceIn(name), ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogWarning("WebDAV share {ShareId}'s attempt on a published note isn't recorded ({Error})", caller.ShareId, e.GetType().Name);
+        }
+    }
+
+    /// <summary>The published notes at or below <paramref name="path"/> as the share sees them (WebDAV design §3.6 cases 6
+    /// and 7); none in a vault without publications.</summary>
+    private async Task<IReadOnlySet<VaultPath>> PublishedAsync(VaultPath path, CancellationToken ct) =>
+        caller.Access(path.Segments[0]) is { } access ? (await publications.PublishedUnderAsync(access, path, ct)).ToHashSet() : new HashSet<VaultPath>();
 
     /// <summary><c>MKCOL</c> (RFC 4918 §9.3): 201; 405 where something is, 409 without the folder above, 415 with a body.</summary>
     public async Task MkcolAsync(DavTarget target, CancellationToken ct)
@@ -144,17 +182,38 @@ public sealed partial class DavWrites(
     /// A <c>DELETE</c> in the store: the note, the attachment, or the folder with everything below it to the trash, in
     /// one batch, as <see cref="TreeWriter"/> does it, with the rights it asks for (a folder with a structural file in
     /// it needs <c>maintain</c>). Each note it trashed is recorded for the share (<see cref="DavHolds"/>), so that an
-    /// editor's save that deletes the original first gets it back (WebDAV design §3.6 case 3). A published note in it
-    /// makes the store refuse the whole batch (<see cref="Kumbu.Core.Publishing.PublishedNoteException"/>, a 403):
-    /// §3.6 case 6, which holds such a note instead, comes in a later step.
+    /// editor's save that deletes the original first gets it back (WebDAV design §3.6 case 3). A published note, which a
+    /// share never may withdraw, isn't trashed but held (case 6): hidden from the share for the minute, and in a folder the
+    /// rest goes and the published notes stay, with the folders above them. One published meanwhile still makes the store
+    /// refuse the whole batch (<see cref="PublishedNoteException"/>, a 403), and nothing goes.
     /// </summary>
     private async Task DeleteStoredAsync(VaultPath path, CancellationToken ct)
     {
-        var removed = await trees.RemoveAsync(path, ct);
+        var published = await PublishedAsync(path, ct);
+        if (published.Contains(path))
+        {
+            if (writer.Caller.RefuseFolder("rm", path) is { } refused) throw Refusal(refused);
+            await HoldDeletedAsync(path, ct);
+            return;
+        }
+
+        var removed = await trees.RemoveAsync(path, ct, keep: published);
         if (removed.Result.IsError) throw Refusal(removed.Result);
         foreach (var note in removed.Trashed)
         {
             if (caller.Place(note.Path) is { } at) holds.RecordRemoval(caller.ShareId, at.VaultId, at.Path, note.Version);
+        }
+
+        foreach (var note in published) await HoldDeletedAsync(note, ct);
+    }
+
+    /// <summary>The published note at <paramref name="path"/>, which the share deleted, held under no name
+    /// (<see cref="DavHolds.HoldDeleted"/>); nothing if it is gone meanwhile.</summary>
+    private async Task HoldDeletedAsync(VaultPath path, CancellationToken ct)
+    {
+        if (caller.Place(path) is { } at && await tree.FindStoredAsync(path, ct) is { IsCollection: false, Version: { } version })
+        {
+            holds.HoldDeleted(caller.ShareId, at.VaultId, path, version);
         }
     }
 
@@ -273,8 +332,7 @@ public sealed partial class DavWrites(
     /// ending is a <c>DELETE</c>'s, so a share that couldn't remove it (a structural file without <c>maintain</c>) is
     /// refused now rather than left wondering in a minute; the rules' source of truth stays the remover the ending calls
     /// (<see cref="EndAsync"/>), which checks them again with the rights the share has then. A folder is no editor's
-    /// backup: 403. A published note is held too; the store refuses its ending, and it stays (§3.6 case 7 says what more
-    /// its ending does).
+    /// backup: 403. A published note is held too, and its ending trashes nothing (§3.6 case 7, with case 6's ending).
     /// </summary>
     private async Task HoldAsync(VaultPath from, DavPlace to, bool replaced, CancellationToken ct)
     {
@@ -285,7 +343,7 @@ public sealed partial class DavWrites(
 
         if (writer.Caller.RefuseFolder("rm", from) is { } refused) throw Refusal(refused);
         if (replaced) parking.Remove(caller.ShareId, to.VaultId, to.Path);
-        holds.Hold(caller.ShareId, to.VaultId, to.Path, from, version);
+        holds.Hold(caller.ShareId, to.VaultId, to.Path, from, version, published: (await PublishedAsync(from, ct)).Contains(from));
         Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
     }
 

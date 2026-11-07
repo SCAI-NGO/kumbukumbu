@@ -9,10 +9,13 @@ namespace Kumbu.Server.Dav;
 /// <paramref name="Original"/> is its path as the share names it (<paramref name="OriginalPlace"/> below the vault),
 /// which the share doesn't see while it is held; <paramref name="Version"/> the version it had, the only one its ending
 /// trashes. <paramref name="Deleted"/>: the share deleted the held name, which then is gone from its listing, and nothing
-/// more. It holds nothing of the share's credentials: only the share's own next request ends it.
+/// more. <paramref name="Published"/>: the note was published when it was held, which a share never may withdraw
+/// (§3.6 cases 6 and 7): its ending gives it back to the share where it is, and trashes nothing. It holds nothing of the
+/// share's credentials: only the share's own next request ends it.
 /// </summary>
 internal sealed record DavHeld(
-    string ShareId, string VaultId, string HeldName, VaultPath Original, string OriginalPlace, string Version, DateTimeOffset Deadline, bool Deleted = false);
+    string ShareId, string VaultId, string HeldName, VaultPath Original, string OriginalPlace, string Version, DateTimeOffset Deadline, bool Deleted = false,
+    bool Published = false);
 
 /// <summary>
 /// What a share's editor did a moment ago that its next step may undo (WebDAV design §3.6), each for
@@ -22,7 +25,8 @@ internal sealed record DavHeld(
 /// so that the file that follows at the original path is a content write of the note.
 /// <para>
 /// A held note whose minute is up goes to the trash at the start of the same share's next request, with that request's
-/// writers, opened and checked afresh (<see cref="ExpireAsync"/>). Nothing here keeps a share's token, credential or
+/// writers, opened and checked afresh (<see cref="ExpireAsync"/>); a published one (cases 6 and 7) is the share's again
+/// where it is, and the owner's activity says the share tried to remove it. Nothing here keeps a share's token, credential or
 /// caller beyond its request (spec §5), so nothing is done for a share later with rights it may no longer have: a share
 /// revoked, a membership ended or a role lowered in the minute ends nothing. A hold its share doesn't come back for
 /// within <see cref="DavRules.ParkingTtl"/> of holding it is forgotten: the note stays where it is, and the share sees it there again
@@ -71,15 +75,36 @@ public sealed class DavHolds(TimeProvider time)
 
     /// <summary>Holds the file at <paramref name="original"/> under <paramref name="heldName"/> below the vault for
     /// <see cref="DavRules.HoldWindow"/>. A hold that had the name before loses it, as a <c>DELETE</c> of it would.</summary>
-    internal DavHeld Hold(string shareId, string vaultId, string heldName, VaultPath original, string version)
+    internal DavHeld Hold(string shareId, string vaultId, string heldName, VaultPath original, string version, bool published = false)
     {
-        var held = new DavHeld(shareId, vaultId, heldName, original, string.Join('/', original.Segments.Skip(1)), version, time.GetUtcNow() + DavRules.HoldWindow);
+        var held = new DavHeld(
+            shareId, vaultId, heldName, original, string.Join('/', original.Segments.Skip(1)), version, time.GetUtcNow() + DavRules.HoldWindow, Published: published);
         lock (_gate)
         {
             Expire();
             var key = (shareId, vaultId, heldName);
             if (_held.TryGetValue(key, out var before)) _held[(shareId, vaultId, Unnamed(before))] = before with { Deleted = true, HeldName = Unnamed(before) };
             _held[key] = held;
+        }
+
+        return held;
+    }
+
+    /// <summary>
+    /// Holds the published note at <paramref name="original"/> that the share deleted (WebDAV design §3.6 case 6) for
+    /// <see cref="DavRules.HoldWindow"/>, under no name: hidden from the share as if it were gone, so that the file an
+    /// editor writes there next is a content write of it (<see cref="TakeArrival"/>), and given back to it where it is
+    /// when the minute is up.
+    /// </summary>
+    internal DavHeld HoldDeleted(string shareId, string vaultId, VaultPath original, string version)
+    {
+        var place = string.Join('/', original.Segments.Skip(1));
+        var held = new DavHeld(shareId, vaultId, "", original, place, version, time.GetUtcNow() + DavRules.HoldWindow, Deleted: true, Published: true);
+        held = held with { HeldName = Unnamed(held) };
+        lock (_gate)
+        {
+            Expire();
+            _held[(shareId, vaultId, held.HeldName)] = held;
         }
 
         return held;

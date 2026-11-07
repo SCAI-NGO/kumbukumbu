@@ -35,7 +35,10 @@ public sealed class DavCaller
     }
 
     /// <summary>The id of the vault the share sees as <paramref name="name"/>, or null if it has none such.</summary>
-    public string? VaultId(string name) => (_caller.Credential as IRightsCredential)?.Access(name)?.Id;
+    public string? VaultId(string name) => Access(name)?.Id;
+
+    /// <summary>The share's access to the vault it sees as <paramref name="name"/>, as this request opened it, or null.</summary>
+    internal VaultAccess? Access(string name) => (_caller.Credential as IRightsCredential)?.Access(name);
 
     /// <summary>The vault and the path below it of <paramref name="path"/>; null for the root and for a vault the share
     /// doesn't have.</summary>

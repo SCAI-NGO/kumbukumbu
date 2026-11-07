@@ -5,7 +5,6 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Dav;
-using Kumbu.Server.Publishing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
@@ -204,28 +203,6 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
         // A folder's removal records each note in it.
         using (var folder = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/Ideas/")) Assert.Equal(HttpStatusCode.NoContent, folder.StatusCode);
         Assert.NotNull(holds.RecentRemoval(dav.Id, vault, "Ideas/other.md"));
-    }
-
-    /// <summary>Only the owner's session or a key that may publish withdraws a published note (publish design §3.7); a
-    /// share never may, so its <c>DELETE</c> is refused and nothing goes. (§3.6 case 6, holding the note, comes later.)</summary>
-    [Fact]
-    public async Task Delete_of_a_published_note_is_refused_and_removes_nothing()
-    {
-        var dav = await DavClient.NewAsync(Api);
-        await dav.Owner.CreateAsync("Ideas/plan.md", "# Plan");
-        await dav.Owner.CreateAsync("Ideas/other.md", "# Other");
-        var store = Store(dav.Owner);
-        var access = (await store.UnlockedVaultsAsync(Ct)).Single(a => a.Name == "Work");
-        await Api.Services.GetRequiredService<Publications>().PublishAsync(
-            access, store, P("/Work/Ideas/plan.md"), dav.Owner.User.Id, dav.Owner.Username, WriterRef.ForOwner(WriterRef.Session, null), KumbuAppFactory.PublicUrl, Ct);
-
-        using var note = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/Ideas/plan.md");
-        using var folder = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/Ideas/");
-
-        Assert.Equal(HttpStatusCode.Forbidden, note.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, folder.StatusCode);
-        Assert.Equal("# Plan", await NoteAsync(dav.Owner, "Ideas/plan.md"));
-        Assert.Equal("# Other", await NoteAsync(dav.Owner, "Ideas/other.md"));
     }
 
     [Fact]
