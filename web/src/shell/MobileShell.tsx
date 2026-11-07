@@ -27,6 +27,7 @@ import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
+import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject } from "./TreeDrawer";
 import { publishingItems } from "./publishingItems";
@@ -259,6 +260,7 @@ export default function MobileShell() {
       <TopBar path={path} writable={!readOnlyNote} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
       <MemberNotices />
+      <StorageNotice />
       <InstallHint />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
       <div className="flex min-h-0 flex-1">

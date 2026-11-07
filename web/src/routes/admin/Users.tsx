@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/admin-client/src/routes/users/index.tsx)
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { api, call } from "../../api/client";
 import { errorText } from "../../api/error-text";
+import { storageText } from "../../api/storage";
 import type { components } from "../../api/schema";
 import ConfirmTyped from "../../components/ConfirmTyped";
-import { FormError, secondaryButtonClass } from "../../components/form";
+import { FormError, inputClass, secondaryButtonClass } from "../../components/form";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../../components/SharedVaultsChoice";
 import { useSession } from "../../state/session";
 import AdminOnly, { useIsAdmin } from "./AdminOnly";
@@ -18,12 +19,7 @@ const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", y
 const date = (iso: string) => day.format(new Date(iso));
 const roleText: Record<string, string> = { user: "User", admin: "Admin", primary_admin: "Primary admin" };
 
-/** Bytes as KB or MB with one decimal; a few bytes stay bytes. */
-export function storageText(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+const GB = 1024 ** 3;
 
 /** Everyone on the server, as metadata only: no note, no vault name. */
 export default function Users() {
@@ -137,8 +133,10 @@ function UserItem({ user, self, onToggle, onDelete, onPromote }: { user: AdminUs
         <span>
           {user.vaults} {user.vaults === 1 ? "vault" : "vaults"}
         </span>
-        <span>{storageText(Number(user.bytesStored))}</span>
+        <StorageFigure user={user} />
       </p>
+      {/* The primary admin's storage is set by the primary admin alone, as the server says. */}
+      {(!primary || self) && <QuotaControl user={user} />}
       {update.isError && <FormError>{errorText(update.error)}</FormError>}
       {!primary && (
         <div className="flex flex-wrap gap-2">
@@ -169,6 +167,97 @@ function UserItem({ user, self, onToggle, onDelete, onPromote }: { user: AdminUs
         </div>
       )}
     </li>
+  );
+}
+
+/** "182 MB / 2 GB" with a small bar, or the figure alone without a limit (WebDAV design §3.10). */
+function StorageFigure({ user }: { user: AdminUser }) {
+  const used = Number(user.bytesStored);
+  const limit = user.limitBytes == null ? null : Number(user.limitBytes);
+  if (limit == null) return <span>{storageText(used)}</span>;
+  const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+  return (
+    <span className="flex items-center gap-2">
+      <span>{`${storageText(used)} / ${storageText(limit)}`}</span>
+      <span
+        role="meter"
+        aria-label="Storage used"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        className="h-1.5 w-16 overflow-hidden rounded-full bg-line"
+      >
+        <span className={`block h-full ${percent >= 90 ? "bg-warning" : "bg-accent"}`} style={{ width: `${percent}%` }} />
+      </span>
+    </span>
+  );
+}
+
+type QuotaKind = "default" | "unlimited" | "custom";
+const quotaKinds: readonly { value: QuotaKind; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "unlimited", label: "Unlimited" },
+  { value: "custom", label: "A size of its own" },
+];
+
+/** The admin's override of a user's storage: the server's default, a size in GB, or none. */
+function QuotaControl({ user }: { user: AdminUser }) {
+  const id = useId();
+  const update = useUpdate(user);
+  // An older server's row has no quota: it is the default then.
+  const stored: QuotaKind = user.quota === "unlimited" || user.quota === "custom" ? user.quota : "default";
+  const storedGb = stored === "custom" && user.limitBytes != null ? String(Number((Number(user.limitBytes) / GB).toFixed(2))) : "";
+  const [kind, setKind] = useState<QuotaKind>(stored);
+  const [gb, setGb] = useState(storedGb);
+  const bytes = Math.round(Number(gb) * GB);
+  const valid = kind !== "custom" || (gb.trim() !== "" && Number.isFinite(bytes) && bytes >= 0);
+  const changed = kind !== stored || (kind === "custom" && gb !== storedGb);
+  return (
+    <>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid && changed) update.mutate({ quota: kind === "custom" ? bytes : kind });
+        }}
+      >
+        <label htmlFor={`${id}-kind`} className="text-sm text-text-body">
+          Storage limit
+        </label>
+        <select
+          id={`${id}-kind`}
+          aria-label={`Storage limit of ${user.display}`}
+          value={kind}
+          onChange={(e) => setKind(e.target.value as QuotaKind)}
+          className={`${inputClass} w-auto`}
+        >
+          {quotaKinds.map((k) => (
+            <option key={k.value} value={k.value}>
+              {k.label}
+            </option>
+          ))}
+        </select>
+        {kind === "custom" && (
+          <span className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              step="any"
+              inputMode="decimal"
+              aria-label={`${user.display}'s limit in GB`}
+              value={gb}
+              onChange={(e) => setGb(e.target.value)}
+              className={`${inputClass} w-24`}
+            />
+            <span className="text-sm text-text-body">GB</span>
+          </span>
+        )}
+        <button type="submit" disabled={!valid || !changed || update.isPending} aria-label={`Set ${user.display}'s storage limit`} className={secondaryButtonClass}>
+          Set
+        </button>
+      </form>
+      {update.isError && <FormError>{errorText(update.error)}</FormError>}
+    </>
   );
 }
 

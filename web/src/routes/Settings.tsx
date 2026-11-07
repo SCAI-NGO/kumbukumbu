@@ -6,6 +6,7 @@ import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import { withdrawnSentence } from "../api/sharing";
+import { storageText, useAccountStorage } from "../api/storage";
 import ConfirmTyped, { repeats } from "../components/ConfirmTyped";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../components/SharedVaultsChoice";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -325,6 +326,19 @@ function ReencryptSection() {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** Deleting a vault, with its name typed: the one place in the app that removes notes beyond the trash. */
+/** "Storage: 182 MB of 2 GB": what her own vaults take, as the admin's list counts it and the quota limits it. */
+function StorageLine() {
+  const storage = useAccountStorage();
+  if (storage.isError) return <FormError>{errorText(storage.error)}</FormError>;
+  if (!storage.data) return null;
+  const used = storageText(Number(storage.data.used));
+  return (
+    <p className="text-text-body">
+      {storage.data.limit == null ? `Storage: ${used} (no limit)` : `Storage: ${used} of ${storageText(Number(storage.data.limit))}`}
+    </p>
+  );
+}
+
 function VaultsSection() {
   const vaults = useVaults();
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -338,6 +352,10 @@ function VaultsSection() {
       <p className="text-text-body">
         Re-encrypting a vault gives it a new key. API keys, connected apps and WebDAV shares with access to it lose it and need to be set up or
         reconnected.
+      </p>
+      <StorageLine />
+      <p className="text-sm text-muted">
+        Your vaults with their history, trash and files count; so do vaults you share, whoever writes in them. Vaults shared with you count against their owner.
       </p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}

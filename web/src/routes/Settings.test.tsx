@@ -27,6 +27,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }]),
     "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
     "GET /api/vault-events": () => json(200, []),
+    "GET /api/account/storage": () => json(200, { used: 4096, limit: null }),
     ...overrides,
   });
 }
@@ -61,6 +62,19 @@ describe("Settings", () => {
     act(() => useUpdate.getState().report("0.2.1+b0b0b0b"));
     expect(about).toHaveTextContent("Server: 0.2.1 (b0b0b0b)");
     act(() => useUpdate.setState({ server: null, available: null }));
+  });
+
+  it("shows storage used of the limit", async () => {
+    const MB = 1024 ** 2;
+    api({ "GET /api/account/storage": () => json(200, { used: 182 * MB, limit: 2048 * MB }) });
+    renderApp("/settings");
+    expect(await within(await screen.findByRole("region", { name: "Vaults" })).findByText("Storage: 182 MB of 2 GB")).toBeInTheDocument();
+  });
+
+  it("says when the storage has no limit", async () => {
+    api({ "GET /api/account/storage": () => json(200, { used: 190_000_000, limit: null }) });
+    renderApp("/settings");
+    expect(await within(await screen.findByRole("region", { name: "Vaults" })).findByText("Storage: 181.2 MB (no limit)")).toBeInTheDocument();
   });
 
   it("calls a local build a development build", async () => {
