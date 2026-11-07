@@ -105,7 +105,7 @@ if [[ -n "$unexpected" ]]; then
   status=1
 fi
 if [[ -n "$fixed" ]]; then
-  echo "Expected to fail but passed (take them off $expected_file):" >&2
+  echo "Expected to fail but did not (passed, or skipped after an earlier failure; take a fixed one off $expected_file):" >&2
   sed 's/^/  /' <<<"$fixed" >&2
   status=1
 fi
