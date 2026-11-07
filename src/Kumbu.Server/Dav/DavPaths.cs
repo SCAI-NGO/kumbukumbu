@@ -7,12 +7,7 @@ namespace Kumbu.Server.Dav;
 
 /// <summary>What a <c>/dav</c> URL names: the root (the share's vaults), a vault by the caller's name for it, or a path
 /// below one. <paramref name="Bare"/>: the URL was <c>/dav</c> without its slash.</summary>
-public sealed record DavTarget(VaultPath Path, bool Bare = false)
-{
-    public bool IsRoot => Path.IsRoot;
-
-    public bool IsVault => Path.Segments.Count == 1;
-}
+public sealed record DavTarget(VaultPath Path, bool Bare = false);
 
 /// <summary>
 /// <c>/dav</c> URLs and the vault paths they name (WebDAV design §5). A URL is read as the client sent it, not as Kestrel
@@ -86,13 +81,4 @@ public static class DavPaths
         var slash = scheme < 0 ? -1 : path.IndexOf('/', scheme + 3);
         return slash < 0 ? null : path[slash..];
     }
-}
-
-/// <summary>A WebDAV request answered with <see cref="Status"/> and a plain-text <see cref="Exception.Message"/>, or the
-/// XML body <see cref="Body"/> when there is one (an RFC 4918 <c>DAV:error</c>).</summary>
-public sealed class DavException(int status, string message, System.Xml.Linq.XElement? body = null) : Exception(message)
-{
-    public int Status { get; } = status;
-
-    public System.Xml.Linq.XElement? Body { get; } = body;
 }

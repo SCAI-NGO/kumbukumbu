@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using Kumbu.Core.Attachments;
-using Kumbu.Core.Notes;
 using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
 
@@ -15,13 +13,10 @@ namespace Kumbu.Server.Dav;
 /// </summary>
 public static class DavEndpoints
 {
-    private static readonly string[] Methods =
-        [HttpMethods.Options, "PROPFIND", "PROPPATCH", HttpMethods.Get, HttpMethods.Head, HttpMethods.Put, HttpMethods.Delete, "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"];
-
     public static IEndpointRouteBuilder MapDav(this IEndpointRouteBuilder app)
     {
         // The pattern matches /dav itself too, so the web app never answers there.
-        app.MapMethods(DavPaths.Prefix + "/{**path}", Methods, DispatchAsync).ExcludeFromDescription();
+        app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync).ExcludeFromDescription();
         // Any other method, after the ones above (a higher order loses when both match).
         app.Map(DavPaths.Prefix + "/{**path}", (HttpContext http) =>
         {
@@ -34,7 +29,7 @@ public static class DavEndpoints
     private static async Task DispatchAsync(HttpContext http)
     {
         var (request, response) = (http.Request, http.Response);
-        if (HttpMethods.IsOptions(request.Method))
+        if (request.Method == DavMethod.Options)
         {
             DavHeaders.Options(response, DavHeaders.DavMethods);
             return;
@@ -46,7 +41,7 @@ public static class DavEndpoints
             var target = DavPaths.Parse(request);
             // A client that names the root without its slash gets it with one, for what it reads; the query stays behind,
             // since nothing under /dav reads one. Any other method acts on the root as if the slash were there.
-            if (target.Bare && (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method) || request.Method == "PROPFIND"))
+            if (target.Bare && request.Method is DavMethod.Get or DavMethod.Head or DavMethod.Propfind)
             {
                 response.StatusCode = StatusCodes.Status308PermanentRedirect;
                 response.Headers.Location = DavPaths.Prefix + "/";
@@ -55,7 +50,7 @@ public static class DavEndpoints
 
             switch (request.Method)
             {
-                case "PROPFIND":
+                case DavMethod.Propfind:
                     await PropfindAsync(http, target, ct);
                     break;
                 default:
@@ -67,16 +62,16 @@ public static class DavEndpoints
         catch (DavException e) when (!response.HasStarted)
         {
             if (e.Body is { } body) await DavXml.WriteAsync(response, e.Status, body, ct);
-            else await PlainAsync(response, e.Status, e.Message, ct);
+            else await DavXml.WriteTextAsync(response, e.Status, e.Message, ct);
         }
         catch (VaultBusyException e) when (!response.HasStarted)
         {
             ApiErrors.SetRetryAfter(http, ApiErrors.BusyRetryAfter);
-            await PlainAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
+            await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
         }
         catch (VaultDeletedException e) when (!response.HasStarted)
         {
-            await PlainAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
+            await DavXml.WriteTextAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
         }
     }
 
@@ -89,7 +84,10 @@ public static class DavEndpoints
         var tree = Tree(http);
         var resource = await tree.FindAsync(target.Path, ct) ?? throw NotFound();
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
-        await DavXml.WriteMultistatusAsync(http.Response, resources.Select(r => DavXml.Response(r.Href, r.Properties(), propfind)), ct);
+        var properties = new DavProperties();
+        var responses = new List<DavResponse>(resources.Count);
+        foreach (var r in resources) responses.Add(DavXml.Response(r.Href, await properties.PropertiesAsync(r, ct), propfind));
+        await DavXml.WriteMultistatusAsync(http.Response, responses, ct);
     }
 
     /// <summary>The <c>Depth</c> header, 0 or 1; <c>infinity</c> or none is 403 with <c>propfind-finite-depth</c>
@@ -115,11 +113,4 @@ public static class DavEndpoints
     }
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
-
-    private static Task PlainAsync(HttpResponse response, int status, string message, CancellationToken ct)
-    {
-        response.StatusCode = status;
-        response.ContentType = "text/plain; charset=utf-8";
-        return response.WriteAsync(message, ct);
-    }
 }

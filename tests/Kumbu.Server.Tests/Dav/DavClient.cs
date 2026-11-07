@@ -131,4 +131,16 @@ public sealed class DavClient
     /// <summary>A body with a content type, for <see cref="SendAsync(HttpMethod, string, HttpContent?, IReadOnlyDictionary{string, string}?, string?)"/>.</summary>
     public static HttpContent Body(string text, string contentType = "application/xml") =>
         new StringContent(text, Encoding.UTF8, MediaTypeHeaderValue.Parse(contentType));
+
+    /// <summary>A body without a length, sent as a chunked one is.</summary>
+    public sealed class Unsized(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) => stream.WriteAsync(bytes).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
 }

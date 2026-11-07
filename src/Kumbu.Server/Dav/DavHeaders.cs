@@ -9,7 +9,7 @@ namespace Kumbu.Server.Dav;
 public static class DavHeaders
 {
     /// <summary>The methods <c>/dav</c> answers.</summary>
-    public const string DavMethods = "OPTIONS, PROPFIND, PROPPATCH, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK";
+    public static readonly string DavMethods = string.Join(", ", DavMethod.All);
 
     /// <summary>The methods <c>/</c> answers: the web app, and a client's probe.</summary>
     public const string RootMethods = "OPTIONS, GET, HEAD";

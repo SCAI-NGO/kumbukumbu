@@ -43,7 +43,6 @@ public static class DavXml
         XmlResolver = null,
         IgnoreProcessingInstructions = true,
         IgnoreComments = true,
-        Async = false,
     };
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
@@ -97,6 +96,7 @@ public static class DavXml
         {
             "allprop" => DavPropfind.AllProp,
             "propname" => new DavPropfind(DavPropfindKind.PropName, []),
+            _ when !choice.HasElements => throw BadBody("A DAV:prop names the properties asked for, at least one."),
             _ => new DavPropfind(DavPropfindKind.Prop, [.. choice.Elements().Select(e => e.Name).Distinct()]),
         };
     }
@@ -115,8 +115,14 @@ public static class DavXml
             case DavPropfindKind.PropName:
                 return new(href, [(StatusCodes.Status200OK, [.. properties.Keys.Select(n => new XElement(n))])]);
             default:
-                var found = propfind.Names.Where(properties.ContainsKey).Select(n => properties[n]()).ToList();
-                var missing = propfind.Names.Where(n => !properties.ContainsKey(n)).Select(n => new XElement(n)).ToList();
+                var found = new List<XElement>();
+                var missing = new List<XElement>();
+                foreach (var name in propfind.Names)
+                {
+                    if (properties.TryGetValue(name, out var property)) found.Add(property());
+                    else missing.Add(new XElement(name));
+                }
+
                 var stats = new List<(int, IReadOnlyList<XElement>)>();
                 if (found.Count > 0) stats.Add((StatusCodes.Status200OK, found));
                 if (missing.Count > 0) stats.Add((StatusCodes.Status404NotFound, missing));
@@ -157,6 +163,14 @@ public static class DavXml
         response.ContentType = ContentType;
         response.ContentLength = buffer.Length;
         await response.Body.WriteAsync(buffer.GetBuffer().AsMemory(0, (int)buffer.Length), ct);
+    }
+
+    /// <summary>A plain-text body, for a refusal a person may read (a client shows it, or logs it).</summary>
+    public static Task WriteTextAsync(HttpResponse response, int status, string message, CancellationToken ct)
+    {
+        response.StatusCode = status;
+        response.ContentType = "text/plain; charset=utf-8";
+        return response.WriteAsync(message, ct);
     }
 
     /// <summary>A propstat's status line (RFC 4918 §14.28).</summary>

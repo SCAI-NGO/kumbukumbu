@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Globalization;
 using System.Text;
-using System.Xml.Linq;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -11,7 +9,7 @@ namespace Kumbu.Server.Dav;
 
 /// <summary>
 /// One resource as a WebDAV client sees it: the root and the vaults and folders are collections, notes and attachments
-/// files (WebDAV design §3.4). <paramref name="Length"/>, <paramref name="ContentType"/>, <paramref name="Version"/> and
+/// files (WebDAV design §3.4); <see cref="DavProperties"/> makes its properties of it. <paramref name="Length"/>, <paramref name="ContentType"/>, <paramref name="Version"/> and
 /// <paramref name="LastWrite"/> are a file's; a collection has none of them (Kumbu² keeps no time for a folder).
 /// </summary>
 public sealed record DavResource(
@@ -20,36 +18,6 @@ public sealed record DavResource(
     public const string NoteContentType = "text/markdown; charset=utf-8";
 
     public string Href => DavPaths.Href(Path, IsCollection);
-
-    /// <summary>The live properties a <c>PROPFIND</c> can report, by name, each built when asked for. The quota properties
-    /// of RFC 4331 (the root and the vaults the share's user owns) join here (Task 12); <c>lockdiscovery</c> lists the
-    /// resource's locks once there are any (Task 7).</summary>
-    public IReadOnlyDictionary<XName, Func<XElement>> Properties()
-    {
-        var d = DavXml.Dav;
-        var properties = new Dictionary<XName, Func<XElement>>
-        {
-            [d + "resourcetype"] = () => new XElement(d + "resourcetype", IsCollection ? new XElement(d + "collection") : null),
-        };
-        if (!Path.IsRoot) properties[d + "displayname"] = () => new XElement(d + "displayname", Path.Name);
-        if (Length is { } length) properties[d + "getcontentlength"] = () => new XElement(d + "getcontentlength", length.ToString(CultureInfo.InvariantCulture));
-        if (ContentType is { } type) properties[d + "getcontenttype"] = () => new XElement(d + "getcontenttype", type);
-        if (Version is { } version) properties[d + "getetag"] = () => new XElement(d + "getetag", $"\"{version}\"");
-        if (LastWrite is { } written)
-        {
-            // The last write is both: Kumbu² keeps no creation time (WebDAV design §3.4).
-            var utc = DateTime.SpecifyKind(written, DateTimeKind.Utc);
-            properties[d + "getlastmodified"] = () => new XElement(d + "getlastmodified", utc.ToString("R", CultureInfo.InvariantCulture));
-            properties[d + "creationdate"] = () => new XElement(d + "creationdate", utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
-        }
-
-        properties[d + "supportedlock"] = () => new XElement(d + "supportedlock", LockEntry(d + "exclusive"), LockEntry(d + "shared"));
-        properties[d + "lockdiscovery"] = () => new XElement(d + "lockdiscovery");
-        return properties;
-
-        XElement LockEntry(XName scope) =>
-            new(d + "lockentry", new XElement(d + "lockscope", new XElement(scope)), new XElement(d + "locktype", new XElement(d + "write")));
-    }
 }
 
 /// <summary>
@@ -99,13 +67,9 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
 
         // A marker keeps its folder in the listing above (it is below it), but is never one of a folder's files.
         children.AddRange(files.Where(a => a.Path.Segments.Count == depth + 1 && !FolderMarker.Is(a.Path)).Select(Attachment));
-        children.AddRange(ParkedChildren(folder));
+        // The files this share parked in the folder join here, for this share only (WebDAV design §3.8, Task 7).
         return [.. folders, .. children.OrderBy(c => c.Path.Name, TextOrder.Default)];
     }
-
-    /// <summary>The files the share parked in <paramref name="folder"/> (WebDAV design §3.8), listed for that share only:
-    /// none until parking comes (Task 7).</summary>
-    private static IEnumerable<DavResource> ParkedChildren(VaultPath folder) => [];
 
     private async Task<bool> IsFolderAsync(VaultPath path, CancellationToken ct) =>
         (await notes.ListNotesUnderAsync(path, ct)).Count > 0 || (await attachments.ListAttachmentsUnderAsync(path, ct)).Count > 0;

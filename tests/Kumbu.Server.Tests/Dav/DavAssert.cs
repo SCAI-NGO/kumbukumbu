@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Xml.Linq;
 
 namespace Kumbu.Server.Tests.Dav;
 
@@ -28,7 +29,44 @@ public static class DavAssert
     }
 
     /// <summary>The share's credentials got the request through to the WebDAV endpoints: whatever they answered, it isn't
-    /// a refusal of the credentials (401), of the connection (403 over plain http) or of the limiter (429).</summary>
-    public static void Through(HttpResponseMessage response) =>
+    /// a refusal of the credentials (401), of the connection (403 over plain http) or of the limiter (429), nor a fault (5xx).</summary>
+    public static void Through(HttpResponseMessage response)
+    {
         Assert.DoesNotContain(response.StatusCode, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.TooManyRequests });
+        Assert.True((int)response.StatusCode < 500, $"A fault: {(int)response.StatusCode}");
+    }
+
+    private static readonly XNamespace D = "DAV:";
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>A 207 with an XML body, its <c>DAV:multistatus</c>; disposes of the response.</summary>
+    public static async Task<XElement> MultistatusAsync(HttpResponseMessage response)
+    {
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.MultiStatus, response.StatusCode);
+            Assert.StartsWith("application/xml", response.Content.Headers.ContentType?.MediaType, StringComparison.Ordinal);
+            var root = XDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).Root!;
+            Assert.Equal(D + "multistatus", root.Name);
+            return root;
+        }
+    }
+
+    /// <summary>The hrefs of a multistatus, in its order.</summary>
+    public static List<string> Hrefs(XElement multistatus) =>
+        [.. multistatus.Elements(D + "response").Select(r => r.Element(D + "href")!.Value)];
+
+    /// <summary>The one response of a multistatus for <paramref name="href"/>.</summary>
+    public static XElement Response(XElement multistatus, string href) =>
+        Assert.Single(multistatus.Elements(D + "response"), r => r.Element(D + "href")!.Value == href);
+
+    /// <summary>The <c>prop</c> of the response's 200 propstat.</summary>
+    public static XElement? Ok(XElement response) =>
+        response.Elements(D + "propstat").FirstOrDefault(p => p.Element(D + "status")?.Value == "HTTP/1.1 200 OK")?.Element(D + "prop");
+
+    /// <summary>A DAV: property of the response's 200 propstat.</summary>
+    public static XElement? Prop(XElement response, string name) => Ok(response)?.Element(D + name);
+
+    public static bool IsCollection(XElement response) => Prop(response, "resourcetype")?.Element(D + "collection") is not null;
 }
