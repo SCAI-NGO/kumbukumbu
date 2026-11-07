@@ -231,6 +231,18 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
 
+        string[] locks =
+        [
+            "<?xml version=\"1.0\"?><!DOCTYPE lockinfo [<!ENTITY x \"y\">]><D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>&x;</D:owner></D:lockinfo>",
+            "<?xml version=\"1.0\"?><!DOCTYPE lockinfo [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>&x;</D:owner></D:lockinfo>",
+            "<?xml version=\"1.0\"?><!DOCTYPE lockinfo SYSTEM \"http://127.0.0.1/evil.dtd\"><D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>",
+        ];
+        foreach (var body in locks)
+        {
+            using var response = await dav.SendAsync(DavClient.Lock, "/dav/Work/", DavClient.Body(body));
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
         using var malformed = await dav.PropfindAsync("/dav/Work/", depth: "0", body: DavClient.Body("<D:propfind xmlns:D=\"DAV:\"><D:allprop>"));
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
         using var notPropfind = await dav.PropfindAsync("/dav/Work/", depth: "0", body: DavClient.Body("<D:lockinfo xmlns:D=\"DAV:\"/>"));

@@ -24,12 +24,18 @@ public sealed record DavResource(
 /// The tree a share sees, read through the request's store, which opens only the share's vaults and names each by the
 /// caller's name for it (a member's alias): the vaults at the root, below each its notes, attachments and folders. A
 /// folder exists while anything is below it, a folder marker included; markers themselves are never listed
-/// (<see cref="FolderMarker"/>).
+/// (<see cref="FolderMarker"/>). What the share parked (WebDAV design §3.8) joins in, for this share only; where the
+/// store has something at the same path, the store's is what the share sees, and writes there go to the store.
 /// </summary>
-public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
+public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavCaller caller, DavParking parking)
 {
     /// <summary>The resource at <paramref name="path"/>, or null if there is none.</summary>
-    public async Task<DavResource?> FindAsync(VaultPath path, CancellationToken ct)
+    public async Task<DavResource?> FindAsync(VaultPath path, CancellationToken ct) =>
+        await FindStoredAsync(path, ct) ?? (Parked(path) is { } item ? Parked(path, item) : null);
+
+    /// <summary>The resource the store has at <paramref name="path"/> (the root and the share's vaults included), or null
+    /// if it has none.</summary>
+    public async Task<DavResource?> FindStoredAsync(VaultPath path, CancellationToken ct)
     {
         if (path.IsRoot) return new DavResource(path, IsCollection: true);
         if (path.Segments.Count == 1) return (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0], StringComparer.Ordinal) ? new DavResource(path, true) : null;
@@ -39,14 +45,19 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
         return await IsFolderAsync(path, ct) ? new DavResource(path, true) : null;
     }
 
-    /// <summary>The content of the note or attachment at <paramref name="path"/>, or null if there is none there (a
-    /// collection, a folder marker, nothing).</summary>
+    /// <summary>The content of the note, attachment or parked file at <paramref name="path"/>, or null if there is none
+    /// there (a collection, a folder marker, nothing).</summary>
     public async Task<DavContent?> ContentAsync(VaultPath path, CancellationToken ct)
     {
-        if (path.Segments.Count < 2 || FolderMarker.Is(path)) return null;
-        if (path.IsNote && await notes.GetAsync(path, ct) is { } note) return DavContent.Note(note);
-        if (path.IsAttachment && await attachments.GetAttachmentAsync(path, ct) is { } attachment) return DavContent.Attachment(attachments, attachment);
-        return null;
+        if (path.Segments.Count < 2) return null;
+        if (!FolderMarker.Is(path))
+        {
+            if (path.IsNote && await notes.GetAsync(path, ct) is { } note) return DavContent.Note(note);
+            if (path.IsAttachment && await attachments.GetAttachmentAsync(path, ct) is { } attachment) return DavContent.Attachment(attachments, attachment);
+        }
+
+        // A file the share parked, unless the store has a folder there, which is then what the share sees.
+        return Parked(path) is { IsFolder: false } item && !await IsFolderAsync(path, ct) ? DavContent.Parked(item) : null;
     }
 
     /// <summary>What <paramref name="collection"/> holds, folders first, each group in the app's text order.</summary>
@@ -66,8 +77,8 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
             .Where(p => p.Segments.Count > depth + 1)
             .Select(p => p.Segments[depth])
             .Distinct(StringComparer.Ordinal)
-            .Order(TextOrder.Default)
-            .Select(name => new DavResource(folder.Child(name), true));
+            .Select(name => new DavResource(folder.Child(name), true))
+            .ToList();
 
         var children = new List<DavResource>();
         foreach (var path in notePaths.Where(p => p.Segments.Count == depth + 1))
@@ -77,9 +88,26 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments)
 
         // A marker keeps its folder in the listing above (it is below it), but is never one of a folder's files.
         children.AddRange(files.Where(a => a.Path.Segments.Count == depth + 1 && !FolderMarker.Is(a.Path)).Select(Attachment));
-        // The files this share parked in the folder join here, for this share only (WebDAV design §3.8, Task 7).
-        return [.. folders, .. children.OrderBy(c => c.Path.Name, TextOrder.Default)];
+
+        // What this share parked in the folder, under a name the store doesn't have there.
+        if (caller.Place(folder) is { } place)
+        {
+            var taken = folders.Select(f => f.Path.Name).Concat(children.Select(c => c.Path.Name)).ToHashSet(StringComparer.Ordinal);
+            foreach (var item in parking.List(caller.ShareId, place.VaultId, place.Path).Where(i => !taken.Contains(i.Name)))
+            {
+                (item.IsFolder ? folders : children).Add(Parked(folder.Child(item.Name), item));
+            }
+        }
+
+        return [.. folders.OrderBy(f => f.Path.Name, TextOrder.Default), .. children.OrderBy(c => c.Path.Name, TextOrder.Default)];
     }
+
+    /// <summary>What the share parked at <paramref name="path"/>, or null; nothing at the root or a vault's own folder.</summary>
+    public ParkedItem? Parked(VaultPath path) =>
+        path.Segments.Count >= 2 && caller.Place(path) is { } place ? parking.Get(caller.ShareId, place.VaultId, place.Path) : null;
+
+    private static DavResource Parked(VaultPath path, ParkedItem item) =>
+        item.IsFolder ? new DavResource(path, true) : new DavResource(path, false, item.Bytes!.LongLength, DavContent.ParkedContentType, item.Version, item.Modified);
 
     private async Task<bool> IsFolderAsync(VaultPath path, CancellationToken ct) =>
         (await notes.ListNotesUnderAsync(path, ct)).Count > 0 || (await attachments.ListAttachmentsUnderAsync(path, ct)).Count > 0;

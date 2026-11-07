@@ -7,10 +7,10 @@ namespace Kumbu.Server.Dav;
 /// <summary>
 /// The live properties of a resource for one request (WebDAV design §3.4), each built when a <c>PROPFIND</c> asks for it.
 /// Per request and asynchronous, since what isn't in <see cref="DavResource"/> needs the request: a resource's locks
-/// (<c>lockdiscovery</c>, from the lock store, Task 7) and the RFC 4331 quota properties on the root and the vaults
-/// the share's user owns (from the usage cache, Task 12) join in <see cref="PropertiesAsync"/>.
+/// (<c>lockdiscovery</c>, the share's own from <see cref="DavLocks"/>) and the RFC 4331 quota properties on the root and
+/// the vaults the share's user owns (from the usage cache, Task 12) join in <see cref="PropertiesAsync"/>.
 /// </summary>
-public sealed class DavProperties
+public sealed class DavProperties(DavCaller caller, DavLocks locks)
 {
     private static readonly XNamespace D = DavXml.Dav;
 
@@ -18,8 +18,8 @@ public sealed class DavProperties
     public Task<IReadOnlyDictionary<XName, Func<XElement>>> PropertiesAsync(DavResource resource, CancellationToken ct)
     {
         var properties = Live(resource);
-        // No locks yet (Task 7): the property is there, and lists none.
-        properties[D + "lockdiscovery"] = () => new XElement(D + "lockdiscovery");
+        properties[D + "lockdiscovery"] = () => DavXml.LockDiscovery(
+            caller.Place(resource.Path) is { } place ? locks.On(caller.ShareId, place.VaultId, place.Path).Select(l => (l, locks.SecondsLeft(l))) : []);
         return Task.FromResult<IReadOnlyDictionary<XName, Func<XElement>>>(properties);
     }
 

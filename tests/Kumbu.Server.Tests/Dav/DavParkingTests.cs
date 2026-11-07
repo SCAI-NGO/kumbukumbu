@@ -1,0 +1,344 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Net;
+using System.Text;
+using Kumbu.Server.Api;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+namespace Kumbu.Server.Tests.Dav;
+
+/// <summary>The parking area (WebDAV design §3.8): client junk kept in memory for the share that wrote it, served through
+/// the same handlers as the store's, and never in MongoDB.</summary>
+[Collection("app")]
+public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
+{
+    // Whole seconds, as the other timed tests.
+    private readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+
+    private WebApplicationFactory<Program>? _timed;
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private WebApplicationFactory<Program> Api => app.PublicApi;
+
+    /// <summary>A server of its own whose clock the test moves.</summary>
+    private WebApplicationFactory<Program> Timed => _timed ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+    {
+        s.RemoveAll<TimeProvider>();
+        s.AddSingleton<TimeProvider>(_time);
+    }));
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timed is not null) await _timed.DisposeAsync();
+    }
+
+    private static string Href(string pathBelowVault) => "/dav/Work/" + string.Join('/', pathBelowVault.Split('/').Select(Uri.EscapeDataString));
+
+    private static HttpContent Bytes(byte[] bytes) => new ByteArrayContent(bytes);
+
+    private static HttpContent Text(string text) => Bytes(Encoding.UTF8.GetBytes(text));
+
+    private static Dictionary<string, string> Headers(params (string Name, string Value)[] headers) => headers.ToDictionary(h => h.Name, h => h.Value);
+
+    private async Task<Dictionary<string, long>> CountsAsync()
+    {
+        var counts = new Dictionary<string, long>();
+        foreach (var name in await (await app.Database.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
+        {
+            // The profiler's own collection counts reads.
+            if (name.StartsWith("system.", StringComparison.Ordinal)) continue;
+            counts[name] = await app.Database.GetCollection<BsonDocument>(name).CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct);
+        }
+
+        return counts;
+    }
+
+    [Theory]
+    [InlineData(".DS_Store")]
+    [InlineData("._x.md")]
+    [InlineData(".gitignore")]
+    [InlineData(".~lock.a.md#")]
+    [InlineData(".goutputstream-1")]
+    [InlineData(".a.md.swp")]
+    [InlineData("Thumbs.db")]
+    [InlineData("desktop.ini")]
+    [InlineData("~$doc.md")]
+    [InlineData("~a.tmp")]
+    [InlineData("a.tmp")]
+    [InlineData("a.md~")]
+    [InlineData("a.swp")]
+    [InlineData("a.swx")]
+    [InlineData("a.kate-swp")]
+    [InlineData("a.part")]
+    [InlineData("a.crdownload")]
+    [InlineData(".ocTransferId1.part")]
+    [InlineData("4913")]
+    [InlineData("#a.md#")]
+    [InlineData(".git/config")]
+    public async Task Every_junk_pattern_is_parked_and_never_reaches_mongodb(string name)
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# Plan");
+        // The share's first request, and whatever it records, before the counting starts.
+        using (var first = await dav.PropfindAsync("/dav/Work/", depth: "1")) Assert.Equal(HttpStatusCode.MultiStatus, first.StatusCode);
+        var before = await CountsAsync();
+
+        if (name.Contains('/'))
+        {
+            using var folder = await dav.SendAsync(DavClient.Mkcol, Href(name[..name.LastIndexOf('/')]));
+            Assert.Equal(HttpStatusCode.Created, folder.StatusCode);
+        }
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, Href(name), Text("junk of " + name))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        using (var get = await dav.SendAsync(HttpMethod.Get, Href(name)))
+        {
+            Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+            Assert.Equal("junk of " + name, await get.Content.ReadAsStringAsync(Ct));
+        }
+
+        var parent = name.Contains('/') ? Href(name[..name.LastIndexOf('/')]) + "/" : "/dav/Work/";
+        var listing = await DavAssert.MultistatusAsync(await dav.PropfindAsync(parent, depth: "1"));
+        Assert.Contains(Href(name), DavAssert.Hrefs(listing));
+
+        Assert.Equal(before, await CountsAsync());
+    }
+
+    [Fact]
+    public async Task Parked_files_are_listed_for_their_share_only()
+    {
+        var alice = await DavClient.NewAsync(Api, label: "Laptop");
+        var other = await DavClient.NewAsync(Api, owner: alice.Owner, label: "Desktop");
+
+        using (var put = await alice.SendAsync(HttpMethod.Put, "/dav/Work/.DS_Store", Text("finder"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        Assert.Contains("/dav/Work/.DS_Store", DavAssert.Hrefs(await DavAssert.MultistatusAsync(await alice.PropfindAsync("/dav/Work/"))));
+        Assert.DoesNotContain("/dav/Work/.DS_Store", DavAssert.Hrefs(await DavAssert.MultistatusAsync(await other.PropfindAsync("/dav/Work/"))));
+        using (var get = await other.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store")) Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
+        using (var find = await other.PropfindAsync("/dav/Work/.DS_Store", depth: "0")) Assert.Equal(HttpStatusCode.NotFound, find.StatusCode);
+        using (var delete = await other.SendAsync(HttpMethod.Delete, "/dav/Work/.DS_Store")) Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+
+        // The other share parks its own under the same name; each reads back its own.
+        using (var put = await other.SendAsync(HttpMethod.Put, "/dav/Work/.DS_Store", Text("other"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        using var mine = await alice.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store");
+        Assert.Equal("finder", await mine.Content.ReadAsStringAsync(Ct));
+
+        // Nothing of it in the app.
+        using var tree = await alice.Owner.GetAsync("/api/vaults/Work/tree");
+        Assert.Equal(HttpStatusCode.OK, tree.StatusCode);
+        Assert.DoesNotContain("DS_Store", await tree.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_parked_file_reads_back_as_an_octet_stream_attachment()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var bytes = Encoding.UTF8.GetBytes("<html><script>alert(1)</script></html>");
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.page.html", Bytes(bytes), Headers(("Content-Type", "text/html")));
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        var etag = put.Headers.ETag?.Tag;
+        Assert.NotNull(etag);
+
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.page.html");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        Assert.Equal(bytes, await get.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal("application/octet-stream", DavAssert.Header(get, "Content-Type"));
+        Assert.Equal(FileApi.Disposition(".page.html", download: true), DavAssert.Header(get, "Content-Disposition"));
+        Assert.StartsWith("attachment", DavAssert.Header(get, "Content-Disposition"), StringComparison.Ordinal);
+        Assert.Equal(Security.FileContentPolicy, DavAssert.Header(get, "Content-Security-Policy"));
+        Assert.Equal("nosniff", DavAssert.Header(get, "X-Content-Type-Options"));
+        Assert.Equal(etag, get.Headers.ETag?.Tag);
+        DavAssert.PrivateWithoutCookie(get);
+
+        using var head = await dav.SendAsync(HttpMethod.Head, "/dav/Work/.page.html");
+        Assert.Equal(bytes.Length, head.Content.Headers.ContentLength);
+        Assert.Empty(await head.Content.ReadAsByteArrayAsync(Ct));
+        using var same = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.page.html", headers: Headers(("If-None-Match", etag)));
+        Assert.Equal(HttpStatusCode.NotModified, same.StatusCode);
+
+        var found = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/.page.html", depth: "0"));
+        var file = DavAssert.Response(found, "/dav/Work/.page.html");
+        Assert.Equal("application/octet-stream", DavAssert.Prop(file, "getcontenttype")?.Value);
+        Assert.Equal(bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture), DavAssert.Prop(file, "getcontentlength")?.Value);
+        Assert.Equal(etag, DavAssert.Prop(file, "getetag")?.Value);
+        Assert.False(DavAssert.IsCollection(file));
+    }
+
+    [Fact]
+    public async Task Parked_files_expire_ten_minutes_after_their_last_write()
+    {
+        var dav = await DavClient.NewAsync(Timed);
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.DS_Store", Text("one"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        _time.Advance(TimeSpan.FromMinutes(5));
+        using (var again = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.DS_Store", Text("two"))) Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
+
+        _time.Advance(TimeSpan.FromMinutes(9) + TimeSpan.FromSeconds(59));
+        using (var present = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store"))
+        {
+            Assert.Equal(HttpStatusCode.OK, present.StatusCode);
+            Assert.Equal("two", await present.Content.ReadAsStringAsync(Ct));
+        }
+
+        _time.Advance(TimeSpan.FromSeconds(2));
+        using (var gone = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store")) Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.DoesNotContain("/dav/Work/.DS_Store", DavAssert.Hrefs(await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/"))));
+    }
+
+    [Fact]
+    public async Task The_oldest_parked_files_are_evicted_beyond_64_MB()
+    {
+        var dav = await DavClient.NewAsync(Timed);
+        var chunk = new byte[15 * 1024 * 1024];
+        foreach (var name in new[] { "a", "b", "c", "d", "e" })
+        {
+            using var put = await dav.SendAsync(HttpMethod.Put, $"/dav/Work/.{name}.part", Bytes(chunk));
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+            _time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        // 75 MiB were written: the first went to make room, the last four (60 MiB) stay.
+        using (var oldest = await dav.SendAsync(HttpMethod.Head, "/dav/Work/.a.part")) Assert.Equal(HttpStatusCode.NotFound, oldest.StatusCode);
+        foreach (var name in new[] { "b", "c", "d", "e" })
+        {
+            using var kept = await dav.SendAsync(HttpMethod.Head, $"/dav/Work/.{name}.part");
+            Assert.Equal(HttpStatusCode.OK, kept.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task A_dot_folder_can_be_made_filled_and_listed()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Ideas/Routing.md", "Routing");
+
+        using (var made = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git")) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using (var again = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git/")) Assert.Equal(HttpStatusCode.MethodNotAllowed, again.StatusCode);
+        using (var objects = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git/objects/")) Assert.Equal(HttpStatusCode.Created, objects.StatusCode);
+        using (var config = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.git/config", Text("[core]"))) Assert.Equal(HttpStatusCode.Created, config.StatusCode);
+        using (var blob = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.git/objects/ab", Text("blob"))) Assert.Equal(HttpStatusCode.Created, blob.StatusCode);
+        // In a real folder too.
+        using (var inIdeas = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/Ideas/.obsidian")) Assert.Equal(HttpStatusCode.Created, inIdeas.StatusCode);
+
+        var git = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/.git/", depth: "1"));
+        Assert.Equal(["/dav/Work/.git/", "/dav/Work/.git/objects/", "/dav/Work/.git/config"], DavAssert.Hrefs(git));
+        Assert.True(DavAssert.IsCollection(DavAssert.Response(git, "/dav/Work/.git/")));
+        Assert.True(DavAssert.IsCollection(DavAssert.Response(git, "/dav/Work/.git/objects/")));
+        Assert.Equal("6", DavAssert.Prop(DavAssert.Response(git, "/dav/Work/.git/config"), "getcontentlength")?.Value);
+
+        var vault = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/", depth: "1"));
+        Assert.True(DavAssert.IsCollection(DavAssert.Response(vault, "/dav/Work/.git/")));
+        var ideas = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/Ideas/", depth: "1"));
+        Assert.Equal(["/dav/Work/Ideas/", "/dav/Work/Ideas/.obsidian/", "/dav/Work/Ideas/Routing.md"], DavAssert.Hrefs(ideas));
+
+        // A parent that doesn't exist is a conflict (RFC 4918 §9.3.1, §9.7.1); a MKCOL with a body is refused.
+        using (var orphan = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.nothing/x")) Assert.Equal(HttpStatusCode.Conflict, orphan.StatusCode);
+        using (var orphanFile = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.nothing/x", Text("x"))) Assert.Equal(HttpStatusCode.Conflict, orphanFile.StatusCode);
+        using (var withBody = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.vscode", Text("body"))) Assert.Equal(HttpStatusCode.UnsupportedMediaType, withBody.StatusCode);
+        using (var overFile = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git/config")) Assert.Equal(HttpStatusCode.MethodNotAllowed, overFile.StatusCode);
+        using (var putOnFolder = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.git", Text("x"))) Assert.Equal(HttpStatusCode.MethodNotAllowed, putOnFolder.StatusCode);
+        using (var getFolder = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.git/")) Assert.Equal(HttpStatusCode.MethodNotAllowed, getFolder.StatusCode);
+
+        // Nothing reached the store: the folder the store knows is Ideas only.
+        using var tree = await dav.Owner.GetAsync("/api/vaults/Work/tree");
+        Assert.Equal(HttpStatusCode.OK, tree.StatusCode);
+        var known = await tree.Content.ReadAsStringAsync(Ct);
+        Assert.Contains("Ideas", known, StringComparison.Ordinal);
+        Assert.DoesNotContain(".git", known, StringComparison.Ordinal);
+        Assert.DoesNotContain(".obsidian", known, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_parked_file_can_be_moved_copied_and_deleted_within_its_share()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var other = await DavClient.NewAsync(Api, owner: dav.Owner, label: "Desktop");
+        const string root = "https://localhost/dav/Work/";
+        Dictionary<string, string> To(string path, string? overwrite = null, string? depth = null)
+        {
+            var headers = Headers(("Destination", root + path));
+            if (overwrite is not null) headers["Overwrite"] = overwrite;
+            if (depth is not null) headers["Depth"] = depth;
+            return headers;
+        }
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.a.swp", Text("swap"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        using (var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: To(".b.swp"))) Assert.Equal(HttpStatusCode.Created, copy.StatusCode);
+        using (var refused = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: To(".b.swp", "F"))) Assert.Equal(HttpStatusCode.PreconditionFailed, refused.StatusCode);
+        using (var over = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: To(".b.swp", "T"))) Assert.Equal(HttpStatusCode.NoContent, over.StatusCode);
+        using (var self = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: To(".a.swp"))) Assert.Equal(HttpStatusCode.Forbidden, self.StatusCode);
+        using (var missing = await dav.SendAsync(DavClient.Copy, "/dav/Work/.none.swp", headers: To(".x.swp"))) Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        using (var orphan = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: To(".nothing/x"))) Assert.Equal(HttpStatusCode.Conflict, orphan.StatusCode);
+        using (var noDestination = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp")) Assert.Equal(HttpStatusCode.BadRequest, noDestination.StatusCode);
+        using (var elsewhere = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: Headers(("Destination", "https://kumbu.example.org/dav/Work/.c.swp")))) Assert.Equal(HttpStatusCode.BadGateway, elsewhere.StatusCode);
+        using (var outside = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a.swp", headers: Headers(("Destination", "https://localhost/api/.c.swp")))) Assert.Equal(HttpStatusCode.BadGateway, outside.StatusCode);
+
+        using (var move = await dav.SendAsync(DavClient.Move, "/dav/Work/.b.swp", headers: To(".c.swp"))) Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+        using (var moved = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.b.swp")) Assert.Equal(HttpStatusCode.NotFound, moved.StatusCode);
+        using (var arrived = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.c.swp")) Assert.Equal("swap", await arrived.Content.ReadAsStringAsync(Ct));
+
+        // A folder, with what is in it.
+        using (var made = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git")) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using (var config = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.git/config", Text("[core]"))) Assert.Equal(HttpStatusCode.Created, config.StatusCode);
+        using (var shallow = await dav.SendAsync(DavClient.Copy, "/dav/Work/.git/", headers: To(".empty/", depth: "0"))) Assert.Equal(HttpStatusCode.Created, shallow.StatusCode);
+        Assert.Equal(["/dav/Work/.empty/"], DavAssert.Hrefs(await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/.empty/"))));
+        using (var deep = await dav.SendAsync(DavClient.Copy, "/dav/Work/.git/", headers: To(".git-copy/"))) Assert.Equal(HttpStatusCode.Created, deep.StatusCode);
+        using (var into = await dav.SendAsync(DavClient.Move, "/dav/Work/.git/", headers: To(".git/inner/"))) Assert.Equal(HttpStatusCode.Forbidden, into.StatusCode);
+        using (var folder = await dav.SendAsync(DavClient.Move, "/dav/Work/.git/", headers: To(".git2/"))) Assert.Equal(HttpStatusCode.Created, folder.StatusCode);
+        using (var inside = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.git2/config")) Assert.Equal("[core]", await inside.Content.ReadAsStringAsync(Ct));
+        using (var copied = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.git-copy/config")) Assert.Equal("[core]", await copied.Content.ReadAsStringAsync(Ct));
+        using (var left = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.git/config")) Assert.Equal(HttpStatusCode.NotFound, left.StatusCode);
+
+        // The other share sees none of it, and can't move it.
+        using (var theirs = await other.SendAsync(DavClient.Move, "/dav/Work/.c.swp", headers: To(".d.swp"))) Assert.Equal(HttpStatusCode.NotFound, theirs.StatusCode);
+
+        using (var delete = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/.c.swp")) Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+        using (var again = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/.c.swp")) Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+        using (var tree = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/.git2/")) Assert.Equal(HttpStatusCode.NoContent, tree.StatusCode);
+        using (var below = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.git2/config")) Assert.Equal(HttpStatusCode.NotFound, below.StatusCode);
+    }
+
+    [Fact]
+    public async Task Parked_files_stay_in_their_vault()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api, vault: "Work");
+        using (var personal = await owner.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Personal" })) Assert.Equal(HttpStatusCode.Created, personal.StatusCode);
+        var dav = await DavClient.NewAsync(Api, owner, vaults: new Dictionary<string, string> { ["Work"] = "write", ["Personal"] = "write" });
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.a", Text("a"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        using (var get = await dav.SendAsync(HttpMethod.Get, "/dav/Personal/.a")) Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
+        // Across vaults the server won't (WebDAV design §3.5): a client falls back to copy and delete.
+        foreach (var method in new[] { DavClient.Copy, DavClient.Move })
+        {
+            using var across = await dav.SendAsync(method, "/dav/Work/.a", headers: Headers(("Destination", "https://localhost/dav/Personal/.a")));
+            Assert.Equal(HttpStatusCode.BadGateway, across.StatusCode);
+        }
+
+        using (var nowhere = await dav.SendAsync(HttpMethod.Put, "/dav/Nowhere/.a", Text("a"))) Assert.Equal(HttpStatusCode.NotFound, nowhere.StatusCode);
+        using (var vault = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/")) Assert.Equal(HttpStatusCode.Forbidden, vault.StatusCode);
+        using (var root = await dav.SendAsync(HttpMethod.Put, "/dav/", Text("a"))) Assert.Equal(HttpStatusCode.Forbidden, root.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_read_share_cannot_park()
+    {
+        var dav = await DavClient.NewAsync(Api, right: "read");
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.DS_Store", Text("finder"))) Assert.Equal(HttpStatusCode.Forbidden, put.StatusCode);
+        using (var mkcol = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.git")) Assert.Equal(HttpStatusCode.Forbidden, mkcol.StatusCode);
+        using (var delete = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/.DS_Store")) Assert.Equal(HttpStatusCode.Forbidden, delete.StatusCode);
+        using (var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/.a", headers: Headers(("Destination", "https://localhost/dav/Work/.b")))) Assert.Equal(HttpStatusCode.Forbidden, copy.StatusCode);
+
+        // It still reads and lists.
+        using var listing = await dav.PropfindAsync("/dav/Work/");
+        Assert.Equal(HttpStatusCode.MultiStatus, listing.StatusCode);
+        using var nothing = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.DS_Store");
+        Assert.Equal(HttpStatusCode.NotFound, nothing.StatusCode);
+    }
+}

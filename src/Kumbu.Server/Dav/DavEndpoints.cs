@@ -10,7 +10,7 @@ namespace Kumbu.Server.Dav;
 /// Everything under <c>/dav</c> (WebDAV design §3): one endpoint for the methods WebDAV has, which dispatches by method.
 /// <see cref="Auth.CallerMiddleware"/> has run first: it lets <c>OPTIONS</c> through without a caller and everything
 /// else only with a share's. <c>OPTIONS</c> is answered before anything else, the same on every path, so it touches no
-/// store and needs no caller. A method that comes in a later step answers 501 until then; one WebDAV doesn't have, 405
+/// store and needs no caller. The methods that write are <see cref="DavWrites"/>'s; one WebDAV doesn't have is a 405
 /// with the methods it does. Every answer carries <see cref="Security.FileContentPolicy"/>, as an attachment's bytes on
 /// <c>/api/files</c> do (brief open point 1): what a share serves is a file's, and a file opened in a tab runs nothing
 /// at the app's origin, whatever its name or bytes.
@@ -63,9 +63,23 @@ public static class DavEndpoints
                 case DavMethod.Get or DavMethod.Head:
                     await GetAsync(http, target, ct);
                     break;
-                default:
-                    // PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK: the steps after this one.
-                    response.StatusCode = StatusCodes.Status501NotImplemented;
+                case DavMethod.Put:
+                    await Writes(http).PutAsync(target, ct);
+                    break;
+                case DavMethod.Mkcol:
+                    await Writes(http).MkcolAsync(target, ct);
+                    break;
+                case DavMethod.Delete:
+                    await Writes(http).DeleteAsync(target, ct);
+                    break;
+                case DavMethod.Copy or DavMethod.Move:
+                    await Writes(http).TransferAsync(target, move: request.Method == DavMethod.Move, ct);
+                    break;
+                case DavMethod.Lock:
+                    await Writes(http).LockAsync(target, ct);
+                    break;
+                case DavMethod.Unlock:
+                    await Writes(http).UnlockAsync(ct);
                     break;
             }
         }
@@ -99,7 +113,7 @@ public static class DavEndpoints
         var tree = Tree(http);
         var resource = await tree.FindAsync(target.Path, ct) ?? throw NotFound();
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
-        var properties = new DavProperties();
+        var properties = new DavProperties(DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>());
         var responses = new List<DavResponse>(resources.Count);
         foreach (var r in resources) responses.Add(DavXml.Response(r.Href, await properties.PropertiesAsync(r, ct), propfind));
         await DavXml.WriteMultistatusAsync(http.Response, responses, ct);
@@ -181,12 +195,16 @@ public static class DavEndpoints
         };
     }
 
-    /// <summary>The share's tree through the request's store, resolved only now: <c>OPTIONS</c> has no caller to open it.</summary>
+    /// <summary>The share's tree through the request's store, with what it parked, resolved only now: <c>OPTIONS</c> has
+    /// no caller to open it.</summary>
     private static DavTree Tree(HttpContext http)
     {
         var store = http.RequestServices.GetRequiredService<EncryptedNoteStore>();
-        return new DavTree(store, store);
+        return new DavTree(store, store, DavCaller.Of(http), http.RequestServices.GetRequiredService<DavParking>());
     }
+
+    private static DavWrites Writes(HttpContext http) =>
+        new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>());
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }

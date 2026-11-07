@@ -116,6 +116,30 @@ public static class DavXml
         return names.Count > 0 ? names : throw BadBody("A DAV:propertyupdate sets or removes at least one property.");
     }
 
+    /// <summary>A <c>LOCK</c> body that asks for a new lock (RFC 4918 §14.11): its scope and the client's
+    /// <c>owner</c>, which the lock gives back as it came. Only write locks exist.</summary>
+    public static (bool Exclusive, XElement? Owner) ParseLockInfo(XDocument body)
+    {
+        if (body.Root is not { } root || root.Name != Dav + "lockinfo") throw BadBody("A LOCK body is a DAV:lockinfo.");
+        var scope = root.Element(Dav + "lockscope")?.Elements().FirstOrDefault();
+        if (scope is null || scope.Name != Dav + "exclusive" && scope.Name != Dav + "shared") throw BadBody("A DAV:lockinfo has a DAV:lockscope, exclusive or shared.");
+        if (root.Element(Dav + "locktype")?.Element(Dav + "write") is null) throw BadBody("A DAV:lockinfo asks for a DAV:locktype of DAV:write.");
+        return (scope.Name == Dav + "exclusive", root.Element(Dav + "owner") is { } owner ? new XElement(owner) : null);
+    }
+
+    /// <summary>A <c>lockdiscovery</c> with an <c>activelock</c> (RFC 4918 §14.1) for each of <paramref name="locks"/>,
+    /// with the seconds it has left.</summary>
+    public static XElement LockDiscovery(IEnumerable<(DavLock Lock, int SecondsLeft)> locks) =>
+        new(Dav + "lockdiscovery", locks.Select(l => new XElement(
+            Dav + "activelock",
+            new XElement(Dav + "locktype", new XElement(Dav + "write")),
+            new XElement(Dav + "lockscope", new XElement(Dav + (l.Lock.Exclusive ? "exclusive" : "shared"))),
+            new XElement(Dav + "depth", l.Lock.Deep ? "infinity" : "0"),
+            l.Lock.Owner,
+            new XElement(Dav + "timeout", $"Second-{l.SecondsLeft}"),
+            new XElement(Dav + "locktoken", new XElement(Dav + "href", l.Lock.Token)),
+            new XElement(Dav + "lockroot", new XElement(Dav + "href", l.Lock.Href)))));
+
     private static DavException BadBody(string message) => new(StatusCodes.Status400BadRequest, message);
 
     /// <summary>The propstats of a resource with <paramref name="properties"/> (its live properties, by name, each a
