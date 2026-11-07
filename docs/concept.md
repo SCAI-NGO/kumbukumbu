@@ -38,7 +38,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 ### Vaults
 - **Every top-level directory is a vault** = a cryptographic boundary with its own vault key.
 - A user creates their vaults themselves after joining (in the web app or with `POST /api/vaults`).
-- Permissions exist **only at vault level** (read / write). No per-subdirectory rights.
+- **Rights are per vault, always.** Every credential (API key, connection, device, WebDAV share) gets a right **per vault** (`read`, `write` or `maintain`) and nothing finer: no folder scopes, now or later. Data that needs a different audience goes into its own vault. This is a fixed principle of Kumbu²: it keeps the rights model, the cryptography (a vault key opens the whole vault) and link rewriting simple.
 - Paths always include the vault name (`/Work/notes/x.md`) — consistent addressing across keys. No `cd` — paths are always absolute.
 
 ### Notes
@@ -143,6 +143,8 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - **Invites:** single-use, expiring, revocable links.
 - **Deactivating a user** kills all their API keys and sessions immediately.
 - Admins see metadata (who, storage used), never content.
+- **Storage quota** (built for the WebDAV work, `docs/superpowers/specs/2026-11-07-webdav-design.md` §3.10): what a user's **own** vaults take in the database, notes with their history, trash, moves, embeddings, checkpoints and attachments, the figure the admin's user list shows, counted from what is in the clear without opening a vault. A default for everyone (`KUMBU_QUOTA_DEFAULT`, unlimited unless set) and an admin's override per user (the default, a size, or unlimited), stored on the user in the clear. Data in a shared vault counts against its owner, whoever writes it; no per-writer accounting, since sharing is with people trusted not to fill it, and revoking is the remedy. Every write that adds data is refused once the limit is reached ("This vault is out of space."); removing, moving and emptying the trash always work. The user sees it in Settings and with `df`; `du` sizes what a folder holds now.
+- **Emptying the trash** is the owner's alone, in the web app, with the password: no member, key, connection, device or share, and no `sh` command, can delete anything permanently.
 - **API keys:** named, per-vault read/write rights, shown once at creation, afterwards only by prefix (`kumbu_ab12…`). A key without at least one right can't exist (no slot = can't decrypt anything).
 - Rate limiting on login and invalid keys, in memory (one instance).
 - **Later:** sharing vaults between users, which needs asymmetric crypto (v3); TOTP/2FA (v5).
@@ -157,7 +159,8 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 
 - **Bearer API keys:** Claude Code, opencode, Hermes, Chatsundere etc.
 - **OAuth 2.1:** app connectors (Claude.ai, ChatGPT, Grok). Kumbu² is **its own authorization server** — no external identity provider needed (that's only the "Login with Google/GitHub" use case). A connection is just another key slot: its vaults and rights are chosen when the user creates it on the Access page, and the consent screen then only allows or denies — no second permission world.
-- Bearer API keys + OAuth cover every client type; **no keys in URLs** (proxy logs, and here keys are key material).
+- **WebDAV shares** (built after 0.3.2, `docs/superpowers/specs/2026-11-07-webdav-design.md`): file managers (Windows Explorer, Finder, Dolphin, GNOME Files) and sync tools (rclone, Nextcloud's external storage, Obsidian Remotely Save) mount vaults at `/dav/`. A share is a credential like an API key: made in the web app for chosen vaults with a right each, never "May publish"; a username (the account's, a dot, the share's id) and a generated 256-bit password, shown once; HTTP Basic, over HTTPS only, on `/dav/` and nowhere else. Its slots are of their own kind (`dav`), so nothing that handles API keys touches them. Notes are `.md` files, PDFs and images files; what clients leave behind (`.DS_Store`, lock and swap files, `.git/`) is parked in memory for that share and never stored. Editors' atomic saves become one new version of the note, and a share never removes a published note. Not an Obsidian vault: the Obsidian plugin (§10) stays the way to edit with Obsidian.
+- Bearer API keys + OAuth cover every client type; WebDAV shares add file access with a password, since file managers can't send a bearer token. **No keys in URLs** (proxy logs, and here keys are key material).
 
 ### OAuth flow (for reference; as built in step 10 the client uses the connection's own address `/mcp/c/{id}`, the endpoints are `/oauth/authorize` and `/oauth/token`, and clients identify themselves by a client metadata document, with dynamic registration as a fallback; `docs/security-architecture.md` §6)
 1. Client calls `/mcp` without token → `401` pointing to metadata.
@@ -274,7 +277,7 @@ Each step = a chapter in `CONCEPTS.md`, numbered on its own (steps 8 to 11 are c
   - **The key lives only in Obsidian's `SecretStorage`** (API since Obsidian 1.11.4), never in the plugin's `data.json`, which sits inside the vault and would be synced with it. The plugin refuses to run without it: `minAppVersion` `1.11.4` in `manifest.json`, a load-time check for `app.secretStorage`, and no plain-text key field in its settings.
   - Known limits of `SecretStorage` to verify before relying on it: the docs only promise local storage keyed to the vault, not OS-keychain encryption at rest; on mobile, secrets with the same name were reported to leak across vaults, so secret names include the vault (e.g. `kumbu-<vault>-<device>`).
   - Later: an OAuth login flow (§9) instead of pasting a key.
-- **Mounting as an alternative** (not planned): **WebDAV** (mountable without extra software; ETags and locks map onto version tokens), **SFTP** (true sshfs; server-side SSH libraries for .NET are scarce) or an **own FUSE client** over the API. A mount keeps a vault unlocked, which works against the idle TTL (§7).
+- **Mounting as an alternative**: **WebDAV** is built (§9, WebDAV shares; ETags are the version tokens, and locks are granted but not enforced), alongside the plugin rather than instead of it; not built: **SFTP** (true sshfs; server-side SSH libraries for .NET are scarce) or an **own FUSE client** over the API. A mount keeps a vault unlocked, which works against the idle TTL (§7).
 - To settle either way: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; sync needs a conflict strategy for offline edits. Plaintext on the server adds no new exposure, as search needs it already.
 
 ### OKF (parked)
