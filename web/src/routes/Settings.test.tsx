@@ -315,8 +315,8 @@ describe("Settings", () => {
     let release: () => void = () => {};
     const access = new Promise<void>((resolve) => (release = resolve));
     api({
-      "GET /api/vaults/Diary/access": async () => (await access, json(200, { apiKeys: ["laptop", "phone"], connections: ["claude"] })),
-      "POST /api/vaults/Diary/rekey": async (r) => (bodies.push(await r.json()), json(200, { revokedApiKeys: 2, disconnectedApps: 1 })),
+      "GET /api/vaults/Diary/access": async () => (await access, json(200, { apiKeys: ["laptop", "phone"], connections: ["claude"], shares: ["Work PC"] })),
+      "POST /api/vaults/Diary/rekey": async (r) => (bodies.push(await r.json()), json(200, { revokedApiKeys: 2, disconnectedApps: 1, revokedShares: 1 })),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     renderApp("/settings", queryClient);
@@ -331,26 +331,49 @@ describe("Settings", () => {
     expect(within(keys).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["laptop", "phone"]);
     const apps = within(dialog).getByRole("list", { name: "Connected apps" });
     expect(within(apps).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["claude"]);
+    const shares = within(dialog).getByRole("list", { name: "WebDAV shares" });
+    expect(within(shares).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["Work PC"]);
 
     await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(bodies).toEqual([{ password: "my password, long" }]);
-    expect(within(vaultsSection).getByRole("status")).toHaveTextContent("Diary is re-encrypted. 2 API keys were revoked and 1 app was disconnected.");
+    expect(within(vaultsSection).getByRole("status")).toHaveTextContent(
+      "Diary is re-encrypted. 2 API keys were revoked and 1 app was disconnected. 1 WebDAV share was revoked.",
+    );
     expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("my password");
+  });
+
+  it("re-encrypting a vault counts a WebDAV share as something that loses access", async () => {
+    api({
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: ["Work PC"] }),
+      "POST /api/vaults/Diary/rekey": () => json(200, { revokedApiKeys: 0, disconnectedApps: 0, revokedShares: 1 }),
+    });
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    const shares = await within(dialog).findByRole("list", { name: "WebDAV shares" });
+    expect(within(shares).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["Work PC"]);
+    expect(within(dialog).queryByText(/^No API key/)).not.toBeInTheDocument();
+
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(within(vaultsSection).getByRole("status")).toHaveTextContent(/^Diary is re-encrypted\. 1 WebDAV share was revoked\.$/);
   });
 
   it("says when a vault is busy being re-encrypted", async () => {
     api({
-      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [] }),
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [] }),
       "POST /api/vaults/Diary/rekey": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
     });
     renderApp("/settings");
     const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
     await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
     const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
-    expect(await within(dialog).findByText("No API key or connected app has access to it.")).toBeInTheDocument();
+    expect(await within(dialog).findByText("No API key, connected app or WebDAV share has access to it.")).toBeInTheDocument();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
     expect(await within(dialog).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();

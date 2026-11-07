@@ -11,6 +11,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }]),
     "GET /api/keys": () => json(200, []),
     "GET /api/connections": () => json(200, []),
+    "GET /api/dav-shares": () => json(200, { enabled: true, shares: [] }),
     ...overrides,
   });
 }

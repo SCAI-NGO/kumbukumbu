@@ -477,17 +477,20 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
       setPassword("");
       const keys = Number(view.revokedApiKeys);
       const apps = Number(view.disconnectedApps);
+      const shares = Number(view.revokedShares ?? 0);
       onDone(
         (keys + apps === 0
           ? `${vault} is re-encrypted.`
-          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`) + withdrawnSentence(view),
+          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`) +
+          (shares === 0 ? "" : ` ${plural(shares, "WebDAV share was", "WebDAV shares were")} revoked.`) +
+          withdrawnSentence(view),
       );
-      await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      await Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
       onClose();
     },
   });
   const lists = access.data;
-  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0;
+  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0 && lists.shares.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -509,9 +512,10 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
         <p className="text-text-body">The vault gets a new key. What has access to it now loses it and needs to be set up or reconnected.</p>
         {access.isPending && <p className="text-muted">Looking up what has access…</p>}
         {access.isError && <FormError>{errorText(access.error)}</FormError>}
-        {nothing && <p className="text-text-body">No API key or connected app has access to it.</p>}
+        {nothing && <p className="text-text-body">No API key, connected app or WebDAV share has access to it.</p>}
         {lists && lists.apiKeys.length > 0 && <AccessList title="API keys" names={lists.apiKeys} />}
         {lists && lists.connections.length > 0 && <AccessList title="Connected apps" names={lists.connections} />}
+        {lists && lists.shares.length > 0 && <AccessList title="WebDAV shares" names={lists.shares} />}
         {lists && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
         {rekey.isPending && <p className="text-muted">Re-encrypting; this can take a while for a large vault.</p>}
         {rekey.isError && <FormError>{errorText(rekey.error)}</FormError>}

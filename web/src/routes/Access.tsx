@@ -3,6 +3,7 @@ import { Fragment, useRef, useState, type KeyboardEvent, type ReactNode } from "
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { AccountScreen } from "../components/form";
 import Connections from "./Connections";
+import DavShares from "./DavShares";
 import Keys from "./Keys";
 
 const tabs = [
@@ -17,14 +18,7 @@ type Tab = (typeof tabs)[number]["id"];
 const panels: Record<Tab, (onReveal: (revealing: boolean) => void) => ReactNode> = {
   keys: (onReveal) => <Keys onRevealChange={onReveal} />,
   apps: (onReveal) => <Connections subtitle="MCP via OAuth: claude.ai connectors, ChatGPT and others" onRevealChange={onReveal} />,
-  dav: () => (
-    <section aria-labelledby="dav-title" className="flex min-w-0 flex-col gap-6">
-      <h2 id="dav-title" className="text-[22px] font-bold text-text">
-        WebDAV
-      </h2>
-      <p className="text-text-body">WebDAV shares will be listed here.</p>
-    </section>
-  ),
+  dav: (onReveal) => <DavShares onRevealChange={onReveal} />,
 };
 
 const tabClass = (on: boolean) =>
