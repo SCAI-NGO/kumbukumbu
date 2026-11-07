@@ -16,7 +16,8 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
 {
     private const string Marker = "zzsecretmarker";
 
-    private static readonly HashSet<string> Methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    private static readonly HashSet<string> Methods =
+        ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

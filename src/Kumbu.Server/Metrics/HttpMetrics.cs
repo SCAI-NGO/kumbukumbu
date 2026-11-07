@@ -7,7 +7,11 @@ namespace Kumbu.Server.Metrics;
 
 public static class HttpMetrics
 {
-    private static readonly HashSet<string> Methods = new(StringComparer.Ordinal) { "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS" };
+    /// <summary>HTTP's and WebDAV's (<c>/dav</c>, and <c>PROPFIND</c> on <c>/</c>): a fixed set, so the label stays bounded.</summary>
+    private static readonly HashSet<string> Methods = new(StringComparer.Ordinal)
+    {
+        "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
+    };
 
     /// <summary>
     /// Request counts and durations by route template (the endpoint label is the pattern, never the path) and status

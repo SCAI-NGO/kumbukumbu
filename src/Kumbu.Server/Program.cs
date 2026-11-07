@@ -11,6 +11,7 @@ using Kumbu.Server.Api;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
+using Kumbu.Server.Dav;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
@@ -140,6 +141,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.RespectRequiredConstructorParameters = true;
 });
 builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+// The WebDAV challenge's realm, "Kumbu²" (CallerMiddleware.DavChallenge), isn't ASCII: without an encoding Kestrel sends
+// a "?" for it. ISO-8859-1 is what clients read a realm in. Every other header is still checked to be ASCII when it is
+// set (Kestrel asks by its name then); writing the headers Kestrel knows, it asks with an empty name, and ISO-8859-1
+// writes ASCII as ASCII.
+builder.WebHost.ConfigureKestrel(kestrel => kestrel.ResponseHeaderEncodingSelector = name =>
+    name.Length == 0 || name.Equals(Microsoft.Net.Http.Headers.HeaderNames.WWWAuthenticate, StringComparison.OrdinalIgnoreCase) ? System.Text.Encoding.Latin1 : null);
 builder.Services.AddOpenApi();
 
 // Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
@@ -283,6 +290,21 @@ app.MapReaderApi();
 app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
     ? Results.Stream(page.CreateReadStream(), "text/html")
     : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+
+// WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
+app.MapMethods("/", [HttpMethods.Options], (HttpContext http) => DavHeaders.Options(http.Response, DavHeaders.RootMethods)).AllowAnonymous().ExcludeFromDescription();
+app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
+{
+    http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+    http.Response.Headers.Allow = DavHeaders.RootMethods;
+}).AllowAnonymous().ExcludeFromDescription();
+// Everything under /dav, until the WebDAV endpoints come: CallerMiddleware lets OPTIONS through without a caller and
+// everything else only with a share's. Matches /dav itself too, so the web app never answers there.
+app.Map("/dav/{**path}", (HttpContext http) =>
+{
+    if (HttpMethods.IsOptions(http.Request.Method)) DavHeaders.Options(http.Response, DavHeaders.DavMethods);
+    else http.Response.StatusCode = StatusCodes.Status501NotImplemented;
+}).ExcludeFromDescription();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.

@@ -97,6 +97,8 @@ services:
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
       # Publishing notes behind a link. Off, nothing is published, updated or read; withdrawing and the marks still work.
       Kumbu__Publish__Enabled: ${KUMBU_PUBLISH_ENABLED:-true}
+      # WebDAV on /dav/ with a share's username and password, over https. Off, /dav/ answers 404; the shares stay.
+      Kumbu__Dav__Enabled: ${KUMBU_DAV_ENABLED:-true}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
       # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.
