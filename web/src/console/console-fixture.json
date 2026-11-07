@@ -1,5 +1,5 @@
 {
-  "allowed": ["ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort", "history", "diff", "trash", "lscp", "uname", "help"],
+  "allowed": ["ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort", "history", "diff", "trash", "lscp", "publish", "uname", "help"],
   "refused": ["restore", "mv", "mkdir", "rm", "mkcp", "rmcp"],
   "lines": [
     { "line": "", "stages": [] },

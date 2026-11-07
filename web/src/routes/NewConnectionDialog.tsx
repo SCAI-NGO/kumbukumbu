@@ -7,7 +7,7 @@ import { useVaults } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
-import { ExpiryPicker, grant, RightsPicker, type Right } from "./NewKeyDialog";
+import { ExpiryPicker, grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
 
 type Connection = components["schemas"]["ConnectionView"];
 
@@ -19,6 +19,7 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
   const vaults = useVaults();
   const [name, setName] = useState("");
   const [chosen, setChosen] = useState<Record<string, Right>>({});
+  const [publish, setPublish] = useState<string[]>([]);
   // As for keys: one that ends by itself is the safer default.
   const [expiresInDays, setExpiresInDays] = useState(90);
 
@@ -26,7 +27,7 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
   const ready = name.trim() !== "" && Object.keys(granted).length > 0;
 
   const create = useMutation({
-    mutationFn: () => call(api.POST("/api/connections", { body: { name, vaults: granted, ...(expiresInDays ? { expiresInDays } : {}) } })),
+    mutationFn: () => call(api.POST("/api/connections", { body: { name, vaults: granted, ...publishing(publish), ...(expiresInDays ? { expiresInDays } : {}) } })),
     // The address is no secret, but it has no business in the client-wide cache either.
     gcTime: 0,
     onSuccess: (created) => {
@@ -77,7 +78,7 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
           </p>
         </div>
 
-        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen}>
+        <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen} publish={publish} onPublishChange={setPublish}>
           A connection needs a name and at least one vault it may read. Read and write is enough for most apps; choose Maintain only for one you
           trust with the vault's structure.
         </RightsPicker>

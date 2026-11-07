@@ -201,6 +201,22 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_rotation_keeps_may_publish()
+    {
+        var account = await AccountAsync("Arbeit", "Diary");
+        var both = new Dictionary<string, KeyRight> { [account.Vaults["Arbeit"]] = KeyRight.Write, [account.Vaults["Diary"]] = KeyRight.Read };
+        var (key, info) = await Keys().CreateAsync(account.User, account.Key, account.ReadAt, "agent", both, Ct, publish: new HashSet<string> { account.Vaults["Arbeit"] });
+        await Connections().CreateAsync(account.User, account.Key, account.ReadAt, "claude", both, Ct, publish: new HashSet<string> { account.Vaults["Diary"] });
+
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, null, Ct))!;
+
+        Assert.Equal(new[] { account.Vaults["Arbeit"] }, Assert.Single(await Keys().ListAsync(account.User, rotation.NewUserKey, Ct)).Publish);
+        Assert.Equal(new[] { account.Vaults["Diary"] }, Assert.Single(await Connections().ListAsync(account.User, rotation.NewUserKey, Ct)).Publish);
+        // The key's slots never involved the user key.
+        Assert.True((await Catalog().OpenForApiKeyAsync(info.Id, key, Ct)).Single(v => v.Id == account.Vaults["Arbeit"]).MayPublish);
+    }
+
+    [Fact]
     public async Task The_old_user_key_opens_nothing()
     {
         var account = await AccountAsync("Arbeit", "Diary");

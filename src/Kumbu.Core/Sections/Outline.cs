@@ -60,7 +60,8 @@ public static partial class Outline
         string? fence = null;
         for (var i = 0; i < lines.Count; i++)
         {
-            if (FenceRegex().Match(lines[i]) is { Success: true } f)
+            // A backtick fence's info string holds no backtick (CommonMark): "``` a`b" opens nothing.
+            if (FenceRegex().Match(lines[i]) is { Success: true } f && !(fence is null && f.Groups[1].Value[0] == '`' && f.Groups[2].Value.Contains('`')))
             {
                 var marker = f.Groups[1].Value;
                 code[i] = true;

@@ -216,7 +216,7 @@ public static class ImageHeader
     }
 
     /// <summary>IFD0's orientation tag (0x0112) in a TIFF block, 1 when absent or malformed.</summary>
-    private static int ExifOrientation(ReadOnlySpan<byte> tiff)
+    internal static int ExifOrientation(ReadOnlySpan<byte> tiff)
     {
         if (tiff.Length < 8)
         {

@@ -66,7 +66,11 @@ public enum ApiKeyKind
 /// <c>ExpiresAt</c> is null for a key that doesn't expire.</summary>
 public sealed record ApiKeyInfo(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent, WriteResumption? Resumed = null);
+    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent, WriteResumption? Resumed = null)
+{
+    /// <summary>The ids of the vaults the key may publish on ("May publish"), all among <see cref="Vaults"/>.</summary>
+    public IReadOnlySet<string> Publish { get; init; } = new HashSet<string>();
+}
 
 /// <summary>A key that was presented and checked: whose it is, the name its writes carry, and whether a device holds it.</summary>
 public sealed record ResolvedApiKey(User User, string Id, string Name, ApiKeyKind Kind = ApiKeyKind.Agent);
@@ -115,14 +119,18 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one. The
     /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards. On a vault shared with the
     /// user, the key is derived through her membership, which records <paramref name="writerName"/> (the device's part
-    /// of a device key's name; the name itself if null) as the key's display name.
+    /// of a device key's name; the name itself if null) as the key's display name. <paramref name="publish"/> names the
+    /// vaults the key may publish on: of <paramref name="vaults"/>, the user's own, and never for a device (else
+    /// <see cref="ArgumentException"/>).
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent, string? writerName = null)
+        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent, string? writerName = null, IReadOnlySet<string>? publish = null)
     {
         var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
+        publish ??= new HashSet<string>();
+        if (kind == ApiKeyKind.Device && publish.Count > 0) throw new ArgumentException("A device never publishes.", nameof(publish));
         if (expiresInDays is { } days && !ExpiryDays.Contains(days))
         {
             throw new ArgumentException($"An API key expires after {string.Join(", ", ExpiryDays.Order())} days, or never.", nameof(expiresInDays));
@@ -132,9 +140,12 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var key = Secrets.New(KeyPrefix);
-        var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
-        // Written for devices only: an agent key's meta stays what every key's was before kinds existed.
-        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null, KeyRights.SealedVersion);
+        var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, publish, ct);
+        // The kind is written for devices only: an agent key's meta stays what every key's was before kinds existed.
+        // "May publish" only where given.
+        var meta = new ApiKeyMeta(
+            clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null, KeyRights.SealedVersion,
+            publish.Count == 0 ? null : [.. publish.Order(StringComparer.Ordinal)]);
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
         // The meta and name id are sealed under this user key: it must still be the one in force (UserKeyRotation).
@@ -411,16 +422,24 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     public static bool LooksLikeKey(string presented) => presented.StartsWith(KeyPrefix, StringComparison.Ordinal);
 
-    private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta) => new(
-        doc.Id,
-        meta.Name,
-        doc.Prefix,
-        meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
-        doc.CreatedAt,
-        doc.LastUsedAt,
-        doc.RevokedAt,
-        doc.ExpiresAt,
-        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent, Resumption(doc));
+    private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta)
+    {
+        var vaults = meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value);
+        return new(
+            doc.Id,
+            meta.Name,
+            doc.Prefix,
+            vaults,
+            doc.CreatedAt,
+            doc.LastUsedAt,
+            doc.RevokedAt,
+            doc.ExpiresAt,
+            meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent, Resumption(doc))
+        {
+            // Only among the vaults listed; a meta sealed before publishing existed has none: it may not.
+            Publish = meta.Publish is { } publish ? publish.Where(vaults.ContainsKey).ToHashSet(StringComparer.Ordinal) : new HashSet<string>(),
+        };
+    }
 
     private const string DeviceKind = "device";
 
@@ -504,7 +523,8 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
         [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
-        [property: JsonPropertyName("v")] int? V = null);
+        [property: JsonPropertyName("v")] int? V = null,
+        [property: JsonPropertyName("publish"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<string>? Publish = null);
 
     /// <summary>A key that wrote nothing for longer than this and writes again has resumed (<see cref="RecordWriteAsync"/>).</summary>
     public static readonly TimeSpan LongPause = TimeSpan.FromDays(14);

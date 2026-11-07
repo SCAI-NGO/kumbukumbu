@@ -34,6 +34,7 @@ public static class Manual
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
+          publish ls|add|update|rm <note> share one note as a read-only copy behind a secret link
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 

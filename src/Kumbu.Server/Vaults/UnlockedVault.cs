@@ -6,6 +6,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Server.Publishing;
 using MongoDB.Bson;
 
 namespace Kumbu.Server.Vaults;
@@ -325,6 +326,25 @@ public sealed class UnlockedVault
         return new StoredCheckpoint(doc.Id, checkpoint, p.Notes.ToDictionary(n => Payload.Path(n.Path), n => Convert.FromBase64String(n.TextId)));
     }
 
+    /// <summary>The pid of the vault's one publishing record (<see cref="PublishingRecord"/>), for the unique index.</summary>
+    public byte[] PublishingId() => VaultCrypto.Mac(_pathKey, "publishing:");
+
+    /// <summary>Bound to the vault, the document and its revision, as a note is: an older revision put back doesn't open.</summary>
+    private string PublishingContext(ObjectId docId, long revision) => $"publishing:{Id}:{docId}:{revision}";
+
+    internal byte[] SealPublishing(ObjectId docId, long revision, PublishingRecord record) => Seal(PublishingContext(docId, revision), record);
+
+    /// <summary>Opens the publishing record and checks the document's pid, as <see cref="OpenCheckpoint"/> checks its name id.</summary>
+    internal PublishingRecord OpenPublishing(SealedDocument doc)
+    {
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PublishingId(), doc.PathId))
+        {
+            throw new InvalidDataException($"Publishing record {doc.Id} does not have the vault's pid");
+        }
+
+        return Open<PublishingRecord>(PublishingContext(doc.Id, doc.Revision), doc.Blob);
+    }
+
     public byte[] SealText(byte[] textId, string content) => Seal($"cptext:{Id}:{Convert.ToBase64String(textId)}", new TextPayload(content));
 
     /// <summary>Opens a checkpoint's text; its id is the keyed hash of the content, so a changed text doesn't open.</summary>
@@ -364,6 +384,7 @@ public sealed class UnlockedVault
             "attachment_trash" => $"attachtrash:{Id}:{doc.Id}",
             "blobs" => BlobContext(doc.PathId),
             "pdf_analyses" => PdfAnalysisContext(doc.PathId, (int)doc.Revision),
+            "publishing" => PublishingContext(doc.Id, doc.Revision),
             _ => throw new ArgumentException($"No sealed documents in {collection}", nameof(collection)),
         };
         byte[] plain;
@@ -438,6 +459,11 @@ public sealed class UnlockedVault
                     var pid = Convert.FromBase64String(Map(Convert.ToBase64String(doc.PathId), ids.Blobs, unmapped));
                     return new Resealed(pid, doc.PathId, SealPlain(to.PdfAnalysisContext(pid, (int)doc.Revision)), null, unmapped);
                 }
+
+                case "publishing":
+                    // Read, so that a record that opens but doesn't parse counts as damaged; its context keeps the revision.
+                    Parse<PublishingRecord>(plain);
+                    return new Resealed(to.PublishingId(), PublishingId(), SealPlain(context), null, []);
 
                 default:
                 {

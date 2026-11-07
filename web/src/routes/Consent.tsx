@@ -135,6 +135,7 @@ export default function Consent() {
         {Object.entries(connection.vaults).map(([vault, right]) => (
           <li key={vault} className="px-4 py-3 break-words text-text">
             {vault}: <ActsAs right={right} level={connection.actsAs[vault]} vault={vault} />
+            {connection.publish.includes(vault) && " · may publish"}
           </li>
         ))}
       </ul>

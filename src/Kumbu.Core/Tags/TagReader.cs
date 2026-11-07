@@ -187,7 +187,7 @@ public static partial class TagReader
     /// Indented code blocks (four spaces or a tab) after a blank line, outside a list: inside a list the same indent
     /// is a nested item or its text, which is where Obsidian users write most of their nested tags.
     /// </summary>
-    private static bool[] IndentedCode(IReadOnlyList<string> lines, int start, bool[] fenced)
+    internal static bool[] IndentedCode(IReadOnlyList<string> lines, int start, bool[] fenced)
     {
         var code = new bool[lines.Count];
         var blank = true;

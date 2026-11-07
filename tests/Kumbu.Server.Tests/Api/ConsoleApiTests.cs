@@ -204,6 +204,54 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_console_lists_publications()
+    {
+        var user = await WorkAsync();
+        var key = await user.KeyAsync("Claude", KeyRight.Write, mayPublish: true);
+        Assert.False((await user.ShAsync("publish add /Work/plan.md", key)).IsError);
+
+        var view = await ConsoleAsync(user, "publish ls /Work");
+
+        Assert.False(IsError(view));
+        Assert.Matches(@"^/Work/plan\.md  \d{4}-\d\d-\d\d \d\d:\d\d UTC  older: no$", Text(view));
+    }
+
+    [Theory]
+    [InlineData("add", "publish add /Work/a.md")]
+    [InlineData("update", "publish update /Work/a.md")]
+    [InlineData("rm", "publish rm /Work/a.md")]
+    [InlineData("add", "ls | publish add /Work/a.md")]
+    [InlineData("add", "publish add /Work/a.md | head")]
+    public async Task The_console_refuses_publishing(string sub, string line)
+    {
+        var user = await WorkAsync();
+        await user.CreateAsync("a.md", "# A\n");
+        // Something to update or withdraw; for add, nothing is published before.
+        if (sub != "add") Assert.False((await user.ShAsync("publish add /Work/a.md", await user.KeyAsync("Claude", KeyRight.Write, mayPublish: true))).IsError);
+        var before = Text(await ConsoleAsync(user, "publish ls /Work"));
+
+        var view = await ConsoleAsync(user, line);
+
+        Assert.True(IsError(view));
+        Assert.Equal($"publish {sub}: not in this console, which only reads", Text(view));
+        Assert.Equal(before, Text(await ConsoleAsync(user, "publish ls /Work")));
+        if (sub == "add") Assert.Equal("no published notes below /Work", before);
+    }
+
+    [Theory]
+    [InlineData("publish")]
+    [InlineData("publish --help")]
+    public async Task The_console_refuses_publish_without_ls(string line)
+    {
+        var user = await WorkAsync();
+
+        var view = await ConsoleAsync(user, line);
+
+        Assert.True(IsError(view));
+        Assert.EndsWith(": not in this console, which only reads", Text(view), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Lines_the_shell_answers_itself()
     {
         var user = await WorkAsync();

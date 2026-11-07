@@ -112,6 +112,18 @@ describe("resolveLine", () => {
     expect(resolveLine(typed, "/")).toBe(sent);
   });
 
+  it("resolves publish's note path", () => {
+    expect(resolveLine("publish ls", "/Work")).toBe("publish ls /Work");
+    expect(resolveLine("publish ls Routing", "/Work")).toBe("publish ls /Work/Routing");
+    expect(resolveLine("publish ls ..", cwd)).toBe("publish ls /Gartenarbeit");
+    expect(resolveLine("publish ls", "/")).toBe("publish ls");
+    expect(resolveLine("publish ls | wc -l", "/Work")).toBe("publish ls /Work | wc -l");
+    expect(resolveLine("publish add Questions.md", "/Work/Routing")).toBe("publish add /Work/Routing/Questions.md");
+    // Only ls stands for the working directory; the server refuses the rest in the console anyway.
+    expect(resolveLine("publish add", "/Work")).toBe("publish add");
+    expect(resolveLine("publish", "/Work")).toBe("publish");
+  });
+
   it("sends a line unchanged when every path is already absolute", () => {
     expect(resolveLine('rg  -n   foo "/Work/a.md"', cwd)).toBe('rg  -n   foo "/Work/a.md"');
   });

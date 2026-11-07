@@ -17,19 +17,20 @@ public sealed record ClientView(string Name, string Host, bool Verified);
 /// <c>read</c> or <c>write</c>, as stored; <c>actsAs</c>: the vaults shared with her where her role caps that right, with
 /// the right the connection acts with there until she is raised. <c>state</c> is <c>waiting</c>, <c>connected</c>, <c>needs_reconnect</c>,
 /// <c>revoked</c> or <c>expired</c>; <c>reason</c> (e.g. <c>rights_changed</c>) goes with the last three;
-/// <c>client</c> is null until an app was authorised.
+/// <c>client</c> is null until an app was authorised. <c>publish</c>: the names of the vaults it may publish on ("May
+/// publish"), all among <c>vaults</c>.
 /// </summary>
 public sealed record ConnectionView(
     string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
-    string State, string? Reason, ClientView? Client);
+    string State, string? Reason, ClientView? Client, string[] Publish);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
-/// out or null, the connection doesn't expire.</summary>
-public sealed record CreateConnectionRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
+/// out or null, the connection doesn't expire. <c>publish</c>: as for an API key.</summary>
+public sealed record CreateConnectionRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null, IReadOnlyList<string>? Publish = null);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>, replacing the connection's rights; the app
-/// has to reconnect afterwards.</summary>
-public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, string> Vaults);
+/// has to reconnect afterwards. <c>publish</c> replaces its "May publish", as for an API key: left out or null, none.</summary>
+public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, string> Vaults, IReadOnlyList<string>? Publish = null);
 
 /// <summary>
 /// What the consent page shows for a pending authorisation. <c>client</c>: the app asking; <c>redirectHost</c>: where
@@ -42,9 +43,10 @@ public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, stri
 public sealed record ConsentView(string RequestId, ClientView Client, string RedirectHost, ConsentConnectionView? Connection, bool Renewal, string? Problem);
 
 /// <summary>A connection on the consent page: its name, vault name → <c>read</c> or <c>write</c>, <c>actsAs</c> as in
-/// <see cref="ConnectionView"/>, its expiry, and the app it is authorised for now, if any.</summary>
+/// <see cref="ConnectionView"/>, its expiry, the app it is authorised for now, if any, and <c>publish</c>, the vaults
+/// this grant may publish on (none if the app asked for read only).</summary>
 public sealed record ConsentConnectionView(
-    string Name, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime? ExpiresAt, ClientView? CurrentClient);
+    string Name, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime? ExpiresAt, ClientView? CurrentClient, string[] Publish);
 
 /// <summary><c>allow</c>: the user's Allow (true) or Deny (false).</summary>
 public sealed record ConsentDecisionRequest(bool Allow);
@@ -175,13 +177,16 @@ public static class ConnectionApi
         // A meta that doesn't open with the user key was changed in the database: nothing to show or to authorise.
         if (connections.OpenMeta(caller.User!, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
 
-        var (vaults, actsAs) = Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), await caller.OpenVaultsAsync(ct));
+        var open = await caller.OpenVaultsAsync(ct);
+        var (vaults, actsAs) = Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), open);
         var view = new ConsentConnectionView(
             meta.Name,
             vaults,
             actsAs,
             doc.ExpiresAt,
-            meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null);
+            meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null,
+            // Capped as the code's issue caps it (OAuthTokens.IssueCodeAsync): none for an app that asked to read only.
+            request.ReadOnly ? [] : AccountApi.PublishNames(Connections.PublishOf(doc, meta), Names(open)));
         var renewal = doc.AuthorisedAt is not null || meta.Client is not null;
         if (doc.RevokedAt is not null) return ("revoked", view, renewal);
         if (time.GetUtcNow().UtcDateTime >= doc.ExpiresAt) return ("expired", view, renewal);
@@ -207,8 +212,10 @@ public static class ConnectionApi
         CreateConnectionRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var open = await caller.OpenVaultsAsync(ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
-        var info = await connections.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
+        var names = Names(open);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var info = await connections.CreateAsync(
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, AccountApi.PublishByVaultId(body.Publish, names));
         return TypedResults.Created($"/api/connections/{info.Id}", View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
@@ -216,8 +223,10 @@ public static class ConnectionApi
         string id, SetConnectionVaultsRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var open = await caller.OpenVaultsAsync(ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
+        var names = Names(open);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names))
+            ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
@@ -244,6 +253,8 @@ public static class ConnectionApi
         return (vaults, actsAs);
     }
 
+    private static Dictionary<string, string> Names(IReadOnlyList<VaultAccess> open) => open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
+
     private static ConnectionView View(ConnectionInfo info, IReadOnlyList<VaultAccess> open, string origin)
     {
         var (vaults, actsAs) = Shown(info.Vaults, open);
@@ -259,7 +270,8 @@ public static class ConnectionApi
             info.RevokedAt,
             StateText(info.State),
             info.Reason,
-            info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null);
+            info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null,
+            AccountApi.PublishNames(info.Publish, Names(open)));
     }
 
     private static string StateText(ConnectionState state) => state switch

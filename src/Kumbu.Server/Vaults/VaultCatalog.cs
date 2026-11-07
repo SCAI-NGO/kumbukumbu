@@ -8,6 +8,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Metrics;
+using Kumbu.Server.Publishing;
 using Microsoft.Extensions.Options;
 using Kumbu.Server.Sharing;
 using MongoDB.Driver;
@@ -91,6 +92,20 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The content checkpoints hold, once per vault and text, the keyed hash of the content in "pid".</summary>
     internal IMongoCollection<SealedDocument> CheckpointTexts { get; } = db.GetCollection<SealedDocument>("checkpoint_texts");
+
+    /// <summary>The vault's publishing record (<see cref="PublishingRecord"/>), one per vault under <see cref="UnlockedVault.PublishingId"/>.</summary>
+    internal IMongoCollection<SealedDocument> Publishing { get; } = db.GetCollection<SealedDocument>(PublicationStore.RecordCollection);
+
+    /// <summary>The published copies, found by their lookup id alone (<see cref="PublicationStore"/>).</summary>
+    internal IMongoCollection<PublicationDocument> Publications { get; } = db.GetCollection<PublicationDocument>("publications");
+
+    /// <summary>The copies' files, sealed under their publication's key; no vault blobs, so <see cref="BlobSweep"/> never sees them.</summary>
+    internal IMongoCollection<PublicationFileDocument> PublicationFiles { get; } = db.GetCollection<PublicationFileDocument>("publication_files");
+
+    /// <summary><see cref="Publications"/> and <see cref="PublicationFiles"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> PublicationsByVault { get; } = db.GetCollection<SealedDocument>("publications");
+
+    private IMongoCollection<SealedDocument> PublicationFilesByVault { get; } = db.GetCollection<SealedDocument>("publication_files");
 
     /// <summary>The attachments' records, one per path, as notes are: loaded with the vault.</summary>
     internal IMongoCollection<SealedDocument> Attachments { get; } = db.GetCollection<SealedDocument>("attachments");
@@ -235,7 +250,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             if (vault is null) continue;
-            result.Add(alias is null ? VaultAccess.Owned(vault) : MemberAccess(vault, vaultKey, alias, active![slot.Membership!]));
+            result.Add(alias is null ? VaultAccess.Owned(vault) with { MayPublish = true } : MemberAccess(vault, vaultKey, alias, active![slot.Membership!]));
             // The owner's own session: she is active, so a mark left from her deactivation goes (collab design §7.4).
             if (alias is null) OwnerActive(vault.Id, true);
             // Only a session meets a placeholder: the start of a run deleted every API key and connection slot. Only the
@@ -458,15 +473,21 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>
     /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
-    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
-    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
+    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id, and
+    /// "May publish" on the vaults in <paramref name="publish"/>. The vault keys come from the user's own slots, so
+    /// <see cref="ArgumentException"/> if a vault isn't the user's, or one in <paramref name="publish"/> isn't one of
+    /// <paramref name="vaults"/> she owns (<see cref="RequirePublishable"/>).
     /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction, after checking
     /// the returned vault keys again there (<see cref="RequireSameVaultKeysAsync"/>).
     /// </summary>
     internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> ApiKeySlotsAsync(
-        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, IReadOnlySet<string> publish,
+        CancellationToken ct)
     {
+        // An early exit, before the database is asked for anything; the vaults' owners are checked once their keys are open.
+        RequirePublishable(vaults, publish, null);
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
+        RequirePublishable(vaults, publish, vaultKeys);
         IReadOnlyList<SlotDocument> slots = [.. vaults.Select(v => new SlotDocument
         {
             Vault = v.Key,
@@ -475,7 +496,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = vaultKeys[v.Key].Membership,
             Wrapped = VaultCrypto.Seal(
                 ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(
-                    new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].AliasKey)),
+                    new ApiKeySlotPayload(
+                        vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].AliasKey,
+                        PublishField(publish.Contains(v.Key)))),
                 ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
@@ -486,8 +509,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// The slots one token of a connection gets when the user consents (the code): one per vault in
     /// <paramref name="vaults"/> (vault id → right), sealing the vault key and the right together as an API key's slot
-    /// does, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the
-    /// token's id, so a slot can't be moved to another token or connection, nor read as an API key's. With
+    /// does, and "May publish" on the vaults in <paramref name="publish"/> that are her own, under
+    /// <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the token's id, so a
+    /// slot can't be moved to another token or connection, nor read as an API key's. With
     /// <paramref name="expiresAt"/> the slot carries it for the TTL index. The vault keys come from the user's own
     /// slots, so <see cref="ArgumentException"/> if a vault isn't the user's. Not stored here: the caller inserts them
     /// with the token's record, in one transaction, after checking the returned vault keys again there
@@ -495,11 +519,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// </summary>
     internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, VaultKeyGrant> VaultKeys)> ConnectionSlotsFromUserAsync(
         string userId, byte[] userKey, string connectionId, string tokenId, string token, IReadOnlyDictionary<string, Accounts.KeyRight> vaults,
-        DateTime? expiresAt, CancellationToken ct)
+        IReadOnlySet<string> publish, DateTime? expiresAt, CancellationToken ct)
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
+        // From the connection's meta, checked when it was set; a slot derived through a membership never carries it.
         var slots = WrapConnectionSlots(
-            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value) { GrantedVia = vaultKeys[v.Key].Membership, AliasKey = vaultKeys[v.Key].AliasKey })],
+            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value, publish.Contains(v.Key) && vaultKeys[v.Key].Membership is null)
+            {
+                GrantedVia = vaultKeys[v.Key].Membership, AliasKey = vaultKeys[v.Key].AliasKey,
+            })],
             connectionId, tokenId, token, expiresAt);
         await IssueFaultAsync("after-wrap");
         return (slots, vaultKeys);
@@ -507,8 +535,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>A vault key opened from a token's slot, with the right sealed into it, and the membership the slot was
     /// derived through, if any: the tokens issued from it carry it on. <c>Membership</c> is that membership as read on
-    /// this request (active), for the level; its role caps the right only when the vault is opened, never in a new slot.</summary>
-    internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right)
+    /// this request (active), for the level; its role caps the right only when the vault is opened, never in a new slot.
+    /// <c>Publish</c> is "May publish" as sealed into the slot, carried on to the tokens issued from it.</summary>
+    internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right, bool Publish)
     {
         public string? GrantedVia { get; init; }
 
@@ -569,7 +598,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 alias = AliasOf(aliases, slot, payload.AliasKey);
             }
 
-            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right)
+            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right, payload.Publish == true)
             {
                 GrantedVia = slot.GrantedVia, AliasKey = payload.AliasKey, Alias = alias, Membership = membership, Slot = slot.GrantedVia is null ? null : slot,
             });
@@ -593,7 +622,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = k.GrantedVia,
             Wrapped = VaultCrypto.Seal(
                 ConnectionKek(token, k.Vault),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia, k.AliasKey)),
+                JsonSerializer.SerializeToUtf8Bytes(
+                    new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia, k.AliasKey, PublishField(k.Publish))),
                 ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
@@ -613,7 +643,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             if (key.Membership is not null && key.Alias is null) continue;
             if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault)
             {
-                result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId) with { DerivedSlot = key.Slot });
+                result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId, key.Publish) with { DerivedSlot = key.Slot });
                 if (key.Membership is null) OwnerActive(vault.Id, true);
             }
         }
@@ -669,7 +699,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault)
             {
-                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
+                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId, payload.Publish == true) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
                 if (membership is null) OwnerActive(vault.Id, true);
             }
         }
@@ -679,12 +709,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
-        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault];
+        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
-    /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
+    /// the published copies with their files), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -1459,7 +1490,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         $"slot:{vaultId}:{SlotDocument.Connection}:{connectionId}:{tokenId}";
 
     /// <summary>What an API key's or a connection's slot seals: the vault key and the right on the vault, together;
-    /// <c>v</c> is <see cref="Accounts.KeyRights.SealedVersion"/> from 0.3.0 on, absent before.</summary>
+    /// <c>v</c> is <see cref="Accounts.KeyRights.SealedVersion"/> from 0.3.0 on, absent before. <c>publish</c> is "May
+    /// publish", written only where given: a slot without it, sealed before publishing existed or since, may not.</summary>
     private sealed record ApiKeySlotPayload(
         [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
         [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
@@ -1467,7 +1499,25 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         [property: System.Text.Json.Serialization.JsonPropertyName("via"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
         string? Via = null,
         [property: System.Text.Json.Serialization.JsonPropertyName("aliasKey"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-        byte[]? AliasKey = null);
+        byte[]? AliasKey = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("publish"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        bool? Publish = null);
+
+    /// <summary>"May publish" as a slot payload holds it: only <c>true</c> is written.</summary>
+    private static bool? PublishField(bool publish) => publish ? true : null;
+
+    internal const string MayPublishOnlyOwned = "May publish is only for vaults you own, given with a right.";
+
+    /// <summary>
+    /// "May publish" names vaults that are also in <paramref name="vaults"/> and, once their keys are opened
+    /// (<paramref name="vaultKeys"/>), the user's own, not shared with her: else <see cref="ArgumentException"/>.
+    /// </summary>
+    internal static void RequirePublishable(
+        IReadOnlyDictionary<string, Accounts.KeyRight> vaults, IReadOnlySet<string> publish, IReadOnlyDictionary<string, VaultKeyGrant>? vaultKeys)
+    {
+        if (publish.Any(v => !vaults.ContainsKey(v) || (vaultKeys is not null && vaultKeys[v].Membership is not null)))
+            throw new ArgumentException(MayPublishOnlyOwned, nameof(publish));
+    }
 
     /// <summary>The slot's <c>grantedVia</c> is the membership sealed into it: one changed, added or removed in the
     /// database (to dodge the membership check, or to borrow another's) makes the slot not open.</summary>
@@ -1555,6 +1605,22 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         await PdfJobs.Indexes.CreateOneAsync(
             new CreateIndexModel<PdfJobDocument>(Builders<PdfJobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
             cancellationToken: ct);
+        await Publishing.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        await Publications.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<PublicationDocument>(Builders<PublicationDocument>.IndexKeys.Ascending(d => d.Lookup), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<PublicationDocument>(Builders<PublicationDocument>.IndexKeys.Ascending(d => d.Vault)),
+            ],
+            ct);
+        await PublicationFiles.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<PublicationFileDocument>(
+                    Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Publication).Ascending(d => d.Index), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<PublicationFileDocument>(Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Vault)),
+            ],
+            ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),

@@ -97,6 +97,11 @@ export const commandTable: Record<string, CommandEntry> = {
     // DiffCommand.cs: with two operands the second is a note or a version token, which has neither '/' nor '.'.
     find: (o) => ({ paths: o.length === 2 && /[/.]/.test(o[1]) ? [0, 1] : first(o) }),
   },
+  // PublishCommand.cs: operand 0 is the subcommand, operand 1 the path; only ls has a default, the working directory.
+  publish: {
+    values: [],
+    find: (o) => ({ paths: o.length > 1 ? [1] : [], missing: o[0] === "ls" ? "cwd" : undefined }),
+  },
   uname: { values: [], find: () => ({ paths: [] }) },
   help: { values: [], find: () => ({ paths: [] }) },
 };

@@ -103,6 +103,7 @@ function KeyItem({ apiKey, vaults, onRevoke }: { apiKey: ApiKey; vaults: VaultVi
         {Object.entries(apiKey.vaults).map(([vault, right]) => (
           <li key={vault}>
             {vault}: <CappedRight right={right} vault={vaults?.find((v) => v.name === vault)} />
+            {apiKey.publish.includes(vault) && ", may publish"}
           </li>
         ))}
       </ul>

@@ -39,7 +39,7 @@ public sealed partial class VaultCatalog
     /// <summary>The order of the passes: checkpoint texts and blobs first, since checkpoints, attachment records and the
     /// analyses of PDFs hold their ids, which the new key changes (<see cref="UnlockedVault.RekeyIds"/>).</summary>
     private static readonly string[] RekeyOrder =
-        ["checkpoint_texts", "blobs", "pdf_analyses", "notes", "attachments", "trash", "attachment_trash", "moves", "embeddings", "checkpoints"];
+        ["checkpoint_texts", "blobs", "pdf_analyses", "notes", "attachments", "trash", "attachment_trash", "moves", "embeddings", "checkpoints", "publishing"];
 
     /// <summary>At most this many documents are read at once in a pass, and at most <see cref="BatchBytes"/> sealed
     /// bytes (a larger document is read alone); each read is cut into batches by the same limits.</summary>
@@ -720,6 +720,7 @@ public sealed partial class VaultCatalog
         "checkpoint_texts" => CheckpointTexts,
         "attachments" => Attachments,
         "attachment_trash" => AttachmentTrash,
+        "publishing" => Publishing,
         _ => throw new ArgumentException($"No sealed documents in {name}", nameof(name)),
     };
 

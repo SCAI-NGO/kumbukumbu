@@ -19,6 +19,17 @@ public sealed class EncryptedNoteStore(
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
 
+    /// <summary>Publications follow removals and moves in their transaction (<see cref="Publishing.Publications.FollowAsync"/>).
+    /// Only the request's store has them, through DI (Program.cs): <see cref="Publishing.Publications"/> is internal, so
+    /// it can't be a parameter of the public constructor. The public one is for callers that only create (the seeder,
+    /// the welcome vault): without publications, a trash or move in a vault that publishes is refused.</summary>
+    private readonly Publishing.Publications? _publications;
+
+    internal EncryptedNoteStore(
+        VaultCatalog catalog, ICredential credential, Search.SearchIndex? index, Accounts.ApiKeys? keys, Attachments.PdfAnalysisRunner? pdf,
+        Publishing.Publications? publications)
+        : this(catalog, credential, index, keys, pdf) => _publications = publications;
+
     private Dictionary<string, VaultAccess>? _vaults;
 
     /// <summary>The same accesses by vault id, to show a path of the vault in the caller's view.</summary>
@@ -277,6 +288,7 @@ public sealed class EncryptedNoteStore(
             }
 
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
+            await FollowAsync(session, access, batch, by, byRef, at, ct);
             return () => apply.ForEach(a => a());
         }, ct);
 
@@ -470,7 +482,29 @@ public sealed class EncryptedNoteStore(
         if (await VaultAsync(current.Path, ct) is not { } a) return false;
         var vault = a.Vault;
         current = Stored(a, current);
-        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedByRef, deletedAt, null, ct), ct);
+        return await WriteAsync(vault, [current.Path], async session =>
+        {
+            if (await TrashInAsync(session, vault, current, deletedBy, deletedByRef, deletedAt, null, ct) is not { } trashed) return null;
+            await FollowAsync(session, a, new NoteBatch { Trashes = { current } }, deletedBy, deletedByRef, deletedAt, ct);
+            return trashed;
+        }, ct);
+    }
+
+    /// <summary>The vault's publications and marks after a batch, in its transaction; a refusal aborts the batch. A store
+    /// without <see cref="Publishing.Publications"/> fails closed: it trashes and moves nothing in a vault that has a
+    /// publishing record.</summary>
+    private async Task FollowAsync(IClientSessionHandle session, VaultAccess access, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
+    {
+        if (_publications is not null)
+        {
+            await _publications.FollowAsync(
+                session, access, credential is ApiKeyCredential { Device: true }, credential is UserCredential, batch, by, byRef, at, ct);
+        }
+        else if ((batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentMoves.Count > 0)
+            && await catalog.Publishing.Find(session, F.Eq(d => d.Vault, access.Id)).AnyAsync(ct))
+        {
+            throw new InvalidOperationException("A note store without publications can't trash or move in a vault that publishes; nothing was written.");
+        }
     }
 
     /// <summary>
@@ -597,6 +631,11 @@ public sealed class EncryptedNoteStore(
     /// <summary>The caller's vaults, unlocked, each under the caller's name for it (the vault endpoints show each one's
     /// embedding provider; the version list reads the working set).</summary>
     internal async Task<IReadOnlyList<VaultAccess>> UnlockedVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Values];
+
+    /// <summary>The vault of a path, or at the root all of them, marked as used, as a command that reads them takes
+    /// them: at the root without a vault in its two-key period, by name <see cref="VaultBusyException"/> for one.</summary>
+    internal async Task<IReadOnlyList<VaultAccess>> UsedVaultsAsync(VaultPath vaultOrRoot, CancellationToken ct) =>
+        vaultOrRoot.IsRoot ? [.. await AllVaultsAsync(ct)] : await VaultAsync(vaultOrRoot, ct) is { } access ? [access] : [];
 
     private static bool InScope(VaultPath scope, VaultPath path) =>
         scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
@@ -822,9 +861,9 @@ public sealed class EncryptedNoteStore(
             {
                 apply = await work(session);
             }
-            catch (MongoException e) when (e.HasErrorLabel("TransientTransactionError"))
+            catch (Exception e) when (e is Publishing.PublishingConflictException || (e is MongoException m && m.HasErrorLabel("TransientTransactionError")))
             {
-                // A write conflict with another transaction: someone else got there first.
+                // A write conflict with another transaction, or the publishing record changed: someone else got there first.
                 apply = null;
             }
             catch
