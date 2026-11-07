@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Xml.Linq;
+using Kumbu.Core.Notes;
 using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.Net.Http.Headers;
@@ -204,7 +205,8 @@ public static class DavEndpoints
     }
 
     private static DavWrites Writes(HttpContext http) =>
-        new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>());
+        new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>(),
+            http.RequestServices.GetRequiredService<NoteWriter>());
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }

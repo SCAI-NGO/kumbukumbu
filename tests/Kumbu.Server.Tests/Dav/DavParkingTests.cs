@@ -389,9 +389,10 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         // Later the store gets a folder of that name, from elsewhere.
         await dav.Owner.CreateAsync("x.tmp/n.md", "# N");
 
-        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/x.tmp/m.md", Text("# M"))) Assert.NotEqual(HttpStatusCode.Created, put.StatusCode);
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/x.tmp/m.md", Text("# M"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
         using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/x.tmp/m.md");
-        Assert.NotEqual("application/octet-stream", DavAssert.Header(get, "Content-Type"));
+        Assert.Equal("text/markdown; charset=utf-8", DavAssert.Header(get, "Content-Type"));
+        Assert.Equal("# M", (await dav.Owner.ReadAsync("x.tmp/m.md"))["content"]!.GetValue<string>());
 
         // A parked name below it is parked all the same.
         using var junk = await dav.SendAsync(HttpMethod.Put, "/dav/Work/x.tmp/.DS_Store", Text("finder"));
