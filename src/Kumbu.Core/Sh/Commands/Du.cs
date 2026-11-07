@@ -22,7 +22,7 @@ public sealed class Du(INoteReader notes) : ICommand
 
     public string Name => "du";
 
-    public string Usage => "du [-s] [-d N] [path]";
+    public string Usage => "du [-h] [-b] [-s] [-d N] [path]";
 
     public string Summary => "sizes of what is below a path, largest first";
 
@@ -60,7 +60,7 @@ public sealed class Du(INoteReader notes) : ICommand
         if (options.Operands.Count > 1) return ShellResult.Error("du: too many arguments" + CommandArgs.QuoteHint);
 
         var depth = 1;
-        if (options.Value("max-depth") is { } d && (!int.TryParse(d, NumberStyles.None, CultureInfo.InvariantCulture, out depth)))
+        if (options.Value("max-depth") is { } d && !int.TryParse(d, NumberStyles.None, CultureInfo.InvariantCulture, out depth))
         {
             return ShellResult.Error($"du: invalid maximum depth '{d}'");
         }
@@ -75,8 +75,8 @@ public sealed class Du(INoteReader notes) : ICommand
         if (options.Operands.Count == 1 && !CommandArgs.TryParsePath(Name, options.Operands[0], out path, out var pathError)) return pathError!;
 
         var bytes = options.Has("bytes");
-        if (!path.IsRoot && await notes.ReadAsync(path, ct) is { } content) return ShellResult.Ok($"{Df.Size(Encoding.UTF8.GetByteCount(content), bytes)}  {path.Value}");
-        if (!path.IsRoot && await StoreAttachments.GetAsync(notes, path, ct) is { } file) return ShellResult.Ok($"{Df.Size(file.Current.Size, bytes)}  {path.Value}");
+        if (!path.IsRoot && await notes.ReadAsync(path, ct) is { } content) return ShellResult.Ok($"{AttachmentText.Size(Encoding.UTF8.GetByteCount(content), bytes)}  {path.Value}");
+        if (!path.IsRoot && await StoreAttachments.GetAsync(notes, path, ct) is { } file) return ShellResult.Ok($"{AttachmentText.Size(file.Current.Size, bytes)}  {path.Value}");
 
         // What lies below, by its segments: a note or an attachment is a file; a folder's marker and an empty vault stand
         // for the folder itself, which then shows with nothing in it.
@@ -97,7 +97,7 @@ public sealed class Du(INoteReader notes) : ICommand
         }
 
         var total = items.Sum(i => i.Size);
-        if (depth == 0) return ShellResult.Ok($"{Df.Size(total, bytes)}  {path.Value}");
+        if (depth == 0) return ShellResult.Ok($"{AttachmentText.Size(total, bytes)}  {path.Value}");
 
         var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var top = path.Segments.Count;
@@ -111,8 +111,8 @@ public sealed class Du(INoteReader notes) : ICommand
             }
         }
 
-        var rows = sizes.OrderByDescending(e => e.Value).ThenBy(e => e.Key, StringComparer.Ordinal).Select(e => (Size: Df.Size(e.Value, bytes), Name: e.Key)).ToList();
-        rows.Add((Df.Size(total, bytes), "total"));
+        var rows = sizes.OrderByDescending(e => e.Value).ThenBy(e => e.Key, StringComparer.Ordinal).Select(e => (Size: AttachmentText.Size(e.Value, bytes), Name: e.Key)).ToList();
+        rows.Add((AttachmentText.Size(total, bytes), "total"));
         var width = rows.Max(r => r.Size.Length);
         return ShellResult.Ok(string.Join('\n', rows.Select(r => r.Size.PadLeft(width) + "  " + r.Name)));
     }

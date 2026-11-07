@@ -20,19 +20,17 @@ public class DfTests
         new("Personal", 182 * Mb, 412, 38),
     ];
 
-    private sealed class Figures(IReadOnlyList<VaultFigure> owned, long? limit) : IStorageFigures
+    private sealed class Figures(IReadOnlyList<VaultFigure> owned, long? limit, bool allOwned) : IStorageFigures
     {
-        public Task<IReadOnlyList<VaultFigure>> OwnedAsync(CancellationToken ct) => Task.FromResult(owned);
-
-        public Task<long?> LimitAsync(CancellationToken ct) => Task.FromResult(limit);
+        public Task<OwnFigures> OwnedAsync(CancellationToken ct) => Task.FromResult(new OwnFigures(owned, limit, allOwned));
     }
 
-    private static Task<ShellResult> Run(string line, long? limit = TwoGb, InMemoryNoteStore? store = null)
+    private static Task<ShellResult> Run(string line, long? limit = TwoGb, InMemoryNoteStore? store = null, bool allOwned = true)
     {
         store ??= new InMemoryNoteStore(("/Work/a.md", "A"), ("/Personal/b.md", "B"));
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded);
         var caller = new FixedCaller(Writers.Dev);
-        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), figures: new Figures(Example, limit));
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), figures: new Figures(Example, limit, allOwned));
         return shell.RunAsync(line, CancellationToken.None);
     }
 
@@ -56,6 +54,31 @@ public class DfTests
         var result = await Run("df", limit: null);
 
         Assert.EndsWith("\nTotal        223.3 MB (no limit)", result.Output);
+    }
+
+    /// <summary>A key for some of the caller's vaults: the rows are those it opens, so a percentage of the limit would read
+    /// as room the quota doesn't give (fix round 1, item 1).</summary>
+    [Fact]
+    public async Task Df_with_a_key_for_some_vaults_names_the_limit_without_a_percentage()
+    {
+        var result = await Run("df", allOwned: false);
+
+        Assert.EndsWith("\n──────────────────────────────────────────\nTotal        223.3 MB  (vaults this key opens; your other vaults count against the 2.0 GB limit too)", result.Output);
+        Assert.DoesNotContain("%", result.Output);
+        Assert.EndsWith("\nTotal        223.3 MB (no limit)", (await Run("df", limit: null, allOwned: false)).Output);
+    }
+
+    [Theory]
+    [InlineData(1023, "1023 B")]
+    [InlineData(1024L * 1024 - 1, "1.0 MB")]
+    [InlineData(1_073_636_966, "1023.9 MB")]
+    [InlineData(1024L * 1024 * 1024 - 1, "1.0 GB")]
+    [InlineData(1024L * 1024 * 1024, "1.0 GB")]
+    [InlineData(2_147_483_648, "2.0 GB")]
+    public void Sizes_go_from_MB_to_GB_at_1024_MB(long bytes, string shown)
+    {
+        Assert.Equal(shown, AttachmentText.Size(bytes));
+        Assert.Equal(bytes.ToString(System.Globalization.CultureInfo.InvariantCulture), AttachmentText.Size(bytes, exact: true));
     }
 
     [Theory]
@@ -120,12 +143,14 @@ public class DfTests
         Assert.Contains("trash", df);
         Assert.Contains("embeddings", df);
         Assert.Contains("counts against its owner", df);
+        Assert.Contains("your other vaults count against the limit too", df);
 
         var du = (await Run("help du")).Output;
         Assert.StartsWith("du [-h] [-b] [-s] [-d N] [path]", du);
         Assert.Contains("smaller than its line in df", du);
 
-        Assert.Contains("\n  df ", Manual.ToolDescription);
-        Assert.Contains("\n  du ", Manual.ToolDescription);
+        Assert.Contains("\n  df [-h] [-b] [/vault] ", Manual.ToolDescription);
+        Assert.Contains("\n  du [-h] [-b] [-s] [-d N] [path] ", Manual.ToolDescription);
+        Assert.Equal(ShellResult.Error("df: too many arguments" + Kumbu.Core.Sh.Commands.CommandArgs.QuoteHint), await Run("df /Work /Personal"));
     }
 }

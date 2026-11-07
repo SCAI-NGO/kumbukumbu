@@ -80,6 +80,32 @@ public class DuTests
     }
 
     [Fact]
+    public async Task Du_shows_an_empty_folder_with_nothing_in_it()
+    {
+        var store = Store();
+        Assert.False((await Run("mkdir /Work/empty", store)).IsError);
+
+        var result = await Run("du -b /Work", store);
+
+        Assert.EndsWith("\n   0  /Work/empty/\n5118  total", result.Output);
+        Assert.Equal(ShellResult.Ok("0  /Work/empty"), await Run("du -sb /Work/empty", store));
+    }
+
+    [Fact]
+    public async Task Du_counts_bytes_not_characters()
+    {
+        Assert.Equal(ShellResult.Ok("2  /Personal/p.md"), await Run("du -b /Personal/p.md"));
+        Assert.Equal(ShellResult.Ok("2  /Personal"), await Run("du -sb /Personal"));
+    }
+
+    [Fact]
+    public async Task Du_dash_s_and_dash_d_N_do_not_go_together()
+    {
+        Assert.Equal(ShellResult.Error("du: -s and -d N don't go together; -s is -d 0"), await Run("du -s -d 2 /Work"));
+        Assert.Equal(ShellResult.Ok("5 KB  /Work"), await Run("du -s -d 0 /Work"));
+    }
+
+    [Fact]
     public async Task Du_with_a_star_explains_there_is_no_globbing()
     {
         var result = await Run("du -sh /Work/*");
@@ -94,6 +120,7 @@ public class DuTests
     {
         Assert.Equal(ShellResult.Error("du: cannot access '/Work/nope': No such file or directory"), await Run("du /Work/nope"));
         Assert.Equal(ShellResult.Error("du: invalid maximum depth 'x'"), await Run("du -d x /Work"));
+        Assert.Equal(ShellResult.Error("du: invalid maximum depth '-1'"), await Run("du -d -1 /Work"));
     }
 
     [Fact]

@@ -66,6 +66,9 @@ public sealed class StorageQuota
     /// lookup waits before it is tried again.</summary>
     public static readonly TimeSpan RecountAfter = TimeSpan.FromMinutes(10);
 
+    /// <summary>How long <c>df</c> serves a figure it counted before it counts again (<see cref="RecentFigureAsync"/>).</summary>
+    public static readonly TimeSpan ShownFor = TimeSpan.FromSeconds(30);
+
     /// <summary>The stored override for "unlimited" (<see cref="UserDocument.Quota"/>); null is the default.</summary>
     public const long Unlimited = -1;
 
@@ -86,6 +89,9 @@ public sealed class StorageQuota
     private readonly Dictionary<string, DateTime> _lookupFailed = new(StringComparer.Ordinal);
 
     private readonly HashSet<string> _resolving = new(StringComparer.Ordinal);
+
+    /// <summary>The count <see cref="RecentFigureAsync"/> serves per owner, and when it started.</summary>
+    private readonly Dictionary<string, (Task<StorageFigure> Count, DateTime StartedAt)> _shown = new(StringComparer.Ordinal);
 
     /// <summary>The background work under way, for <see cref="SettledAsync"/>; what has ended is dropped whenever more is added.</summary>
     private readonly List<Task> _running = [];
@@ -232,6 +238,33 @@ public sealed class StorageQuota
     {
         var (limit, used, byVault) = await CountAsync(ownerId, always: true, ct);
         return new StorageFigure(used!.Value, limit, byVault);
+    }
+
+    /// <summary>
+    /// <see cref="FigureAsync"/> for <c>df</c>, bounded: a figure counted less than <see cref="ShownFor"/> ago is served
+    /// again, and calls that meet a count under way share it, so an agent calling df in a loop costs one aggregation per
+    /// owner every 30 seconds. The rows may lag behind a write by as much; the write path's check doesn't read this. A
+    /// count that failed is not kept. The shared count doesn't take the caller's token: another caller may be waiting on it.
+    /// </summary>
+    public Task<StorageFigure> RecentFigureAsync(string ownerId, CancellationToken ct)
+    {
+        Task<StorageFigure> count;
+        lock (_lock)
+        {
+            if (_shown.TryGetValue(ownerId, out var shown) && !shown.Count.IsFaulted && !shown.Count.IsCanceled
+                && (!shown.Count.IsCompleted || Now - shown.StartedAt < ShownFor))
+            {
+                count = shown.Count;
+            }
+            else
+            {
+                // Started outside the lock: the count takes it itself.
+                count = Task.Run(() => FigureAsync(ownerId, CancellationToken.None), CancellationToken.None);
+                _shown[ownerId] = (count, Now);
+            }
+        }
+
+        return count.WaitAsync(ct);
     }
 
     /// <summary>

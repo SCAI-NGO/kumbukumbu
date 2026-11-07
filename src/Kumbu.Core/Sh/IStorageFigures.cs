@@ -6,6 +6,14 @@ namespace Kumbu.Core.Sh;
 /// those in the trash.</summary>
 public sealed record VaultFigure(string Vault, long Used, int Notes, int Attachments);
 
+/// <summary>What <c>df</c> shows, counted in one go: the caller's own vaults that this credential opens, her storage limit
+/// in bytes (null: none), and whether those are all the vaults she owns. When they aren't (a key for some of them), the
+/// limit applies to more than the rows add up to.</summary>
+public sealed record OwnFigures(IReadOnlyList<VaultFigure> Vaults, long? Limit, bool AllOwned)
+{
+    public static readonly OwnFigures None = new([], null, true);
+}
+
 /// <summary>
 /// What <c>df</c> reports (WebDAV design §3.12): the vaults the caller owns, never one shared with her, since data in a
 /// shared vault counts against its owner. The server's figures are those of the storage quota; a shell without a server
@@ -13,11 +21,7 @@ public sealed record VaultFigure(string Vault, long Used, int Notes, int Attachm
 /// </summary>
 public interface IStorageFigures
 {
-    /// <summary>The caller's own vaults that this credential opens, counted now.</summary>
-    Task<IReadOnlyList<VaultFigure>> OwnedAsync(CancellationToken ct);
-
-    /// <summary>The caller's storage limit in bytes; null: none.</summary>
-    Task<long?> LimitAsync(CancellationToken ct);
+    Task<OwnFigures> OwnedAsync(CancellationToken ct);
 }
 
 /// <summary>No figures: no vault of one's own, no limit.</summary>
@@ -25,7 +29,5 @@ public sealed class NoStorageFigures : IStorageFigures
 {
     public static readonly NoStorageFigures Instance = new();
 
-    public Task<IReadOnlyList<VaultFigure>> OwnedAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<VaultFigure>>([]);
-
-    public Task<long?> LimitAsync(CancellationToken ct) => Task.FromResult<long?>(null);
+    public Task<OwnFigures> OwnedAsync(CancellationToken ct) => Task.FromResult(OwnFigures.None);
 }

@@ -29,6 +29,8 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
           Notes and Attachments count what is there now, not the trash. Writes that add data are refused
           once Used reaches the limit; rm, mv and emptying the trash (in the web app) always work.
           A vault shared with you is not listed: what anyone writes there counts against its owner.
+          With a key that opens only some of your vaults, the rows and the total are those vaults';
+          your other vaults count against the limit too, so no percentage is shown.
           Sizes are B, KB, MB and GB (1 KB = 1024 B); -h is accepted and changes nothing.
           -b, --bytes   exact bytes
 
@@ -42,10 +44,11 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
-        if (options.Operands.Count > 1) return ShellResult.Error("df: too many arguments");
+        if (options.Operands.Count > 1) return ShellResult.Error("df: too many arguments" + CommandArgs.QuoteHint);
 
         var bytes = options.Has("bytes");
-        var owned = (await figures.OwnedAsync(ct)).OrderBy(f => f.Vault, TextOrder.Default).ToList();
+        var own = await figures.OwnedAsync(ct);
+        var owned = own.Vaults.OrderBy(f => f.Vault, TextOrder.Default).ToList();
         if (options.Operands.Count == 1)
         {
             if (!CommandArgs.TryParsePath(Name, options.Operands[0], out var path, out var pathError)) return pathError!;
@@ -64,10 +67,15 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
         if (owned.Count == 0) return ShellResult.Ok("(no vaults of your own)");
         var lines = Table(owned, bytes, out var columns);
         var used = owned.Sum(f => f.Used);
-        var limit = await figures.LimitAsync(ct);
         lines.Add(new string('─', columns.Width + 2));
-        var total = "Total".PadRight(columns.Name) + Size(used, bytes).PadLeft(columns.Used);
-        lines.Add(limit is { } max ? $"{total}  of {Size(max, bytes)} ({Percent(used, max)} %)" : $"{total} (no limit)");
+        var total = "Total".PadRight(columns.Name) + AttachmentText.Size(used, bytes).PadLeft(columns.Used);
+        lines.Add(own.Limit switch
+        {
+            null => $"{total} (no limit)",
+            { } max when own.AllOwned => $"{total}  of {AttachmentText.Size(max, bytes)} ({Percent(used, max)} %)",
+            // The rows leave out vaults the limit counts too: a percentage of it would promise room the quota doesn't give.
+            { } max => $"{total}  (vaults this key opens; your other vaults count against the {AttachmentText.Size(max, bytes)} limit too)",
+        });
         return ShellResult.Ok(string.Join('\n', lines));
     }
 
@@ -80,20 +88,18 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
     /// wide as the widest figure (the total's included), the counts are right-aligned under their headings.</summary>
     private static List<string> Table(IReadOnlyList<VaultFigure> owned, bool bytes, out Columns columns)
     {
-        var total = Size(owned.Sum(f => f.Used), bytes);
+        var total = AttachmentText.Size(owned.Sum(f => f.Used), bytes);
         columns = new Columns(
             Math.Max("Vault".Length, owned.Max(f => f.Vault.Length + 1)) + 4,
-            Math.Max("Used".Length, Math.Max(total.Length, owned.Max(f => Size(f.Used, bytes).Length))),
+            Math.Max("Used".Length, Math.Max(total.Length, owned.Max(f => AttachmentText.Size(f.Used, bytes).Length))),
             Math.Max("Notes".Length, owned.Max(f => Count(f.Notes).Length)),
             Math.Max("Attachments".Length, owned.Max(f => Count(f.Attachments).Length)));
         var c = columns;
         List<string> lines = ["Vault".PadRight(c.Name) + "Used".PadRight(c.Used) + " " + "Notes".PadLeft(c.Notes) + "  " + "Attachments".PadLeft(c.Attachments)];
         lines.AddRange(owned.Select(f =>
-            ("/" + f.Vault).PadRight(c.Name) + Size(f.Used, bytes).PadLeft(c.Used) + " " + Count(f.Notes).PadLeft(c.Notes) + "  " + Count(f.Attachments).PadLeft(c.Attachments)));
+            ("/" + f.Vault).PadRight(c.Name) + AttachmentText.Size(f.Used, bytes).PadLeft(c.Used) + " " + Count(f.Notes).PadLeft(c.Notes) + "  " + Count(f.Attachments).PadLeft(c.Attachments)));
         return lines;
     }
-
-    internal static string Size(long bytes, bool exact) => exact ? bytes.ToString(CultureInfo.InvariantCulture) : AttachmentText.Size(bytes);
 
     private static string Count(int count) => count.ToString(CultureInfo.InvariantCulture);
 
