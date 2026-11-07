@@ -12,6 +12,7 @@ import NewKeyDialog from "./NewKeyDialog";
 import RevokeDialog from "./RevokeDialog";
 import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
+import { useReveal } from "./useReveal";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
@@ -23,15 +24,10 @@ export default function Keys({ onRevealChange }: { onRevealChange?(revealing: bo
   const keys = useQuery({ queryKey: ["keys"], queryFn: () => call(api.GET("/api/keys")) });
   const [creating, setCreating] = useState(false);
   // The new key lives here, in component state only, until the reveal is done.
-  const [created, setCreated] = useState<{ name: string; key: string } | null>(null);
+  const [created, reveal] = useReveal<{ name: string; key: string }>(onRevealChange);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   const [order, setOrder] = useState<UsageOrder>("created");
   const vaults = useVaults();
-
-  const reveal = (c: { name: string; key: string } | null) => {
-    setCreated(c);
-    onRevealChange?.(c !== null);
-  };
 
   if (created) return <KeyReveal name={created.name} value={created.key} onDone={() => reveal(null)} />;
 

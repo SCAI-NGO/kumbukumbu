@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../state/session";
@@ -81,31 +81,11 @@ describe("Access", () => {
   });
 
   it("a new connection's address has the page to itself, without the tabs, until done", async () => {
-    const url = "https://kumbu.example.org/mcp/c/Zk3-connection-token";
-    const connection = {
-      id: "c1",
-      name: "Work",
-      url,
-      vaults: { Work: "write" },
-      actsAs: {},
-      createdAt: "2026-10-01T09:00:00Z",
-      lastUsedAt: null,
-      expiresAt: null,
-      revokedAt: null,
-      state: "waiting",
-      reason: null,
-      client: null,
-      publish: [],
-    };
     api({ "POST /api/connections": () => json(201, connection) });
     renderApp("/access/apps");
-    await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
-    const dialog = screen.getByRole("dialog", { name: "Connect an app" });
-    await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
-    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read and write"));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
+    await connect();
 
-    expect(await screen.findByText(url)).toBeInTheDocument();
+    expect(await screen.findByText(connection.url)).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByText("MCP via OAuth: claude.ai connectors, ChatGPT and others")).not.toBeInTheDocument();
 
@@ -113,4 +93,67 @@ describe("Access", () => {
     expect(await screen.findByRole("tablist", { name: "Access" })).toBeInTheDocument();
     expect(tab("Apps")).toHaveAttribute("aria-selected", "true");
   });
+
+  it("leaving in the middle of a reveal and coming back shows the tabs again", async () => {
+    api({ "POST /api/connections": () => json(201, connection) });
+    const router = renderApp(["/access/keys", "/access/apps"]);
+    await connect();
+    expect(await screen.findByText(connection.url)).toBeInTheDocument();
+
+    await act(() => router.navigate(-1));
+    expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
+    await act(() => router.navigate("/access/apps"));
+    expect(await screen.findByRole("button", { name: "Connect an app" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Access" })).toBeInTheDocument();
+    expect(tab("Apps")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("an unknown tab leads to the keys tab", async () => {
+    api();
+    const router = renderApp("/access/foo");
+
+    expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/access/keys");
+  });
+
+  it("Home and End move to the first and the last tab, in place of the current entry", async () => {
+    api();
+    const router = renderApp(["/settings", "/access/apps"]);
+    await screen.findByRole("heading", { name: "Connections" });
+    tab("Apps").focus();
+
+    await userEvent.keyboard("{End}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/access/dav"));
+    expect(tab("WebDAV")).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/access/keys"));
+    expect(tab("API keys")).toHaveFocus();
+
+    await act(() => router.navigate(-1));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+  });
 });
+
+const connection = {
+  id: "c1",
+  name: "Work",
+  url: "https://kumbu.example.org/mcp/c/Zk3-connection-token",
+  vaults: { Work: "write" },
+  actsAs: {},
+  createdAt: "2026-10-01T09:00:00Z",
+  lastUsedAt: null,
+  expiresAt: null,
+  revokedAt: null,
+  state: "waiting",
+  reason: null,
+  client: null,
+  publish: [],
+};
+
+async function connect() {
+  await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
+  const dialog = screen.getByRole("dialog", { name: "Connect an app" });
+  await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
+  await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read and write"));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
+}

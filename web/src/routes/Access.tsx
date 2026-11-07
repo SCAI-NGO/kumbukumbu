@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { AccountScreen } from "../components/form";
 import Connections from "./Connections";
@@ -12,6 +12,20 @@ const tabs = [
 ] as const;
 
 type Tab = (typeof tabs)[number]["id"];
+
+/** Each tab's content; one that shows a secret calls `onReveal` (see `useReveal`) so the tabs make way for it. */
+const panels: Record<Tab, (onReveal: (revealing: boolean) => void) => ReactNode> = {
+  keys: (onReveal) => <Keys onRevealChange={onReveal} />,
+  apps: (onReveal) => <Connections subtitle="MCP via OAuth: claude.ai connectors, ChatGPT and others" onRevealChange={onReveal} />,
+  dav: () => (
+    <section aria-labelledby="dav-title" className="flex min-w-0 flex-col gap-6">
+      <h2 id="dav-title" className="text-[22px] font-bold text-text">
+        WebDAV
+      </h2>
+      <p className="text-text-body">WebDAV shares will be listed here.</p>
+    </section>
+  ),
+};
 
 const tabClass = (on: boolean) =>
   `flex min-h-11 flex-1 items-center justify-center rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
@@ -33,7 +47,8 @@ export default function Access() {
     if (to === undefined) return;
     e.preventDefault();
     const next = tabs[(to + tabs.length) % tabs.length];
-    navigate(`/access/${next.id}`);
+    // Moving along the tabs is one step, as for any tablist; Back leaves the page rather than walking the tabs.
+    navigate(`/access/${next.id}`, { replace: true });
     refs.current[next.id]?.focus();
   };
 
@@ -68,18 +83,8 @@ export default function Access() {
         aria-labelledby={alone ? undefined : `access-tab-${current.id}`}
         className="flex min-w-0 flex-col gap-6"
       >
-        {current.id === "keys" && <Keys key="keys" onRevealChange={onReveal} />}
-        {current.id === "apps" && (
-          <Connections key="apps" subtitle="MCP via OAuth: claude.ai connectors, ChatGPT and others" onRevealChange={onReveal} />
-        )}
-        {current.id === "dav" && (
-          <section aria-labelledby="dav-title" className="flex min-w-0 flex-col gap-6">
-            <h2 id="dav-title" className="text-[22px] font-bold text-text">
-              WebDAV
-            </h2>
-            <p className="text-text-body">WebDAV shares will be listed here.</p>
-          </section>
-        )}
+        {/* Keyed, so a tab's state goes with it. */}
+        <Fragment key={current.id}>{panels[current.id](onReveal)}</Fragment>
       </div>
     </AccountScreen>
   );
