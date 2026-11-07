@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text;
 using Kumbu.Server.Api;
+using Kumbu.Server.Dav;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -107,6 +108,24 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal(before, await CountsAsync());
     }
+
+    /// <summary>The store never has a dot-folder (<c>NoteNames</c> refuses one), so over HTTP what is below one is
+    /// parked by its parked folder too; the rule itself is checked here.</summary>
+    [Theory]
+    [InlineData(".git/config", true)]
+    [InlineData("Ideas/.obsidian/plugins/x/main.js", true)]
+    [InlineData("Ideas/.DS_Store", true)]
+    [InlineData("A.TMP", true)]
+    [InlineData("THUMBS.DB", true)]
+    [InlineData("#", false)]
+    [InlineData("plan.md", false)]
+    [InlineData("Ideas/plan.md", false)]
+    [InlineData("Ideas.git/plan.md", false)]
+    [InlineData("4913.md", false)]
+    [InlineData("a.tmp.md", false)]
+    [InlineData("diagram.png", false)]
+    public void The_patterns_are_matched_on_the_name_and_on_dot_folders_above_it(string path, bool parked) =>
+        Assert.Equal(parked, DavRules.IsParked(path.Split('/')));
 
     [Fact]
     public async Task Parked_files_are_listed_for_their_share_only()
