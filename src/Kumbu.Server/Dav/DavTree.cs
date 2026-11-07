@@ -29,6 +29,19 @@ public sealed record DavResource(
 /// </summary>
 public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavCaller caller, DavParking parking)
 {
+    /// <summary>
+    /// The path a client's <paramref name="path"/> names (brief open point 6): a name ending in <c>.md</c> in another case
+    /// (<c>Plan.MD</c>) is the note ending in <c>.md</c>, the one spelling the store keeps notes under, unless the
+    /// share sees something under the exact name (a folder, a parked file). The one place this is decided: every method
+    /// resolves its target here, and <c>COPY</c> and <c>MOVE</c> their destination too.
+    /// </summary>
+    public async Task<VaultPath> ResolveAsync(VaultPath path, CancellationToken ct)
+    {
+        if (path.Segments.Count < 2 || path.IsNote || !path.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) return path;
+        if (await FindAsync(path, ct) is not null) return path;
+        return path.Segments.SkipLast(1).Aggregate(VaultPath.Root, (p, s) => p.Child(s)).Child(path.Name[..^3] + ".md");
+    }
+
     /// <summary>The resource at <paramref name="path"/>, or null if there is none.</summary>
     public async Task<DavResource?> FindAsync(VaultPath path, CancellationToken ct) =>
         await FindStoredAsync(path, ct) ?? (Parked(path) is { } item ? Parked(path, item) : null);

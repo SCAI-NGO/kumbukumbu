@@ -53,6 +53,11 @@ public static class DavEndpoints
                 return;
             }
 
+            if (await Tree(http).ResolveAsync(target.Path, ct) is var resolved && resolved != target.Path)
+            {
+                target = target with { Path = resolved, Asked = target.Path };
+            }
+
             switch (request.Method)
             {
                 case DavMethod.Propfind:
@@ -116,7 +121,12 @@ public static class DavEndpoints
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
         var properties = new DavProperties(DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>());
         var responses = new List<DavResponse>(resources.Count);
-        foreach (var r in resources) responses.Add(DavXml.Response(r.Href, await properties.PropertiesAsync(r, ct), propfind));
+        foreach (var r in resources)
+        {
+            // The resource asked about answers under the name it was asked by (Plan.MD), what is below it under its own.
+            var href = r == resource && target.Asked is { } asked ? DavPaths.Href(asked, r.IsCollection) : r.Href;
+            responses.Add(DavXml.Response(href, await properties.PropertiesAsync(r, ct), propfind));
+        }
         await DavXml.WriteMultistatusAsync(http.Response, responses, ct);
     }
 

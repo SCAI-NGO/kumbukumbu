@@ -66,7 +66,6 @@ public class NoteWriterTests
 
     [Theory]
     [InlineData("/Nope/x.md", "write: there is no vault 'Nope' (ls lists the vaults; writing does not create new ones)")]
-    [InlineData("/Work/plan.md", "write: /Work/plan.md already exists; to overwrite it, pass the version from 'cat /Work/plan.md'")]
     [InlineData("/Work/sub", "write: /Work/sub: note names end in .md")]
     [InlineData("/Work/notes.txt", "write: /Work/notes.txt: note names end in .md")]
     [InlineData("/Work.md", "write: /Work.md: notes live inside a vault, e.g. /Work/plan.md")]
@@ -81,6 +80,14 @@ public class NoteWriterTests
     [InlineData("/", "write: /: paths must be absolute, e.g. /Work/plan.md (there is no working directory)")]
     public async Task RejectsBadNewNotes(string path, string error) =>
         Assert.Equal(ShellResult.Error(error), await Write(path, "x", null));
+
+    /// <summary>A name taken is the vault's state in the way, as a stale version is: a client may take the note as it is
+    /// now and write again.</summary>
+    [Fact]
+    public async Task RejectsANewNoteWhereOneExistsAsAConflict() =>
+        Assert.Equal(
+            ShellResult.Error("write: /Work/plan.md already exists; to overwrite it, pass the version from 'cat /Work/plan.md'") with { Kind = ShellErrorKind.Conflict },
+            await Write("/Work/plan.md", "x", null));
 
     [Fact]
     public async Task RejectsAControlCharacter() =>

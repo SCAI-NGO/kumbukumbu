@@ -7,7 +7,12 @@ namespace Kumbu.Server.Dav;
 
 /// <summary>What a <c>/dav</c> URL names: the root (the share's vaults), a vault by the caller's name for it, or a path
 /// below one. <paramref name="Bare"/>: the URL was <c>/dav</c> without its slash.</summary>
-public sealed record DavTarget(VaultPath Path, bool Bare = false);
+public sealed record DavTarget(VaultPath Path, bool Bare = false)
+{
+    /// <summary>The path the client named, where <see cref="DavTree.ResolveAsync"/> took it for another
+    /// (<c>Plan.MD</c> for the note <c>Plan.md</c>); null where it is <see cref="Path"/>.</summary>
+    public VaultPath? Asked { get; init; }
+}
 
 /// <summary>
 /// <c>/dav</c> URLs and the vault paths they name (WebDAV design §5). A URL is read as the client sent it, not as Kestrel

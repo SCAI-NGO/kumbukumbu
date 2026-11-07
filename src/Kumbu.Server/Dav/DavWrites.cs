@@ -36,9 +36,9 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
 
     /// <summary>
     /// <c>PUT</c> (RFC 4918 §9.7): 201 for a new file, 204 for one replaced, with the <c>ETag</c> of what was stored.
-    /// What it is goes by its name's extension, in any case (brief open point 6): a note, an attachment of a format
-    /// Kumbu² keeps, a parked file, or a 415. A parked placeholder (an empty attachment) is not parked for its own sake:
-    /// the write that follows it goes to the store.
+    /// What it is goes by its name's extension, in any case (brief open point 6; a note's name the target's resolution
+    /// already spelt <c>.md</c>): a note, an attachment of a format Kumbu² keeps, a parked file, or a 415. A parked
+    /// placeholder (an empty attachment) is not parked for its own sake: the write that follows it goes to the store.
     /// </summary>
     public async Task PutAsync(DavTarget target, CancellationToken ct)
     {
@@ -48,7 +48,7 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         if (!await ParkedAsync(target.Path, place, ct, itself: false))
         {
             var name = target.Path.Name;
-            if (name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) await PutNoteAsync(target.Path, ct);
+            if (target.Path.IsNote) await PutNoteAsync(target, ct);
             else if (AttachmentFormat.ForName(name) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(target.Path, place, format, ct);
             else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
             return;
@@ -107,8 +107,9 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
         var from = Writable(source.Path);
         var header = Request.Headers["Destination"].ToString();
         if (header.Length == 0) throw new DavException(StatusCodes.Status400BadRequest, "COPY and MOVE name where to in a Destination header.");
-        var destination = DavDestination.Parse(Request, header)
+        var parsed = DavDestination.Parse(Request, header)
             ?? throw new DavException(StatusCodes.Status502BadGateway, "The destination is not on this server's WebDAV.");
+        var destination = parsed with { Path = await tree.ResolveAsync(parsed.Path, ct) };
         if (destination.Path.IsRoot || caller.VaultId(destination.Path.Segments[0]) != from.VaultId)
         {
             throw new DavException(StatusCodes.Status502BadGateway, "Kumbu² copies and moves within one vault only.");
@@ -198,18 +199,17 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
 
     /// <summary>
     /// A note's <c>PUT</c>: at most <see cref="NoteWriter.MaxBytes"/> (413), UTF-8 (415), its preconditions (412), and
-    /// written through <see cref="NoteWriter"/>, which makes <c>\r\n</c> <c>\n</c> as every write path does. A name
-    /// ending in <c>.MD</c> or any other case is the note ending in <c>.md</c>, where the store keeps notes; the answer
-    /// then says where in <c>Location</c>. Every check runs before anything is written.
+    /// written through <see cref="NoteWriter"/>, which makes <c>\r\n</c> <c>\n</c> as every write path does. Asked
+    /// as <c>Plan.MD</c>, the answer says in <c>Location</c> where the note is. Every check runs before anything is
+    /// written.
     /// </summary>
-    private async Task PutNoteAsync(VaultPath path, CancellationToken ct)
+    private async Task PutNoteAsync(DavTarget target, CancellationToken ct)
     {
-        var stored = path.IsNote ? path : Parent(path).Child(path.Name[..^3] + ".md");
-        if (stored != path && await tree.FindAsync(stored, ct) is { IsCollection: true }) throw new DavException(StatusCodes.Status405MethodNotAllowed, "A folder has no content to write.");
-        if (writer.Caller.Refuse("write", stored) is { } refused) throw Refusal(refused);
+        var path = target.Path;
+        if (writer.Caller.Refuse("write", path) is { } refused) throw Refusal(refused);
 
         var bytes = await DavBody.ReadLimitedAsync(Request, NoteWriter.MaxBytes, ct)
-            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A note can have at most {NoteWriter.MaxBytes} bytes (1 MiB).");
+            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A note can have at most {NoteWriter.MaxBytes / 1024 / 1024} MiB.");
         string text;
         try
         {
@@ -220,32 +220,27 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
             throw new DavException(StatusCodes.Status415UnsupportedMediaType, "A note is UTF-8 text; this one isn't.");
         }
 
-        var existing = await tree.FindStoredAsync(stored, ct);
+        var existing = await tree.FindStoredAsync(path, ct);
         Preconditions(existing?.Version);
-        var result = await writer.WriteAsync(stored.Value, text, existing?.Version, ct);
-        if (result.IsError && await LostRaceAsync(stored, existing?.Version, ct) is var (lost, now) && lost)
-        {
-            result = await writer.WriteAsync(stored.Value, text, now, ct);
-        }
-
+        var (result, replaced) = await WriteOnceMoreIfLostAsync(path, existing?.Version, v => writer.WriteAsync(path.Value, text, v, ct), ct);
         if (result.IsError) throw Refusal(result);
-        if (stored != path) Response.Headers.Location = DavPaths.Href(stored, collection: false);
-        Written(result.Version!.Token, created: existing is null);
+        if (target.Asked is not null) Response.Headers.Location = DavPaths.Href(path, collection: false);
+        Written(result.Version!.Token, created: !replaced);
     }
 
     /// <summary>
     /// An attachment's <c>PUT</c>: at most <see cref="AttachmentFormat.MaxBytes"/> (413), its preconditions (412), and
-    /// written through <see cref="AttachmentWriter"/>, its bytes checked against the format the name says (415 with the
-    /// reason). An empty body is the placeholder a file manager writes before the content (WebDAV design §3.5): parked,
-    /// for this share, unless the store has the file, which then stays as it is until the content comes. The content
-    /// goes to the store and takes the placeholder's place.
+    /// written through <see cref="AttachmentWriter"/>, whose check of the bytes against the format the name says is a
+    /// 415 with its reason. An empty body is the placeholder a file manager writes before the content (WebDAV design
+    /// §3.5): parked, for this share, unless the store has the file, which then stays as it is until the content
+    /// comes. The content goes to the store and takes the placeholder's place.
     /// </summary>
     private async Task PutAttachmentAsync(VaultPath path, DavPlace place, AttachmentFormat format, CancellationToken ct)
     {
         var files = writer.ForAttachments() ?? throw NoAttachments();
         if (writer.Caller.Refuse("upload", path) is { } refused) throw Refusal(refused);
         var bytes = await DavBody.ReadLimitedAsync(Request, AttachmentFormat.MaxBytes, ct)
-            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, "A file can have at most 15 MB.");
+            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A file can have at most {AttachmentFormat.MaxBytes / 1024 / 1024} MB.");
 
         var existing = await tree.FindStoredAsync(path, ct);
         var placeholder = existing is null ? tree.Parked(path) : null;
@@ -263,24 +258,21 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
             return;
         }
 
-        if (AttachmentFormat.Problem(path, bytes) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem + ".");
-        // The dimensions stored are read here from the bytes stored, as on /api/files.
+        // The dimensions stored are read here from the bytes stored, as on /api/files; bytes that aren't of the
+        // format have none, and the writer refuses them.
         (int, int)? dimensions = null;
-        if (format.Kind == AttachmentKind.Image)
+        var matches = AttachmentFormat.Problem(path, bytes) is null;
+        if (matches && format.Kind == AttachmentKind.Image)
         {
             dimensions = ImageHeader.Read(bytes, out var headerProblem)
                 ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.");
         }
 
-        var (result, _) = await files.WriteAsync(path.Value, bytes, dimensions, existing?.Version, ct);
-        if (result.IsError && await LostRaceAsync(path, existing?.Version, ct) is var (lost, now) && lost)
-        {
-            (result, _) = await files.WriteAsync(path.Value, bytes, dimensions, now, ct);
-        }
-
-        if (result.IsError) throw Refusal(result);
+        var (result, replaced) = await WriteOnceMoreIfLostAsync(
+            path, existing?.Version, async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result, ct);
+        if (result.IsError) throw matches ? Refusal(result) : new DavException(StatusCodes.Status415UnsupportedMediaType, result.Output);
         if (placeholder is not null) parking.Remove(caller.ShareId, place.VaultId, place.Path);
-        Written(result.Version!.Token, created: existing is null && placeholder is null);
+        Written(result.Version!.Token, created: !replaced && placeholder is null);
     }
 
     /// <summary>
@@ -308,21 +300,35 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
     }
 
     /// <summary>
-    /// After a write that failed: whether another write came in between this one's look and its write (WebDAV design
-    /// §3.5), and the version of what that other one left there (null for nothing). Without a precondition, the write
-    /// is then tried once more on that state, and overwrites it: WebDAV has no merge. A write with one was asked of
-    /// the state it named, which is gone: 412.
+    /// <paramref name="write"/> on the state of version <paramref name="version"/> (null: nothing there), and, if it lost
+    /// the compare-and-swap to a write that came in between (WebDAV design §3.5), once more on the state that one left,
+    /// which it then overwrites: WebDAV has no merge. A request with a precondition asked for the state it named, which
+    /// is gone: 412. Whether the write replaced something, for 201 or 204.
     /// </summary>
-    private async Task<(bool Lost, string? Now)> LostRaceAsync(VaultPath path, string? version, CancellationToken ct)
+    private async Task<(ShellResult Result, bool Replaced)> WriteOnceMoreIfLostAsync(
+        VaultPath path, string? version, Func<string?, Task<ShellResult>> write, CancellationToken ct)
     {
-        var now = await tree.FindStoredAsync(path, ct);
-        if (now is { IsCollection: true } || now?.Version == version) return (false, null);
-        if (Request.Headers.IfMatch.Count > 0 || Request.Headers.IfNoneMatch.Count > 0)
+        var result = await write(version);
+        if (result.IsError && await OvertakenAsync(path, result, version, ct) is { } now)
         {
-            throw new DavException(StatusCodes.Status412PreconditionFailed, "The file changed while it was written.");
+            if (Request.Headers.IfMatch.Count > 0 || Request.Headers.IfNoneMatch.Count > 0)
+            {
+                throw new DavException(StatusCodes.Status412PreconditionFailed, "The file changed while it was written.");
+            }
+
+            (result, version) = (await write(now), now);
         }
 
-        return (true, now?.Version);
+        return (result, version is not null);
+    }
+
+    /// <summary>The version another write left at <paramref name="path"/> when <paramref name="failed"/> is the
+    /// writer's version conflict (<see cref="ShellErrorKind.Conflict"/>: changed, or created, meanwhile) and a file is
+    /// there now at another version than <paramref name="version"/>; null for any other failure.</summary>
+    private async Task<string?> OvertakenAsync(VaultPath path, ShellResult failed, string? version, CancellationToken ct)
+    {
+        if (failed.Kind != ShellErrorKind.Conflict) return null;
+        return await tree.FindStoredAsync(path, ct) is { IsCollection: false, Version: { } now } && now != version ? now : null;
     }
 
     /// <summary>The answer to a <c>PUT</c> that stored <paramref name="version"/>.</summary>
@@ -374,6 +380,7 @@ public sealed partial class DavWrites(HttpContext http, DavCaller caller, DavTre
     {
         if (await tree.FindStoredAsync(path, ct) is not null) return false;
         if (DavRules.IsParked([.. path.Segments.Skip(1)])) return true;
+        // Without itself, the folder it is in; "" for one in the vault's own folder, where nothing is parked above.
         var below = itself ? place.Path : place.Path[..Math.Max(0, place.Path.LastIndexOf('/'))];
         if (parking.Holder(caller.ShareId, place.VaultId, below) is not { } holder) return false;
         if (holder == place.Path) return true;

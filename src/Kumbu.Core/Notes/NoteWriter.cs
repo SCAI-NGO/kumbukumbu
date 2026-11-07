@@ -99,7 +99,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         {
             if (existing is not null)
             {
-                return ShellResult.Error($"write: {path.Value} already exists; to overwrite it, pass the version from 'cat {Quote(path)}'");
+                return ShellResult.Error($"write: {path.Value} already exists; to overwrite it, pass the version from 'cat {Quote(path)}'") with { Kind = ShellErrorKind.Conflict };
             }
 
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
@@ -108,7 +108,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             var note = new StoredNote(path, content, 1, caller.WriterIn(path.Segments[0]), Now, [], Changeset: await ChangesetAsync(path, ct), Ref: caller.ReferenceIn(path.Segments[0]));
             if (!await store.TryCreateAsync(note, ct))
             {
-                return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again");
+                return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again") with { Kind = ShellErrorKind.Conflict };
             }
 
             var shared = (await store.VaultInfoAsync(path.Segments[0], ct))?.Shared == true ? $". {path.Segments[0]} is shared: others can read this note" : "";

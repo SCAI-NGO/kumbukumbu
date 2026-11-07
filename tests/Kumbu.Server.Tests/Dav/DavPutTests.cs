@@ -3,6 +3,9 @@ using System.Net;
 using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+using Kumbu.Core.Sh;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Tests.Api;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +25,10 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
 
     private WebApplicationFactory<Program>? _timed;
 
+    private WebApplicationFactory<Program>? _raced;
+
+    private readonly Race _race = new();
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private WebApplicationFactory<Program> Api => app.PublicApi;
@@ -33,9 +40,68 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         s.AddSingleton<TimeProvider>(_time);
     }));
 
+    /// <summary>A server whose writers' caller lets <see cref="_race"/> write in between a WebDAV write's look at the
+    /// store and its write.</summary>
+    private WebApplicationFactory<Program> Raced => _raced ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+    {
+        s.RemoveAll<ICaller>();
+        s.AddScoped<ICaller>(sp => new RacingCaller(sp.GetRequiredService<RequestCaller>(), _race));
+    }));
+
     public async ValueTask DisposeAsync()
     {
         if (_timed is not null) await _timed.DisposeAsync();
+        if (_raced is not null) await _raced.DisposeAsync();
+    }
+
+    /// <summary>A write another client makes once, at the next chance <see cref="RacingCaller"/> gives it.</summary>
+    private sealed class Race
+    {
+        public Func<Task>? Next { get; set; }
+    }
+
+    /// <summary>
+    /// The request's caller, as the writers ask it. <see cref="Kumbu.Server.Dav.DavWrites"/> asks for the right first,
+    /// then reads what is stored; the writer asks again before its own read and its compare-and-swap. That second ask
+    /// is where <see cref="Race.Next"/> runs, and every ask after it while one is set: another write between the WebDAV
+    /// write's look and the writer's.
+    /// </summary>
+    private sealed class RacingCaller(ICaller inner, Race race) : ICaller
+    {
+        private int _asked;
+
+        public string Writer => inner.Writer;
+
+        public WriterRef Reference => inner.Reference;
+
+        public string WriterIn(string vault) => inner.WriterIn(vault);
+
+        public WriterRef ReferenceIn(string vault) => inner.ReferenceIn(vault);
+
+        public TimeSpan ChangesetIdle => inner.ChangesetIdle;
+
+        public AccessLevel? Level(string vault) => inner.Level(vault);
+
+        public bool CanWrite(string vault) => inner.CanWrite(vault);
+
+        public string ReadOnlySentence(string vault) => inner.ReadOnlySentence(vault);
+
+        public string? ReadOnlyCode(string vault) => inner.ReadOnlyCode(vault);
+
+        public string StructuralLimit(string vault) => inner.StructuralLimit(vault);
+
+        public ShellResult? Refuse(string command, VaultPath path)
+        {
+            if (++_asked >= 2 && race.Next is { } next)
+            {
+                race.Next = null;
+                next().GetAwaiter().GetResult();
+            }
+
+            return inner.Refuse(command, path);
+        }
+
+        public ShellResult? RefuseFolder(string command, VaultPath folder) => inner.RefuseFolder(command, folder);
     }
 
     private static HttpContent Bytes(byte[] bytes) => new ByteArrayContent(bytes);
@@ -115,6 +181,202 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.Created, put.StatusCode);
         Assert.Equal("# Plan", await NoteAsync(dav, "Plan.md"));
         Assert.Equal("/dav/Work/Plan.md", put.Headers.Location?.OriginalString);
+    }
+
+    /// <summary>A name ending in <c>.MD</c>, or any other case, addresses the note ending in <c>.md</c> for every method
+    /// (brief open point 6): the store keeps notes under <c>.md</c> only.</summary>
+    [Fact]
+    public async Task An_upper_MD_name_addresses_the_md_note_for_every_method()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Plan.md", "# Old");
+
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/Plan.MD", Text("# Plan")))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+            Assert.Equal("/dav/Work/Plan.md", put.Headers.Location?.OriginalString);
+        }
+
+        Assert.Equal("# Plan", await NoteAsync(dav, "Plan.md"));
+        var version = (await dav.Owner.ReadAsync("Plan.md"))["version"]!.GetValue<string>();
+
+        using (var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/Plan.MD"))
+        {
+            Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+            Assert.Equal("# Plan", await BodyAsync(get));
+            Assert.Equal($"\"{version}\"", get.Headers.ETag?.Tag);
+        }
+
+        using (var head = await dav.SendAsync(HttpMethod.Head, "/dav/Work/Plan.mD")) Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+
+        // Depth 0 answers for the name the client asked about.
+        var props = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/Plan.MD", depth: "0"));
+        Assert.Equal(["/dav/Work/Plan.MD"], DavAssert.Hrefs(props));
+        Assert.Equal($"\"{version}\"", DavAssert.Prop(DavAssert.Response(props, "/dav/Work/Plan.MD"), "getetag")?.Value);
+
+        using (var patch = await dav.SendAsync(DavClient.Proppatch, "/dav/Work/Plan.MD", DavClient.Body(
+            "<?xml version=\"1.0\"?><D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop><D:x/></D:prop></D:set></D:propertyupdate>")))
+        {
+            Assert.Equal(HttpStatusCode.MultiStatus, patch.StatusCode);
+        }
+
+        using (var locked = await dav.SendAsync(DavClient.Lock, "/dav/Work/Plan.MD", DavClient.Body(
+            "<?xml version=\"1.0\"?><D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>")))
+        {
+            Assert.Equal(HttpStatusCode.OK, locked.StatusCode);
+            Assert.Contains("/dav/Work/Plan.md", await BodyAsync(locked), StringComparison.Ordinal);
+        }
+
+        // An exact name the store has is never taken for another.
+        using var listing = await dav.PropfindAsync("/dav/Work/", depth: "1");
+        Assert.DoesNotContain("/dav/Work/Plan.MD", DavAssert.Hrefs(await DavAssert.MultistatusAsync(listing)));
+    }
+
+    [Fact]
+    public async Task An_upper_MD_name_over_a_folder_is_405()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Plan.md/inside.md", "# Inside");
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/Plan.MD", Text("# Plan"));
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, put.StatusCode);
+        Assert.Equal("# Inside", await NoteAsync(dav, "Plan.md/inside.md"));
+    }
+
+    [Fact]
+    public async Task A_lost_race_without_if_match_is_retried_once_and_stored()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        var first = await owner.CreateAsync("plan.md", "one");
+        _race.Next = async () =>
+        {
+            using var other = await owner.SendAsync(HttpMethod.Put, owner.Url("plan.md"), new { content = "two", version = first });
+            Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        };
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("three"));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        var note = await owner.ReadAsync("plan.md");
+        Assert.Equal("three", note["content"]!.GetValue<string>());
+        Assert.Equal($"\"{note["version"]!.GetValue<string>()}\"", put.Headers.ETag?.Tag);
+    }
+
+    [Fact]
+    public async Task A_lost_race_on_a_new_note_overwrites_what_came_in_between()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        _race.Next = () => owner.CreateAsync("plan.md", "theirs");
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("mine"));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        Assert.Equal("mine", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_lost_race_with_if_match_is_412()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        var first = await owner.CreateAsync("plan.md", "one");
+        _race.Next = async () =>
+        {
+            using var other = await owner.SendAsync(HttpMethod.Put, owner.Url("plan.md"), new { content = "two", version = first });
+            Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        };
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("three"), Headers(("If-Match", $"\"{first}\"")));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, put.StatusCode);
+        Assert.Equal("two", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_lost_race_of_an_attachment_is_retried_once_and_stored()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        var first = await owner.CreateFileAsync("shot.png", FileApiTests.Png(2, 2));
+        _race.Next = async () =>
+        {
+            using var other = await owner.PutFileAsync("shot.png", FileApiTests.Png(3, 3), first);
+            Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        };
+        var mine = FileApiTests.Png(4, 4);
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/shot.png", Bytes(mine));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/shot.png");
+        Assert.Equal(mine, await get.Content.ReadAsByteArrayAsync(Ct));
+    }
+
+    /// <summary>Only a lost compare-and-swap is tried again: a refusal stays one, even when the file changed meanwhile.
+    /// The writer is asked once.</summary>
+    [Fact]
+    public async Task A_refused_write_is_not_retried()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        var first = await owner.CreateFileAsync("shot.png", FileApiTests.Png(2, 2));
+        var asked = 0;
+        Func<Task>? count = null;
+        count = async () =>
+        {
+            if (++asked == 1)
+            {
+                using var other = await owner.PutFileAsync("shot.png", FileApiTests.Png(3, 3), first);
+                Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+            }
+
+            _race.Next = count;
+        };
+        _race.Next = count;
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/shot.png", Text("not a picture"));
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, put.StatusCode);
+        Assert.Contains("isn't a PNG image", await BodyAsync(put), StringComparison.Ordinal);
+        Assert.Equal(1, asked);
+    }
+
+    [Fact]
+    public async Task An_empty_put_over_a_stored_attachment_writes_nothing()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var bytes = FileApiTests.Png(2, 2);
+        var version = await dav.Owner.CreateFileAsync("shot.png", bytes);
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/shot.png", Bytes([]));
+
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        Assert.Equal($"\"{version}\"", put.Headers.ETag?.Tag);
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/shot.png");
+        Assert.Equal(bytes, await get.Content.ReadAsByteArrayAsync(Ct));
+        using var history = await dav.Owner.GetAsync(dav.Owner.Url("shot.png", "history"));
+        Assert.Single((await JsonAsync(history)).AsArray());
+    }
+
+    [Fact]
+    public async Task The_413_messages_say_the_limits()
+    {
+        var dav = await DavClient.NewAsync(Api);
+
+        using var note = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.md", Bytes(new byte[NoteWriter.MaxBytes + 1]));
+        using var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", Bytes(new byte[AttachmentFormat.MaxBytes + 1]));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, note.StatusCode);
+        Assert.Equal("A note can have at most 1 MiB.", await BodyAsync(note));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, file.StatusCode);
+        Assert.Equal("A file can have at most 15 MB.", await BodyAsync(file));
     }
 
     [Fact]
@@ -348,6 +610,17 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, folder.StatusCode);
         Assert.Equal(HttpStatusCode.MethodNotAllowed, note.StatusCode);
+    }
+
+    [Fact]
+    public async Task Mkcol_on_an_existing_empty_folder_is_405()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        using (var made = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/Drafts")) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+
+        using var again = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/Drafts");
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, again.StatusCode);
     }
 
     [Fact]
