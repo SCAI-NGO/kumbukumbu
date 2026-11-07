@@ -232,6 +232,20 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.DoesNotContain("/dav/Work/Plan.MD", DavAssert.Hrefs(await DavAssert.MultistatusAsync(listing)));
     }
 
+    /// <summary>A folder's name ending in <c>.MD</c> is that folder: only a name the share sees nothing under is taken
+    /// for the note.</summary>
+    [Fact]
+    public async Task An_upper_MD_name_the_store_has_is_its_own()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Notes.MD/inside.md", "# Inside");
+
+        var props = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/Notes.MD", depth: "1"));
+
+        Assert.True(DavAssert.IsCollection(DavAssert.Response(props, "/dav/Work/Notes.MD/")));
+        Assert.Contains("/dav/Work/Notes.MD/inside.md", DavAssert.Hrefs(props));
+    }
+
     [Fact]
     public async Task An_upper_MD_name_over_a_folder_is_405()
     {
