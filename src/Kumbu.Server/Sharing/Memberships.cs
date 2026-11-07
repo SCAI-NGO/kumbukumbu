@@ -564,8 +564,8 @@ public sealed partial class Memberships(
     /// <summary>
     /// The cleanup after a revocation or departure (collab design §6.2), one transaction, idempotent, retried by the
     /// sweep until it commits: the member slot and every slot derived through the membership (<c>grantedVia</c>) go,
-    /// the member's API keys left with no vault are revoked, and her connections lose the vault (revoked if it was
-    /// their last). The tombstone stays, with its label and writers, for the owner's history ("Bob (left) · Claude");
+    /// the member's API keys and WebDAV shares left with no vault are revoked, and her connections lose the vault
+    /// (revoked if it was their last). The tombstone stays, with its label and writers, for the owner's history ("Bob (left) · Claude");
     /// it is marked <c>cleanedAt</c>. Nothing for a membership that isn't a tombstone, or was cleaned up already.
     /// </summary>
     internal async Task CleanupAsync(string membershipId, CancellationToken ct)
@@ -573,6 +573,7 @@ public sealed partial class Memberships(
         var f = Builders<MembershipDocument>.Filter;
         var ended = f.Eq(m => m.Id, membershipId) & f.In(m => m.Status, Ended) & f.Eq(m => m.CleanedAt, null);
         IReadOnlyList<string> keys = [];
+        IReadOnlyList<string> shares = [];
         IReadOnlyList<string> connections = [];
         using var session = await catalog.StartSessionAsync(ct);
         var done = await session.WithTransactionAsync(
@@ -584,6 +585,8 @@ public sealed partial class Memberships(
                 var derived = sl.Eq(x => x.GrantedVia, membershipId);
                 var keyIds = await (await catalog.Slots.DistinctAsync(s, x => x.KeyId, derived & sl.Eq(x => x.Kind, SlotDocument.ApiKey) & sl.Exists(x => x.KeyId), cancellationToken: token))
                     .ToListAsync(token);
+                var shareIds = await (await catalog.Slots.DistinctAsync(
+                    s, x => x.ShareId, derived & sl.Eq(x => x.Kind, SlotDocument.Dav) & sl.Exists(x => x.ShareId), cancellationToken: token)).ToListAsync(token);
                 // Only the connections this membership granted the vault: the same person may hold a later membership
                 // of it, whose connections a retried cleanup of this one must leave alone.
                 var connectionIds = await (await catalog.Slots.DistinctAsync(
@@ -593,6 +596,7 @@ public sealed partial class Memberships(
                 if (doc.Member is { } member)
                 {
                     keys = await catalog.RevokeKeysWithoutVaultsAsync(s, keyIds, token);
+                    shares = await catalog.RevokeSharesWithoutVaultsAsync(s, [.. shareIds.OfType<string>()], token);
                     connections = await ConnectionRevocation.RemoveVaultsAsync(
                         db, s, [doc.Vault], Now, token, user: member, reason: ConnectionReasons.SharingEnded, only: [.. connectionIds.OfType<string>()]);
                 }
@@ -604,6 +608,7 @@ public sealed partial class Memberships(
             cancellationToken: ct);
         if (!done) return;
         foreach (var keyId in keys) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
+        foreach (var shareId in shares) log.LogInformation("WebDAV share {ShareId} has no vault left and is revoked", shareId);
         foreach (var connectionId in connections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
         log.LogInformation("Membership {MembershipId} was cleaned up", membershipId);
     }
@@ -655,7 +660,7 @@ public sealed partial class Memberships(
         var now = Now;
         var sl = Builders<SlotDocument>.Filter;
         var slots = await catalog.Slots.Find(sl.Eq(x => x.Vault, vaultId) & sl.In(x => x.GrantedVia, docs.Select(d => d.Id)))
-            .Project<SlotDocument>(Builders<SlotDocument>.Projection.Include(x => x.Kind).Include(x => x.KeyId).Include(x => x.ConnectionId)
+            .Project<SlotDocument>(Builders<SlotDocument>.Projection.Include(x => x.Kind).Include(x => x.KeyId).Include(x => x.ConnectionId).Include(x => x.ShareId)
                 .Include(x => x.GrantedVia).Include(x => x.UsedAt).Include(x => x.ExpiresAt))
             .ToListAsync(ct);
         var result = new List<MemberAccess>();
@@ -675,8 +680,8 @@ public sealed partial class Memberships(
             }
 
             var credentials = slots
-                .Where(x => x.GrantedVia == doc.Id && !(now >= x.ExpiresAt) && (x.KeyId ?? x.ConnectionId) is not null)
-                .GroupBy(x => (Id: (x.KeyId ?? x.ConnectionId)!, Kind: x.Kind == SlotDocument.ApiKey ? MemberCredentialKinds.Key : MemberCredentialKinds.Connection))
+                .Where(x => x.GrantedVia == doc.Id && !(now >= x.ExpiresAt) && CredentialOf(x) is not null)
+                .GroupBy(x => CredentialOf(x)!.Value)
                 .Select(g => new MemberCredential(writers.GetValueOrDefault(g.Key.Id) ?? Kumbu.Core.Notes.PlainWriterLabels.UnknownWriter, g.Key.Kind, g.Max(x => x.UsedAt)))
                 .OrderBy(c => c.Name, StringComparer.Ordinal).ThenBy(c => c.Kind, StringComparer.Ordinal)
                 .ToList();
@@ -685,6 +690,16 @@ public sealed partial class Memberships(
 
         return result;
     }
+
+    /// <summary>A member's derived slot as the credential it belongs to: its id in the membership's <c>writers</c> and
+    /// its kind; null for a slot of no credential.</summary>
+    private static (string Id, string Kind)? CredentialOf(SlotDocument slot) => slot switch
+    {
+        { Kind: SlotDocument.ApiKey, KeyId: { } key } => (key, MemberCredentialKinds.Key),
+        { Kind: SlotDocument.Dav, ShareId: { } share } => (DavShares.CredentialId(share), MemberCredentialKinds.Share),
+        { ConnectionId: { } connection } => (connection, MemberCredentialKinds.Connection),
+        _ => null,
+    };
 
     /// <summary>The tombstones' statuses.</summary>
     private static readonly string[] Ended = [MembershipStatus.Revoked, MembershipStatus.Left];
@@ -941,4 +956,7 @@ public static class MemberCredentialKinds
 
     /// <summary>A connected app (OAuth).</summary>
     public const string Connection = "connection";
+
+    /// <summary>A WebDAV share.</summary>
+    public const string Share = "share";
 }

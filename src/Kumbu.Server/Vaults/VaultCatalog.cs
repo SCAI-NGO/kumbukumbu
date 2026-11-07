@@ -729,7 +729,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault)
             {
-                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, id, payload.Publish == true) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
+                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, kind.CredentialId(id), payload.Publish == true) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
                 if (membership is null) OwnerActive(vault.Id, true);
             }
         }
@@ -742,8 +742,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
 
     /// <summary>
-    /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
-    /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
+    /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', WebDAV shares',
+    /// the dev token's, recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
     /// the published copies with their files), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
@@ -773,6 +773,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
         IReadOnlyList<string> revoked = [];
         IReadOnlyList<string> revokedConnections = [];
+        IReadOnlyList<string> revokedShares = [];
         var loading = false;
         try
         {
@@ -817,11 +818,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         var keyIds = await (await Slots.DistinctAsync(
                             s, sl => sl.KeyId, slot.Eq(sl => sl.Kind, SlotDocument.ApiKey) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.KeyId), cancellationToken: token))
                             .ToListAsync(token);
+                        var shareIds = await (await Slots.DistinctAsync(
+                            s, sl => sl.ShareId, slot.Eq(sl => sl.Kind, SlotDocument.Dav) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.ShareId), cancellationToken: token))
+                            .ToListAsync(token);
                         await MarkOwnersAsync(s, ids, token);
                         long count = (await Vaults.DeleteManyAsync(s, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: token)).DeletedCount;
                         // The connections' slots on these vaults go here too, by vault.
                         count += (await Slots.DeleteManyAsync(s, slot.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
                         revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
+                        revokedShares = await RevokeSharesWithoutVaultsAsync(s, [.. shareIds.OfType<string>()], token);
                         revokedConnections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, ids, Now, token);
                         foreach (var collection in ContentCollections)
                         {
@@ -841,6 +846,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             tombstoned.Clear();
             foreach (var keyId in revoked) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
             foreach (var connectionId in revokedConnections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
+            foreach (var shareId in revokedShares) log.LogInformation("WebDAV share {ShareId} has no vault left and is revoked", shareId);
             foreach (var vault in seen) vault.Deleted = true;
             foreach (var id in ids)
             {
@@ -922,6 +928,29 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             session,
             Builders<Accounts.ApiKeyDocument>.Filter.In(k => k.Id, unrevoked),
             Builders<Accounts.ApiKeyDocument>.Update.Set(k => k.RevokedAt, Now).Unset(k => k.NameId),
+            cancellationToken: ct);
+        return unrevoked;
+    }
+
+    /// <summary>
+    /// As <see cref="RevokeKeysWithoutVaultsAsync"/>, for WebDAV shares: of <paramref name="shareIds"/>, those left with
+    /// no slot are revoked, as <see cref="Accounts.DavShares.RevokeAsync"/> would, label freed. Returns their ids.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> RevokeSharesWithoutVaultsAsync(IClientSessionHandle s, IReadOnlyCollection<string> shareIds, CancellationToken ct)
+    {
+        if (shareIds.Count == 0) return [];
+        var slot = Builders<SlotDocument>.Filter;
+        var left = (await (await Slots.DistinctAsync(s, sl => sl.ShareId, slot.Eq(sl => sl.Kind, SlotDocument.Dav) & slot.In(sl => sl.ShareId, shareIds), cancellationToken: ct))
+            .ToListAsync(ct)).ToHashSet();
+        var orphans = shareIds.Where(id => !left.Contains(id)).ToList();
+        if (orphans.Count == 0) return [];
+        var shares = db.GetCollection<Accounts.DavShareDocument>(Accounts.DavShares.CollectionName);
+        var unrevoked = await shares.Find(s, d => orphans.Contains(d.Id) && d.RevokedAt == null).Project(d => d.Id).ToListAsync(ct);
+        if (unrevoked.Count == 0) return [];
+        await shares.UpdateManyAsync(
+            s,
+            Builders<Accounts.DavShareDocument>.Filter.In(d => d.Id, unrevoked),
+            Builders<Accounts.DavShareDocument>.Update.Set(d => d.RevokedAt, Now).Unset(d => d.NameId),
             cancellationToken: ct);
         return unrevoked;
     }
@@ -1531,6 +1560,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         public FilterDefinition<SlotDocument> Of(string id) =>
             Builders<SlotDocument>.Filter.Eq(s => s.Kind, Kind)
             & (Kind == SlotDocument.Dav ? Builders<SlotDocument>.Filter.Eq(s => s.ShareId, id) : Builders<SlotDocument>.Filter.Eq(s => s.KeyId, id));
+
+        /// <summary>The credential's id in a membership's <c>writers</c> and <c>writerIds</c>: a share's can't meet a key's.</summary>
+        public string CredentialId(string id) => Kind == SlotDocument.Dav ? Accounts.DavShares.CredentialId(id) : id;
 
         public SlotDocument WithId(SlotDocument slot, string id)
         {
