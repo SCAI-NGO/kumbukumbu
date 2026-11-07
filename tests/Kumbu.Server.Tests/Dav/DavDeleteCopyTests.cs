@@ -232,14 +232,14 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
     public async Task Copy_of_a_note_leaves_links_alone()
     {
         var dav = await DavClient.NewAsync(Api);
-        await dav.Owner.CreateAsync("Ideas/Questions.md", "# Questions\n\nSee [[Routing]] and [x](../Other/Routing.md)\n");
+        await dav.Owner.CreateAsync("Ideas/Questions.md", "# Questions\n\nSee [[Routing]] and [r](Routing.md)\n");
         await dav.Owner.CreateAsync("Ideas/Routing.md", "# Routing\n\nAsk [[Questions]]\n");
 
         using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/Ideas/Questions.md", headers: To("Archive.md"));
 
         Assert.Equal(HttpStatusCode.Created, copy.StatusCode);
-        Assert.Equal("# Questions\n\nSee [[Routing]] and [x](../Other/Routing.md)\n", await NoteAsync(dav.Owner, "Archive.md"));
-        Assert.Equal("# Questions\n\nSee [[Routing]] and [x](../Other/Routing.md)\n", await NoteAsync(dav.Owner, "Ideas/Questions.md"));
+        Assert.Equal("# Questions\n\nSee [[Routing]] and [r](Routing.md)\n", await NoteAsync(dav.Owner, "Archive.md"));
+        Assert.Equal("# Questions\n\nSee [[Routing]] and [r](Routing.md)\n", await NoteAsync(dav.Owner, "Ideas/Questions.md"));
         Assert.Equal("# Routing\n\nAsk [[Questions]]\n", await NoteAsync(dav.Owner, "Ideas/Routing.md"));
     }
 
