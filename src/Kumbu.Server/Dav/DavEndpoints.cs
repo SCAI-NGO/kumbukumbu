@@ -99,6 +99,12 @@ public static class DavEndpoints
             ApiErrors.SetRetryAfter(http, ApiErrors.BusyRetryAfter);
             await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
         }
+        // A published note a write would trash (a DELETE, a COPY over it): a share never may withdraw one (publish
+        // design §3.8), and the store refuses the whole batch. WebDAV design §3.6 case 6 holds such a note instead.
+        catch (Kumbu.Core.Publishing.PublishedNoteException e) when (!response.HasStarted)
+        {
+            await DavXml.WriteTextAsync(response, StatusCodes.Status403Forbidden, e.Message, ct);
+        }
         catch (VaultDeletedException e) when (!response.HasStarted)
         {
             await DavXml.WriteTextAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
@@ -216,7 +222,7 @@ public static class DavEndpoints
 
     private static DavWrites Writes(HttpContext http) =>
         new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>(),
-            http.RequestServices.GetRequiredService<NoteWriter>());
+            http.RequestServices.GetRequiredService<NoteWriter>(), http.RequestServices.GetRequiredService<TreeWriter>(), http.RequestServices.GetRequiredService<DavHolds>());
 
     private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }

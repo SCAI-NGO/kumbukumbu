@@ -107,6 +107,7 @@ builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<DavShares>();
 builder.Services.AddSingleton<DavParking>();
 builder.Services.AddSingleton<DavLocks>();
+builder.Services.AddSingleton<DavHolds>();
 builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
@@ -169,6 +170,7 @@ builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNote
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
+builder.Services.AddScoped<TreeWriter>();
 builder.Services.AddScoped<Replacer>();
 builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
