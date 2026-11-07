@@ -963,7 +963,9 @@ public sealed class EncryptedNoteStore(
     /// The storage quota's check of a write that adds about <paramref name="incoming"/> bytes to <paramref name="vault"/>
     /// (WebDAV design §3.10): against its owner's account, never the caller's, from the cache alone, so it never waits for
     /// MongoDB. <see cref="QuotaExceededException"/> if it doesn't fit; else the owner whose figure the write adjusts after
-    /// its commit, or null (no quota, the seeder's store; a vault without an owner).
+    /// its commit, or null (no quota, the seeder's store; a vault without an owner). A vault the store has no access record
+    /// for passes: every path that writes found the vault through <see cref="VaultAsync"/>, which records it, so none
+    /// arises but from a misuse inside the store, and refusing there would hide that bug behind "out of space".
     /// </summary>
     private string? RequireSpace(UnlockedVault vault, long incoming) =>
         _quota is not null && _byId.GetValueOrDefault(vault.Id) is { } access ? _quota.Require(access, incoming) : null;

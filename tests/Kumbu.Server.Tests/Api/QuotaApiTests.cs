@@ -46,9 +46,176 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         s.AddSingleton<TimeProvider>(_time);
     }));
 
+    private readonly List<WebApplicationFactory<Program>> _own = [];
+
     public async ValueTask DisposeAsync()
     {
         if (_timed is not null) await _timed.DisposeAsync();
+        foreach (var api in _own) await api.DisposeAsync();
+    }
+
+    /// <summary>A server of its own (its own cache): with <paramref name="quotaDefault"/>, on <paramref name="time"/> if
+    /// given, and on a database of its own if <paramref name="freshDatabase"/>, where no user carries an override.</summary>
+    private WebApplicationFactory<Program> Own(string? quotaDefault = null, FakeTimeProvider? time = null, bool freshDatabase = false)
+    {
+        var api = app.PublicApi.WithWebHostBuilder(b =>
+        {
+            if (quotaDefault is not null) b.UseSetting("Kumbu:Quota:Default", quotaDefault);
+            if (freshDatabase) b.UseSetting("Kumbu:Mongo:Database", "t" + Guid.NewGuid().ToString("N"));
+            if (time is not null)
+            {
+                b.ConfigureServices(s =>
+                {
+                    s.RemoveAll<TimeProvider>();
+                    s.AddSingleton<TimeProvider>(time);
+                });
+            }
+        });
+        _own.Add(api);
+        return api;
+    }
+
+    /// <summary>The queries the cache makes for <paramref name="id"/> (or every one, if null), by kind; a kind in
+    /// <paramref name="failing"/> throws as MongoDB away would.</summary>
+    private static Dictionary<string, int> Watch(StorageQuota quota, string? id = null, params string[] failing)
+    {
+        var seen = new Dictionary<string, int>();
+        quota.Querying = (kind, of) =>
+        {
+            if (id is not null && of != id) return Task.CompletedTask;
+            lock (seen) seen[kind] = seen.GetValueOrDefault(kind) + 1;
+            return failing.Contains(kind) ? throw new TimeoutException("MongoDB is away") : Task.CompletedTask;
+        };
+        return seen;
+    }
+
+    private static int Seen(Dictionary<string, int> seen, string kind)
+    {
+        lock (seen) return seen.GetValueOrDefault(kind);
+    }
+
+    /// <summary>Background work that ended is let go, not held for ever.</summary>
+    [Fact]
+    public async Task Ended_background_work_is_let_go()
+    {
+        var api = Own(quotaDefault: "1GB");
+        var quota = Quota(api);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        for (var i = 0; i < 5; i++) await quota.RecountAsync(user.User.Id);
+        Assert.True(quota.Tracked <= 1, $"{quota.Tracked} tasks held");
+    }
+
+    /// <summary>A count or an owner's lookup that fails is tried again ten minutes on, not on every write.</summary>
+    [Fact]
+    public async Task A_failed_count_or_lookup_waits_ten_minutes()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var api = Own(quotaDefault: "1GB", time: time);
+        var quota = Quota(api);
+        var counted = await RestClient.NewAsync(api, vault: "Work");
+        var looked = await RestClient.NewAsync(api, vault: "Work");
+        var lookedVault = await looked.VaultIdAsync();
+        var counts = Watch(quota, counted.User.Id, "limit");
+        async Task WriteAsync(RestClient user, string name)
+        {
+            await user.CreateAsync(name, "x\n");
+            await quota.SettledAsync();
+        }
+
+        // Its owner is a member's to know: the lookup comes first, then the count fails.
+        await WriteAsync(counted, "a.md");
+        await WriteAsync(counted, "b.md");
+        var first = Seen(counts, "limit");
+        Assert.Equal(1, first);
+        await WriteAsync(counted, "c.md");
+        Assert.Equal(1, Seen(counts, "limit"));
+        time.Advance(StorageQuota.RecountAfter + TimeSpan.FromMinutes(1));
+        await WriteAsync(counted, "d.md");
+        Assert.Equal(2, Seen(counts, "limit"));
+
+        var lookups = Watch(quota, lookedVault, "owner");
+        await WriteAsync(looked, "a.md");
+        await WriteAsync(looked, "b.md");
+        Assert.Equal(1, Seen(lookups, "owner"));
+        time.Advance(StorageQuota.RecountAfter + TimeSpan.FromMinutes(1));
+        await WriteAsync(looked, "c.md");
+        Assert.Equal(2, Seen(lookups, "owner"));
+    }
+
+    /// <summary>A write that commits while a count runs isn't lost when the count's figure comes in.</summary>
+    [Fact]
+    public async Task A_count_keeps_what_writes_adjusted_while_it_ran()
+    {
+        var api = Own(quotaDefault: "1GB");
+        var quota = Quota(api);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var before = (await quota.FigureAsync(user.User.Id, Ct)).Used;
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        quota.Querying = async (kind, of) =>
+        {
+            if (kind != "count" || of != user.User.Id) return;
+            entered.TrySetResult();
+            await release.Task;
+        };
+        var recount = quota.RecountAsync(user.User.Id);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        quota.Adjust(user.User.Id, 1000);
+        release.SetResult();
+        await recount;
+
+        Assert.Equal(before + 1000, quota.KnownUsage(user.User.Id));
+    }
+
+    /// <summary>No default and no override anywhere: the write path asks MongoDB nothing about anyone's storage, but
+    /// whether an override exists; once an admin sets one, it does.</summary>
+    [Fact]
+    public async Task Without_a_default_or_an_override_nothing_is_looked_up()
+    {
+        var api = Own(freshDatabase: true);
+        var quota = Quota(api);
+        var seen = Watch(quota);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var dav = await DavClient.NewAsync(api, user);
+        for (var i = 0; i < 3; i++) await user.CreateAsync($"n{i}.md", "x\n");
+        using (var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/d.md", Text("d\n"))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        await quota.SettledAsync();
+        await user.CreateAsync("late.md", "x\n");
+        await quota.SettledAsync();
+
+        Assert.Equal(0, Seen(seen, "owner") + Seen(seen, "limit") + Seen(seen, "count"));
+        Assert.Equal(1, Seen(seen, "overrides"));
+
+        var admin = await RestClient.NewAsync(api, vault: "Admin", role: Roles.Admin);
+        using (var patched = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{user.User.Id}", new { quota = 0 })) Assert.Equal(HttpStatusCode.NoContent, patched.StatusCode);
+        using var refused = await user.SendAsync(HttpMethod.Put, user.Url("after.md"), new { content = "x\n" });
+        await AssertFullAsync(refused);
+    }
+
+    /// <summary>A request that changes the role and the quota applies both or nothing: an admin making herself a user
+    /// in it still sets the quota, and a quota that doesn't read changes no state.</summary>
+    [Fact]
+    public async Task A_patch_with_the_quota_applies_all_or_nothing()
+    {
+        var admin = await RestClient.NewAsync(Api, vault: "Admin", role: Roles.Admin);
+        var user = await RestClient.NewAsync(Api, vault: "Work");
+        var users = Users(Api);
+
+        using (var bad = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{user.User.Id}", new { active = false, quota = "lots" }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        }
+
+        Assert.True((await users.Find(u => u.Id == user.User.Id).SingleAsync(Ct)).Active);
+
+        using (var both = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{admin.User.Id}", new { role = Roles.User, quota = 5 }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, both.StatusCode);
+        }
+
+        var self = await users.Find(u => u.Id == admin.User.Id).SingleAsync(Ct);
+        Assert.Equal((Roles.User, (long?)5), (self.Role, self.Quota));
     }
 
     private static StorageQuota Quota(WebApplicationFactory<Program> api) => api.Services.GetRequiredService<StorageQuota>();
@@ -336,11 +503,21 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         var quota = Quota(Api);
         Assert.Null(quota.KnownUsage(user.User.Id));
 
+        // The first write goes through; the cache learns in the background, at most one step a write (whether overrides
+        // exist, the vault's owner, her figure), and refuses once it knows.
         await user.CreateAsync("a.md", "a\n");
-        await quota.SettledAsync();
+        HttpStatusCode status;
+        var tries = 0;
+        do
+        {
+            await quota.SettledAsync();
+            using var next = await user.SendAsync(HttpMethod.Put, user.Url($"b{tries}.md"), new { content = "b\n" });
+            status = next.StatusCode;
+        }
+        while (status != HttpStatusCode.InsufficientStorage && ++tries < 3);
+
+        Assert.Equal(HttpStatusCode.InsufficientStorage, status);
         Assert.True(quota.KnownUsage(user.User.Id) > OneMb);
-        using var refused = await user.SendAsync(HttpMethod.Put, user.Url("b.md"), new { content = "b\n" });
-        await AssertFullAsync(refused);
     }
 
     /// <summary>What the cache doesn't see (here a write behind its back) counts after the next recount, at most ten minutes on.</summary>

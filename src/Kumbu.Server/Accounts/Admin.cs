@@ -175,17 +175,29 @@ public sealed class Admin(
     /// a number of bytes (0: no write that adds data); false if there is no such user. Nobody acts on the primary admin
     /// but the primary admin herself. The caller tells <see cref="StorageQuota"/>, which depends on this class.
     /// </summary>
-    public async Task<bool> SetQuotaAsync(User actor, string userId, long? quota, CancellationToken ct)
+    public async Task<bool> SetQuotaAsync(User actor, string userId, long? quota, CancellationToken ct) =>
+        await PrepareQuotaAsync(actor, userId, ct) is { } change && await SetQuotaAsync(change, quota, ct);
+
+    /// <summary>The checks of <see cref="SetQuotaAsync(User, string, long?, CancellationToken)"/>, before anything is
+    /// written: a request that changes the role or the state as well checks the quota first, so that a refusal applies
+    /// nothing. Null if there is no such user.</summary>
+    internal async Task<QuotaChange?> PrepareQuotaAsync(User actor, string userId, CancellationToken ct)
     {
-        if (quota is < StorageQuota.Unlimited) throw new ArgumentException("A quota is a number of bytes, 0 or more.", nameof(quota));
         var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
         var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
-        if (target is null) return false;
+        if (target is null) return null;
         if (target.Role == Roles.PrimaryAdmin && target.Id != acting.Id) throw new NotPermittedException("Only the primary admin sets the primary admin's storage.");
+        return new QuotaChange(acting, target);
+    }
 
+    /// <summary>The write of a change <see cref="PrepareQuotaAsync"/> allowed; false if the user is gone meanwhile.</summary>
+    internal async Task<bool> SetQuotaAsync(QuotaChange change, long? quota, CancellationToken ct)
+    {
+        if (quota is < StorageQuota.Unlimited) throw new ArgumentException("A quota is a number of bytes, 0 or more.", nameof(quota));
+        var (acting, target) = (change.Acting, change.Target);
         var update = quota is { } bytes ? Builders<UserDocument>.Update.Set(u => u.Quota, bytes) : Builders<UserDocument>.Update.Unset(u => u.Quota);
-        // The role again in the filter, in case it changed since the read above.
-        var updated = await Users.UpdateOneAsync(u => u.Id == userId && (u.Role != Roles.PrimaryAdmin || u.Id == acting.Id), update, cancellationToken: ct);
+        // The role again in the filter, in case it changed since the read.
+        var updated = await Users.UpdateOneAsync(u => u.Id == target.Id && (u.Role != Roles.PrimaryAdmin || u.Id == acting.Id), update, cancellationToken: ct);
         if (updated.MatchedCount == 0) return false;
         log.LogInformation(
             "{Admin} set the storage of {Username} to {Quota}", acting.Username, target.Username,
@@ -218,6 +230,9 @@ public sealed class Admin(
         return bytes;
     }
 }
+
+/// <summary>A storage override an admin may set: who acts, on whom (<see cref="Admin.PrepareQuotaAsync"/>).</summary>
+internal sealed record QuotaChange(UserDocument Acting, UserDocument Target);
 
 /// <summary>The rule every admin action starts with.</summary>
 internal static class AdminRules

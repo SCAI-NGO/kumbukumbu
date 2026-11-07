@@ -42,7 +42,8 @@ public sealed class NoteBatch
 
     /// <summary>The batch of a move (<c>mv</c>, WebDAV's <c>MOVE</c>, <see cref="NoteMover"/>): its replaces are the links it
     /// rewrites, and what it trashes is what the move replaces. It adds no data of its own, so the storage quota lets it
-    /// pass even when full (WebDAV design §3.10), decided by this kind and not by bytes.</summary>
+    /// pass even when full (WebDAV design §3.10), decided by this kind and not by bytes. Only <see cref="NoteMover"/> sets
+    /// it, and a store copies it when it translates a batch's paths; nothing else may, or a content write slips past the quota.</summary>
     public bool IsMove { get; init; }
 
     /// <summary>Whether the batch writes content, and so passes the storage quota: a note or attachment created,

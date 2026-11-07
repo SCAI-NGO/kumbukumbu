@@ -450,7 +450,7 @@ public static class AccountApi
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
             .Select(u => new AdminUserView(
                 u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults,
-                u.Quota switch { null => "default", < 0 => "unlimited", _ => "custom" }, quota.Effective(u.Quota)))
+                StorageQuota.Kind(u.Quota), quota.Effective(u.Quota)))
             .ToArray());
 
     /// <summary>The session's own storage, counted now (Settings shows it).</summary>
@@ -483,14 +483,17 @@ public static class AccountApi
         else Security.RequirePasswordWindow(caller);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
-        // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
+        // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set; and the
+        // quota's checks run here too, so the quota, written last, is refused by nothing (not even by an admin who
+        // makes herself a user in the same request).
         if (body.Active is false && id == caller.User!.Id) throw new NotPermittedException("You can't deactivate yourself.");
+        var quotaChange = body.Quota is null ? null : await admin.PrepareQuotaAsync(caller.User!, id, ct) ?? throw NoSuchUser();
         if (body.Role is { } role && !await admin.SetRoleAsync(caller.User!, id, role, ct)) throw NoSuchUser();
         if (body.Active is { } active && !await admin.SetActiveAsync(caller.User!, id, active, ct)) throw NoSuchUser();
         if (body.Active is false) pairings.DropAll(id);
         if (body.Quota is not null)
         {
-            if (!await admin.SetQuotaAsync(caller.User!, id, newQuota, ct)) throw NoSuchUser();
+            if (!await admin.SetQuotaAsync(quotaChange!, newQuota, ct)) throw NoSuchUser();
             // At once in this process: the next write of hers is checked against the new limit.
             await quota.RecountAsync(id);
         }

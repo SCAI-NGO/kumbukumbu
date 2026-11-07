@@ -50,14 +50,20 @@ public sealed record StorageFigure(long Used, long? Limit, IReadOnlyDictionary<s
 /// for MongoDB (brief open point 8): what isn't known yet (a vault's owner, the limit, the first count after a start) is
 /// read in the background, and the write is allowed meanwhile. Every write adjusts the figure; the write path recounts an
 /// owner whose figure is ten minutes old (<see cref="RecountAfter"/>), which corrects what the cache doesn't see: the
-/// trash's TTL, history trimmed, embeddings, a write by another process. An owner without a limit is never counted, only
-/// her limit read again, so a server whose admin set none behaves as before. The check is against the usage plus what is
-/// about to be written, and may be off by a write's worth under concurrency, which is accepted.
+/// trash's TTL, history trimmed, embeddings, a write by another process. A count or lookup that fails is tried again
+/// after the same ten minutes, not on every write. The check is against the usage plus what is about to be written, and
+/// may be off by a write's worth under concurrency, which is accepted.
+/// </para>
+/// <para>
+/// A server whose admin set no default and no override behaves as before (brief, "breaks nothing"): the cache then asks
+/// MongoDB nothing but, at most every ten minutes, whether any user document carries an override at all. Only once one
+/// does (or an admin sets one here) are owners looked up and limits read; an owner without a limit is never counted.
 /// </para>
 /// </summary>
 public sealed class StorageQuota
 {
-    /// <summary>How old the write path lets an owner's figure get before it counts again.</summary>
+    /// <summary>How old the write path lets an owner's figure get before it counts again, and how long a failed count or
+    /// lookup waits before it is tried again.</summary>
     public static readonly TimeSpan RecountAfter = TimeSpan.FromMinutes(10);
 
     /// <summary>The stored override for "unlimited" (<see cref="UserDocument.Quota"/>); null is the default.</summary>
@@ -72,12 +78,23 @@ public sealed class StorageQuota
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Account> _accounts = new(StringComparer.Ordinal);
 
-    /// <summary>Each vault's owner, once read: it never changes. A vault without one (the dev token's) is read again
-    /// after <see cref="RecountAfter"/>.</summary>
-    private readonly Dictionary<string, (string? Owner, DateTime At)> _owners = new(StringComparer.Ordinal);
+    /// <summary>Each vault's owner, once read, for good: it never changes, and a vault without one (the dev token's) never
+    /// gets one.</summary>
+    private readonly Dictionary<string, string?> _owners = new(StringComparer.Ordinal);
+
+    /// <summary>When a vault's owner couldn't be read: not again before <see cref="RecountAfter"/>.</summary>
+    private readonly Dictionary<string, DateTime> _lookupFailed = new(StringComparer.Ordinal);
 
     private readonly HashSet<string> _resolving = new(StringComparer.Ordinal);
+
+    /// <summary>The background work under way, for <see cref="SettledAsync"/>; what has ended is dropped whenever more is added.</summary>
     private readonly List<Task> _running = [];
+
+    /// <summary>Whether any user document carries an override (null: not read yet), and when that was read.</summary>
+    private bool? _overrides;
+
+    private DateTime? _overridesReadAt;
+    private Task? _overridesCheck;
 
     public StorageQuota(IMongoDatabase db, VaultCatalog catalog, Admin admin, IOptions<KumbuOptions> options, TimeProvider time, ILogger<StorageQuota> log)
     {
@@ -94,6 +111,19 @@ public sealed class StorageQuota
     /// <summary>The limit of a user without an override (<c>KUMBU_QUOTA_DEFAULT</c>); null: none.</summary>
     public long? Default { get; }
 
+    /// <summary>For tests: runs before each query the cache makes, with its kind (<c>overrides</c>, <c>owner</c>,
+    /// <c>limit</c>, <c>count</c>) and the vault's or user's id; it may wait, or throw as a failing query would.</summary>
+    internal Func<string, string, Task>? Querying { get; set; }
+
+    /// <summary>For tests: how much background work is held, ended or not.</summary>
+    internal int Tracked
+    {
+        get
+        {
+            lock (_lock) return _running.Count;
+        }
+    }
+
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     /// <summary>One owner's cached state; every field under <see cref="_lock"/>.</summary>
@@ -109,10 +139,19 @@ public sealed class StorageQuota
 
         public DateTime ReadAt;
 
+        /// <summary>When the last count failed; the write path tries again only <see cref="RecountAfter"/> later.</summary>
+        public DateTime? FailedAt;
+
         public Task? Refresh;
 
         /// <summary>A recount was asked for while one ran: it runs once more, so it sees what came after its start.</summary>
         public bool Again;
+
+        /// <summary>Counts under way, and what writes adjusted meanwhile: a count's figure gets it added, so a write that
+        /// committed while it ran isn't lost (one it already saw counts twice until the next count, which is accepted).</summary>
+        public int Counting;
+
+        public long Pending;
     }
 
     /// <summary>The limit a stored override stands for: null the default, −1 none, else bytes (0 refuses every write
@@ -124,9 +163,32 @@ public sealed class StorageQuota
         _ => stored,
     };
 
+    /// <summary>What a stored override is, in the admin's words: <c>default</c>, <c>unlimited</c> or <c>custom</c>.</summary>
+    public static string Kind(long? stored) => stored switch
+    {
+        null => "default",
+        < 0 => "unlimited",
+        _ => "custom",
+    };
+
     /// <summary>The limit of <paramref name="ownerId"/> as the database has it now; null: none.</summary>
-    public async Task<long?> LimitAsync(string ownerId, CancellationToken ct) =>
-        Effective(await _users.Find(u => u.Id == ownerId).Project(u => u.Quota).FirstOrDefaultAsync(ct));
+    public async Task<long?> LimitAsync(string ownerId, CancellationToken ct)
+    {
+        await QueryAsync("limit", ownerId);
+        var stored = await _users.Find(u => u.Id == ownerId).Project(u => u.Quota).FirstOrDefaultAsync(ct);
+        if (stored is not null) OverrideSeen();
+        return Effective(stored);
+    }
+
+    /// <summary>An admin set an override (or one was read): from now on the cache looks owners up.</summary>
+    internal void OverrideSeen()
+    {
+        lock (_lock)
+        {
+            _overrides = true;
+            _overridesReadAt = Now;
+        }
+    }
 
     /// <summary>The usage the cache holds for <paramref name="ownerId"/>, or null if it holds none.</summary>
     public long? KnownUsage(string ownerId)
@@ -139,7 +201,9 @@ public sealed class StorageQuota
     {
         lock (_lock)
         {
-            if (_accounts.TryGetValue(ownerId, out var account) && account.Used is { } used) account.Used = Math.Max(0, used + delta);
+            if (!_accounts.TryGetValue(ownerId, out var account)) return;
+            if (account.Used is { } used) account.Used = Math.Max(0, used + delta);
+            if (account.Counting > 0) account.Pending += delta;
         }
     }
 
@@ -173,13 +237,14 @@ public sealed class StorageQuota
     /// <summary>
     /// The check of a write that adds <paramref name="incoming"/> bytes to the vault of <paramref name="access"/>, from the
     /// cache alone: <see cref="QuotaExceededException"/> if it doesn't fit its owner's limit, else the owner to adjust after
-    /// the commit (null: a vault without one, the dev token's, which is never limited). The vault's owner is checked, never
-    /// the caller; the exception says whether the caller is that owner.
+    /// the commit (null: no limit can apply, or a vault without an owner, the dev token's, which is never limited). The
+    /// vault's owner is checked, never the caller; the exception says whether the caller is that owner.
     /// </summary>
     internal string? Require(VaultAccess access, long incoming)
     {
         lock (_lock)
         {
+            if (!MayLimit()) return null;
             if ((access.Membership?.Owner ?? OwnerOf(access.Id)) is not { } owner) return null;
             var account = AccountOf(owner);
             Freshen(owner, account);
@@ -196,8 +261,9 @@ public sealed class StorageQuota
         Task? first = null;
         lock (_lock)
         {
+            if (!MayLimit()) return null;
             var account = AccountOf(ownerId);
-            if (!account.Known) first = account.Refresh ?? Start(ownerId, account);
+            if (!account.Known) first = account.Refresh ?? (FailedLately(account) ? null : Start(ownerId, account));
             else Freshen(ownerId, account);
         }
 
@@ -222,25 +288,67 @@ public sealed class StorageQuota
         }
     }
 
+    /// <summary>Under the lock: whether a limit can apply to anyone. With a default, yes; without one, only once a user
+    /// document carries an override, which is asked in the background at most every <see cref="RecountAfter"/>.</summary>
+    private bool MayLimit()
+    {
+        if (Default is not null) return true;
+        if (_overridesCheck is null && (_overridesReadAt is not { } read || read + RecountAfter <= Now)) _overridesCheck = Track(Task.Run(CheckOverridesAsync));
+        return _overrides == true;
+    }
+
+    private async Task CheckOverridesAsync()
+    {
+        bool? found = null;
+        try
+        {
+            await QueryAsync("overrides", "");
+            found = await _users.Find(Builders<UserDocument>.Filter.Exists(u => u.Quota)).Limit(1).AnyAsync(CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Reading whether any user has a storage override failed");
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                // One seen meanwhile (an admin's change) stands.
+                if (found is { } exists && _overrides != true) _overrides = exists;
+                _overridesReadAt = Now;
+                _overridesCheck = null;
+            }
+        }
+    }
+
     private Account AccountOf(string ownerId)
     {
         if (!_accounts.TryGetValue(ownerId, out var account)) _accounts[ownerId] = account = new Account();
         return account;
     }
 
-    /// <summary>Under the lock: a count in the background if the figure is unknown or older than <see cref="RecountAfter"/>
-    /// and none runs.</summary>
+    private bool FailedLately(Account account) => account.FailedAt is { } failed && failed + RecountAfter > Now;
+
+    /// <summary>Under the lock: a count in the background if the figure is unknown or older than <see cref="RecountAfter"/>,
+    /// none runs, and none failed lately.</summary>
     private void Freshen(string ownerId, Account account)
     {
-        if (account.Refresh is null && (!account.Known || account.ReadAt + RecountAfter <= Now)) Start(ownerId, account);
+        if (account.Refresh is null && !FailedLately(account) && (!account.Known || account.ReadAt + RecountAfter <= Now)) Start(ownerId, account);
     }
 
     /// <summary>Under the lock, with none running: the owner's limit read and her usage counted, in the background.</summary>
     private Task Start(string ownerId, Account account)
     {
         account.Again = false;
-        var task = Task.Run(() => RefreshAsync(ownerId, account));
+        var task = Track(Task.Run(() => RefreshAsync(ownerId, account)));
         account.Refresh = task;
+        return task;
+    }
+
+    /// <summary>Under the lock: held for <see cref="SettledAsync"/>, after dropping what has ended.</summary>
+    private Task Track(Task task)
+    {
+        _running.RemoveAll(t => t.IsCompleted);
         _running.Add(task);
         return task;
     }
@@ -254,6 +362,7 @@ public sealed class StorageQuota
                 await CountAsync(ownerId, always: false, CancellationToken.None);
                 lock (_lock)
                 {
+                    account.FailedAt = null;
                     if (!account.Again)
                     {
                         account.Refresh = null;
@@ -270,7 +379,7 @@ public sealed class StorageQuota
             _log.LogWarning(e, "Counting the storage of user {UserId} failed", ownerId);
             lock (_lock)
             {
-                account.ReadAt = Now;
+                account.FailedAt = Now;
                 account.Refresh = null;
             }
         }
@@ -281,38 +390,54 @@ public sealed class StorageQuota
     private async Task<(long? Limit, long? Used, IReadOnlyDictionary<string, long> ByVault)> CountAsync(string ownerId, bool always, CancellationToken ct)
     {
         var started = Now;
-        var limit = await LimitAsync(ownerId, ct);
-        long? used = null;
-        IReadOnlyDictionary<string, long> byVault = new Dictionary<string, long>();
-        if (limit is not null || always)
-        {
-            var vaults = await _catalog.OwnedVaultIdsAsync(ownerId, ct);
-            var bytes = await _admin.BytesByVaultAsync(vaults, ct);
-            byVault = vaults.Distinct(StringComparer.Ordinal).ToDictionary(v => v, v => bytes.GetValueOrDefault(v), StringComparer.Ordinal);
-            used = byVault.Values.Sum();
-            lock (_lock)
-            {
-                foreach (var vault in byVault.Keys) _owners[vault] = (ownerId, started);
-            }
-        }
-
+        Account account;
         lock (_lock)
         {
-            var account = AccountOf(ownerId);
-            account.Known = true;
-            account.Limit = limit;
-            account.Used = limit is null ? null : used;
-            account.ReadAt = started;
+            account = AccountOf(ownerId);
+            if (account.Counting++ == 0) account.Pending = 0;
         }
 
-        return (limit, used, byVault);
+        try
+        {
+            var limit = await LimitAsync(ownerId, ct);
+            long? used = null;
+            IReadOnlyDictionary<string, long> byVault = new Dictionary<string, long>();
+            if (limit is not null || always)
+            {
+                await QueryAsync("count", ownerId);
+                var vaults = await _catalog.OwnedVaultIdsAsync(ownerId, ct);
+                var bytes = await _admin.BytesByVaultAsync(vaults, ct);
+                byVault = vaults.Distinct(StringComparer.Ordinal).ToDictionary(v => v, v => bytes.GetValueOrDefault(v), StringComparer.Ordinal);
+                used = byVault.Values.Sum();
+            }
+
+            lock (_lock)
+            {
+                foreach (var vault in byVault.Keys) _owners[vault] = ownerId;
+                account.Known = true;
+                account.Limit = limit;
+                account.Used = limit is null ? null : used + account.Pending;
+                account.ReadAt = started;
+            }
+
+            return (limit, used, byVault);
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                if (--account.Counting == 0) account.Pending = 0;
+            }
+        }
     }
 
-    /// <summary>Under the lock: the vault's owner if known, else null and a lookup in the background.</summary>
+    /// <summary>Under the lock: the vault's owner if known, else null and a lookup in the background, unless one failed
+    /// lately.</summary>
     private string? OwnerOf(string vaultId)
     {
-        if (_owners.TryGetValue(vaultId, out var known) && (known.Owner is not null || known.At + RecountAfter > Now)) return known.Owner;
-        if (_resolving.Add(vaultId)) _running.Add(Task.Run(() => ResolveAsync(vaultId)));
+        if (_owners.TryGetValue(vaultId, out var known)) return known;
+        if (_lookupFailed.TryGetValue(vaultId, out var failed) && failed + RecountAfter > Now) return null;
+        if (_resolving.Add(vaultId)) Track(Task.Run(() => ResolveAsync(vaultId)));
         return null;
     }
 
@@ -320,18 +445,21 @@ public sealed class StorageQuota
     {
         try
         {
+            await QueryAsync("owner", vaultId);
             var slot = Builders<SlotDocument>.Filter;
             var owner = await _catalog.Slots.Find(slot.Eq(s => s.Kind, SlotDocument.User) & slot.Eq(s => s.Vault, vaultId) & slot.Exists(s => s.Owner))
                 .Project(s => s.Owner).FirstOrDefaultAsync(CancellationToken.None);
             lock (_lock)
             {
-                _owners[vaultId] = (owner, Now);
+                _owners[vaultId] = owner;
+                _lookupFailed.Remove(vaultId);
                 if (owner is not null) Freshen(owner, AccountOf(owner));
             }
         }
         catch (Exception e)
         {
             _log.LogWarning(e, "Finding the owner of vault {VaultId} for the storage quota failed", vaultId);
+            lock (_lock) _lookupFailed[vaultId] = Now;
         }
         finally
         {
@@ -339,11 +467,13 @@ public sealed class StorageQuota
         }
     }
 
+    private Task QueryAsync(string kind, string id) => Querying is { } hook ? hook(kind, id) : Task.CompletedTask;
+
     /// <summary>A blob sweep freed space in <paramref name="vaultId"/>: its owner, if known, is counted again.</summary>
     private void Released(string vaultId)
     {
         string? owner;
-        lock (_lock) owner = _owners.GetValueOrDefault(vaultId).Owner;
+        lock (_lock) owner = _owners.GetValueOrDefault(vaultId);
         if (owner is not null) Recount(owner);
     }
 }
