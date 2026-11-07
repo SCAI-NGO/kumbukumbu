@@ -76,7 +76,7 @@ public sealed class ExpiredKeySweepTests(MongoFixture fixture)
     {
         var (month, quarter, never) = await KeysAsync();
         _time.Advance(TimeSpan.FromDays(30) + TimeSpan.FromMinutes(1));
-        using var sweep = new ExpiredKeySweep(Keys(), _time, NullLogger<ExpiredKeySweep>.Instance);
+        using var sweep = new ExpiredKeySweep(Keys(), new DavShares(_db, Catalog(), _time, NullLogger<DavShares>.Instance), _time, NullLogger<ExpiredKeySweep>.Instance);
 
         await sweep.StartAsync(Ct);
         await WaitUntilAsync(async () => await SlotsAsync(month.Id) == 0);

@@ -273,7 +273,7 @@ public sealed class UserCatalog(
     private sealed record RecoveryReplacement(byte[] Used);
 
     /// <summary>
-    /// Sets the password, ends every session and, if asked, revokes every API key and connection token. Without
+    /// Sets the password, ends every session and, if asked, revokes every API key, WebDAV share and connection token. Without
     /// <paramref name="recovery"/>, the password slot is replaced only if it is still <paramref name="passwordUsed"/>,
     /// the one that was opened. With it, the user key is rotated (<see cref="UserKeyRotation"/>) in the one transaction that writes
     /// the new password slot and the new recovery slot, the latter only if the recovery slot is still the one that was
@@ -301,6 +301,7 @@ public sealed class UserCatalog(
         {
             await keys.RevokeAllAsync(user, ct);
             await connections.RevokeAllTokensAsync(user, reason, ct);
+            await DavShares.RevokeAllAsync(db, user, Now, log, ct);
         }
 
         PreparedRotation? rotation = null;
@@ -327,6 +328,7 @@ public sealed class UserCatalog(
         {
             await keys.RevokeAllAsync(user, ct);
             await connections.RevokeAllTokensAsync(user, reason, ct);
+            await DavShares.RevokeAllAsync(db, user, Now, log, ct);
         }
 
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);

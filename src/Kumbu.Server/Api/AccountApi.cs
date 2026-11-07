@@ -76,6 +76,24 @@ public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 
+/// <summary>A WebDAV share as its owner sees it: its username, label, vault names with their rights; never its password.
+/// <c>expiresAt</c> is null for a share that doesn't expire. <c>lostVaults</c>: the ids of vaults it was given but no
+/// longer opens (a re-keying took them).</summary>
+public sealed record DavShareView(
+    string Id, string Username, string Label, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
+    DateTime? ExpiresAt, string[] LostVaults);
+
+/// <summary>The WebDAV tab: <c>enabled</c> is whether this server answers on <c>/dav/</c> (<c>Kumbu:Dav:Enabled</c>); the
+/// shares are listed either way.</summary>
+public sealed record DavSharesView(bool Enabled, DavShareView[] Shares);
+
+/// <summary><c>vaults</c>: vault name → <c>read</c>, <c>write</c> or <c>maintain</c>. <c>expiresInDays</c>: 30, 90 or
+/// 365; left out or null, the share doesn't expire. A share never publishes.</summary>
+public sealed record CreateDavShareRequest(string Label, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
+
+/// <summary><c>password</c> is shown here once and never again; the username is the share's.</summary>
+public sealed record CreatedDavShareView(string Password, DavShareView Share);
+
 /// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
 /// session, the latest visit (its first request after 30 minutes without one); not the last request. <c>sharedVaults</c>:
 /// how many of their vaults have an active member (a count, never a name).</summary>
@@ -171,6 +189,11 @@ public static class AccountApi
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
         account.MapPost("/keys", CreateKeyAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
+
+        // Made and revoked while WebDAV is switched off too: the shares wait for it to be on again.
+        account.MapGet("/dav-shares", ListDavSharesAsync).Errors(401, 403, 503);
+        account.MapPost("/dav-shares", CreateDavShareAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
+        account.MapDelete("/dav-shares/{id}", RevokeDavShareAsync).Errors(401, 403, 404);
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404, 429);
@@ -397,6 +420,24 @@ public static class AccountApi
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
 
+    private static async Task<Ok<DavSharesView>> ListDavSharesAsync(RequestCaller caller, DavShares shares, IOptions<KumbuOptions> options, CancellationToken ct)
+    {
+        var names = await VaultNamesAsync(caller, ct);
+        var list = await shares.ListAsync(caller.User!, caller.UserKey!, ct);
+        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Select(s => DavShareView(s, names))]));
+    }
+
+    private static async Task<Created<CreatedDavShareView>> CreateDavShareAsync(CreateDavShareRequest body, RequestCaller caller, DavShares shares, CancellationToken ct)
+    {
+        var names = await VaultNamesAsync(caller, ct);
+        var vaults = RightsByVaultId(body.Vaults, names);
+        var (_, password, info) = await shares.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Label, vaults, ct, body.ExpiresInDays);
+        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names)));
+    }
+
+    private static async Task<NoContent> RevokeDavShareAsync(string id, RequestCaller caller, DavShares shares, CancellationToken ct) =>
+        await shares.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such WebDAV share that isn't revoked.");
+
     private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
             .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults))
@@ -549,6 +590,18 @@ public static class AccountApi
         info.ExpiresAt,
         info.Kind == ApiKeyKind.Device ? "device" : "agent",
         PublishNames(info.Publish, names));
+
+    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
+    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(
+        info.Id,
+        info.Username,
+        info.Label,
+        info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+        info.CreatedAt,
+        info.LastUsedAt,
+        info.RevokedAt,
+        info.ExpiresAt,
+        [.. info.LostVaults]);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

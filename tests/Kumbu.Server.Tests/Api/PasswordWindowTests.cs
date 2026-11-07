@@ -109,6 +109,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "GET /api/vaults/{vault}/checkpoints/{name}/export",
         "GET /api/vaults/{vault}/export",
         "POST /api/connections/",
+        "POST /api/dav-shares",
         "POST /api/keys",
         "POST /api/vaults/{vault}/pairing",
         "POST /api/vaults/{vault}/invitations",
@@ -128,6 +129,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     {
         ["GET /api/session"] = Reading,
         ["GET /api/keys"] = Reading,
+        ["GET /api/dav-shares"] = Reading,
         ["GET /api/admin/users"] = Reading,
         ["GET /api/admin/deletions"] = Reading,
         ["GET /api/admin/invitations"] = Reading,
@@ -153,6 +155,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/vault-invitations/accept"] = "the owner's secret is the grant: it gives the caller's credentials nothing",
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,
+        ["DELETE /api/dav-shares/{id}"] = CleaningUp,
         ["DELETE /api/admin/invitations/{id}"] = CleaningUp,
         ["DELETE /api/connections/{id}"] = CleaningUp,
         ["POST /api/sessions/end-others"] = CleaningUp,

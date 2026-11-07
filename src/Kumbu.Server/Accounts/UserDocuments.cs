@@ -79,6 +79,11 @@ public sealed class UserDocument
     [BsonElement("connectionsCreated")]
     public long ConnectionsCreated { get; set; }
 
+    /// <summary>How many WebDAV shares the user has created; incremented in each share's transaction, for the same
+    /// reason as <see cref="KeysCreated"/> (see <see cref="DavShares.CreateAsync"/>).</summary>
+    [BsonElement("sharesCreated")]
+    public long SharesCreated { get; set; }
+
     /// <summary>How many vaults the user has created; incremented in each vault's transaction, for the same reason
     /// as <see cref="KeysCreated"/>: a concurrent deletion of the account conflicts with it.</summary>
     [BsonElement("vaultsCreated")]

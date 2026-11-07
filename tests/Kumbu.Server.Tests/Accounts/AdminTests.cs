@@ -33,7 +33,7 @@ public sealed class AdminTests(MongoFixture fixture)
 
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), new SyncHub(Catalog(), Keys(), Sessions(), _time, NullLogger<SyncHub>.Instance), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), new DavShares(_db, Catalog(), _time, NullLogger<DavShares>.Instance), new SyncHub(Catalog(), Keys(), Sessions(), _time, NullLogger<SyncHub>.Instance), _time, NullLogger<Admin>.Instance);
 
     private async Task<User> UserAsync(string username, string role)
     {

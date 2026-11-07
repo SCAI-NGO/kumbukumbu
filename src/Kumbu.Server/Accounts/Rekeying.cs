@@ -12,7 +12,7 @@ namespace Kumbu.Server.Accounts;
 /// </summary>
 public sealed class Rekeying(
     UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, ApiKeys keys, Connections connections, RekeyRunner runner, IMongoDatabase db,
-    TimeProvider time, ILogger<Rekeying> log, Sharing.Memberships memberships)
+    TimeProvider time, ILogger<Rekeying> log, Sharing.Memberships memberships, DavShares shares)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -44,6 +44,7 @@ public sealed class Rekeying(
             if (RevokeFault is { } fault) await fault();
             await keys.RevokeAllAsync(user, CancellationToken.None);
             await connections.RevokeAllTokensAsync(user, ConnectionReasons.Rekeyed, CancellationToken.None);
+            await shares.RevokeAllAsync(user, CancellationToken.None);
             revoked = true;
         }
         catch (Exception e)

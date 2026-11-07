@@ -62,6 +62,16 @@ public sealed class KumbuOptions
     public PdfOptions Pdf { get; set; } = new();
 
     public PublishOptions Publish { get; set; } = new();
+
+    public DavOptions Dav { get; set; } = new();
+}
+
+/// <summary>WebDAV access with a share's username and password (WebDAV design §3.2).</summary>
+public sealed class DavOptions
+{
+    /// <summary>Off (<c>KUMBU_DAV_ENABLED=false</c>), <c>/dav/</c> answers 404; shares can still be made and revoked,
+    /// and work again once it is on.</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>Publishing notes behind a link (publish design §3.13).</summary>

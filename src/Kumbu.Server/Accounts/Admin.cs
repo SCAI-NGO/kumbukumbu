@@ -18,7 +18,8 @@ public sealed record UserSummary(
 /// MongoDB holds in the clear (slot owners, document sizes), and no vault is opened.
 /// </summary>
 public sealed class Admin(
-    IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, Sync.SyncHub hub, TimeProvider time, ILogger<Admin> log)
+    IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, DavShares shares, Sync.SyncHub hub, TimeProvider time,
+    ILogger<Admin> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -53,7 +54,7 @@ public sealed class Admin(
     /// <summary>
     /// Deactivates or reactivates a user; false if there is no such user, true (and nothing done) if they already
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
-    /// and revokes every API key of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
+    /// and revokes every API key and WebDAV share of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
     /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>; deactivating also revokes the user's
     /// open invitations there. Revoking again on reactivation catches a key or a code whose creation raced the
     /// deactivation (its request's session resolved just before it): reactivating revives no key, no app, no session
@@ -67,11 +68,11 @@ public sealed class Admin(
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deactivated.");
         if (!active && target.Id == acting.Id) throw new NotPermittedException("You can't deactivate yourself.");
 
-        (int Keys, int Connections, long Invitations)? revoked;
+        (int Keys, int Connections, long Invitations, int Shares)? revoked;
         using (var session = await catalog.StartSessionAsync(ct))
         {
             // Retried on a write conflict: a key or a connection in use writes its lastUsedAt outside any transaction.
-            revoked = await session.WithTransactionAsync<(int, int, long)?>(
+            revoked = await session.WithTransactionAsync<(int, int, long, int)?>(
                 async (s, token) =>
                 {
                     // The role is checked again in the filter, in case it changed since the read above; the state, so
@@ -86,6 +87,7 @@ public sealed class Admin(
 
                     await sessions.EndAllAsync(s, userId, token);
                     var keyCount = await keys.RevokeAllAsync(s, userId, token);
+                    var shareCount = await shares.RevokeAllAsync(s, userId, token);
                     var connectionCount = await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token);
                     var invitationCount = active ? 0 : await Invitations.RevokeOpenOfAsync(db, s, userId, Now, token);
                     // Her shared vaults become read-only for their members (collab design §7.4): an event for each, which
@@ -98,7 +100,7 @@ public sealed class Admin(
                         }
                     }
 
-                    return (keyCount, connectionCount, invitationCount);
+                    return (keyCount, connectionCount, invitationCount, shareCount);
                 },
                 cancellationToken: ct);
         }
@@ -123,8 +125,8 @@ public sealed class Admin(
         else
         {
             log.LogInformation(
-                "{Admin} deactivated user {Username}; {Count} API keys, the tokens of {Connections} connections and {Invitations} open invitations revoked",
-                acting.Username, target.Username, count.Keys, count.Connections, count.Invitations);
+                "{Admin} deactivated user {Username}; {Count} API keys, {Shares} WebDAV shares, the tokens of {Connections} connections and {Invitations} open invitations revoked",
+                acting.Username, target.Username, count.Keys, count.Shares, count.Connections, count.Invitations);
         }
 
         return true;

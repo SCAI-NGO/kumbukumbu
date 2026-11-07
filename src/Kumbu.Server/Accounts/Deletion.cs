@@ -68,6 +68,8 @@ public sealed class Deletion(
 
     private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>("api_keys");
 
+    private IMongoCollection<DavShareDocument> Shares { get; } = db.GetCollection<DavShareDocument>(DavShares.CollectionName);
+
     private IMongoCollection<BsonDocument> Notes { get; } = db.GetCollection<BsonDocument>("notes");
 
     private IMongoCollection<BsonDocument> Attachments { get; } = db.GetCollection<BsonDocument>("attachments");
@@ -284,6 +286,10 @@ public sealed class Deletion(
                     foreach (var id in keyIds) await catalog.DeleteApiKeySlotsAsync(s, id, token);
                     await Keys.DeleteManyAsync(s, k => k.User == userId, cancellationToken: token);
                     keyCount = keyIds.Count;
+                    // Her WebDAV shares the same way: those on others' vaults go with her memberships below, any left by share id.
+                    var shareIds = await Shares.Find(s, d => d.User == userId).Project(d => d.Id).ToListAsync(token);
+                    foreach (var id in shareIds) await catalog.DeleteDavSlotsAsync(s, id, token);
+                    await Shares.DeleteManyAsync(s, d => d.User == userId, cancellationToken: token);
                     // The user document is deleted above, in this transaction: a connection being created or a token being
                     // issued writes it or the connection's document, and conflicts.
                     connectionCount = await ConnectionRevocation.DeleteAllAsync(db, s, userId, token);
