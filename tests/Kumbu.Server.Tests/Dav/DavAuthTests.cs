@@ -110,7 +110,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit + 4; i++)
         {
-            using var busy = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            using var busy = await dav.PropfindAsync("/dav/", ip: ip);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, busy.StatusCode);
             Assert.NotNull(busy.Headers.RetryAfter);
             DavAssert.PrivateWithoutCookie(busy);
@@ -219,7 +219,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         foreach (var path in new[] { "/dav", "/dav/", "/dav/Work/plan.md" })
         {
-            using var response = await dav.SendAsync(DavClient.Propfind, path);
+            using var response = await dav.PropfindAsync(path);
 
             DavAssert.Through(response);
             DavAssert.PrivateWithoutCookie(response);
@@ -228,7 +228,8 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         using (var withDepth = await dav.PropfindAsync("/dav/", depth: "0")) DavAssert.Through(withDepth);
 
         // Typed in by hand: lower case, without hyphens, O for 0.
-        using var typed = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/", dav.Password.Replace("-", "", StringComparison.Ordinal).Replace('0', 'O').ToLowerInvariant());
+        using var typed = await dav.SendWithPasswordAsync(
+            DavClient.Propfind, "/dav/", dav.Password.Replace("-", "", StringComparison.Ordinal).Replace('0', 'O').ToLowerInvariant(), headers: DavClient.WithDepth(null, "1"));
         DavAssert.Through(typed);
     }
 
@@ -244,12 +245,12 @@ public sealed class DavAuthTests(KumbuAppFactory app)
             DavAssert.Challenged(wrong);
         }
 
-        using var limited = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+        using var limited = await dav.PropfindAsync("/dav/", ip: ip);
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.NotNull(limited.Headers.RetryAfter);
         DavAssert.PrivateWithoutCookie(limited);
 
-        using var elsewhere = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        using var elsewhere = await dav.PropfindAsync("/dav/");
         DavAssert.Through(elsewhere);
     }
 
@@ -267,7 +268,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
             DavAssert.Challenged(refused);
         }
 
-        using var right = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+        using var right = await dav.PropfindAsync("/dav/", ip: ip);
         DavAssert.Through(right);
     }
 
@@ -301,10 +302,10 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         var dav = await DavClient.NewAsync(timed, expiresInDays: 30);
 
         time.Advance(TimeSpan.FromDays(30) - TimeSpan.FromMinutes(1));
-        using (var before = await dav.SendAsync(DavClient.Propfind, "/dav/")) DavAssert.Through(before);
+        using (var before = await dav.PropfindAsync("/dav/")) DavAssert.Through(before);
         time.Advance(TimeSpan.FromMinutes(1));
 
-        using var expired = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        using var expired = await dav.PropfindAsync("/dav/");
         DavAssert.Challenged(expired);
     }
 
@@ -316,7 +317,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         Assert.True(await Api.Services.GetRequiredService<Admin>().SetActiveAsync(admin.User, dav.Owner.User.Id, false, Ct));
 
-        using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        using var refused = await dav.PropfindAsync("/dav/");
         DavAssert.Challenged(refused);
     }
 
@@ -332,7 +333,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit; i++)
         {
-            using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            using var refused = await dav.PropfindAsync("/dav/", ip: ip);
             DavAssert.Challenged(refused);
         }
     }
@@ -348,7 +349,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
 
         for (var i = 0; i <= WrongKeyLimiter.PermitLimit; i++)
         {
-            using var refused = await dav.SendAsync(DavClient.Propfind, "/dav/", ip: ip);
+            using var refused = await dav.PropfindAsync("/dav/", ip: ip);
             DavAssert.Challenged(refused);
         }
     }
@@ -369,7 +370,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
             DavAssert.PrivateWithoutCookie(plain);
         }
 
-        using var https = await dav.SendAsync(DavClient.Propfind, "/dav/");
+        using var https = await dav.PropfindAsync("/dav/");
         DavAssert.Through(https);
     }
 
@@ -421,7 +422,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         }
 
         // The shares stay, and work again once it is on.
-        using var on = await dav.On(Api).SendAsync(DavClient.Propfind, "/dav/");
+        using var on = await dav.On(Api).PropfindAsync("/dav/");
         DavAssert.Through(on);
     }
 
@@ -433,7 +434,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         using var anonymous = await DavClient.SendAsync(Api, DavClient.Propfind, "/DAV/", authorization: null);
         DavAssert.Challenged(anonymous);
 
-        using var right = await dav.SendAsync(DavClient.Propfind, "/Dav/Work/");
+        using var right = await dav.PropfindAsync("/Dav/Work/");
         DavAssert.Through(right);
 
         using var options = await DavClient.SendAsync(Api, HttpMethod.Options, "/DAV/", authorization: null);
@@ -448,7 +449,7 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         var dav = await DavClient.NewAsync(logged);
         var wrong = DavTokens.Format(DavTokens.New());
 
-        using (var right = await dav.SendAsync(DavClient.Propfind, "/dav/Work/")) DavAssert.Through(right);
+        using (var right = await dav.PropfindAsync("/dav/Work/")) DavAssert.Through(right);
         using (var refused = await dav.SendWithPasswordAsync(DavClient.Propfind, "/dav/Work/", wrong)) DavAssert.Challenged(refused);
 
         Assert.Contains(log.Lines, l => l.StartsWith("Trace", StringComparison.Ordinal));

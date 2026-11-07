@@ -27,6 +27,8 @@ public static class DavAssert
         Assert.False(response.Headers.Contains("Set-Cookie"));
     }
 
-    /// <summary>The share's credentials got the request through to the WebDAV endpoints: for now their placeholder's 501.</summary>
-    public static void Through(HttpResponseMessage response) => Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
+    /// <summary>The share's credentials got the request through to the WebDAV endpoints: whatever they answered, it isn't
+    /// a refusal of the credentials (401), of the connection (403 over plain http) or of the limiter (429).</summary>
+    public static void Through(HttpResponseMessage response) =>
+        Assert.DoesNotContain(response.StatusCode, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.TooManyRequests });
 }

@@ -305,13 +305,9 @@ app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
     http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
     http.Response.Headers.Allow = DavHeaders.RootMethods;
 }).AllowAnonymous().ExcludeFromDescription();
-// Everything under /dav, until the WebDAV endpoints come: CallerMiddleware lets OPTIONS through without a caller and
-// everything else only with a share's. Matches /dav itself too, so the web app never answers there.
-app.Map("/dav/{**path}", (HttpContext http) =>
-{
-    if (HttpMethods.IsOptions(http.Request.Method)) DavHeaders.Options(http.Response, DavHeaders.DavMethods);
-    else http.Response.StatusCode = StatusCodes.Status501NotImplemented;
-}).ExcludeFromDescription();
+// Everything under /dav, /dav itself included: CallerMiddleware lets OPTIONS through without a caller and everything else
+// only with a share's.
+app.MapDav();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
