@@ -196,7 +196,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var marked = Writers.Marked(writer, "mv");
         // Link rewrites join the writer's changeset like any write.
         var changeset = await Changeset.ForAsync(store, vault.Segments[0], reference, writer, caller.ChangesetIdle, now, ct);
-        var batch = new NoteBatch { Changeset = changeset };
+        var batch = new NoteBatch { Changeset = changeset, IsMove = true };
         if (replacing is not null)
         {
             batch.Trashes.AddRange(replacing.Trashes);

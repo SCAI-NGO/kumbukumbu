@@ -34,6 +34,10 @@ public static class Refusals
     /// <summary>The note is published, and this caller may not withdraw it (publish design §3.7).</summary>
     public const string Published = "published";
 
+    /// <summary>The vault's owner's storage is full (WebDAV design §3.10); sent to the owner only, a member gets the
+    /// sentence alone (<see cref="QuotaExceededException"/>).</summary>
+    public const string Quota = "quota";
+
     /// <summary>A refusal with its code. The text starts with the command's first word, as every error of it does
     /// (<c>board rename_column</c> answers as <c>board:</c>).</summary>
     public static ShellResult Of(string command, string code, string sentence) =>

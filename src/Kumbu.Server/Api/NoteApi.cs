@@ -200,7 +200,7 @@ public static class NoteApi
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503, 507);
         api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
 

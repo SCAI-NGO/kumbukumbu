@@ -114,6 +114,12 @@ public static class DavEndpoints
         {
             await DavXml.WriteTextAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
         }
+        // The vault's owner is full (WebDAV design §3.10): a PUT, a COPY, a MKCOL, a parked file moved onto a real path
+        // (which stays parked). The sentence alone, to the owner's share as to a member's.
+        catch (QuotaExceededException e) when (!response.HasStarted)
+        {
+            await DavXml.WriteTextAsync(response, StatusCodes.Status507InsufficientStorage, e.Message, ct);
+        }
         // An attachment's bytes are gone or don't open: the server's fault, not a deletion, as on /api/files.
         catch (ContentMissingException e) when (!response.HasStarted)
         {
@@ -130,7 +136,8 @@ public static class DavEndpoints
         var tree = Tree(http);
         var resource = await tree.FindAsync(target.Path, ct) ?? throw NotFound();
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
-        var properties = new DavProperties(DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>());
+        var properties = new DavProperties(
+            DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>(), http.RequestServices.GetRequiredService<Accounts.StorageQuota>(), propfind);
         var responses = new List<DavResponse>(resources.Count);
         foreach (var r in resources)
         {

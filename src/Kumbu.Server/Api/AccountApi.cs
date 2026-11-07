@@ -96,13 +96,20 @@ public sealed record CreatedDavShareView(string Password, DavShareView Share);
 
 /// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
 /// session, the latest visit (its first request after 30 minutes without one); not the last request. <c>sharedVaults</c>:
-/// how many of their vaults have an active member (a count, never a name).</summary>
+/// how many of their vaults have an active member (a count, never a name). <c>quota</c>: <c>default</c>, <c>unlimited</c> or
+/// <c>custom</c>, the override the admin set (WebDAV design §3.10); <c>limitBytes</c>: the limit that applies, the default's
+/// or the override's, null for none.</summary>
 public sealed record AdminUserView(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults,
+    string Quota, long? LimitBytes);
 
-/// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
-/// acting admin's own.</summary>
-public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null);
+/// <summary>Any of them; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
+/// acting admin's own. <c>quota</c>: <c>"default"</c>, <c>"unlimited"</c> or a number of bytes, 0 or more (0: no write
+/// that adds data).</summary>
+public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null, System.Text.Json.JsonElement? Quota = null);
+
+/// <summary>What the session's own vaults take in the database, in bytes, and the limit that applies to them (null: none).</summary>
+public sealed record AccountStorageView(long Used, long? Limit);
 
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.
 /// <c>sharedVaults</c>: what becomes of her vaults shared with others (collab design §7.3): <c>give-members-7-days</c>
@@ -203,6 +210,7 @@ public static class AccountApi
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403, 429);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
+        account.MapGet("/account/storage", StorageAsync).Errors(401, 403);
         account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
         account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
     }
@@ -438,16 +446,36 @@ public static class AccountApi
     private static async Task<NoContent> RevokeDavShareAsync(string id, RequestCaller caller, DavShares shares, CancellationToken ct) =>
         await shares.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such WebDAV share that isn't revoked.");
 
-    private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
+    private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, StorageQuota quota, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults))
+            .Select(u => new AdminUserView(
+                u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults,
+                u.Quota switch { null => "default", < 0 => "unlimited", _ => "custom" }, quota.Effective(u.Quota)))
             .ToArray());
 
-    private static async Task<NoContent> UpdateUserAsync(
-        string id, UpdateUserRequest body, HttpContext http, RequestCaller caller, Admin admin, Pairings pairings, UserCatalog users, Sessions sessions,
-        AccountLimits limits, CancellationToken ct)
+    /// <summary>The session's own storage, counted now (Settings shows it).</summary>
+    private static async Task<Ok<AccountStorageView>> StorageAsync(RequestCaller caller, StorageQuota quota, CancellationToken ct)
     {
-        if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
+        var figure = await quota.FigureAsync(caller.User!.Id, ct);
+        return TypedResults.Ok(new AccountStorageView(figure.Used, figure.Limit));
+    }
+
+    /// <summary>An override as the request gives it: <c>"default"</c> (null), <c>"unlimited"</c>, or whole bytes.</summary>
+    private static long? QuotaOf(System.Text.Json.JsonElement value) => value switch
+    {
+        { ValueKind: System.Text.Json.JsonValueKind.String } when value.GetString() == "default" => null,
+        { ValueKind: System.Text.Json.JsonValueKind.String } when value.GetString() == "unlimited" => StorageQuota.Unlimited,
+        { ValueKind: System.Text.Json.JsonValueKind.Number } when value.TryGetInt64(out var bytes) && bytes >= 0 => bytes,
+        _ => throw ApiErrors.BadRequest("'quota' is \"default\", \"unlimited\" or a number of bytes, 0 or more."),
+    };
+
+    private static async Task<NoContent> UpdateUserAsync(
+        string id, UpdateUserRequest body, HttpContext http, RequestCaller caller, Admin admin, StorageQuota quota, Pairings pairings, UserCatalog users,
+        Sessions sessions, AccountLimits limits, CancellationToken ct)
+    {
+        if (body is { Active: null, Role: null, Quota: null }) throw ApiErrors.BadRequest("Give 'active', 'role', 'quota' or more of them.");
+        // Before anything is written: a quota that doesn't read refuses the whole request.
+        var newQuota = body.Quota is { } given ? QuotaOf(given) : null;
         // Every change to another account needs the window: deactivating or demoting destroys that account's
         // credentials, which a remembered session with its window closed must not do. Making an admin brings the
         // password itself, which opens it.
@@ -460,6 +488,13 @@ public static class AccountApi
         if (body.Role is { } role && !await admin.SetRoleAsync(caller.User!, id, role, ct)) throw NoSuchUser();
         if (body.Active is { } active && !await admin.SetActiveAsync(caller.User!, id, active, ct)) throw NoSuchUser();
         if (body.Active is false) pairings.DropAll(id);
+        if (body.Quota is not null)
+        {
+            if (!await admin.SetQuotaAsync(caller.User!, id, newQuota, ct)) throw NoSuchUser();
+            // At once in this process: the next write of hers is checked against the new limit.
+            await quota.RecountAsync(id);
+        }
+
         return TypedResults.NoContent();
 
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");

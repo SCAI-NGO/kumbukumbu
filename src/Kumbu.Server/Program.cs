@@ -117,6 +117,7 @@ builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<StorageQuota>();
 builder.Services.AddSingleton<DeletionList>();
 builder.Services.AddSingleton<RestoredDeletions>();
 builder.Services.AddHostedService<RestoredDeletionsCheck>();
@@ -163,7 +164,7 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credenti
 // By hand: the constructor that takes Publications is internal, and DI only sees public ones.
 builder.Services.AddScoped(sp => new EncryptedNoteStore(
     sp.GetRequiredService<VaultCatalog>(), sp.GetRequiredService<ICredential>(), sp.GetService<SearchIndex>(), sp.GetService<ApiKeys>(),
-    sp.GetService<PdfAnalysisRunner>(), sp.GetRequiredService<Publications>()));
+    sp.GetService<PdfAnalysisRunner>(), sp.GetRequiredService<Publications>(), sp.GetRequiredService<StorageQuota>()));
 builder.Services.AddScoped<WriterLabels>();
 builder.Services.AddScoped<IWriterLabels>(sp => sp.GetRequiredService<WriterLabels>());
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());

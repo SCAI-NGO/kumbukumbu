@@ -26,6 +26,9 @@ public sealed class DavCaller
 
     public string ShareId { get; }
 
+    /// <summary>The user whose share it is.</summary>
+    public string UserId => _caller.User?.Id ?? throw new InvalidOperationException("A WebDAV share's caller without its user");
+
     public static DavCaller Of(HttpContext http)
     {
         var caller = http.Features.Get<RequestCaller>();

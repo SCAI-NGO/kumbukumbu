@@ -1,26 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
 using System.Xml.Linq;
+using Kumbu.Server.Accounts;
 
 namespace Kumbu.Server.Dav;
 
 /// <summary>
 /// The live properties of a resource for one request (WebDAV design §3.4), each built when a <c>PROPFIND</c> asks for it.
 /// Per request and asynchronous, since what isn't in <see cref="DavResource"/> needs the request: a resource's locks
-/// (<c>lockdiscovery</c>, the share's own from <see cref="DavLocks"/>) and the RFC 4331 quota properties on the root and
-/// the vaults the share's user owns (from the usage cache, Task 12) join in <see cref="PropertiesAsync"/>.
+/// (<c>lockdiscovery</c>, the share's own from <see cref="DavLocks"/>) and RFC 4331's quota properties join in
+/// <see cref="PropertiesAsync"/>. Those come only on the root and on the vaults the share's user owns (a shared vault
+/// counts against its owner, whose figures a member never learns), only while a limit applies to her, and only when the
+/// <c>PROPFIND</c> names them: RFC 4331 keeps them out of <c>allprop</c>, so the listings every client asks for never
+/// wait for a count. Both are her account's, on the root as on each of her vaults: the quota is per user.
 /// </summary>
-public sealed class DavProperties(DavCaller caller, DavLocks locks)
+public sealed class DavProperties(DavCaller caller, DavLocks locks, StorageQuota quota, DavPropfind propfind)
 {
     private static readonly XNamespace D = DavXml.Dav;
 
+    private static readonly XName Available = D + "quota-available-bytes";
+    private static readonly XName Used = D + "quota-used-bytes";
+
+    private readonly bool _quotaAsked = propfind.Kind == DavPropfindKind.Prop && propfind.Names.Any(n => n == Available || n == Used);
+
+    /// <summary>The share's user's figure, once per request.</summary>
+    private Task<(long Used, long Limit)?>? _usage;
+
     /// <summary>The properties of <paramref name="resource"/>, by name.</summary>
-    public Task<IReadOnlyDictionary<XName, Func<XElement>>> PropertiesAsync(DavResource resource, CancellationToken ct)
+    public async Task<IReadOnlyDictionary<XName, Func<XElement>>> PropertiesAsync(DavResource resource, CancellationToken ct)
     {
         var properties = Live(resource);
         properties[D + "lockdiscovery"] = () => DavXml.LockDiscovery(
             caller.Place(resource.Path) is { } place ? locks.On(caller.ShareId, place.VaultId, place.Path).Select(l => (l, locks.SecondsLeft(l))) : []);
-        return Task.FromResult<IReadOnlyDictionary<XName, Func<XElement>>>(properties);
+        if (_quotaAsked && (resource.Path.IsRoot || (resource.Path.Segments.Count == 1 && caller.Access(resource.Path.Segments[0]) is { IsOwner: true }))
+            && await (_usage ??= quota.UsageAsync(caller.UserId, ct)) is { } usage)
+        {
+            properties[Available] = () => new XElement(Available, Math.Max(0, usage.Limit - usage.Used).ToString(CultureInfo.InvariantCulture));
+            properties[Used] = () => new XElement(Used, usage.Used.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return properties;
     }
 
     /// <summary>What the resource itself says: its type, name, length, type of content, version and last write.</summary>

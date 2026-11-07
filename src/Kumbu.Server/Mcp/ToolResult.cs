@@ -90,6 +90,12 @@ internal static class ToolResult
         {
             return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Refused);
         }
+        // Only the owner is pointed at df (WebDAV design §3.10): a member's agent gets the sentence alone.
+        catch (Kumbu.Core.Notes.QuotaExceededException e)
+        {
+            var sentence = e.Owner ? e.Message + " See `df`." : e.Message;
+            return (ShellResult.Error(sentence) with { Kind = ShellErrorKind.Refused, Code = e.Owner ? Kumbu.Core.Notes.Refusals.Quota : null }, KumbuMetrics.ToolError.Refused);
+        }
         catch (Kumbu.Core.Publishing.PublishedNoteException e)
         {
             return (ShellResult.Error(e.Message) with { Kind = ShellErrorKind.Refused, Code = e.Code }, KumbuMetrics.ToolError.Refused);

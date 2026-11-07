@@ -1145,6 +1145,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     private int _sweepingBlobs;
 
+    /// <summary>A blob sweep released blobs of the vault with this id: the storage quota counts its owner again
+    /// (<see cref="Accounts.StorageQuota"/>, which the catalog can't depend on).</summary>
+    internal event Action<string>? BlobsReleased;
+
     private async Task SweepBlobsAsync(IReadOnlyList<UnlockedVault> vaults, DateTime now, CancellationToken ct)
     {
         try
@@ -1154,7 +1158,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 try
                 {
-                    await sweep.RunAsync(vault, now, ct);
+                    if (await sweep.RunAsync(vault, now, ct) > 0) BlobsReleased?.Invoke(vault.Id);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {

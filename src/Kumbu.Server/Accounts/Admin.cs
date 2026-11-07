@@ -7,9 +7,11 @@ namespace Kumbu.Server.Accounts;
 
 /// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.
 /// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).
-/// <c>SharedVaults</c>: how many of their vaults have an active member, for the deletion dialog's choice; a number only.</summary>
+/// <c>SharedVaults</c>: how many of their vaults have an active member, for the deletion dialog's choice; a number only.
+/// <c>Quota</c>: their storage override as stored (<see cref="UserDocument.Quota"/>).</summary>
 public sealed record UserSummary(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults,
+    long? Quota = null);
 
 /// <summary>
 /// The admin's tools (accounts design, "Admin"): the user list, deactivating and reactivating, and roles. Every
@@ -47,7 +49,7 @@ public sealed class Admin(
             var vaults = vaultsByOwner.GetValueOrDefault(u.Id) ?? [];
             return new UserSummary(
                 u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, vaults.Count, vaults.Sum(v => bytesByVault.GetValueOrDefault(v)),
-                vaults.Count(withMembers.Contains));
+                vaults.Count(withMembers.Contains), u.Quota);
         })];
     }
 
@@ -168,8 +170,32 @@ public sealed class Admin(
         return true;
     }
 
-    /// <summary>The BSON size of every document of these vaults, summed per vault: what they take in the database.</summary>
-    private async Task<Dictionary<string, long>> BytesByVaultAsync(IReadOnlyList<string> vaultIds, CancellationToken ct)
+    /// <summary>
+    /// Sets a user's storage override (WebDAV design §3.10): null for the default, <see cref="StorageQuota.Unlimited"/>, or
+    /// a number of bytes (0: no write that adds data); false if there is no such user. Nobody acts on the primary admin
+    /// but the primary admin herself. The caller tells <see cref="StorageQuota"/>, which depends on this class.
+    /// </summary>
+    public async Task<bool> SetQuotaAsync(User actor, string userId, long? quota, CancellationToken ct)
+    {
+        if (quota is < StorageQuota.Unlimited) throw new ArgumentException("A quota is a number of bytes, 0 or more.", nameof(quota));
+        var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (target is null) return false;
+        if (target.Role == Roles.PrimaryAdmin && target.Id != acting.Id) throw new NotPermittedException("Only the primary admin sets the primary admin's storage.");
+
+        var update = quota is { } bytes ? Builders<UserDocument>.Update.Set(u => u.Quota, bytes) : Builders<UserDocument>.Update.Unset(u => u.Quota);
+        // The role again in the filter, in case it changed since the read above.
+        var updated = await Users.UpdateOneAsync(u => u.Id == userId && (u.Role != Roles.PrimaryAdmin || u.Id == acting.Id), update, cancellationToken: ct);
+        if (updated.MatchedCount == 0) return false;
+        log.LogInformation(
+            "{Admin} set the storage of {Username} to {Quota}", acting.Username, target.Username,
+            quota switch { null => "the default", < 0 => "unlimited", _ => $"{quota} bytes" });
+        return true;
+    }
+
+    /// <summary>The BSON size of every document of these vaults, summed per vault: what they take in the database. The
+    /// user list's figure, and the storage quota's (<see cref="StorageQuota"/>) for one owner's vaults.</summary>
+    internal async Task<Dictionary<string, long>> BytesByVaultAsync(IReadOnlyList<string> vaultIds, CancellationToken ct)
     {
         var bytes = new Dictionary<string, long>();
         if (vaultIds.Count == 0) return bytes;

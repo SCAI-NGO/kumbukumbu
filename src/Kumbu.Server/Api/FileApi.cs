@@ -65,7 +65,7 @@ public static class FileApi
                 };
                 return Task.CompletedTask;
             })
-            .Errors(400, 401, 403, 404, 413, 503);
+            .Errors(400, 401, 403, 404, 413, 503, 507);
         api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
     }
 

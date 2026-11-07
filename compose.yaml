@@ -99,6 +99,8 @@ services:
       Kumbu__Publish__Enabled: ${KUMBU_PUBLISH_ENABLED:-true}
       # WebDAV on /dav/ with a share's username and password, over https. Off, /dav/ answers 404; the shares stay.
       Kumbu__Dav__Enabled: ${KUMBU_DAV_ENABLED:-true}
+      # The storage each user's own vaults may take unless an admin set their own, e.g. 2GB; empty or 0: no limit.
+      Kumbu__Quota__Default: ${KUMBU_QUOTA_DEFAULT:-}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
       # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.

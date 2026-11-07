@@ -40,6 +40,16 @@ public sealed class NoteBatch
     /// attachment carries its own.</summary>
     public Changeset? Changeset { get; init; }
 
+    /// <summary>The batch of a move (<c>mv</c>, WebDAV's <c>MOVE</c>, <see cref="NoteMover"/>): its replaces are the links it
+    /// rewrites, and what it trashes is what the move replaces. It adds no data of its own, so the storage quota lets it
+    /// pass even when full (WebDAV design §3.10), decided by this kind and not by bytes.</summary>
+    public bool IsMove { get; init; }
+
+    /// <summary>Whether the batch writes content, and so passes the storage quota: a note or attachment created,
+    /// replaced or restored. A move's link rewrites aren't (<see cref="IsMove"/>); trashes and moves never are.</summary>
+    public bool AddsData =>
+        Creates.Count > 0 || AttachmentCreates.Count > 0 || AttachmentRestores.Count > 0 || (!IsMove && (Replaces.Count > 0 || AttachmentReplaces.Count > 0));
+
     public bool HasAttachments =>
         AttachmentReplaces.Count > 0 || AttachmentMoves.Count > 0 || AttachmentTrashes.Count > 0 || AttachmentCreates.Count > 0 || AttachmentRestores.Count > 0;
 

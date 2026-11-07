@@ -30,6 +30,9 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
     public const string PdfUrlMessage =
         "Kumbu:Pdf:Url must be empty or an absolute http or https URL without credentials, e.g. http://pdf:8090";
 
+    public const string QuotaDefaultMessage =
+        "Kumbu:Quota:Default (KUMBU_QUOTA_DEFAULT) must be empty, 0 (no limit) or a size such as 2GB or 500MB (B, KB, MB, GB, TB; binary prefixes)";
+
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
         var failures = new List<string>();
@@ -64,6 +67,15 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         if (options.Proxy.Trusted && string.IsNullOrEmpty(options.PublicUrl))
         {
             failures.Add(ProxyNeedsPublicUrlMessage);
+        }
+
+        try
+        {
+            Accounts.QuotaSize.Parse(options.Quota.Default);
+        }
+        catch (FormatException)
+        {
+            failures.Add(QuotaDefaultMessage);
         }
 
         if (options.Vaults.CheckpointLimit < 0)

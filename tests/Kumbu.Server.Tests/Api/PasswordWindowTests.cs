@@ -133,6 +133,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/admin/users"] = Reading,
         ["GET /api/admin/deletions"] = Reading,
         ["GET /api/admin/invitations"] = Reading,
+        ["GET /api/account/storage"] = Reading,
         ["GET /api/account/preferences"] = Reading,
         ["GET /api/connections/"] = Reading,
         ["GET /api/oauth/requests/{id}"] = Reading,

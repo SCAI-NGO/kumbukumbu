@@ -64,6 +64,17 @@ public sealed class KumbuOptions
     public PublishOptions Publish { get; set; } = new();
 
     public DavOptions Dav { get; set; } = new();
+
+    public QuotaOptions Quota { get; set; } = new();
+}
+
+/// <summary>The storage quota (WebDAV design §3.10).</summary>
+public sealed class QuotaOptions
+{
+    /// <summary>The limit of every user without an override (<c>KUMBU_QUOTA_DEFAULT</c>): a size such as <c>2GB</c> or
+    /// <c>500MB</c>, binary prefixes (<see cref="Accounts.QuotaSize"/>). Empty or <c>0</c>, the default: no limit, so a
+    /// server updated to this version changes nothing until its admin sets one.</summary>
+    public string? Default { get; set; }
 }
 
 /// <summary>WebDAV access with a share's username and password (WebDAV design §3.2).</summary>
