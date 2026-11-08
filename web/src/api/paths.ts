@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { VaultView } from "./notes";
+
 // Paths as the API gives them: from the root of the vault tree, the vault first ("/Work/projects/plan.md").
 
 /** The app's URL of a note, each segment encoded: vault and note names are content, not URL syntax. */
@@ -16,6 +18,12 @@ export const checkpointUrl = (vault: string, name: string, path?: string) =>
 /** The app's URL of a vault's board, or of a checkpoint's board as it was. */
 export const boardUrl = (vault: string, checkpoint?: string) =>
   `/board/${encodeURIComponent(vault)}` + (checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "");
+
+/**
+ * Whether a note can be published as a note: not one of the vault Skills, nor one in a vault's `_skills` folder; a skill
+ * is shared as a whole, by link, from the Skills screen.
+ */
+export const publishableAsNote = (vault: VaultView | undefined, path: string) => vault?.kind !== "skills" && !/^\/[^/]+\/_skills(\/|$)/.test(path);
 
 /** The app's URL of a vault's gallery: its images and PDFs. */
 export const galleryUrl = (vault: string) => `/gallery/${encodeURIComponent(vault)}`;

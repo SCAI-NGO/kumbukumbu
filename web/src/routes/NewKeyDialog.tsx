@@ -44,7 +44,7 @@ export const publishing = (publish: string[]) => (publish.length > 0 ? { publish
  * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it. A vault shared
  * with her names its owner, any level may be chosen for it, and one above her own is shown as what it acts as; one
  * choice that covers a vault others write into and a private one is warned about. May publish is offered beside a right
- * on a vault of her own while the server publishes, and goes with the right when "None" is chosen; without
+ * on a vault of her own while the server publishes (never on the vault Skills), and goes with the right when "None" is chosen; without
  * `onPublishChange` (a WebDAV share, which never publishes) it isn't offered at all.
  */
 export function RightsPicker({
@@ -97,7 +97,7 @@ export function RightsPicker({
             ))}
           </div>
           {chosen[vault.name] === "maintain" && <p className="text-sm text-warning">{maintainSentence}</p>}
-          {publishEnabled && vault.owner == null && (chosen[vault.name] ?? "none") !== "none" && (
+          {publishEnabled && vault.owner == null && vault.kind !== "skills" && (chosen[vault.name] ?? "none") !== "none" && (
             <>
               <label className="flex min-h-11 cursor-pointer items-center gap-2 text-text">
                 <input

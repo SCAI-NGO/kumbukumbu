@@ -135,6 +135,18 @@ describe("publishing in the tree", () => {
     expect(within(row("secret")).queryByRole("img", { name: "Unpublishable" })).toBeNull();
   });
 
+  it("hides Publish for a note in _skills", async () => {
+    api();
+    renderApp("/notes/Work/inbox.md");
+    expect((await noteMenu()).map((i) => i.label)).toContain("Publish…");
+    cleanup();
+
+    api();
+    renderApp("/notes/Work/_skills/x/SKILL.md");
+    await waitFor(async () => expect((await noteMenu()).map((i) => i.label)).toContain("Mark unpublishable"));
+    expect((await noteMenu()).map((i) => i.label)).not.toContain("Publish…");
+  });
+
   it("offers no publishing and no marks to members", async () => {
     const { fetch } = api({ vault: shared, marks: ["/Work/Private"] });
     await openDrawer();

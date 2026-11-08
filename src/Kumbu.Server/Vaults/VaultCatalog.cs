@@ -1228,6 +1228,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// </summary>
     internal async Task RenameVaultAsync(string userId, byte[] userKey, UnlockedVault vault, string newName, CancellationToken ct)
     {
+        if (vault.Kind == VaultKinds.Skills) throw new InvalidOperationException("The vault Skills keeps its name.");
         await EnsureReadyAsync(ct);
         await RequireNoneRekeyingAsync([vault.Id], ct);
         CheckWritable(vault);

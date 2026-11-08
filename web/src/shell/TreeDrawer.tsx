@@ -6,8 +6,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
-import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
+import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
@@ -68,6 +68,7 @@ type Publishing = {
   marks: readonly string[] | undefined;
   published: readonly string[] | undefined;
   enabled: boolean;
+  vault: VaultView | undefined;
   onPublish(note: string): void;
   onMark(path: string, marked: boolean): void;
 };
@@ -78,7 +79,7 @@ const entriesOf = (publishing: Publishing | null, path: string, note: boolean): 
         path,
         note,
         marks: publishing.marks,
-        mayPublish: publishing.enabled && !!publishing.published && !publishing.published.includes(path),
+        mayPublish: publishing.enabled && !!publishing.published && !publishing.published.includes(path) && publishableAsNote(publishing.vault, path),
         onPublish: () => publishing.onPublish(path),
         onMark: (marked) => publishing.onMark(path, marked),
       })
@@ -443,6 +444,7 @@ export default function TreeDrawer(props: {
         marks: publications.data?.unpublishable,
         published,
         enabled: publishEnabled === true,
+        vault: active,
         onPublish: setPublishing,
         onMark: marking.mark,
       }

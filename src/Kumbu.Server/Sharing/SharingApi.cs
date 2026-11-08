@@ -103,6 +103,7 @@ public static class SharingApi
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         var vaultId = await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Id == vaultId && v.IsSkillsVault)) throw new ApiException(StatusCodes.Status409Conflict, SharingRefusedException.SkillsVault().Message);
         var invite = await memberships.InviteAsync(caller.User!.Id, caller.UserKey!, vaultId, body.Label, role, TimeSpan.FromDays(days), body.Confirm, ct);
         return TypedResults.Created(
             (string?)null,

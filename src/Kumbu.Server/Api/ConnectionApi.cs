@@ -215,7 +215,7 @@ public static class ConnectionApi
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
         var info = await connections.CreateAsync(
-            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, AccountApi.PublishByVaultId(body.Publish, names));
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)));
         return TypedResults.Created($"/api/connections/{info.Id}", View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
@@ -225,7 +225,7 @@ public static class ConnectionApi
         var open = await caller.OpenVaultsAsync(ct);
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names))
+        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)))
             ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }

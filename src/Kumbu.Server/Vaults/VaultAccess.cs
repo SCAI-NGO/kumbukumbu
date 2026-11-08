@@ -46,6 +46,9 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
         _ => $"vault {vault} is read-only",
     };
 
+    /// <summary>The caller's own vault marked as the skills vault (<see cref="VaultKinds.Skills"/>).</summary>
+    public bool IsSkillsVault => IsOwner && Membership is null && Vault.Kind == VaultKinds.Skills;
+
     /// <summary>The vault is seen under another name than its stored one (a member's alias, or the name its owner renamed it
     /// to): its paths are translated in both directions.</summary>
     public bool Renamed => !string.Equals(Name, Vault.Name, StringComparison.Ordinal);

@@ -423,10 +423,11 @@ public static class AccountApi
 
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
-        var names = await VaultNamesAsync(caller, ct);
+        var open = await caller.OpenVaultsAsync(ct);
+        var names = open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
         var vaults = RightsByVaultId(body.Vaults, names);
         var (key, info) = await keys.CreateAsync(
-            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, publish: PublishByVaultId(body.Publish, names));
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, publish: PublishByVaultId(body.Publish, names, SkillsVaultIds(open)));
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 
@@ -609,18 +610,27 @@ public static class AccountApi
     }
 
     /// <summary>A request's "May publish" (vault names) by vault id; 400 for a vault the caller has no such name for.
-    /// Whether it may be given there is for the service to say (an <see cref="ArgumentException"/>, a 400 too).</summary>
-    internal static HashSet<string> PublishByVaultId(IReadOnlyList<string>? requested, Dictionary<string, string> names)
+    /// Whether it may be given there is for the service to say (an <see cref="ArgumentException"/>, a 400 too); not for the vault Skills.</summary>
+    internal static HashSet<string> PublishByVaultId(IReadOnlyList<string>? requested, Dictionary<string, string> names, IReadOnlySet<string>? skillsVaults = null)
     {
         var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
         var publish = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in requested ?? []) publish.Add((name is null ? null : idsByName.GetValueOrDefault(name)) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'."));
+        foreach (var name in requested ?? [])
+        {
+            var id = (name is null ? null : idsByName.GetValueOrDefault(name)) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
+            if (skillsVaults?.Contains(id) == true) throw ApiErrors.BadRequest("May publish isn't given for the vault Skills: a skill is shared from the Skills screen.");
+            publish.Add(id);
+        }
+
         return publish;
     }
 
     /// <summary>"May publish" by vault name, in order; as for the rights, a vault that no longer opens for the user isn't listed.</summary>
     internal static string[] PublishNames(IReadOnlySet<string> publish, Dictionary<string, string> names) =>
         [.. publish.Where(names.ContainsKey).Select(id => names[id]).Order(StringComparer.Ordinal)];
+
+    /// <summary>The ids of the caller's own vault marked as the skills vault, which is never given "May publish".</summary>
+    internal static IReadOnlySet<string> SkillsVaultIds(IEnumerable<Vaults.VaultAccess> open) => open.Where(v => v.IsSkillsVault).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The caller's vaults, id → name. Opening them is what a session does on every vault request anyway.</summary>
     internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>

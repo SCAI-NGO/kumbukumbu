@@ -7,6 +7,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Sharing;
@@ -76,6 +77,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         Check(access, publishing: true);
         var stored = access.ToVault(note);
+        RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
         {
             var current = await notes.GetAsync(note, ct) ?? throw NoSuchNote(note);
@@ -110,6 +112,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         Check(access, publishing: true);
         var stored = access.ToVault(note);
+        RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
         {
             var current = await notes.GetAsync(note, ct) ?? throw NoSuchNote(note);
@@ -292,6 +295,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var note = moved.GetValueOrDefault(entry.Note, entry.Note);
             var files = entry.Files.Select(f => f with { Path = moved.GetValueOrDefault(f.Path, f.Path) }).ToList();
             if (trashed.Contains(entry.Note)) withdrawn.Add((entry, WithdrawalReasons.Removed));
+            // A skill is shared as a whole, by link; a note that lands in a skill's place is no longer a note publication.
+            else if (note != entry.Note && InSkillPlace(access.Vault, Parse(note))) withdrawn.Add((entry, WithdrawalReasons.Removed));
             else if (Newly(entry.Note, note) || entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
             else kept.Add(note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files });
         }
@@ -457,6 +462,18 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     }
 
     private static bool IsOwner(VaultAccess access) => access.IsOwner && access.Membership is null;
+
+    /// <summary>The vault marked as the skills vault, and a skill location (<c>_skills</c> at a vault's root), hold skills,
+    /// which are shared as a whole, not as notes.</summary>
+    private static bool InSkillPlace(UnlockedVault vault, VaultPath stored) => vault.Kind == VaultKinds.Skills || SkillPaths.LocationOf(stored, null) is not null;
+
+    private static void RequireNotInSkillPlace(UnlockedVault vault, VaultPath stored, VaultPath note)
+    {
+        if (InSkillPlace(vault, stored))
+        {
+            throw Refused(Refusals.Unpublishable, $"{note} is in a skill's place; a skill is shared as a whole, by link, from the Skills screen");
+        }
+    }
 
     private static void RequireNotMarked(PublishingRecord record, VaultPath stored, VaultPath note)
     {

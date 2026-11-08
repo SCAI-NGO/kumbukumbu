@@ -284,6 +284,7 @@ public static class NoteApi
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"You have no vault named '{root.Segments[0]}'.");
         if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        if (access.IsSkillsVault) throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills keeps its name.");
         if (string.Equals(name, access.Name, StringComparison.Ordinal)) return TypedResults.NoContent();
         try
         {
@@ -341,6 +342,11 @@ public static class NoteApi
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Name == vault && v.IsSkillsVault))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills can't be deleted: it holds your skills. Remove single skills instead.");
+        }
+
         // A wrong password throws; null is a right one and no such vault.
         var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
         await AccountApi.PasswordGivenAsync(http, sessions, ct);

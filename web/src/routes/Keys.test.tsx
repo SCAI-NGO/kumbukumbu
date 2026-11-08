@@ -340,6 +340,21 @@ describe("May publish", () => {
     expect(dialog).not.toHaveTextContent(hint);
   });
 
+  it("offers no May publish for Skills", async () => {
+    api({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: true }),
+      "GET /api/vaults": () => json(200, [own("Work"), { ...own("Skills"), kind: "skills" }]),
+    });
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    const skills = within(dialog).getByRole("group", { name: "Skills" });
+    await userEvent.click(within(work).getByLabelText("Read"));
+    await userEvent.click(within(skills).getByLabelText("Read"));
+    expect(within(work).getByLabelText("May publish")).toBeInTheDocument();
+    expect(within(skills).queryByLabelText("May publish")).not.toBeInTheDocument();
+  });
+
   it("sends May publish", async () => {
     const bodies: unknown[] = [];
     publishing(true, bodies);
