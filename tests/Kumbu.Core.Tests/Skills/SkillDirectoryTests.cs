@@ -90,6 +90,34 @@ public class SkillDirectoryTests
         Assert.DoesNotContain("another user", skill.Line());
     }
 
+    /// <summary>A skill is all its files: Carol rewriting the steps <c>SKILL.md</c> sends the agent to is a change to the
+    /// skill, though <c>SKILL.md</c> is Bob's own.</summary>
+    [Fact]
+    public async Task Another_users_write_to_any_file_of_the_skill_marks_it()
+    {
+        Put("/Work/_skills/release-notes/SKILL.md", "---\nname: release-notes\ndescription: Drafts release notes.\n---\nFollow references/steps.md.\n", WriterRef.ForMember("w-bob"));
+        _store.Put(new StoredNote(P("/Work/_skills/release-notes/references/steps.md"), "# Steps\n", 1, "", InMemoryNoteStore.Seeded.AddHours(1), [], "# Steps\n", Ref: WriterRef.ForMember("w-carol")));
+
+        var skill = await One("/Work/_skills/release-notes");
+
+        Assert.True(skill.ByOther);
+        Assert.Equal("Carol", skill.LastEditor);
+        Assert.Equal("release-notes (/Work/_skills/release-notes, shared by \"Alice\", last changed by Carol, another user): Drafts release notes.", skill.Line());
+    }
+
+    [Fact]
+    public async Task The_last_editor_is_whoever_wrote_a_file_of_the_skill_last()
+    {
+        Put("/Work/_skills/release-notes/SKILL.md", "---\nname: release-notes\ndescription: Drafts release notes.\n---\n", WriterRef.ForMember("w-carol"));
+        _store.Put(new StoredNote(P("/Work/_skills/release-notes/references/steps.md"), "# Steps\n", 1, "", InMemoryNoteStore.Seeded.AddHours(1), [], "# Steps\n", Ref: WriterRef.ForMember("w-bob")));
+
+        var skill = await One("/Work/_skills/release-notes");
+
+        // Bob wrote last, but Carol's SKILL.md is still hers.
+        Assert.Equal("Bob", skill.LastEditor);
+        Assert.True(skill.ByOther);
+    }
+
     [Fact]
     public async Task An_own_skill_names_no_owner()
     {
@@ -188,8 +216,9 @@ public class SkillDirectoryTests
         var skill = await One("/Skills/loose");
 
         Assert.Equal("", skill.Description);
-        Assert.Null(skill.LastEditor);
-        Assert.Equal("loose (/Skills/loose) [warning: SKILL.md is missing]", skill.Line());
+        // Its files still have a writer.
+        Assert.Equal("Bob", skill.LastEditor);
+        Assert.Equal("loose (/Skills/loose, last changed by Bob) [warning: SKILL.md is missing]", skill.Line());
     }
 
     [Fact]
@@ -197,7 +226,7 @@ public class SkillDirectoryTests
     {
         _store.AddAttachment("/Skills/script-only/run.py");
 
-        Assert.Equal("script-only (/Skills/script-only) [warning: SKILL.md is missing]", (await One("/Skills/script-only")).Line());
+        Assert.Equal("script-only (/Skills/script-only, last changed by seed) [warning: SKILL.md is missing]", (await One("/Skills/script-only")).Line());
     }
 
     [Fact]

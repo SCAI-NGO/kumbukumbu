@@ -131,6 +131,22 @@ public sealed class SkillsApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_members_write_to_a_skills_file_marks_it_for_the_owner()
+    {
+        var alice = await AliceAsync();
+        var carol = await RestClient.NewAsync(app.PublicApi, vault: "Private");
+        await alice.ShareWithAsync(carol, "Garten", MemberRole.Write, label: "Carol");
+        using (var put = await carol.SendContentAsync(HttpMethod.Put, "/api/files/Garten/_skills/release-notes/scripts/run.sh",
+            new ByteArrayContent("echo hi\n"u8.ToArray()) { Headers = { ContentType = new("application/octet-stream") } }))
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        var skill = (await GetAsync(alice, "/api/skills"))["skills"]!.AsArray().Single(s => s!["name"]!.GetValue<string>() == "release-notes")!;
+
+        Assert.True(skill["byOther"]!.GetValue<bool>());
+        Assert.Equal("Carol", skill["lastEditor"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Find_returns_rank_and_score()
     {
         var alice = await AliceAsync();

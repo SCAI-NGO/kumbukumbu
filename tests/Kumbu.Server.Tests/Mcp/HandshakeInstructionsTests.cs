@@ -123,6 +123,20 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_members_write_to_any_file_of_a_skill_marks_it()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await RestClient.NewAsync(app.PublicApi, vault: "Private");
+        await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, carol, "Garten", Kumbu.Server.Sharing.MemberRole.Write, label: "Carol");
+        using (var put = await carol.SendAsync(HttpMethod.Put, "/api/notes/Garten/_skills/release-notes/references/steps.md", new { content = "# Steps\n" }))
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        var text = await InstructionsAsync(key);
+
+        Assert.Contains("- release-notes (/Work/_skills/release-notes, last changed by Carol, another user): Drafts release notes.", text);
+    }
+
+    [Fact]
     public async Task A_key_without_Skills_sees_none_of_its_skills()
     {
         var (_, key) = await AliceAsync("Work");

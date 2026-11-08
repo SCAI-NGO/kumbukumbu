@@ -13,8 +13,6 @@ namespace Kumbu.Core.Skills;
 /// </summary>
 public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
 {
-    private readonly WriterMarks _marks = new(notes, labels);
-
     /// <summary>The system skills, then the vault Skills, then the other vaults in <see cref="TextOrder"/>, by folder
     /// name within each; with <paramref name="vault"/>, only that vault's (nothing for one the caller doesn't reach).</summary>
     public async Task<IReadOnlyList<Skill>> ListAsync(string? vault, CancellationToken ct)
@@ -59,6 +57,34 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         ? await notes.ReadAsync(folder.Child(SkillPaths.Manifest), ct)
         : SystemSkills.Find(skill.Name)?.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Content;
 
+    /// <summary>
+    /// Who wrote the skill: the label of the last writer of any of its files, and whether another user (in a shared vault,
+    /// by the writer reference, as <see cref="WriterMarks"/> decides it) last wrote one of them. A skill is all its files:
+    /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote.
+    /// </summary>
+    private async Task<(string? Editor, bool ByOther)> WritersAsync(
+        string vault, VaultInfo? info, VaultPath folder, IReadOnlyList<VaultPath> notePaths, IReadOnlyList<StoredAttachment> attachments, CancellationToken ct)
+    {
+        var prefix = folder.Value + "/";
+        var writes = new List<(string Label, WriterRef? Ref, DateTime At)>();
+        foreach (var path in notePaths.Where(p => p.Value.StartsWith(prefix, StringComparison.Ordinal)))
+        {
+            if (await notes.GetAsync(path, ct) is { } note) writes.Add((note.LastWriter, note.Ref, note.LastWriteAt));
+        }
+
+        writes.AddRange(attachments.Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).Select(a => (a.LastWriter, a.Ref, a.LastWriteAt)));
+        if (writes.Count == 0) return (null, false);
+        var last = writes.MaxBy(w => w.At);
+        var editor = (await labels.RenderAsync(vault, last.Label, last.Ref, ct)).Display;
+        if (info?.Shared != true) return (editor, false);
+        foreach (var write in writes)
+        {
+            if (!await labels.IsOwnAsync(vault, write.Ref, ct)) return (editor, true);
+        }
+
+        return (editor, false);
+    }
+
     private static Skill System(SystemSkill skill)
     {
         var manifest = SkillManifest.Read(skill.Name, skill.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Content);
@@ -69,23 +95,23 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
     {
         var location = vault == marked ? VaultPath.Root.Child(vault) : VaultPath.Root.Child(vault).Child(SkillPaths.LocationFolder);
         var depth = location.Segments.Count;
-        var paths = (await notes.ListNotesUnderAsync(location, ct)).Concat((await StoreAttachments.UnderAsync(notes, location, ct)).Select(a => a.Path));
+        var notePaths = await notes.ListNotesUnderAsync(location, ct);
+        var attachments = await StoreAttachments.UnderAsync(notes, location, ct);
         // Only what lies inside a subfolder makes one a skill; a file loose at the location's root is none.
-        var folders = paths.Where(p => p.Segments.Count > depth + 1).Select(p => p.Segments[depth]).Distinct(StringComparer.Ordinal).Order(TextOrder.Default);
+        var folders = notePaths.Concat(attachments.Select(a => a.Path)).Where(p => p.Segments.Count > depth + 1)
+            .Select(p => p.Segments[depth]).Distinct(StringComparer.Ordinal).Order(TextOrder.Default);
 
-        var sharedBy = (await notes.VaultInfoAsync(vault, ct))?.Owner;
+        var info = await notes.VaultInfoAsync(vault, ct);
         var skills = new List<Skill>();
         foreach (var name in folders)
         {
             var folder = location.Child(name);
-            var path = folder.Child(SkillPaths.Manifest);
-            var note = await notes.GetAsync(path, ct);
+            var note = await notes.GetAsync(folder.Child(SkillPaths.Manifest), ct);
             var manifest = SkillManifest.Read(name, note?.Content);
-            var editor = note is null ? null : (await labels.RenderAsync(vault, note.LastWriter, note.Ref, ct)).Display;
-            var byOther = note is not null && (await _marks.ByOthersAsync([path], ct)).Count > 0;
+            var (editor, byOther) = await WritersAsync(vault, info, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
-            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = sharedBy });
+            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner });
         }
 
         return skills;
