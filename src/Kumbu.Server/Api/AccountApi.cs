@@ -350,7 +350,7 @@ public static class AccountApi
         CancellationToken ct)
     {
         var user = caller.User!;
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
         Log(logs).LogInformation("User {UserId} confirmed their password", user.Id);
@@ -380,7 +380,7 @@ public static class AccountApi
         ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if (!await users.ChangePasswordAsync(user, caller.UserKey!, body.OldPassword, body.NewPassword, body.RevokeApiKeys, ct))
         {
             throw new WrongPasswordException("The current password is wrong.");
@@ -397,7 +397,7 @@ public static class AccountApi
     {
         var user = caller.User!;
         // The same limit as the password change: both are a password check behind a session.
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         var recoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, caller.UserKey!, body.CurrentPassword, ct)
             ?? throw new WrongPasswordException("The current password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
@@ -413,7 +413,7 @@ public static class AccountApi
         SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         var recoveryKey = await rekeying.ReencryptAccountAsync(user, caller.UserKey!, body.Password, http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct)
             ?? throw new WrongPasswordException("The password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
@@ -427,7 +427,7 @@ public static class AccountApi
         DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, Pairings pairings, CancellationToken ct)
     {
         var user = caller.User!;
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         var shared = SharedVaultChoice(body.SharedVaults);
         if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct, shared)) throw new WrongPasswordException("The password is wrong.");
         pairings.DropAll(user.Id);
@@ -561,7 +561,7 @@ public static class AccountApi
         string id, DeleteUserRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits, SearchIndex index,
         IOptions<KumbuOptions> options, Pairings pairings, CancellationToken ct)
     {
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         // A wrong password throws; null is a right one and no such user.
         var shared = SharedVaultChoice(body.SharedVaults);
         var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct, shared);
@@ -580,7 +580,7 @@ public static class AccountApi
         RepeatDeletionsRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits, SearchIndex index,
         IOptions<KumbuOptions> options, Pairings pairings, CancellationToken ct)
     {
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         var deleted = await deletion.RepeatAsync(caller.User!, caller.UserKey!, body.Password, ct);
         await PasswordGivenAsync(http, sessions, ct);
         foreach (var user in deleted) pairings.DropAll(user.Id);
@@ -628,7 +628,7 @@ public static class AccountApi
         HttpContext http, RequestCaller caller, string? password, string missing, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(password)) throw ApiErrors.BadRequest(missing);
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, password, ct)) throw new WrongPasswordException("Your password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
     }
@@ -740,7 +740,7 @@ public static class AccountApi
         {
             if (string.IsNullOrEmpty(body.Password)) throw ApiErrors.BadRequest("Turning off the password for downloads of several files needs your password.");
             // The same limit as the export's ticket: both are a password check behind a session.
-            if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
             if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
             await PasswordGivenAsync(http, sessions, ct);
             Log(logs).LogInformation("User {UserId} turned off the password for downloads of several files", user.Id);

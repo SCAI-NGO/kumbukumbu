@@ -211,10 +211,12 @@ export default function MobileShell() {
   // A note the caller can't change (any more: her role was lowered) is only read. Not before the vaults are in, whose
   // levels say so: Write would be off for a moment on every note, and a note opened in Write mode would drop out of it.
   // A save of the open note the server refused counts at once, by its code, until the vault list read after it is in:
-  // that list then says (collab design §9.3).
+  // that list then says (collab design §9.3). Nor for a vault the list doesn't name yet: renamed in another tab, the
+  // note moves to the new name before the list read again is in.
   const refused = useEditor((s) => s.refused);
   const held = refused && refused.path === path && vaults.dataUpdatedAt <= refused.at ? refusalSentence(refused.code, vaultOf(path)) : null;
-  const readOnlyNote = !!held || (!!path && !!vaults.data && !mayChange(noteLevel, path));
+  const listed = !!path && !!vaults.data?.some((v) => v.name === vaultOf(path));
+  const readOnlyNote = !!held || (listed && !mayChange(noteLevel, path!));
   useEffect(() => {
     if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
   }, [readOnlyNote, mode]);

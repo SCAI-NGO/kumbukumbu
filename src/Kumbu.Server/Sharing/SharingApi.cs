@@ -95,7 +95,7 @@ public static class SharingApi
         var days = body.ExpiresInDays ?? (int)Memberships.DefaultInviteExpiry.TotalDays;
         if (days < 1 || days > Memberships.MaxInviteExpiry.TotalDays) throw ApiErrors.BadRequest($"An invitation is valid for 1 to {Memberships.MaxInviteExpiry.TotalDays} days.");
         // The same budget as the other password checks behind a session.
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if (string.IsNullOrEmpty(body.Password) || !await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct))
         {
             throw new WrongPasswordException("The password is wrong.");
@@ -189,7 +189,7 @@ public static class SharingApi
         if (role == MemberRole.Maintain && !string.IsNullOrEmpty(body.Password))
         {
             // The same budget as the other password checks behind a session.
-            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
             if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
             await AccountApi.PasswordGivenAsync(http, sessions, ct);
             passwordGiven = true;

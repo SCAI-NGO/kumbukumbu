@@ -118,7 +118,7 @@ public static class ExportApi
         CancellationToken ct)
     {
         var user = caller.User!;
-        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password ?? "", ct)) throw new WrongPasswordException("The password is wrong.");
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         var (ticket, expiresAt) = tickets.Issue(user.Id);

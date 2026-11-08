@@ -482,6 +482,29 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Deleting_vaults_one_after_another_runs_into_the_password_check_limit_and_says_why()
+    {
+        var session = await SignInAsync(await NewUserAsync());
+        var limit = Kumbu.Server.Api.AccountLimits.SignInsPerUsername;
+        for (var i = 0; i <= limit; i++)
+        {
+            using var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = $"Alt{i}" }, session: session);
+            Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        }
+
+        for (var i = 0; i < limit; i++)
+        {
+            using var deleted = await SendAsync(HttpMethod.Post, $"/api/vaults/Alt{i}/delete", new { password = Password, confirm = $"Alt{i}" }, session: session);
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, $"/api/vaults/Alt{limit}/delete", new { password = Password, confirm = $"Alt{limit}" }, session: session);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Equal($"Your password has been checked {limit} times in the last minute; try again in a minute.",
+            (await JsonAsync(limited))["error"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_vault_is_deleted_by_its_owner_with_its_name_typed()
     {
         var username = await NewUserAsync();

@@ -8,7 +8,7 @@ import { shownPath } from "../api/paths";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
-import { collectFromDrop, collectFromInput, type Picked } from "./collectFiles";
+import { collectFromDrop, collectFromInput, contentsOf, soleFolder, type Picked } from "./collectFiles";
 import ConflictList from "./ConflictList";
 import { ACCEPT, isAttachmentName, MAX_ATTACHMENT_BYTES, planUpload, toBatches, TOO_LARGE_FILE, type Skipped, type UploadFile } from "./planUpload";
 import { putFile } from "./putFile";
@@ -155,6 +155,9 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
   const [view, setView] = useState<View>({ kind: "pick" });
   const run = useRef<Run>(emptyRun());
   const pending = useRef<Pending | null>(null);
+  // A pick that lies in one folder, as it came: the review offers to upload only what is inside it.
+  const picks = useRef<{ picked: Picked[]; folder: string } | null>(null);
+  const [contents, setContents] = useState(false);
   const [vault, ...rest] = folder.split("/").slice(1);
   const inVault = rest.join("/");
   // A batch in flight is finished first: closing then would leave the user without the summary. Conflicts need a
@@ -168,6 +171,19 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     else setOverlay("none");
   };
   const dialog = useDialog<HTMLDivElement>(close);
+
+  function pick(picked: Picked[], start = false) {
+    const folder = soleFolder(picked);
+    picks.current = folder ? { picked, folder } : null;
+    setContents(false);
+    return take(picked, start);
+  }
+
+  function chooseContents(only: boolean) {
+    const { picked, folder } = picks.current!;
+    setContents(only);
+    void take(only ? contentsOf(picked, folder) : picked);
+  }
 
   async function take(picked: Picked[], start = false) {
     setView({ kind: "reading" });
@@ -323,7 +339,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
   useEffect(() => {
     if (!dropped || took.current) return;
     took.current = true;
-    void take(dropped);
+    void pick(dropped);
   }, []);
 
   // Each step replaces the controls the focus was on: it moves to the step's default (Skip all, Retry, Done).
@@ -331,28 +347,13 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     (dialog.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialog.current)?.focus();
   }, [view.kind, dialog]);
 
-  // A drop that misses the drop zone would make the browser open the file in place of the app, run and all.
-  useEffect(() => {
-    const swallow = (e: globalThis.DragEvent) => {
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
-    };
-    window.addEventListener("dragover", swallow);
-    window.addEventListener("drop", swallow);
-    return () => {
-      window.removeEventListener("dragover", swallow);
-      window.removeEventListener("drop", swallow);
-    };
-  }, []);
-
   const onDragOver = (e: DragEvent) => {
     if (view.kind === "pick" && e.dataTransfer.types.includes("Files")) e.preventDefault();
   };
   const onDrop = (e: DragEvent) => {
     if (view.kind !== "pick") return;
     e.preventDefault();
-    void collectFromDrop(e.dataTransfer.items).then((picked) => take(picked));
+    void collectFromDrop(e.dataTransfer.items).then((picked) => pick(picked));
   };
 
   // An image pasted (a screenshot on the desktop) is named after the moment; the name can be changed before it goes.
@@ -367,7 +368,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
   };
   const uploadPasted = (paste: Extract<View, { kind: "paste" }>) => {
     const name = withExtension(paste.name.trim().normalize("NFC"), paste.extension);
-    void take([{ path: name, file: new File([paste.file], name, { type: paste.file.type }) }], true);
+    void pick([{ path: name, file: new File([paste.file], name, { type: paste.file.type }) }], true);
   };
 
   const r = run.current;
@@ -400,7 +401,8 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
           <>
             <p className="text-text-body">
               Markdown files (.md, .markdown) become notes; PDFs and images (.pdf, .png, .jpg, .jpeg, .gif, .webp) up to 15 MB are kept as they are; inside a skill folder
-              (_skills/…) so are scripts and data files (.py, .sh, .json, …); other files are skipped. A folder comes in with its own name. You can paste an image too.
+              (_skills/…) so are scripts and data files (.py, .sh, .json, …); other files are skipped. A folder comes in with its own name, or only with what is inside
+              it if you choose. Choose files picks files only: drop files and folders here to bring both. You can paste an image too.
             </p>
             {view.error && (
               <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
@@ -409,12 +411,12 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
             )}
             <div className="flex flex-wrap gap-2.5">
               <label className={pickButtonClass}>
-                <input type="file" multiple accept={ACCEPT} className="sr-only" onChange={(e) => take(collectFromInput(e.target.files ?? []))} />
+                <input type="file" multiple accept={ACCEPT} className="sr-only" onChange={(e) => pick(collectFromInput(e.target.files ?? []))} />
                 <FilePlus size={18} aria-hidden className="text-muted" />
                 Choose files
               </label>
               <label className={pickButtonClass}>
-                <input type="file" multiple className="sr-only" {...{ webkitdirectory: "" }} onChange={(e) => take(collectFromInput(e.target.files ?? []))} />
+                <input type="file" multiple className="sr-only" {...{ webkitdirectory: "" }} onChange={(e) => pick(collectFromInput(e.target.files ?? []))} />
                 <FolderPlus size={18} aria-hidden className="text-muted" />
                 Choose a folder
               </label>
@@ -484,6 +486,12 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
               {reviewText(view.notes, view.files, view.folders)}, {count(r.skipped.length, "file", "files")} skipped
             </p>
             <SkippedList skipped={r.skipped} />
+            {picks.current && (
+              <label className="flex min-h-11 items-center gap-3 text-text">
+                <input type="checkbox" checked={contents} onChange={(e) => chooseContents(e.target.checked)} className="size-5 accent-accent" />
+                {`Only what's inside ${picks.current.folder}, not the folder itself`}
+              </label>
+            )}
             <div className="flex gap-2.5">
               <button type="button" onClick={close} className={`${secondaryButtonClass} flex-1`}>
                 Cancel

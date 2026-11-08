@@ -354,7 +354,7 @@ public static class NoteApi
         CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Name == vault && v.IsSkillsVault))
         {
             throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills can't be deleted: it holds your skills. Remove single skills instead.");
@@ -385,7 +385,7 @@ public static class NoteApi
         Pairings pairings, CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         // A wrong password throws; null is a right one and no such vault.
         RekeySummary? summary;
         var passwordRight = true;
