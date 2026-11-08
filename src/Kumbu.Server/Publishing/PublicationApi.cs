@@ -91,7 +91,7 @@ public static class PublicationApi
         if (body.Password is null) Security.RequirePasswordWindow(caller);
         else
         {
-            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
             if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
             await AccountApi.PasswordGivenAsync(http, sessions, ct);
         }
