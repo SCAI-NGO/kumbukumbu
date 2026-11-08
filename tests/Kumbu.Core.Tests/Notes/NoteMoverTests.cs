@@ -181,4 +181,21 @@ public class NoteMoverTests
         Assert.Equal(ShellResult.Error("mv: /W/: A vault exists on its own; it needs no .vaultkeep"), await Move("/W/D/.vaultkeep", "/W/.vaultkeep"));
         Assert.NotNull(await _store.GetAttachmentAsync(P("/W/D/.vaultkeep"), Ct));
     }
+
+    [Fact]
+    public async Task Archiving_a_folder_keeps_its_notes_links_to_each_other()
+    {
+        var store = new InMemoryNoteStore(
+            ("/W/Inbox/Manual/ch1.md", "See [[ch2]] and [next](ch2.md).\n"),
+            ("/W/Inbox/Manual/ch2.md", "Back to [[ch1]].\n"),
+            ("/W/Notes/ch2.md", "A living namesake.\n"),
+            ("/W/Notes/ch1.md", "Another.\n"));
+        var mover = new NoteMover(store, _time, new FixedCaller(Writers.Dev));
+
+        var result = await mover.MoveFolderAsync(P("/W/Inbox/Manual"), P("/W/_archive/Inbox/Manual"), rewriteLinks: true, Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("See [[ch2]] and [next](ch2.md).\n", await store.ReadAsync(P("/W/_archive/Inbox/Manual/ch1.md"), Ct));
+        Assert.Equal("Back to [[ch1]].\n", await store.ReadAsync(P("/W/_archive/Inbox/Manual/ch2.md"), Ct));
+    }
 }
