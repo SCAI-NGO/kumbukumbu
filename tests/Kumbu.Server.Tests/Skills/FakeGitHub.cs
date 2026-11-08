@@ -127,20 +127,47 @@ public sealed class FakeGitHub : HttpMessageHandler
         }
     });
 
-    /// <summary>A gzipped tar of one file whose ustar header says it holds <paramref name="declared"/> bytes, followed by
-    /// only <paramref name="actual"/> and the end of the archive.</summary>
-    public static byte[] TarWithDeclaredSize(string path, long declared, byte[] actual)
+    /// <summary>A gzipped tar of one entry whose header says it holds <paramref name="declared"/> bytes, followed by only
+    /// <paramref name="actual"/> and the end of the archive.</summary>
+    public static byte[] TarWithDeclaredSize(string path, long declared, byte[] actual, char type = '0', bool gnu = false) =>
+        GzipTar(UstarHeader(path, type, declared, gnu), actual);
+
+    /// <summary>One hand-made 512-byte header: ustar (or GNU) magic, the size as 11 octal digits, a right checksum unless
+    /// <paramref name="edit"/> changes the header after it's summed (<paramref name="beforeSum"/> changes it before).</summary>
+    public static byte[] UstarHeader(string name, char type, long size, bool gnu = false, Action<byte[]>? beforeSum = null, Action<byte[]>? edit = null)
     {
-        using var plain = new MemoryStream();
-        using (var tar = new TarWriter(plain, TarEntryFormat.Ustar, leaveOpen: true))
-            tar.WriteEntry(new UstarTarEntry(TarEntryType.RegularFile, path) { DataStream = new MemoryStream(actual) });
-        var bytes = plain.ToArray();
-        Encoding.ASCII.GetBytes(Convert.ToString(declared, 8).PadLeft(11, '0') + "\0").CopyTo(bytes, 124);
-        Array.Fill(bytes, (byte)' ', 148, 8);
-        var sum = bytes.AsSpan(0, 512).ToArray().Sum(b => (int)b);
-        Encoding.ASCII.GetBytes(Convert.ToString(sum, 8).PadLeft(6, '0') + "\0 ").CopyTo(bytes, 148);
+        var header = new byte[512];
+        void Put(int at, string text) => Encoding.ASCII.GetBytes(text).CopyTo(header, at);
+        Put(0, name);
+        Put(100, "0000644\0");
+        Put(108, "0000000\0");
+        Put(116, "0000000\0");
+        Put(124, Convert.ToString(size, 8).PadLeft(11, '0') + "\0");
+        Put(136, "00000000000\0");
+        header[156] = (byte)type;
+        Put(257, gnu ? "ustar  \0" : "ustar\000");
+        beforeSum?.Invoke(header);
+        Array.Fill(header, (byte)' ', 148, 8);
+        Put(148, Convert.ToString(header.Sum(b => (int)b), 8).PadLeft(6, '0') + "\0 ");
+        edit?.Invoke(header);
+        return header;
+    }
+
+    /// <summary>The blocks in order, each padded to 512 bytes, then the end of the archive, gzipped.</summary>
+    public static byte[] GzipTar(params byte[][] blocks)
+    {
         using var output = new MemoryStream();
-        using (var gzip = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true)) gzip.Write(bytes);
+        using (var gzip = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            foreach (var block in blocks)
+            {
+                gzip.Write(block);
+                gzip.Write(new byte[(512 - block.Length % 512) % 512]);
+            }
+
+            gzip.Write(new byte[1024]);
+        }
+
         return output.ToArray();
     }
 

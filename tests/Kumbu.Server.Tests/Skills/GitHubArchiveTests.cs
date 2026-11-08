@@ -8,7 +8,8 @@ using Microsoft.Extensions.Time.Testing;
 namespace Kumbu.Server.Tests.Skills;
 
 /// <summary>A marketplace's archive: where it comes from, the limits it's read within, the names it may hold and the
-/// cache it's kept in (spec §3.9; Decisions 23, 30).</summary>
+/// cache it's kept in (spec §3.9; Decisions 23, 30). Alone, so that the allocation measurements see only their own test.</summary>
+[Collection(nameof(GitHubArchiveTests))]
 public sealed class GitHubArchiveTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -67,14 +68,59 @@ public sealed class GitHubArchiveTests
         Assert.Equal("too-large", (await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct))).Kind);
     }
 
-    [Fact]
-    public async Task A_2_GB_entry_header_is_refused_before_allocating()
+    // 1 GiB stays below Array.MaxLength, so an allocation of the declared size would really happen and be measured.
+    [Theory, InlineData('0', false), InlineData('x', false), InlineData('g', false), InlineData('L', true), InlineData('K', true)]
+    public async Task A_1_GB_header_is_refused_before_allocating(char type, bool gnu)
     {
         var (client, fake, _, _) = Make();
-        fake.Archive = FakeGitHub.TarWithDeclaredSize("r/huge.bin", 2L * 1024 * 1024 * 1024, actual: new byte[16]);   // a header claiming 2 GB
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        fake.Archive = type == '0'
+            ? FakeGitHub.TarWithDeclaredSize("r/huge.bin", 1L << 30, actual: new byte[16])
+            : FakeGitHub.GzipTar(FakeGitHub.UstarHeader("r/", '5', 0), FakeGitHub.UstarHeader(gnu ? "././@LongLink" : "PaxHeaders/x", type, 1L << 30, gnu), new byte[16]);
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        var refused = await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct));
+        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+        Assert.True(allocated < 256L * 1024 * 1024, $"{allocated} bytes allocated");
+        Assert.Equal("too-large", refused.Kind);
+    }
+
+    [Fact]
+    public async Task A_pax_size_is_followed_past_the_entry()
+    {
+        var (client, fake, _, _) = Make();
+        fake.Archive = FakeGitHub.GzipTar(FakeGitHub.UstarHeader("r/", '5', 0), FakeGitHub.UstarHeader("PaxHeaders/f", 'x', 11), "11 size=16\n"u8.ToArray(),
+            FakeGitHub.UstarHeader("r/f.bin", '0', 0), "aaaaaaaaaaaaaaaa"u8.ToArray(), FakeGitHub.UstarHeader("r/g.txt", '0', 1), "g"u8.ToArray());
+        var archive = await client.ArchiveAsync(Repo, Sha, Ct);
+        Assert.Equal(["f.bin", "g.txt"], archive.Files.Select(f => f.Path));
+        Assert.Equal(16, archive.Files[0].Bytes.Length);
+    }
+
+    public static TheoryData<string> Malformed => ["size", "checksum", "mode", "sparse", "pax-length", "pax-then-pax"];
+
+    [Theory, MemberData(nameof(Malformed))]
+    public async Task A_malformed_header_is_a_bad_answer(string kind)
+    {
+        var (client, fake, _, _) = Make();
+        byte[][] blocks = kind switch
+        {
+            "size" => [FakeGitHub.UstarHeader("r/a", '0', 0, beforeSum: h => "zzzzzzzzzzz\0"u8.CopyTo(h.AsSpan(124)))],
+            "checksum" => [FakeGitHub.UstarHeader("r/a", '0', 0, edit: h => h[148] = (byte)'7')],
+            "mode" => [FakeGitHub.UstarHeader("r/a", '0', 0, beforeSum: h => "zzzzzzz\0"u8.CopyTo(h.AsSpan(100)))],
+            "sparse" => [FakeGitHub.UstarHeader("r/a", 'S', 0, gnu: true)],   // TarReader: NotSupportedException
+            "pax-length" => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 11), "99 size=16\n"u8.ToArray(), FakeGitHub.UstarHeader("r/a", '0', 0)],
+            _ => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0), FakeGitHub.UstarHeader("PaxHeaders/b", 'x', 0), FakeGitHub.UstarHeader("r/a", '0', 0)],
+        };
+        fake.Archive = FakeGitHub.GzipTar([FakeGitHub.UstarHeader("r/", '5', 0), .. blocks]);
+        Assert.Equal("bad-answer", (await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct))).Kind);
+    }
+
+    [Fact]
+    public async Task Metadata_headers_count_toward_5000()
+    {
+        var (client, fake, _, _) = Make();
+        // 2,501 files with a long PAX name each: 2,501 entries, but 5,002 headers (plus the top folder's).
+        var deep = string.Join('/', Enumerable.Repeat("folder-with-a-long-name", 12));
+        fake.Archive = FakeGitHub.Tar(Enumerable.Range(0, 2501).Select(i => ($"r/{deep}/{i}.md", Array.Empty<byte>())).ToArray());
         Assert.Equal("too-large", (await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct))).Kind);
-        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 64L * 1024 * 1024);
     }
 
     [Fact]
@@ -97,10 +143,10 @@ public sealed class GitHubArchiveTests
     public async Task Links_and_escaping_names_are_skipped()
     {
         var (client, fake, _, _) = Make();
-        fake.Archive = FakeGitHub.TarWith(symlink: "r/link", hardlink: "r/hard", files: [("r/ok.md", "x"u8.ToArray()), ("/etc/x", "x"u8.ToArray()), ("r/a/../../b", "x"u8.ToArray()), ("r/a\\b", "x"u8.ToArray())]);
+        fake.Archive = FakeGitHub.TarWith(symlink: "r/link", hardlink: "r/hard", files: [("r/ok.md", "x"u8.ToArray()), ("../x", "x"u8.ToArray()), ("q/y", "x"u8.ToArray()), ("/etc/x", "x"u8.ToArray()), ("r/a/../../b", "x"u8.ToArray()), ("r/a\\b", "x"u8.ToArray())]);
         var archive = await client.ArchiveAsync(Repo, Sha, Ct);
         Assert.Equal(["ok.md"], archive.Files.Select(f => f.Path));
-        Assert.Equal(["/etc/x", "a/../../b", "a\\b", "hard", "link"], archive.Skipped.Order(StringComparer.Ordinal));
+        Assert.Equal(["../x", "/etc/x", "a/../../b", "a\\b", "hard", "link", "q/y"], archive.Skipped.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -215,3 +261,6 @@ public sealed class GitHubArchiveTests
         }
     }
 }
+
+[CollectionDefinition(nameof(GitHubArchiveTests), DisableParallelization = true)]
+public sealed class GitHubArchiveCollection;

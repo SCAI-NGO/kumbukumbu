@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Concurrent;
 using System.Formats.Tar;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
@@ -132,14 +133,17 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         using var timeout = new CancellationTokenSource(RequestTimeout, time);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         RepoArchive archive;
+        var reading = false;
         try
         {
             using var response = await SendAsync(repo, uri, "application/x-gzip", linked.Token);
             if (response.Content.Headers.ContentLength > MaxArchiveBytes) throw TooLarge(repo);
+            reading = true;
             await using var compressed = new CappedStream(await response.Content.ReadAsStreamAsync(linked.Token), MaxArchiveBytes);
             await using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
             await using var unpacked = new CappedStream(gzip, MaxUnpackedBytes);
-            await using var tar = new TarReader(unpacked);
+            await using var guarded = new TarGuard(unpacked);
+            await using var tar = new TarReader(guarded);
             archive = await ReadArchiveAsync(repo, commit, tar, linked.Token);
         }
         catch (CappedStream.TooLongException)
@@ -150,7 +154,9 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         {
             throw Unavailable(repo, e);
         }
-        catch (Exception e) when (e is InvalidDataException or EndOfStreamException or FormatException)
+        // What TarReader and GZipStream throw for input they can't make sense of; anything but a 500.
+        catch (Exception e) when (reading && e is InvalidDataException or EndOfStreamException or FormatException or InvalidOperationException
+                                      or ArgumentException or OverflowException or NotSupportedException)
         {
             throw Fail(repo, "bad-answer", "GitHub's archive can't be read.");
         }
@@ -169,14 +175,14 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         var files = new List<ArchiveFile>();
         var skipped = new List<string>();
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var entries = 0;
+        string? top = null;
         long unpacked = 0;
+        // TarGuard counts the entries, every header of any kind.
         while (await tar.GetNextEntryAsync(copyData: false, ct) is { } entry)
         {
-            if (++entries > MaxEntries) throw TooLarge(repo);
-            if (entry.EntryType is TarEntryType.Directory or TarEntryType.GlobalExtendedAttributes) continue;
-
-            var path = ArchivePath(entry.Name, out var shown);
+            if (entry.EntryType is TarEntryType.GlobalExtendedAttributes) continue;
+            var path = ArchivePath(entry.Name, ref top, out var shown);
+            if (entry.EntryType is TarEntryType.Directory) continue;
             if (path is null || entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile)
                 || !paths.Add(path))
             {
@@ -209,14 +215,19 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
 
     /// <summary>An entry's path below the archive's top folder, NFC; null for a name that could leave or confuse the
     /// folder it's unpacked into (absolute, a <c>..</c>, <c>.</c> or empty segment, a NUL or a backslash) or that isn't
-    /// below a top folder. <paramref name="shown"/> is how the entry is named among the skipped.</summary>
-    internal static string? ArchivePath(string name, out string shown)
+    /// below the top folder. Codeload's archives have one, <c>&lt;repo&gt;-&lt;commit&gt;</c>: the first safe one seen is
+    /// <paramref name="top"/>, any other is skipped. <paramref name="shown"/> is how the entry is named among the skipped.</summary>
+    internal static string? ArchivePath(string name, ref string? top, out string shown)
     {
         while (name.StartsWith("./", StringComparison.Ordinal)) name = name[2..];
         shown = name;
         if (name.StartsWith('/')) return null;
         var slash = name.IndexOf('/');
         if (slash < 0) return null;
+        var first = name[..slash];
+        if (first is "" or "." or ".." || first.Contains('\0') || first.Contains('\\')) return null;
+        top ??= first;
+        if (first != top) return null;
         var path = name[(slash + 1)..];
         shown = path;
         if (path.Length == 0 || path.Contains('\0') || path.Contains('\\') || path.Split('/').Any(s => s is "" or "." or "..")) return null;
@@ -379,6 +390,193 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
                     _bytes -= last.Value.Archive.Bytes;
                 }
             }
+        }
+    }
+
+    /// <summary>Follows the tar structure in the decompressed bytes as they pass to <see cref="TarReader"/>, which allocates
+    /// whatever a metadata entry (a PAX <c>x</c> or <c>g</c>, a GNU <c>L</c> or <c>K</c>) says its length is. Each header
+    /// is checked before its last byte is handed on: its checksum, its size (octal or base-256, a PAX <c>size</c> record
+    /// included), at most <see cref="MaxMetadataBytes"/> for any entry that isn't a regular file (whose data TarReader
+    /// streams), and at most <see cref="MaxEntries"/> headers of any kind. What it can't follow exactly it refuses.</summary>
+    internal sealed class TarGuard(Stream inner) : Stream
+    {
+        public const int MaxMetadataBytes = 64 * 1024;
+        private const int Block = 512;
+
+        private readonly byte[] _header = new byte[Block];
+        private int _filled;
+        private long _dataLeft, _padLeft;
+        private byte[]? _pax;   // a PAX x entry's data, collected while it passes
+        private int _paxFilled;
+        private long? _nextSize;   // its size record, for the entry that follows
+        private bool _afterPax;
+
+        public int Headers { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = inner.Read(buffer, offset, count);
+            Follow(buffer.AsSpan(offset, read));
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await inner.ReadAsync(buffer, cancellationToken);
+            Follow(buffer.Span[..read]);
+            return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        private void Follow(ReadOnlySpan<byte> bytes)
+        {
+            while (bytes.Length > 0)
+            {
+                int n;
+                if (_dataLeft > 0)
+                {
+                    n = (int)Math.Min(_dataLeft, bytes.Length);
+                    if (_pax is not null)
+                    {
+                        bytes[..n].CopyTo(_pax.AsSpan(_paxFilled));
+                        _paxFilled += n;
+                    }
+
+                    _dataLeft -= n;
+                    if (_dataLeft == 0 && _pax is not null) EndPax();
+                }
+                else if (_padLeft > 0)
+                {
+                    n = (int)Math.Min(_padLeft, bytes.Length);
+                    _padLeft -= n;
+                }
+                else
+                {
+                    n = Math.Min(Block - _filled, bytes.Length);
+                    bytes[..n].CopyTo(_header.AsSpan(_filled));
+                    _filled += n;
+                    if (_filled == Block)
+                    {
+                        _filled = 0;
+                        OnHeader();
+                    }
+                }
+
+                bytes = bytes[n..];
+            }
+        }
+
+        private void OnHeader()
+        {
+            var h = _header.AsSpan();
+            if (!h.ContainsAnyExcept((byte)0)) return;   // the end of the archive (two of these), or padding after it
+            if (++Headers > MaxEntries) throw new CappedStream.TooLongException();
+            if (!ChecksumHolds(h)) throw new InvalidDataException("A tar header's checksum is wrong.");
+
+            var type = (char)h[156];
+            var size = Number(h.Slice(124, 12));
+            var metadata = type is 'x' or 'g' or 'L' or 'K';
+            if (_afterPax && metadata) throw new InvalidDataException("A PAX header followed by another header of its kind.");
+            if (!metadata && _nextSize is { } paxSize) size = paxSize;
+            _afterPax = false;
+            _nextSize = null;
+            if (type is not ('0' or '\0' or '7') && size > MaxMetadataBytes) throw new CappedStream.TooLongException();
+
+            if (type == 'x')
+            {
+                _afterPax = true;
+                _pax = new byte[size];
+                _paxFilled = 0;
+                if (size == 0) EndPax();
+            }
+
+            _dataLeft = size;
+            _padLeft = (Block - size % Block) % Block;
+        }
+
+        /// <summary>PAX records, <c>"&lt;length&gt; &lt;key&gt;=&lt;value&gt;\n"</c>; only <c>size</c> matters here.</summary>
+        private void EndPax()
+        {
+            var data = _pax!.AsSpan();
+            _pax = null;
+            while (data.Length > 0)
+            {
+                var space = data.IndexOf((byte)' ');
+                if (space is < 1 or > 20 || !long.TryParse(data[..space], NumberStyles.None, CultureInfo.InvariantCulture, out var length)
+                    || length <= space || length > data.Length || data[(int)length - 1] != '\n')
+                    throw new InvalidDataException("A malformed PAX record.");
+                var record = data[(space + 1)..((int)length - 1)];
+                var equals = record.IndexOf((byte)'=');
+                if (equals < 0) throw new InvalidDataException("A malformed PAX record.");
+                if (record[..equals].SequenceEqual("size"u8))
+                    _nextSize = long.TryParse(record[(equals + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var size)
+                        ? size
+                        : throw new InvalidDataException("A malformed PAX size.");
+                data = data[(int)length..];
+            }
+        }
+
+        private static bool ChecksumHolds(ReadOnlySpan<byte> h)
+        {
+            var sum = 8 * ' ';
+            for (var i = 0; i < Block; i++)
+                if (i is < 148 or >= 156) sum += h[i];
+            return Number(h.Slice(148, 8)) == sum;
+        }
+
+        /// <summary>A numeric field: octal digits, perhaps space-led and NUL- or space-ended, or base-256 (the top bit set).</summary>
+        private static long Number(ReadOnlySpan<byte> field)
+        {
+            long value = 0;
+            if ((field[0] & 0x80) != 0)
+            {
+                if (field[0] == 0xFF) throw new InvalidDataException("A negative tar number.");
+                value = field[0] & 0x7F;
+                foreach (var b in field[1..])
+                {
+                    if (value > long.MaxValue >> 8) throw new InvalidDataException("A tar number too large.");
+                    value = value << 8 | b;
+                }
+
+                return value;
+            }
+
+            field = field.Trim((byte)' ').TrimEnd((byte)0).TrimEnd((byte)' ');
+            foreach (var b in field)
+            {
+                if (b is < (byte)'0' or > (byte)'7' || value > long.MaxValue >> 3) throw new InvalidDataException("A malformed tar number.");
+                value = value << 3 | (long)(b - '0');
+            }
+
+            return value;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            await base.DisposeAsync();
         }
     }
 
