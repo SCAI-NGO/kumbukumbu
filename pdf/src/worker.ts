@@ -29,8 +29,8 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
       );
     case "boxes":
       return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
-    // pdf.js runs with its warnings on here, and they may name details of the file: nothing of the
-    // job reaches the console.
+    // A backstop: whatever pdf.js prints during an extraction job, warnings on or not, may name details
+    // of the file, and is swallowed.
     case "list":
       return quietly(async () => ({ value: await listImages(job.bytes, job.page), transfer: [] }));
     case "extract":

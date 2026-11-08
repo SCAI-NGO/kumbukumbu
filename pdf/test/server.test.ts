@@ -385,7 +385,8 @@ describe("extraction pool", () => {
   const stub = new URL("./workers/stub.mjs", import.meta.url);
   const main = new Pool({ workers: 1, queue: 0, entry: stub });
   const extract = new Pool({ workers: 1, queue: 0, entry: stub });
-  const sidecar = createSidecar(main, {}, extract);
+  // A render limit far past the test's own: an extraction that times out has kept to its own limit.
+  const sidecar = createSidecar(main, { renderMs: 60_000, extractMs: 300 }, extract);
   let url = "";
 
   beforeAll(async () => {
@@ -415,5 +416,11 @@ describe("extraction pool", () => {
 
   it("counts both pools in its connections", () => {
     expect(sidecar.maxConnections).toBe(main.capacity + extract.capacity + 16);
+  });
+
+  it("answers 504 for an extraction past its own limit", async () => {
+    const r = await fetch(url + "/images/list?page=1", { method: "POST", body: new Uint8Array(10) });
+    expect(r.status).toBe(504);
+    expect(await r.json()).toMatchObject({ code: "timeout" });
   });
 });
