@@ -4,7 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCheckpointTree } from "../api/history";
 import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
-import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, isAttachment, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
+import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
 import { Menu } from "../components/Menu";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
@@ -12,6 +12,7 @@ import MoveDialog from "../shell/MoveDialog";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
 import PdfPages, { type PdfStatus } from "./PdfPages";
+import TextFile from "./TextFile";
 
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
@@ -27,9 +28,9 @@ const pillClass = "rounded-full bg-[#232328] px-2.5 py-0.5 text-[12px] text-[#ec
 type State = LightboxState & { back?: boolean };
 
 /** Without an order to page through: the attachments of the file's folder, as the tree (today's or a checkpoint's) lists them. */
-function folderOrder(root: TreeFolder | undefined, path: string): string[] | null {
+function folderOrder(root: TreeFolder | undefined, vault: string, path: string): string[] | null {
   const folder = root && findFolder(root, folderOf(path));
-  const paths = folder?.notes.filter((n) => isAttachment(n.path)).map((n) => n.path) ?? [];
+  const paths = folder?.notes.filter((n) => fileKindOf(n.path, vault) !== "note").map((n) => n.path) ?? [];
   return paths.includes(path) ? paths : null;
 }
 
@@ -59,7 +60,7 @@ export default function Lightbox() {
   // An earlier version is shown on its own; a checkpoint's file pages through its folder as the checkpoint held it.
   const tree = useTree(given || readOnly ? null : vault);
   const checkpointTree = useCheckpointTree(vault, checkpoint ?? "", !!checkpoint);
-  const paths = given ?? (version ? null : folderOrder((checkpoint ? checkpointTree.data : tree.data)?.root, path)) ?? [path];
+  const paths = given ?? (version ? null : folderOrder((checkpoint ? checkpointTree.data : tree.data)?.root, vault, path)) ?? [path];
   // Opened from within the app, closing goes back there; opened from outside (a bookmark), to the vaults, or to
   // the checkpoint.
   const back = state?.back ?? location.key !== "default";
@@ -68,7 +69,7 @@ export default function Lightbox() {
   const shownVersion = version ? history.data?.find((v) => v.version === version) : undefined;
   const checkpointRoot = checkpoint ? checkpointTree.data?.root : undefined;
   const checkpointFile = checkpointRoot && findFolder(checkpointRoot, folderOf(path))?.notes.find((n) => n.path === path);
-  const kind = fileKindOf(path);
+  const kind = fileKindOf(path, vault);
   const name = titleOf(path);
 
   const [showInfo, setShowInfo] = useState(false);
@@ -150,7 +151,7 @@ export default function Lightbox() {
       ? []
       : [
           ...(writes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") }] : []),
-          { label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
+          ...(kind === "text" ? [] : [{ label: "Copy link", icon: Link2, onSelect: () => void copyLink() }]),
           { label: "History", icon: History, onSelect: () => setDialog("history") },
           ...(writes ? [{ label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current }] : []),
         ]),
@@ -176,7 +177,9 @@ export default function Lightbox() {
 
   return (
     <main aria-label={name} className="fixed inset-0 z-50 overflow-hidden bg-black text-[#eceae4]">
-      {kind === "pdf" ? (
+      {kind === "text" ? (
+        <TextFile key={stageKey} vault={vault} path={inVault(path)} at={source} />
+      ) : kind === "pdf" ? (
         <PdfPages key={stageKey} vault={vault} path={inVault(path)} at={source} onStatus={setPdf} onSwipe={swipe} />
       ) : (
         <ImageStage key={stageKey} vault={vault} path={path} at={source} name={name} onSwipe={swipe} onZoom={setZoom} />
@@ -258,9 +261,11 @@ export default function Lightbox() {
                   <FolderInput size={20} aria-hidden />
                 </button>
               )}
-              <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
-                <Link2 size={20} aria-hidden />
-              </button>
+              {kind !== "text" && (
+                <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
+                  <Link2 size={20} aria-hidden />
+                </button>
+              )}
               {writes && (
                 <button type="button" aria-label="Delete" disabled={!current} onClick={() => setDialog("delete")} className={controlClass}>
                   <Trash2 size={20} aria-hidden />

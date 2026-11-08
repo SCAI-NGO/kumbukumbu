@@ -42,7 +42,7 @@ export type Row =
   | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
-const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" ? entry.kind : "note");
+const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 

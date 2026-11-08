@@ -171,7 +171,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
 
   async function take(picked: Picked[], start = false) {
     setView({ kind: "reading" });
-    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })));
+    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })), { vault, folder: inVault });
     let notes: UploadFile[];
     try {
       notes = await Promise.all(plan.notes.map(async (k) => ({ path: k.path, content: await k.file.text() })));

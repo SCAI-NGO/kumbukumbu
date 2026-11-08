@@ -20,8 +20,11 @@ export const boardUrl = (vault: string, checkpoint?: string) =>
 /** The app's URL of a vault's gallery: its images and PDFs. */
 export const galleryUrl = (vault: string) => `/gallery/${encodeURIComponent(vault)}`;
 
-/** What a path holds, as the server tells files apart (`kind`): "image", "pdf", "note", or "folder" for an empty folder's marker. */
-export type FileKind = "note" | "image" | "pdf" | "folder";
+/**
+ * What a path holds, as the server tells files apart (`kind`): "image", "pdf", "note", "folder" for an empty folder's
+ * marker, or "text" for a script or data file inside a skill's folder.
+ */
+export type FileKind = "note" | "image" | "pdf" | "folder" | "text";
 
 /** The zero-byte file that keeps an empty folder; the server names it as its folder wherever it shows changes. */
 export const MARKER = ".vaultkeep";
@@ -37,8 +40,28 @@ export const shownPath = (path: string) => (isMarker(path) ? path.slice(0, path.
 /** The formats Kumbu² keeps besides notes, as the server accepts them (any case). */
 const attachmentKinds: Record<string, FileKind> = { ".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image" };
 
-export function fileKindOf(path: string): FileKind {
+/** The extensions of the text files a skill's folder keeps (`AttachmentFormat.TextExtensions`), any case. */
+export const textExtensions = [".py", ".sh", ".js", ".mjs", ".ts", ".json", ".yaml", ".yml", ".toml", ".txt", ".csv", ".xml", ".html", ".css", ".svg"];
+
+/** The extension-less names of those files (`AttachmentFormat.TextNames`), any case. */
+export const textNames = ["LICENSE", "LICENCE", "COPYING", "NOTICE", "AUTHORS", "CHANGELOG", "README", "Makefile", "Dockerfile"];
+
+/**
+ * Whether a path below the vault (`pdf/scripts/run.py`) is a text file of a skill's folder: in the vault Skills at least
+ * `skill/file`, elsewhere `_skills/skill/file`, with a text extension or a listed name. Only these are kept as text; the
+ * server decides again.
+ */
+export function isSkillTextFile(vault: string, path: string): boolean {
+  const segments = path.split("/");
+  const name = segments.at(-1)!.toLowerCase();
+  const below = vault === "Skills" ? segments.length >= 2 : segments.length >= 3 && segments[0] === "_skills";
+  return below && (textExtensions.some((e) => name.endsWith(e)) || textNames.some((n) => n.toLowerCase() === name));
+}
+
+/** `vault` (with the full `path`, the vault first) lets a skill folder's text file be told from a note. */
+export function fileKindOf(path: string, vault?: string): FileKind {
   if (isMarker(path)) return "folder";
+  if (vault !== undefined && path.startsWith(`/${vault}/`) && isSkillTextFile(vault, path.slice(vault.length + 2))) return "text";
   const dot = path.lastIndexOf(".");
   return (dot > path.lastIndexOf("/") && attachmentKinds[path.slice(dot).toLowerCase()]) || "note";
 }
