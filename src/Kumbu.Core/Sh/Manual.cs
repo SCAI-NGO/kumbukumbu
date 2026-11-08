@@ -43,7 +43,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
+        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.

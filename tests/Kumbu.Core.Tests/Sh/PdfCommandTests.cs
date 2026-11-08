@@ -673,11 +673,15 @@ public class PdfCommandTests
         Assert.All(help.Split('\n'), line => Assert.True(line.Length <= 107, line));
         Assert.Contains("A client may drop images", help);
         Assert.Contains("'help img'", help);
+        Assert.Contains("To store pictures as images: pdfimages (see 'help pdfimages').", help);
         Assert.Contains("pdf /Work/Papers/paper.pdf 4 --crop", help);
         Assert.Contains("'help pdf'", (await Run("help img")).Output);
         var attachments = (await Run("help attachments")).Output;
         Assert.Contains("pdf        reads a PDF", attachments);
         Assert.Contains("12 pages (1-3 text, 4 mixed, 5-12 text)", attachments);
+        Assert.Contains("\n    pdfimages  stores the images of a PDF", attachments);
+        Assert.Contains("never overwrites", attachments);
+        Assert.Contains("pdfimages stores a PDF's pictures", Manual.ToolDescription);
     }
 
     [Fact]

@@ -57,6 +57,8 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 links, backlinks          backlinks lists the notes that link to it or embed it
                 img        shows an image to the model, whole or a part of it ('help img')
                 pdf        reads a PDF page by page: its text, pages as images, a part of a page ('help pdf')
+                pdfimages  stores the images of a PDF, or a region of a page, as attachments to place in notes:
+                             at most 8 megapixels each, small ones left out; it never overwrites ('help pdfimages')
                 rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
                 semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
                              1. /Work/paper.pdf p7  score 0.61

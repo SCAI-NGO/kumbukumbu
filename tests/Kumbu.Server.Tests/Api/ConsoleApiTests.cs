@@ -164,7 +164,7 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
         foreach (var command in new[]
                  {
                      "restore /Work/plan.md", "mv /Work/plan.md /Work/b.md", "archive /Work/plan.md", "mkdir /Work/new", "rm /Work/plan.md", "mkcp /Work/plan.md cp1",
-                     "rmcp /Work/plan.md cp1",
+                     "rmcp /Work/plan.md cp1", "pdfimages --list /Work/plan.md",
                  })
         {
             var name = command.Split(' ')[0];
