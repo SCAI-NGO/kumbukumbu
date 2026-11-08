@@ -725,7 +725,9 @@ internal sealed partial class DavWrites(
         if (await tree.FindAsync(DavPaths.Parent(path), ct) is not { IsCollection: true }) throw new DavException(StatusCodes.Status409Conflict, "The folder it would be in doesn't exist.");
     }
 
-    /// <summary>The <c>Depth</c> header, one of <paramref name="allowed"/>; none means <c>infinity</c> (RFC 4918 §10.2).</summary>
+    /// <summary>The <c>Depth</c> header, one of <paramref name="allowed"/>; none means <c>infinity</c> (RFC 4918 §10.2),
+    /// which COPY, MOVE and LOCK carry out. PROPFIND reads its own (<c>DavEndpoints.Depth</c>): there none means the
+    /// infinity it refuses with a 403, which is why the two don't share a parser.</summary>
     private string Depth(string[] allowed)
     {
         var depth = Request.Headers["Depth"].ToString().Trim().ToLowerInvariant();

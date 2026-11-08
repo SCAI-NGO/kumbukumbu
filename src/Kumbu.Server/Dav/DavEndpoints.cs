@@ -237,7 +237,9 @@ public static class DavEndpoints
     }
 
     /// <summary>The <c>Depth</c> header, 0 or 1; <c>infinity</c> or none is 403 with <c>propfind-finite-depth</c>
-    /// (RFC 4918 §9.1), anything else 400.</summary>
+    /// (RFC 4918 §9.1), anything else 400. PROPFIND's alone: the writing methods read theirs with
+    /// <see cref="DavWrites"/>' own <c>Depth</c>, where none means <c>infinity</c> and is what they do (a COPY or MOVE of
+    /// a folder takes everything in it), while here a missing header means the infinity a PROPFIND refuses.</summary>
     private static int Depth(HttpRequest request)
     {
         var depth = request.Headers["Depth"].ToString().Trim();
