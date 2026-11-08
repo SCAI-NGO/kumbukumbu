@@ -163,7 +163,7 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
         var data = new TheoryData<string, string>();
         foreach (var command in new[]
                  {
-                     "restore /Work/plan.md", "mv /Work/plan.md /Work/b.md", "mkdir /Work/new", "rm /Work/plan.md", "mkcp /Work/plan.md cp1",
+                     "restore /Work/plan.md", "mv /Work/plan.md /Work/b.md", "archive /Work/plan.md", "mkdir /Work/new", "rm /Work/plan.md", "mkcp /Work/plan.md cp1",
                      "rmcp /Work/plan.md cp1",
                  })
         {

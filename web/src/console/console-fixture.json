@@ -1,6 +1,6 @@
 {
   "allowed": ["ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort", "history", "diff", "trash", "df", "du", "lscp", "publish", "skills", "uname", "help"],
-  "refused": ["pdfimages", "restore", "mv", "mkdir", "rm", "mkcp", "rmcp"],
+  "refused": ["pdfimages", "restore", "mv", "archive", "mkdir", "rm", "mkcp", "rmcp"],
   "lines": [
     { "line": "", "stages": [] },
     { "line": "   ", "stages": [] },
