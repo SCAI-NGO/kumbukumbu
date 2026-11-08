@@ -95,4 +95,40 @@ public sealed class TextFileChannelTests(KumbuAppFactory app)
             store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
         Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
     }
+
+    private async Task<(EncryptedNoteStore Store, StoredAttachment Kept)> KeptScriptAsync()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var store = new EncryptedNoteStore(app.PublicApi.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
+        var blob = await store.PutBlobAsync("Work", Script, Ct);
+        var state = new AttachmentState(AttachmentFormat.TextMediaType, Script.Length, null, null, VersionToken.Of(Script), blob);
+        var kept = new StoredAttachment(P("/Work/_skills/x/run.py"), state, 1, "alice", DateTime.UtcNow, [], null, WriterRef.ForOwner(WriterRef.Session, null));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { kept } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
+        return (store, (await store.GetAttachmentAsync(kept.Path, Ct))!);
+    }
+
+    [Fact]
+    public async Task The_store_refuses_to_move_a_text_file_out_of_a_skill_folder()
+    {
+        var (store, kept) = await KeptScriptAsync();
+        var moved = kept with { Path = P("/Work/run.py"), Revision = kept.Revision + 1 };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.TryCommitAsync(new NoteBatch { AttachmentMoves = { (kept, moved) } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
+        Assert.NotNull(await store.GetAttachmentAsync(P("/Work/_skills/x/run.py"), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
+    }
+
+    [Fact]
+    public async Task The_store_refuses_to_restore_a_text_file_to_a_place_outside_a_skill_folder()
+    {
+        var (store, kept) = await KeptScriptAsync();
+        var by = WriterRef.ForOwner(WriterRef.Session, null);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { kept } }, "alice", by, DateTime.UtcNow, Ct));
+        var trashed = Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
+        var restored = trashed.Attachment with { Path = P("/Work/run.py"), Revision = trashed.Attachment.Revision + 1, Changeset = null };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "alice", by, DateTime.UtcNow, Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
+        Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
+    }
 }
