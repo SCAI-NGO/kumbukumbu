@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import type { VaultView } from "../api/notes";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
-import { addSkill, copySkill, moveSkill, type SkillView } from "../api/skills";
+import { addSkill, copySkill, installSkill, moveSkill, type SkillView } from "../api/skills";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 
@@ -18,6 +18,8 @@ type Props = { vaults: VaultView[] | undefined; onClose(): void } & (
   | { mode: "copy" | "move"; skill: SkillView }
   // Add to my skills: the skill behind a link's code, whose name the server knows.
   | { mode: "add"; code: string; onAdded(path: string): void }
+  // Install from a marketplace: the skill at `path` of `repo` as of the commit she was shown.
+  | { mode: "install"; repo: string; commit: string; path: string; name: string; onAdded(path: string): void }
 );
 
 /**
@@ -26,7 +28,7 @@ type Props = { vaults: VaultView[] | undefined; onClose(): void } & (
  */
 export default function TargetDialog(props: Props) {
   const { mode, vaults, onClose } = props;
-  const skill = props.mode === "add" ? null : props.skill;
+  const skill = props.mode === "add" || props.mode === "install" ? null : props.skill;
   const id = useId();
   const queryClient = useQueryClient();
   const dialog = useDialog<HTMLDivElement>(onClose);
@@ -35,25 +37,26 @@ export default function TargetDialog(props: Props) {
   const [chosen, setTo] = useState<string | null>(null);
   // Skills unless she chose; the vaults may arrive after the dialog opens.
   const to = chosen ?? (targets.find((v) => v.kind === "skills") ?? targets.find((v) => v.name === "Skills") ?? targets[0])?.name ?? "";
-  const [name, setName] = useState(skill?.name ?? "");
+  const [name, setName] = useState(skill?.name ?? (props.mode === "install" ? props.name : ""));
   const [taken, setTaken] = useState(false);
 
   const run = useMutation({
     mutationFn: () => {
       const other = taken ? name.trim() : undefined;
+      if (props.mode === "install") return installSkill(props.repo, props.commit, props.path, to, other);
       return props.mode === "add" ? addSkill(props.code, to, other) : (props.mode === "copy" ? copySkill : moveSkill)(sourceOf(props.skill), to, other);
     },
     onSuccess: async (view) => {
       // The skill's folder appears in (or leaves) the trees, and the vaults' note counts change.
       await Promise.all(["skills", "tree", "vaults"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
-      if (props.mode === "add") props.onAdded(view.path);
+      if (props.mode === "add" || props.mode === "install") props.onAdded(view.path);
       else onClose();
     },
     // Another error leaves the name field and what was typed in it.
     onError: (e) => e instanceof HttpError && e.type === "name-taken" && setTaken(true),
   });
 
-  const verb = mode === "copy" ? "Copy" : mode === "move" ? "Move" : "Add";
+  const verb = mode === "copy" ? "Copy" : mode === "move" ? "Move" : mode === "install" ? "Install" : "Add";
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
       <div
@@ -64,7 +67,7 @@ export default function TargetDialog(props: Props) {
         className="flex max-h-full w-full max-w-sm flex-col gap-4 overflow-y-auto rounded-[14px] border border-line bg-surface-2 p-5"
       >
         <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
-          {skill ? `${verb} ${skill.name} to…` : "Add to my skills"}
+          {skill ? `${verb} ${skill.name} to…` : props.mode === "install" ? `Install ${props.name} to…` : "Add to my skills"}
         </h2>
         {!vaults ? (
           <p className="text-text-body">Loading…</p>

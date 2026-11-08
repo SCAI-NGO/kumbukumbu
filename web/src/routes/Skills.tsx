@@ -2,8 +2,10 @@
 import { Fragment, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { usePublishEnabled } from "../api/publications";
+import { useMarketplaces } from "../api/skills";
 import { AccountScreen } from "../components/form";
 import Installed from "../skills/Installed";
+import Marketplaces from "../skills/Marketplaces";
 import Shared from "../skills/Shared";
 import Try from "../skills/Try";
 
@@ -11,6 +13,7 @@ const allTabs = [
   { id: "installed", label: "Installed" },
   { id: "try", label: "Try" },
   { id: "shared", label: "Shared" },
+  { id: "marketplaces", label: "Marketplaces" },
 ] as const;
 
 type Tab = (typeof allTabs)[number]["id"];
@@ -20,6 +23,7 @@ const panels: Record<Tab, () => ReactNode> = {
   installed: () => <Installed />,
   try: () => <Try />,
   shared: () => <Shared />,
+  marketplaces: () => <Marketplaces />,
 };
 
 const tabClass = (on: boolean) =>
@@ -32,9 +36,12 @@ export default function Skills() {
   const refs = useRef<Partial<Record<Tab, HTMLAnchorElement | null>>>({});
   // Shared only where the server publishes; until the session says, the tab waits rather than flicker.
   const publishEnabled = usePublishEnabled();
-  const tabs = allTabs.filter((t) => t.id !== "shared" || publishEnabled === true);
+  // Marketplaces likewise, where the admin switched them on.
+  const marketplaces = useMarketplaces();
+  const marketplacesEnabled = marketplaces.data?.enabled;
+  const tabs = allTabs.filter((t) => (t.id !== "shared" || publishEnabled === true) && (t.id !== "marketplaces" || marketplacesEnabled === true));
 
-  if (tab === "shared" && publishEnabled === undefined) {
+  if ((tab === "shared" && publishEnabled === undefined) || (tab === "marketplaces" && marketplaces.isPending)) {
     return (
       <AccountScreen title="Skills">
         <p className="text-text-body">Loading…</p>

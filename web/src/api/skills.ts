@@ -41,3 +41,43 @@ export const shareSkill = (path: string) => call(api.POST("/api/skills/shared", 
 export const updateSharedSkill = (id: string) => call(api.POST("/api/skills/shared/{id}/update", { params: { path: { id } } }));
 
 export const withdrawSharedSkill = (id: string) => call(api.DELETE("/api/skills/shared/{id}", { params: { path: { id } } }));
+
+export type MarketplacesView = components["schemas"]["MarketplacesView"];
+export type MarketplaceListingView = components["schemas"]["MarketplaceListingView"];
+export type MarketplaceSkillView = components["schemas"]["MarketplaceSkillView"];
+
+const marketplacesKey = ["skills", "marketplaces"];
+
+/** Her marketplaces, and whether the admin has marketplaces on at all. */
+export const useMarketplaces = () => useQuery({ queryKey: marketplacesKey, queryFn: () => call(api.GET("/api/skills/marketplaces")) });
+
+const split = (repo: string) => {
+  const [owner = "", name = ""] = repo.split("/");
+  return { owner, repo: name };
+};
+
+export const addMarketplace = (repo: string) => call(api.POST("/api/skills/marketplaces", { body: { repo } }));
+
+export const removeMarketplace = (repo: string) => call(api.DELETE("/api/skills/marketplaces/{owner}/{repo}", { params: { path: split(repo) } }));
+
+/** What the marketplace offers at the commit its default branch points to now. Asked GitHub, so only on demand, and not again by itself. */
+export const useMarketplaceListing = (repo: string) =>
+  useQuery({
+    queryKey: ["marketplace", repo],
+    queryFn: () => call(api.GET("/api/skills/marketplaces/{owner}/{repo}", { params: { path: split(repo) } })),
+    retry: false,
+    staleTime: Infinity,
+  });
+
+/** The skill at `path` as of `commit`, for the install dialog. */
+export const useMarketplaceSkill = (repo: string, commit: string, path: string) =>
+  useQuery({
+    queryKey: ["marketplace", repo, commit, path],
+    queryFn: () => call(api.GET("/api/skills/marketplaces/{owner}/{repo}/skill", { params: { path: split(repo), query: { commit, path } } })),
+    retry: false,
+    staleTime: Infinity,
+  });
+
+/** The skill at `path` of `repo` as of the `commit` she was shown, into the vault `vault`; `name` when the folder's name is taken there. */
+export const installSkill = (repo: string, commit: string, path: string, vault: string, name?: string) =>
+  call(api.POST("/api/skills/install", { body: { repo, commit, path, vault, ...(name ? { name } : {}) } }));
