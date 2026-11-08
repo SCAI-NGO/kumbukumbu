@@ -53,9 +53,9 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
           naming every page; duplicates are found within one call, so a later call stores a repeated image again.
           It stores at most 500 images in one call; for more, it stores nothing and names a page range that fits.
           pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
-          can't be read; the output names their pages; look at them with pdf --crop. A long PDF stops after about
-          20 seconds, the last line naming the pages to go on with. A writing command: it needs write access to
-          the folder.
+          can't be read: the output names their pages, to look at with pdf --crop. A long PDF stops after about
+          20 seconds, the last line naming the pages to go on with. A call stopped within a page says which of its
+          files are stored. A writing command: it needs write access to the folder.
 
           pdfimages --list "/Work/Pump manual.pdf" 1-10
           pdfimages "/Work/Pump manual.pdf" 1-10 "/Work/Pump manual/images/"
@@ -142,6 +142,13 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var call = new Call(opened.Value.Path, opened.Value.State, range, all, started);
 
         if (list) return await ListAsync(call, ct);
+        // Asked as the writer will ask it, before the sidecar is: a reader learns at once, not after the listing.
+        var probe = crop is not null ? into! : into!.Child(Path.GetFileNameWithoutExtension(call.Path.Name) + ".png");
+        if (files.Caller.Refuse(AttachmentWriter.Upload, probe) is { } refused)
+        {
+            return refused with { Output = $"pdfimages: {refused.Output}", Kind = ShellErrorKind.Refused };
+        }
+
         if (crop is not null) return await StoreRegionAsync(call, crop, rotate, into!, ct);
 
         return await StoreAsync(call, into!, ct);
@@ -279,16 +286,11 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var stem = Path.GetFileNameWithoutExtension(call.Path.Name);
         var plan = new List<Planned>();
         var byHash = new Dictionary<string, Planned>(StringComparer.Ordinal);
-        var small = 0;
         foreach (var page in listing.Pages)
         {
             foreach (var image in page.Images)
             {
-                if (image.Small && !call.All)
-                {
-                    small++;
-                    continue;
-                }
+                if (image.Small && !call.All) continue;
 
                 if (!image.Failed && image.Hash is { } hash && byHash.TryGetValue(hash, out var first))
                 {
@@ -310,6 +312,9 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
 
         var lines = new List<string>();
         var stored = 0;
+        // What a stop reports of the pages it leaves out: the header's small ones and the over lines are of the pages before it.
+        string HeaderBefore(int page) => Header(stored, into, call.All ? 0 : listing.Pages.Where(p => p.Page < page).Sum(p => p.Images.Count(i => i.Small)), call.All);
+        ShellResult StoppedAt(ShellResult why, int i) => Stopped(why, HeaderBefore(plan[i].Page.Page), lines, plan.Skip(i), listing, plan[i].Page.Page, call.Range.Last is null);
         var ofPage = new List<string>();
         int? goOn = listing.Next;
         string? partly = null;
@@ -354,7 +359,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
             }
             catch (PixelsUnavailableException e)
             {
-                return Stopped(Failed(e), Header(stored, into, small, call.All), lines, plan.Skip(i));
+                return StoppedAt(Failed(e), i);
             }
 
             var jpeg = picture.MediaType == "image/jpeg";
@@ -366,18 +371,19 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
             }
             catch (QuotaExceededException e)
             {
-                return Stopped(Full(e), Header(stored, into, small, call.All), lines, plan.Skip(i));
+                return StoppedAt(Full(e), i);
             }
 
-            if (written.Result.IsError) return Stopped(WriterRefused(written), Header(stored, into, small, call.All), lines, plan.Skip(i));
+            if (written.Result.IsError) return StoppedAt(WriterRefused(written), i);
 
             stored++;
             ofPage.Add(path.Value);
             lines.Add(Line(path, item, picture, jpeg));
         }
 
-        lines.InsertRange(0, [Header(stored, into, small, call.All)]);
-        lines.AddRange(OverLines(listing.Pages));
+        var end = goOn ?? int.MaxValue;
+        lines.InsertRange(0, [HeaderBefore(end)]);
+        lines.AddRange(OverLines(listing.Pages.Where(p => p.Page < end)));
         if (partly is not null) lines.Add(partly);
         if (goOn is { } next) lines.Add($"stored {Count(stored, "image")}; go on with {GoOn(next, listing.Last, call.Range.Last is null)}");
         return ShellResult.Ok(string.Join('\n', lines));
@@ -438,14 +444,17 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         $"stored {Count(stored, "image")} in {into.Value}/{(small > 0 && !all ? $" ({small} left out as smaller than 1 % of their page, --all keeps them)" : "")}";
 
     /// <summary>
-    /// A stop part way: what was stored, which images were not, and why. With nothing to tell but the reason, the
-    /// reason alone.
+    /// A stop part way at <paramref name="page"/>: what was stored, the over lines of the pages before it, which images
+    /// were not stored, the pages not listed, and why. With nothing to tell but the reason, the reason alone.
     /// </summary>
-    private static ShellResult Stopped(ShellResult why, string header, List<string> lines, IEnumerable<Planned> rest)
+    private static ShellResult Stopped(ShellResult why, string header, List<string> lines, IEnumerable<Planned> rest, Listing listing, int page, bool open)
     {
         if (lines.Count == 0) return why;
         var left = rest.Where(p => !p.Failed).Select(p => p.Ref).ToList();
-        return why with { Output = string.Join('\n', [header, .. lines, .. left.Count > 0 ? [$"not stored: {string.Join(", ", left)}"] : Array.Empty<string>(), why.Output]) };
+        List<string> told = [header, .. lines, .. OverLines(listing.Pages.Where(p => p.Page < page))];
+        if (left.Count > 0) told.Add($"not stored: {string.Join(", ", left)}");
+        if (listing.Next is { } next) told.Add($"not listed: {GoOn(next, listing.Last, open)}");
+        return why with { Output = string.Join('\n', [.. told, why.Output]) };
     }
 
     /// <summary>"/Work/images/manual-p4-1.png  p4, p9  2400×1600  1.9 MB  at 80,300,435,290", as spec §3.1 words a stored image.</summary>

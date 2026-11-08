@@ -686,6 +686,7 @@ public class PdfImagesTests
         Assert.StartsWith("upload: ", refused.Output);
         Assert.Equal(refused with { Output = "pdfimages: " + refused.Output }, result);
         Assert.Equal(ShellErrorKind.Refused, result.Kind);
+        Assert.Empty(_pixels.Calls);
         Assert.Empty(await StoredUnder("/Work/images"));
     }
 
@@ -772,6 +773,94 @@ public class PdfImagesTests
             stored 2 images; go on with page 1
             """,
             result.Output);
+    }
+
+    [Fact]
+    public async Task A_stop_after_a_cut_listing_names_the_pages_not_listed()
+    {
+        await Upload();
+        _pixels.PageCount = 10;
+        _pixels.PerCall = TimeSpan.FromSeconds(4);
+        _pixels.Pages[1] = [Image(1, 1200, 400, 72, 40, 451, 150, "aa"), Image(2, 16, 16, 40, 40, 8, 8, "dot", small: true)];
+        _pixels.Pages[2] = [Image(1, 640, 480, 0, 0, 320, 240, "cc")];
+        _pixels.Pages[3] = [Image(1, 16, 16, 40, 60, 8, 8, "rule", small: true)];
+        _pixels.Over[1] = 1;
+        _pixels.Over[3] = 1;
+        _pixels.Images[(1, 1)] = Png(90_112, 1200, 400);
+        _pixels.Images[(2, 1)] = Png(30_000, 640, 480);
+        var second = _pixels.Images[(2, 1)].Data;
+        _store.BlobFails = b => b.Span.SequenceEqual(second) ? new QuotaExceededException(owner: true) : null;
+
+        var result = await Run("pdfimages /Work/manual.pdf 1-8 /Work/images/");
+
+        Assert.Equal(["list 1", "list 2", "list 3", "image 1 1", "image 2 1"], _pixels.Calls);
+        Assert.Equal(
+            """
+            stored 1 image in /Work/images/ (1 left out as smaller than 1 % of their page, --all keeps them)
+            /Work/images/manual-p1-1.png  p1  1200×400  88 KB  at 72,40,451,150
+            page 1: 1 image over 50 MP left out (look with pdf --crop)
+            not stored: p2 #1
+            not listed: pages 4-8
+            This vault is out of space. See `df`.
+            """,
+            result.Output);
+        Assert.Equal((ShellErrorKind.Refused, Refusals.Quota), (result.Kind, result.Code));
+    }
+
+    [Fact]
+    public async Task A_budget_stop_counts_only_the_pages_written()
+    {
+        await Upload();
+        _pixels.PerCall = TimeSpan.FromSeconds(3);
+        _pixels.Pages[1] = [Image(1, 100, 100, 0, 0, 100, 100, "a")];
+        _pixels.Pages[2] = [.. Enumerable.Range(1, 4).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"b{n}"))];
+        _pixels.Pages[3] = [Image(1, 100, 100, 0, 0, 100, 100, "c"), Image(2, 16, 16, 40, 60, 8, 8, "rule", small: true)];
+        _pixels.Over[3] = 1;
+        _pixels.Images[(1, 1)] = Png(1000, 100, 100);
+        for (var n = 1; n <= 4; n++) _pixels.Images[(2, n)] = Png(1000 + n, 100, 100);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.StartsWith("stored 5 images in /Work/images/\n", result.Output);
+        Assert.DoesNotContain("page 3:", result.Output);
+        Assert.EndsWith("1004 B  at 0,0,100,100\nstored 5 images; go on with pages 3-", result.Output);
+    }
+
+    [Fact]
+    public async Task The_ceiling_before_anything_of_a_page_was_stored_only_says_where_to_go_on()
+    {
+        await Upload();
+        _pixels.PerCall = TimeSpan.FromSeconds(5);
+        _pixels.Pages[1] = [Image(1, 100, 100, 0, 0, 100, 100, "a")];
+        _pixels.Pages[2] = [Image(1, 100, 100, 0, 0, 100, 100, "b1"), Image(2, 100, 100, 0, 0, 100, 100, "b2")];
+        _pixels.Images[(1, 1)] = Png(1000, 100, 100);
+        _pixels.ImageFails[(2, 1)] = new PixelsUnavailableException("image 1 on page 2 is over 15 MB even as JPEG at quality 60", PixelsProblem.TooLarge);
+        _sh.Register(new PdfImages(_store, _pixels, _files, _time) { Budget = TimeSpan.FromSeconds(100), Ceiling = TimeSpan.FromSeconds(20) });
+
+        var result = await Run("pdfimages /Work/manual.pdf 1-2 /Work/images/");
+
+        Assert.Equal(["list 1", "list 2", "image 1 1", "image 2 1"], _pixels.Calls);
+        Assert.Equal(
+            """
+            stored 1 image in /Work/images/
+            /Work/images/manual-p1-1.png  p1  100×100  1000 B  at 0,0,100,100
+            p2 #1 skipped: over 15 MB even as JPEG
+            stored 1 image; go on with page 2
+            """,
+            result.Output);
+    }
+
+    [Fact]
+    public async Task Busy_four_times_while_fetching_an_image_gives_up()
+    {
+        await TwoPages();
+        for (var i = 0; i < 4; i++) _pixels.ImageThrows.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
+
+        var result = await Run("pdfimages /Work/manual.pdf 1 /Work/images/");
+
+        Assert.Equal(ShellResult.Error("pdfimages: PDF image extraction is busy; try again in a moment") with { Kind = ShellErrorKind.Unavailable }, result);
+        Assert.Equal(["list 1", "image 1 1", "image 1 1", "image 1 1", "image 1 1"], _pixels.Calls);
+        Assert.Empty(await StoredUnder("/Work/images"));
     }
 
     [Fact]
@@ -959,6 +1048,7 @@ public class PdfImagesTests
         Assert.StartsWith("upload: ", refused.Output);
         Assert.Equal(refused with { Output = "pdfimages: " + refused.Output }, result);
         Assert.Null(await Stored(Diagram + ".png"));
+        Assert.Empty(_pixels.Calls);
     }
 
     [Fact]
@@ -975,6 +1065,8 @@ public class PdfImagesTests
         Assert.Contains("300 dpi", own.Output);
         Assert.Contains("Only drawings need it", own.Output);
         Assert.Contains("x,y,w,h counts in the turned page", own.Output);
+        Assert.Contains("can't be read: the output names their pages, to look at with pdf --crop", own.Output);
+        Assert.Contains("A call stopped within a page says which of its", own.Output);
         Assert.Contains("\n  pdfimages <pdf> [pages] <dir>/  ", Manual.ToolDescription);
     }
 
