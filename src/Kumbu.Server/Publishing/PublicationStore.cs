@@ -79,26 +79,59 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     }
 
     /// <summary>
-    /// Changes the vault's record by itself, with nothing else in the same write: <paramref name="change"/> gets the record
-    /// as read and returns the next one, or null to leave it. Read again when it changed meanwhile, up to three times; then
-    /// <see cref="PublishingConflictException"/>.
+    /// Changes the vault's record by itself, as every write of the vault is made: checked, under the vault's gate, checked
+    /// again, in one transaction, so a re-keying run never seals it under the old key unseen (<see cref="VaultCatalog"/>'s
+    /// re-keying). <paramref name="change"/> gets the record as read and returns the next one, or null to leave it. Read
+    /// again when it changed meanwhile, up to three times; then <see cref="PublishingConflictException"/>.
     /// </summary>
     public async Task ChangeAsync(VaultAccess access, Func<PublishingRecord, PublishingRecord?> change, CancellationToken ct)
     {
+        var vault = access.Vault;
         for (var attempt = 1; ; attempt++)
         {
-            catalog.CheckWritable(access.Vault, access);
-            var (doc, record) = await ReadAsync(null, access.Vault, ct);
-            if (change(record) is not { } next) return;
-            using var session = await catalog.StartSessionAsync(ct);
+            catalog.CheckWritable(vault, access);
+            await vault.Gate.WaitAsync(ct);
             try
             {
-                await WriteAsync(session, access.Vault, doc, next, ct);
-                return;
+                catalog.CheckWritable(vault, access);
+                var (doc, record) = await ReadAsync(null, vault, ct);
+                if (change(record) is not { } next) return;
+                using var session = await catalog.StartSessionAsync(ct);
+                session.StartTransaction();
+                try
+                {
+                    await WriteAsync(session, vault, doc, next, ct);
+                    await session.CommitTransactionAsync(CancellationToken.None);
+                    return;
+                }
+                catch (Exception e) when (attempt < ChangeAttempts && (e is PublishingConflictException || (e is MongoException m && m.HasErrorLabel("TransientTransactionError"))))
+                {
+                    await AbortAsync(session);
+                }
+                catch
+                {
+                    await AbortAsync(session);
+                    throw;
+                }
             }
-            catch (PublishingConflictException) when (attempt < 3)
+            finally
             {
+                vault.Gate.Release();
             }
+        }
+    }
+
+    private const int ChangeAttempts = 3;
+
+    private static async Task AbortAsync(IClientSessionHandle session)
+    {
+        try
+        {
+            if (session.IsInTransaction) await session.AbortTransactionAsync(CancellationToken.None);
+        }
+        catch (MongoException)
+        {
+            // The server already aborted it.
         }
     }
 

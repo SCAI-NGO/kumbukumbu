@@ -25,7 +25,7 @@ public sealed record SkillCopiedView(string Path);
 /// write that fails removes what this request wrote. A link copy's sealed code and origin go into the target vault's
 /// record, and with a move leave the source's. The folder's name is the source folder's, never the manifest's.
 /// </summary>
-internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, PublicationStore publishing, RequestCaller caller)
+internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, PublicationStore publishing, RequestCaller caller, ILogger? log = null)
 {
     public const string SystemPrefix = "system:";
 
@@ -105,6 +105,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         }
         catch
         {
+            // RemoveAsync never throws: the error that stopped the copy (a 507 among them) is the answer.
             await RemoveAsync(attachments, written);
             throw;
         }
@@ -178,10 +179,34 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         }, ct);
     }
 
-    /// <summary>A move's end: the source's files to its vault's trash, and its sealed state out of the source's record.</summary>
+    /// <summary>
+    /// A move's end: the source's sealed state out of its record first, so nothing restored from the trash takes it up, then
+    /// its files to its vault's trash, <c>SKILL.md</c> first. Should the record not change, the source stays whole, as
+    /// after a copy; should <c>SKILL.md</c> stay, its state goes back with it.
+    /// </summary>
     private async Task LeaveAsync(AttachmentWriter attachments, Source source, VaultPath copied, CancellationToken ct)
     {
         var (access, folder) = (source.Access!, source.Folder!);
+        var stored = access.ToVault(folder).Value;
+        List<SkillCode> codes = [];
+        List<SkillOrigin> origins = [];
+        try
+        {
+            await publishing.ChangeAsync(access, r =>
+            {
+                codes = [.. r.SkillCodes.Where(c => Under(c.Path, stored))];
+                origins = [.. r.Origins.Where(o => Under(o.Path, stored))];
+                return codes.Count > 0 || origins.Count > 0
+                    ? r with { SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, stored))], Origins = [.. r.Origins.Where(o => !Under(o.Path, stored))] }
+                    : null;
+            }, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log?.LogWarning("A skill move kept its source: its vault's record did not change ({Kind})", e.GetType().Name);
+            throw new ApiException(StatusCodes.Status409Conflict, $"Copied to {copied.Value}, but {folder.Value} stayed where it was; remove it by hand if you meant to move it.");
+        }
+
         var stayed = new List<string>();
         foreach (var file in source.Files)
         {
@@ -190,24 +215,46 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
             if (removed.IsError) stayed.Add(path.Value);
         }
 
-        var stored = access.ToVault(folder).Value;
-        await publishing.ChangeAsync(access, r => r.SkillCodes.Any(c => Under(c.Path, stored)) || r.Origins.Any(o => Under(o.Path, stored))
-            ? r with { SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, stored))], Origins = [.. r.Origins.Where(o => !Under(o.Path, stored))] }
-            : null, ct);
+        if (stayed.Contains(folder.Child(SkillPaths.Manifest).Value) && (codes.Count > 0 || origins.Count > 0))
+        {
+            try
+            {
+                await publishing.ChangeAsync(access, r => r with { SkillCodes = [.. r.SkillCodes, .. codes], Origins = [.. r.Origins, .. origins] }, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                log?.LogWarning("A skill move could not give its source back its sealed state ({Kind})", e.GetType().Name);
+            }
+        }
+
         if (stayed.Count > 0)
         {
             throw new ApiException(StatusCodes.Status409Conflict, $"Copied to {copied.Value}, but these stayed where they were: {string.Join(", ", stayed)}.");
         }
     }
 
-    /// <summary>What a failed copy wrote, to the target's trash: never cancelled, so a client gone away leaves nothing half-copied.</summary>
+    /// <summary>
+    /// What a failed copy wrote, to the target's trash (there it stays for the trash's days, in the owner's vault for a
+    /// member's copy): never cancelled, so a client gone away leaves nothing half-copied, and never throwing, so the
+    /// failure the caller hears is the one that stopped the copy. What stays is logged by count, never by name or content.
+    /// </summary>
     private async Task RemoveAsync(AttachmentWriter attachments, IReadOnlyList<VaultPath> written)
     {
+        var stayed = 0;
         foreach (var path in written)
         {
-            if (path.IsNote) await writer.RemoveAsync(path, CancellationToken.None);
-            else await attachments.RemoveAsync(path.Value, CancellationToken.None);
+            try
+            {
+                var removed = path.IsNote ? await writer.RemoveAsync(path, CancellationToken.None) : await attachments.RemoveAsync(path.Value, CancellationToken.None);
+                if (removed.IsError) stayed++;
+            }
+            catch (Exception)
+            {
+                stayed++;
+            }
         }
+
+        if (stayed > 0) log?.LogWarning("A failed skill copy left {Count} of {Written} files it wrote", stayed, written.Count);
     }
 
     private static bool Under(string path, string folder) =>

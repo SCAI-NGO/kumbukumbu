@@ -11,6 +11,8 @@ using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
 
@@ -284,6 +286,95 @@ public sealed class SkillCopyTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NotFound, vault.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, same.StatusCode);
         Assert.Equal(["SKILL.md", "ref/guide.md", "scripts/run.py"], await FilesAsync(alice, "/Skills/x"));
+    }
+
+    [Fact]
+    public async Task Move_needs_write_on_the_source()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        await alice.CreateAsync("_skills/x/SKILL.md", Manifest);
+        var bob = await RestClient.NewAsync(app.PublicApi, vault: "Private");
+        await alice.ShareWithAsync(bob, "Team", MemberRole.Read);
+
+        using var response = await MoveAsync(bob, new { from = "/Team/_skills/x", to = "Skills" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("You can only read vault Team.", await RestClient.ErrorAsync(response));
+        Assert.Equal(["SKILL.md"], await FilesAsync(alice, "/Work/_skills/x"));
+        Assert.Empty(await FilesAsync(bob, "/Skills/x"));
+    }
+
+    [Fact]
+    public async Task A_system_skill_is_copied_not_moved()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+
+        using var response = await MoveAsync(alice, new { from = "system:create-skill", to = "Work" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(await FilesAsync(alice, "/Work/_skills"));
+    }
+
+    private static PublicationStore Publishing(RestClient user) => user.Api.Services.GetRequiredService<PublicationStore>();
+
+    private static readonly SkillOrigin Origin = new("/Work/_skills/x", "link:00ff", "sha256:abc");
+
+    /// <summary>As every write of the vault: a re-keying run, which holds the gate, never seals the record between a check and the write.</summary>
+    [Fact]
+    public async Task A_record_change_runs_under_the_vaults_gate()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var access = await AccessAsync(alice, "Work");
+        var held = false;
+
+        await Publishing(alice).ChangeAsync(access, r =>
+        {
+            held = access.Vault.Gate.CurrentCount == 0;
+            return r with { Origins = [Origin] };
+        }, Ct);
+
+        Assert.True(held);
+        Assert.Equal([Origin], (await RecordAsync(alice, "Work")).Origins);
+    }
+
+    [Fact]
+    public async Task A_record_change_during_a_re_keying_is_refused()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var access = await AccessAsync(alice, "Work");
+
+        await using (await alice.HoldRekeyAsync())
+        {
+            var busy = await Assert.ThrowsAsync<VaultBusyException>(() => Publishing(alice).ChangeAsync(access, r => r with { Origins = [Origin] }, Ct));
+            Assert.Equal(VaultBusyException.BeingReencrypted, busy.Message);
+        }
+    }
+
+    [Fact]
+    public async Task A_record_change_that_keeps_conflicting_is_409()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var access = await AccessAsync(alice, "Work");
+        var records = alice.Api.Services.GetRequiredService<VaultCatalog>().Publishing;
+        await Publishing(alice).ChangeAsync(access, r => r with { Origins = [Origin] }, Ct);
+        var calls = 0;
+
+        // Each time, another writer gets there first: the record is a revision further, still sealed as it should be.
+        await Assert.ThrowsAsync<PublishingConflictException>(() => Publishing(alice).ChangeAsync(access, r =>
+        {
+            calls++;
+            var doc = records.Find(d => d.Vault == access.Id).Single();
+            records.ReplaceOne(d => d.Id == doc.Id, new SealedDocument
+            {
+                Id = doc.Id, Vault = doc.Vault, PathId = doc.PathId, Revision = doc.Revision + 1, Blob = access.Vault.SealPublishing(doc.Id, doc.Revision + 1, r),
+            });
+            return r with { Origins = [] };
+        }, Ct));
+
+        Assert.Equal(3, calls);
+        Assert.Equal([Origin], (await RecordAsync(alice, "Work")).Origins);
+        var answer = await ApiErrors.Filter(new DefaultEndpointFilterInvocationContext(new DefaultHttpContext()), _ => throw new PublishingConflictException());
+        Assert.Equal(StatusCodes.Status409Conflict, Assert.IsType<JsonHttpResult<ApiError>>(answer).StatusCode);
     }
 
     [Fact]

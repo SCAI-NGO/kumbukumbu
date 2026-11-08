@@ -41,12 +41,12 @@ public static class SkillsApi
     }
 
     private static async Task<Ok<SkillCopiedView>> CopyAsync(
-        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, CancellationToken ct) =>
-        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller).CopyAsync(body, ct)).Value));
+        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, ILoggerFactory logs, CancellationToken ct) =>
+        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).CopyAsync(body, ct)).Value));
 
     private static async Task<Ok<SkillCopiedView>> MoveAsync(
-        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, CancellationToken ct) =>
-        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller).MoveAsync(body, ct)).Value));
+        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, ILoggerFactory logs, CancellationToken ct) =>
+        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).MoveAsync(body, ct)).Value));
 
     private static async Task<Ok<SkillsView>> ListAsync(
         RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections, TimeProvider time, CancellationToken ct)

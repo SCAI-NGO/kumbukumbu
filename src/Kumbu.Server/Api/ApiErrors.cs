@@ -73,7 +73,8 @@ public static class ApiErrors
         }
         catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or DavShareLabelTakenException or DavShareLimitException or PrimaryAdminExistsException or VaultNameTakenException
             or RotationConflictException or RecoveryConflictException or PasswordConflictException
-            or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException or RekeyRunningException)
+            or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException or RekeyRunningException
+            or Publishing.PublishingConflictException)
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
         }
