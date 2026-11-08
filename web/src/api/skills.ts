@@ -25,6 +25,10 @@ export const copySkill = (from: string, to: string, name?: string) =>
 export const moveSkill = (from: string, to: string, name?: string) =>
   call(api.POST("/api/skills/move", { body: { from, to, ...(name ? { name } : {}) } }));
 
+/** The skill behind a link's `code` into the vault `vault`; `name` when the folder's name is taken there. Gives the new folder. */
+export const addSkill = (code: string, vault: string, name?: string) =>
+  call(api.POST("/api/skills/add", { body: { code, vault, ...(name ? { name } : {}) } }));
+
 export type SharedSkillView = components["schemas"]["SharedSkillView"];
 
 /** Her skills shared by link: never a link, which only the answer that makes it holds. */

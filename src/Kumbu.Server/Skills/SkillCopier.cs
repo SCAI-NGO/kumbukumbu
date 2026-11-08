@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Api;
+using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Vaults;
@@ -88,18 +90,79 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
             }
         }
 
+        await RequireFreeAsync(target, folder, command, ct);
+        var attachments = await WriteAsync(folder, source.Files, async () =>
+        {
+            if (source is { Access: { } access, Folder: { } at }) await CarryStateAsync(access, at, target, folder, ct);
+        }, ct);
+        if (move) await LeaveAsync(attachments, source, folder, ct);
+        return folder;
+    }
+
+    /// <summary>
+    /// Add to my skills (skills design §3.12, Decision 6): the copy behind a link, <paramref name="opened"/> with
+    /// <paramref name="code"/>, into the skill location of <paramref name="vault"/>, under the publication's folder name
+    /// or <paramref name="name"/>. <c>kumbu-hash</c> covers the files as received, before <c>SKILL.md</c> gets its
+    /// origin; <c>kumbu-source</c> names the link by its lookup id. The code itself is kept only sealed, in the target
+    /// vault's record, beside the sealed origin (Decisions 16, 33, 34).
+    /// </summary>
+    public async Task<VaultPath> AddAsync(string code, OpenedSkill opened, string vault, string? name, CancellationToken ct)
+    {
+        var target = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => string.Equals(v.Name, vault, StringComparison.Ordinal))
+            ?? throw ApiErrors.NotFound($"There is no vault '{vault}'.");
+        name ??= opened.Copy.Name;
+        if (NameProblem(name) is { } problem) throw ApiErrors.BadRequest($"Choose another name: {problem}.");
+        var folder = TargetOf(target, name);
+        await RequireFreeAsync(target, folder, "copy", ct);
+
+        var received = new List<(string Path, byte[] Bytes)>(opened.Copy.Files.Count);
+        foreach (var file in opened.Copy.Files.OrderBy(f => f.Index))
+        {
+            received.Add((file.Path, (await publishing.OpenSkillFileAsync(opened, file.Index, ct))?.Bytes ?? throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence)));
+        }
+
+        if (!received.Any(f => f.Path == SkillPaths.Manifest)) throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        var hash = SkillHash.Of(received.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes)));
+        var origin = "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code));
+        var files = received.Select(f =>
+            f.Path == SkillPaths.Manifest ? new SourceFile(f.Path, SkillManifest.WithOrigin(Encoding.UTF8.GetString(f.Bytes), origin, hash), null, null)
+            : Inside(folder, f.Path).IsNote ? new SourceFile(f.Path, Encoding.UTF8.GetString(f.Bytes), null, null)
+            : new SourceFile(f.Path, null, f.Bytes, Dimensions(Inside(folder, f.Path), f.Bytes)));
+
+        var stored = target.ToVault(folder).Value;
+        await WriteAsync(folder, [.. Ordered(files)], () => publishing.ChangeAsync(target, r => r with
+        {
+            SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, stored)), new SkillCode(stored, code)],
+            Origins = [.. r.Origins.Where(o => !Under(o.Path, stored)), new SkillOrigin(stored, origin, hash)],
+        }, ct), ct);
+        return folder;
+    }
+
+    /// <summary>An image's width and height as its bytes say, never as anyone else told; null for another file, or a
+    /// header that doesn't read, which the writer then refuses.</summary>
+    private static (int W, int H)? Dimensions(VaultPath path, byte[] bytes) =>
+        AttachmentFormat.ForPath(path) is { Kind: AttachmentKind.Image } ? ImageHeader.Read(bytes, out _) : null;
+
+    /// <summary>The target folder is hers to write and holds nothing yet.</summary>
+    private async Task RequireFreeAsync(VaultAccess target, VaultPath folder, string command, CancellationToken ct)
+    {
         RequireWritable(target.Name);
-        if (((ICaller)caller).Refuse(command, folder) is { } refusedHere) throw NoteApi.Refused(refusedHere);
+        if (((ICaller)caller).Refuse(command, folder) is { } refused) throw NoteApi.Refused(refused);
         if ((await store.ListNotesUnderAsync(folder, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, folder, ct)).Count > 0)
         {
             throw new ApiException(StatusCodes.Status409Conflict, $"{folder.Value} is taken; choose another name.", type: NameTaken);
         }
+    }
 
+    /// <summary>Every file into <paramref name="folder"/> through the request's writers, then <paramref name="state"/>
+    /// (the sealed state of the copy); should any of it fail, what this wrote goes again.</summary>
+    private async Task<AttachmentWriter> WriteAsync(VaultPath folder, IReadOnlyList<SourceFile> files, Func<Task> state, CancellationToken ct)
+    {
         var attachments = writer.ForAttachments() ?? throw new InvalidOperationException("The server's store keeps attachments.");
         var written = new List<VaultPath>();
         try
         {
-            foreach (var file in source.Files)
+            foreach (var file in files)
             {
                 var path = Inside(folder, file.Path);
                 var result = file.Bytes is { } bytes
@@ -109,7 +172,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
                 written.Add(path);
             }
 
-            if (source is { Access: { } access, Folder: { } at }) await CarryStateAsync(access, at, target, folder, ct);
+            await state();
         }
         catch
         {
@@ -118,8 +181,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
             throw;
         }
 
-        if (move) await LeaveAsync(attachments, source, folder, ct);
-        return folder;
+        return attachments;
     }
 
     /// <summary>The skill at <paramref name="from"/> as <paramref name="store"/> reads it: its folder's name and every file, <c>SKILL.md</c> first.</summary>

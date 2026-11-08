@@ -80,9 +80,18 @@ public static class SkillPageApi
         return TypedResults.File(SkillZip.Of(opened.Copy.Name, files, opened.Copy.SnapshotAt), "application/zip");
     }
 
-    /// <summary>As the reader's: the limits first, then the switch; no cookie at all takes no allowance. The skill opens
-    /// only if its owner's account is active.</summary>
     private static async Task<(string Code, OpenedSkill Opened)> OpenAsync(
+        string? typed, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+    {
+        if (await OpenCodeAsync(typed, http, store, users, limits, options, logs, ct) is { } opened) return opened;
+        http.Response.Cookies.Delete(Cookie, CookieOptions());
+        throw ApiErrors.NotFound(NotFoundSentence);
+    }
+
+    /// <summary>As the reader's: the limits first, then the switch; no code at all takes no allowance. The skill opens
+    /// only if its owner's account is active; null for a wrong code, which counts. Also Add to my skills' way in
+    /// (<see cref="SkillsApi"/>), so a session guesses no faster than a stranger.</summary>
+    internal static async Task<(string Code, OpenedSkill Opened)?> OpenCodeAsync(
         string? typed, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
         if (typed is not null)
@@ -104,8 +113,7 @@ public static class SkillPageApi
             Failed(http, limits, logs);
         }
 
-        http.Response.Cookies.Delete(Cookie, CookieOptions());
-        throw ApiErrors.NotFound(NotFoundSentence);
+        return null;
     }
 
     private static void Failed(HttpContext http, AccountLimits limits, ILoggerFactory logs)

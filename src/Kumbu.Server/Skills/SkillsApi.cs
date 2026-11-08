@@ -40,6 +40,13 @@ public sealed record SharedSkillView(string Id, string Path, DateTime SnapshotAt
 /// <summary>When the copy behind a skill's link was taken.</summary>
 public sealed record SkillSnapshotView(DateTime SnapshotAt);
 
+/// <summary>Add to my skills: the code from the skill's link, the name of a vault she may write, and the folder's name
+/// there, by default the publication's. Not logged: <see cref="ToString"/> leaves out the code.</summary>
+public sealed record SkillAddRequest(string Code, string Vault, string? Name = null)
+{
+    public override string ToString() => $"SkillAddRequest {{ Vault = {Vault}, Name = {Name} }}";
+}
+
 /// <summary>A skill that fits a request: its place (1 first) and its fused score.</summary>
 public sealed record SkillHitView(int Rank, double Score, SkillView Skill);
 
@@ -59,6 +66,7 @@ public static class SkillsApi
         group.MapGet("/find", FindAsync).Errors(400, 401, 403, 404, 503);
         group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        group.MapPost("/add", AddAsync).Errors(400, 401, 403, 404, 409, 429, 503, 507);
         group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(401, 403, 404, 503);
         MapSharing(group);
     }
@@ -84,6 +92,21 @@ public static class SkillsApi
     private static async Task<Ok<SkillCopiedView>> MoveAsync(
         SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, ILoggerFactory logs, CancellationToken ct) =>
         TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).MoveAsync(body, ct)).Value));
+
+    /// <summary>
+    /// Add to my skills (skills design §3.12): the code opens the skill as on its page, under the same limits, so a session
+    /// guesses no faster than a stranger, and a wrong one answers the page's 404. The answer names the new folder, never
+    /// the code.
+    /// </summary>
+    private static async Task<Created<SkillCopiedView>> AddAsync(
+        SkillAddRequest body, HttpContext http, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, PublicationStore publishing, UserCatalog users,
+        AccountLimits limits, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+    {
+        var (code, opened) = await SkillPageApi.OpenCodeAsync(body.Code ?? "", http, publishing, users, limits, options, logs, ct)
+            ?? throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        var folder = await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).AddAsync(code, opened, body.Vault ?? "", body.Name, ct);
+        return TypedResults.Created((string?)null, new SkillCopiedView(folder.Value));
+    }
 
     /// <summary>A skill she can read (its folder, or <c>system:&lt;name&gt;</c>) as a <c>.zip</c> under its folder's name.</summary>
     private static async Task<FileContentHttpResult> ZipAsync([FromQuery] string? path, HttpContext http, RequestCaller caller, EncryptedNoteStore store, TimeProvider time, CancellationToken ct)

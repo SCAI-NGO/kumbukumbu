@@ -101,6 +101,8 @@ export const routes: RouteObject[] = [
       { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
       // Signed in or not: without a session it says what to do first, and keeps the link's secret through sign-in.
       { path: "/share", lazy: lazyPage(() => import("./routes/Share")) },
+      // As /share: a shared skill's code waits through sign-in. Before /skills/:tab, which would take "add" for a tab.
+      { path: "/skills/add", lazy: lazyPage(() => import("./skills/AddSkill")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       { path: "/consent", element: <ConsentRoute /> },
