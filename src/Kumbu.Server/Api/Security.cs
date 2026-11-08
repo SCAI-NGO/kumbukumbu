@@ -316,8 +316,9 @@ public sealed class AccountLimits : IDisposable
     public const int AliasRenamesPerUser = 30;
 
     /// <summary>
-    /// A user's requests that make the server ask GitHub (a marketplace's commit, listing or archive not in the cache),
-    /// a minute per user (skills spec §3.9; Decision 30): each one spends the server's GitHub allowance, shared by everyone.
+    /// A user's requests that may make the server ask GitHub, a minute per user (skills spec §3.9; Decision 30): every
+    /// browse, preview, install and update check counts, whether its commit, listing or archive is in the cache or not,
+    /// since any of them may spend the server's GitHub allowance, shared by everyone.
     /// </summary>
     public const int GitHubFetchesPerUser = 30;
 

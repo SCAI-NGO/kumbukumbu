@@ -47,6 +47,10 @@ public sealed record SkillAddRequest(string Code, string Vault, string? Name = n
     public override string ToString() => $"SkillAddRequest {{ Vault = {Vault}, Name = {Name} }}";
 }
 
+/// <summary>A copy's state after Check for updates (<see cref="SkillUpdates"/>): its folder, <c>current</c>, <c>available</c>,
+/// <c>gone</c>, <c>skipped</c> or <c>origin-edited</c>, its sealed source and, for a GitHub copy, the commit asked.</summary>
+public sealed record SkillUpdateView(string Path, string State, string? Source = null, string? Commit = null);
+
 /// <summary>A skill that fits a request: its place (1 first) and its fused score.</summary>
 public sealed record SkillHitView(int Rank, double Score, SkillView Skill);
 
@@ -67,6 +71,7 @@ public static class SkillsApi
         group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/add", AddAsync).Errors(400, 401, 403, 404, 409, 429, 503, 507);
+        group.MapPost("/updates/check", CheckUpdatesAsync).Errors(401, 403, 429, 503);
         group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(401, 403, 404, 503);
         MapSharing(group);
     }
@@ -107,6 +112,13 @@ public static class SkillsApi
         var folder = await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).AddAsync(code, opened, body.Vault ?? "", body.Name, ct);
         return TypedResults.Created((string?)null, new SkillCopiedView(folder.Value));
     }
+
+    /// <summary>Check for updates (skills spec §3.10): asked only here, by her session, when the Skills screen opens or
+    /// she presses the button; never in the background, never by <c>sh</c>.</summary>
+    private static async Task<Ok<SkillUpdateView[]>> CheckUpdatesAsync(
+        RequestCaller caller, EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, CancellationToken ct) =>
+        TypedResults.Ok((await new SkillUpdates(store, github, publishing, limits, caller).CheckAsync(ct))
+            .Select(s => new SkillUpdateView(s.Folder.Value, s.State, s.Source, s.Commit)).ToArray());
 
     /// <summary>A skill she can read (its folder, or <c>system:&lt;name&gt;</c>) as a <c>.zip</c> under its folder's name.</summary>
     private static async Task<FileContentHttpResult> ZipAsync([FromQuery] string? path, HttpContext http, RequestCaller caller, EncryptedNoteStore store, TimeProvider time, CancellationToken ct)
@@ -193,29 +205,50 @@ public static class SkillsApi
 
     private static async Task<List<SkillView>> ViewsAsync(EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
     {
-        var (shared, withdrawn) = await SharedFoldersAsync(store, publishing, skills, ct);
+        var (shared, withdrawn, origins, updates) = await SharedFoldersAsync(store, publishing, skills, ct);
         var views = new List<SkillView>(skills.Count);
         foreach (var s in skills)
         {
             var canWrite = s.Vault is { } vault && await store.VaultInfoAsync(vault, ct) is { Level: >= AccessLevel.Write };
+            var edited = s.Folder is { } copy && origins.TryGetValue(copy.Value, out var origin) && await OriginEditedAsync(store, copy, origin, ct);
+            var update = !edited && s.Folder is { } checkedFolder && updates.Contains(checkedFolder.Value) ? SkillUpdates.Available : null;
             views.Add(new SkillView(
                 s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, s.Source, s.LastEditor, s.ByOther, [.. s.Warnings],
-                Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited,
+                Update: update, Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited || edited,
                 WithdrawnBefore: s.Folder is { } at && withdrawn.Contains(at.Value)));
         }
 
         return views;
     }
 
-    /// <summary>The folders of <paramref name="skills"/> shared by link, and those whose link was withdrawn since they were
-    /// last shared, in the caller's view: whether, not how (no link).</summary>
-    private static async Task<(HashSet<string> Shared, HashSet<string> Withdrawn)> SharedFoldersAsync(
+    /// <summary>Whether the frontmatter's <c>kumbu-source</c> or <c>kumbu-hash</c> disagrees with the sealed origin (Decision 33).</summary>
+    private static async Task<bool> OriginEditedAsync(EncryptedNoteStore store, VaultPath folder, SkillOrigin origin, CancellationToken ct)
+    {
+        var counts = store.CountsUse;
+        store.CountsUse = false;
+        try
+        {
+            var manifest = SkillManifest.Read(folder.Name, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct));
+            return !string.Equals(manifest.Source, origin.Source, StringComparison.Ordinal) || !string.Equals(manifest.Hash, origin.Hash, StringComparison.Ordinal);
+        }
+        finally
+        {
+            store.CountsUse = counts;
+        }
+    }
+
+    /// <summary>The folders of <paramref name="skills"/> shared by link, those whose link was withdrawn since they were last
+    /// shared, the sealed origins of copies and the folders the last check found an update for, in the caller's view:
+    /// whether, not how (no link, no code).</summary>
+    private static async Task<(HashSet<string> Shared, HashSet<string> Withdrawn, Dictionary<string, SkillOrigin> Origins, HashSet<string> Updates)> SharedFoldersAsync(
         EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
     {
         var folders = new HashSet<string>(StringComparer.Ordinal);
         var withdrawn = new HashSet<string>(StringComparer.Ordinal);
+        var origins = new Dictionary<string, SkillOrigin>(StringComparer.Ordinal);
+        var updates = new HashSet<string>(StringComparer.Ordinal);
         var vaults = skills.Select(s => s.Vault).OfType<string>().ToHashSet(StringComparer.Ordinal);
-        if (vaults.Count == 0) return (folders, withdrawn);
+        if (vaults.Count == 0) return (folders, withdrawn, origins, updates);
         foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(a => vaults.Contains(a.Name)))
         {
             var record = (await publishing.ReadAsync(null, access.Vault, ct)).Record;
@@ -228,9 +261,19 @@ public static class SkillsApi
             {
                 if (VaultPath.TryParse(folder, out var stored)) withdrawn.Add(access.ToCaller(stored).Value);
             }
+
+            foreach (var origin in record.Origins)
+            {
+                if (VaultPath.TryParse(origin.Path, out var stored)) origins[access.ToCaller(stored).Value] = origin;
+            }
+
+            foreach (var folder in record.Updates)
+            {
+                if (VaultPath.TryParse(folder, out var stored)) updates.Add(access.ToCaller(stored).Value);
+            }
         }
 
-        return (folders, withdrawn);
+        return (folders, withdrawn, origins, updates);
     }
 
     /// <summary>The skills of her own vaults shared by link.</summary>
