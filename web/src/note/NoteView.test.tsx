@@ -66,6 +66,18 @@ function noteApi(extra: Parameters<typeof fakeApi>[0] = {}, previousSignInAt: st
 const view = () => screen.getByRole("article");
 
 describe("the note view", () => {
+  it("reads the note again by itself once its vault is no longer being re-encrypted", async () => {
+    let busy = true;
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => (busy ? json(503, { error: "This vault is being re-encrypted; try again in a moment." }) : json(200, noteView(PLAN, source))),
+    });
+    renderApp(planUrl);
+    expect(await screen.findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+    busy = false;
+    expect(await screen.findByRole("heading", { level: 2, name: "Goals" }, { timeout: 4500 })).toBeInTheDocument();
+    expect(screen.queryByText("This vault is being re-encrypted; try again in a moment.")).not.toBeInTheDocument();
+  });
+
   it("renders the note, with its front matter as properties above the body", async () => {
     noteApi();
     renderApp(planUrl);

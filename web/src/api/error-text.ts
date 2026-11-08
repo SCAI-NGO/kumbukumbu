@@ -10,12 +10,16 @@ export function errorText(err: unknown): string {
   if (err instanceof HttpError) {
     // The password dialog was cancelled: the server's sentence names an API call, which is no use to a person.
     if (err.status === 401 && err.type === "password-required") return "This needs your password, so nothing was done.";
-    // The one 503 with a sentence of the API's own: a vault being re-encrypted. A proxy's 503 has none.
-    if (err.status === 503 && err.message) return err.message;
+    if (isVaultBusy(err)) return err.message;
     if (err.status >= 500) return "The server can't be reached right now. Try again in a moment.";
     if (err.message) return err.message;
   }
   // fetch rejects with a TypeError when the network or the server is gone.
   if (err instanceof TypeError) return "The server can't be reached right now. Try again in a moment.";
   return "Something went wrong. Try again.";
+}
+
+/** A vault being re-encrypted: the one 503 with a sentence of the API's own (a proxy's 503 has none). Over in seconds. */
+export function isVaultBusy(err: unknown): boolean {
+  return err instanceof HttpError && err.status === 503 && !!err.message;
 }
