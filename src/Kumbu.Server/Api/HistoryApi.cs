@@ -282,7 +282,7 @@ public static class HistoryApi
         if (!string.IsNullOrEmpty(body.Password))
         {
             // The same budget as the other password checks behind a session.
-            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
             if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
             await AccountApi.PasswordGivenAsync(http, sessions, ct);
         }
