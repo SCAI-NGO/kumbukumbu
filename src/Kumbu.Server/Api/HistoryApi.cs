@@ -237,7 +237,7 @@ public static class HistoryApi
             var (fileWriter, fileKind) = await labels.RenderAsync(notePath.Segments[0], file.LastWriter, file.Ref, ct);
             return TypedResults.Ok(new NoteVersionView(
                 notePath.Value, file.Version, fileWriter, file.LastWriteAt, fileKind,
-                AttachmentFormat.KindOf(notePath.Name), file.Current.MediaType, file.Current.Size, file.Current.Width, file.Current.Height));
+                AttachmentFormat.KindOf(notePath.Value), file.Current.MediaType, file.Current.Size, file.Current.Width, file.Current.Height));
         }
 
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
@@ -262,7 +262,7 @@ public static class HistoryApi
         {
             files.Add(new TrashEntryView(
                 t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, (await labels.RenderAsync(t.Attachment.Path.Segments[0], t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
-                0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Name), t.Attachment.Current.MediaType));
+                0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Value), t.Attachment.Current.MediaType));
         }
 
         // Stable: entries removed at one instant keep the order each list gives them.
@@ -461,7 +461,7 @@ public static class HistoryApi
         return TypedResults.Ok(new RestorePreviewView(
             preview.Checkpoint.Scope,
             [.. preview.Changes.Select(c => new RestoreChangeView(
-                c.Kind.ToString().ToLowerInvariant(), c.Path.Value, c.From?.Value, c.Lines?.Added, c.Lines?.Removed, AttachmentFormat.KindOf(c.Path.Name)))],
+                c.Kind.ToString().ToLowerInvariant(), c.Path.Value, c.From?.Value, c.Lines?.Added, c.Lines?.Removed, AttachmentFormat.KindOf(c.Path.Value)))],
             preview.RewrittenLinks,
             [.. preview.RewrittenIn.Select(p => p.Value)],
             preview.Broken,

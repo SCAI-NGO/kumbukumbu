@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Skills;
 
 namespace Kumbu.Core.Attachments;
 
@@ -8,6 +10,7 @@ public enum AttachmentKind
     Image,
     Pdf,
     Folder,
+    Text,
 }
 
 /// <summary>
@@ -34,7 +37,31 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>The folder marker: kept like an attachment, but no format users may upload, so not in <see cref="All"/>.</summary>
     public static AttachmentFormat Marker { get; } = new(FolderMarker.Name, FolderMarker.MediaType, AttachmentKind.Folder);
 
-    public static AttachmentFormat? ForPath(VaultPath path) => path.IsRoot ? null : ForName(path.Name);
+    public const string TextMediaType = "text/plain; charset=utf-8";
+
+    /// <summary>The extensions of text files a skill's folder keeps (case-insensitive).</summary>
+    public static IReadOnlyList<string> TextExtensions { get; } =
+    [
+        ".py", ".sh", ".js", ".mjs", ".ts", ".json", ".yaml", ".yml", ".toml", ".txt", ".csv", ".xml", ".html", ".css", ".svg",
+    ];
+
+    /// <summary>The extension-less names of text files a skill's folder keeps (case-insensitive).</summary>
+    public static IReadOnlySet<string> TextNames { get; } = new HashSet<string>(
+        ["LICENSE", "LICENCE", "COPYING", "NOTICE", "AUTHORS", "CHANGELOG", "README", "Makefile", "Dockerfile"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Text kept inside a skill's folder; no format users may upload elsewhere, so not in <see cref="All"/>.</summary>
+    public static AttachmentFormat Text { get; } = new("", TextMediaType, AttachmentKind.Text);
+
+    /// <summary>The format a path is kept as: <see cref="Text"/> for a text name strictly inside a skill's folder, else by <see cref="ForName"/>.</summary>
+    public static AttachmentFormat? ForPath(VaultPath path)
+    {
+        if (path.IsRoot) return null;
+        if (IsTextName(path.Name) && SkillPaths.IsInSkillFolder(path)) return Text;
+        return ForName(path.Name);
+    }
+
+    private static bool IsTextName(string name) =>
+        TextNames.Contains(name) || TextExtensions.Any(e => name.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether a stored attachment is a PDF.</summary>
     public static bool IsPdf(AttachmentState state) => state.MediaType == "application/pdf";
@@ -66,22 +93,30 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     {
         if (ForPath(source) is not { } format) return null;
         if (format == Marker) return ForPath(target) == Marker ? null : $"{FolderMarker.Name} keeps its name";
+        if (format == Text)
+        {
+            return ForPath(target)?.Kind == AttachmentKind.Text
+                ? null
+                : $"{source.Name} is a text file, kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)";
+        }
+
         if (ForPath(target)?.MediaType == format.MediaType) return null;
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
 
-    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", or "note" for anything else.</summary>
-    public static string KindOf(string path) => ForName(path)?.Kind switch
+    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", "folder", "text" (only for a full path inside a skill's folder), or "note" for anything else.</summary>
+    public static string KindOf(string path) => (VaultPath.TryParse(path, out var parsed) && ForPath(parsed) is { } kept ? kept : ForName(path))?.Kind switch
     {
         AttachmentKind.Image => "image",
         AttachmentKind.Pdf => "pdf",
         AttachmentKind.Folder => "folder",
+        AttachmentKind.Text => "text",
         _ => "note",
     };
 
     /// <summary>Null when the file is accepted; otherwise the reason to show the user. <paramref name="head"/>
-    /// is the start of the content (at least 12 bytes where the file has them).</summary>
+    /// is the start of the content (at least 12 bytes where the file has them); for a text file callers pass the whole content.</summary>
     public static string? Problem(VaultPath path, ReadOnlySpan<byte> head)
     {
         var format = ForPath(path);
@@ -95,9 +130,26 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
             return head.IsEmpty ? null : $"A {FolderMarker.Name} keeps its folder and holds nothing; send it empty";
         }
 
+        if (format == Text) return TextProblem(path.Name, head);
+
         return format.Matches(head)
             ? null
             : $"{path.Name} isn't {format.Description} (its content doesn't match its name)";
+    }
+
+    /// <summary>Null when the content is UTF-8 text without NUL bytes; otherwise why not.</summary>
+    public static string? TextProblem(string name, ReadOnlySpan<byte> content)
+    {
+        try
+        {
+            new UTF8Encoding(false, throwOnInvalidBytes: true).GetCharCount(content);
+        }
+        catch (ArgumentException)
+        {
+            return $"{name} isn't UTF-8 text";
+        }
+
+        return content.Contains((byte)0) ? $"{name} contains a NUL byte; a skill's folder keeps text only" : null;
     }
 
     private string Description => MediaType switch
@@ -106,6 +158,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         "image/png" => "a PNG image",
         "image/jpeg" => "a JPEG image",
         "image/gif" => "a GIF image",
+        TextMediaType => "a text file",
         _ => "a WebP image",
     };
 

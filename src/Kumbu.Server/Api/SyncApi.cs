@@ -171,7 +171,7 @@ public static class SyncApi
     }
 
     private static VersionEntry Entry(VaultPath path, string version, bool withKind) =>
-        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Name) : null);
+        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value) : null);
 
     /// <summary>
     /// Where a <c>since</c> answer starts, or null for the full list: no cursor, one that doesn't parse, one in the

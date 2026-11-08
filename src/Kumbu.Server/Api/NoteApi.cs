@@ -404,7 +404,7 @@ public static class NoteApi
             .Concat(attachments.Select(a => (a.Path, TreeFile(a)))));
 
     private static TreeNote TreeFile(StoredAttachment file) =>
-        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Name), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
+        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
     private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below)
     {
@@ -614,7 +614,7 @@ public static class NoteApi
                 var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
                 versions.Add(new HistoryEntryView(
                     v.Version, v.WrittenAt, writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, kind,
-                    AttachmentFormat.KindOf(notePath.Name), v.State.MediaType));
+                    AttachmentFormat.KindOf(notePath.Value), v.State.MediaType));
             }
 
             return TypedResults.Ok(versions.ToArray());
