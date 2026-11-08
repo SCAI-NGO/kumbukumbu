@@ -746,8 +746,12 @@ public sealed class PdfSidecarTests
         { "a hash that isn't hex", """{"op":"set","path":"images.0.hash","value":"0123456789abcdeg0123456789abcdef0123456789abcdef0123456789abcdef"}""" },
         { "no hash on an image decoded", """{"op":"set","path":"images.0.hash","value":null}""" },
         { "a negative box", """{"op":"set","path":"images.0.x","value":-0.5}""" },
-        { "a box of no width", """{"op":"set","path":"images.0.w","value":-1}""" },
-        { "a huge number", """{"op":"set","path":"images.0.h","value":1e400}""" },
+        { "a negative box width", """{"op":"set","path":"images.0.w","value":-1}""" },
+        { "a box past the page's right edge", """{"op":"set","path":"images.0.w","value":515.4}""" },
+        { "a box past the page's foot", """{"op":"set","path":"images.0.h","value":541.5}""" },
+        { "a number beyond a double, which System.Text.Json doesn't read", """{"op":"set","path":"images.0.h","value":1e400}""" },
+        { "a hash on an image that failed", $$"""{"op":"set","path":"images.2.hash","value":"{{Hash1}}"}""" },
+        { "a negative size on an image that failed", """{"op":"set","path":"images.2.width","value":-1}""" },
         { "no pixels", """{"op":"set","path":"images.1.width","value":0}""" },
         { "a number out of order", """{"op":"set","path":"images.1.n","value":3}""" },
         { "numbers not from 1", """{"op":"set","path":"images.0.n","value":0}""" },
@@ -778,25 +782,43 @@ public sealed class PdfSidecarTests
     }
 
     [Fact]
+    public async Task A_box_a_rounding_past_the_page_is_accepted()
+    {
+        var json = PageTwoImages();
+        json["images"]![0]!["w"] = 515.25;
+        json["images"]![0]!["h"] = 541.45;
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, json.ToJsonString()));
+
+        var images = await Sidecar(stub).ListImagesAsync(Pdf, 2, Ct);
+
+        Assert.Equal((515.25, 541.45), (images.Images[0].W, images.Images[0].H));
+    }
+
+    [Fact]
     public async Task More_than_10000_images_on_a_page_are_refused()
     {
         var json = PageTwoImages();
         var images = new JsonArray();
         for (var n = 1; n <= 10_001; n++)
         {
-            images.Add(JsonNode.Parse($$"""{ "n": {{n}}, "width": 1, "height": 1, "x": 0, "y": 0, "w": 1, "h": 1, "small": true, "hash": "{{Hash1}}", "failed": false }"""));
+            images.Add(JsonNode.Parse($$"""{"n":{{n}},"width":1,"height":1,"x":0,"y":0,"w":1,"h":1,"small":true,"hash":"{{Hash1}}","failed":false}"""));
         }
 
         json["images"] = images;
-        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, json.ToJsonString()));
+        var text = json.ToJsonString();
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
 
-        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).ListImagesAsync(Pdf, 2, Ct))).Code);
+        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).ListImagesAsync(Pdf, 2, Ct));
+
+        // Under the byte limit, so it is the count that refuses it.
+        Assert.True(text.Length < PdfSidecar.MaxImageListBytes, $"{text.Length} bytes");
+        Assert.Equal((SidecarException.Failed, "The image list doesn't add up"), (e.Code, e.Message));
     }
 
     [Fact]
-    public async Task Images_of_a_page_over_1_MiB_or_not_json_are_refused()
+    public async Task Images_of_a_page_over_4_MiB_or_not_json_are_refused()
     {
-        var huge = new Stub((_, _) => Json(HttpStatusCode.OK, PageTwoImages().ToJsonString() + new string(' ', 1024 * 1024)));
+        var huge = new Stub((_, _) => Json(HttpStatusCode.OK, PageTwoImages().ToJsonString() + new string(' ', 4 * 1024 * 1024)));
         var notJson = new Stub((_, _) => Json(HttpStatusCode.OK, "<html>oops</html>"));
 
         Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(huge).ListImagesAsync(Pdf, 2, Ct))).Code);
@@ -939,9 +961,9 @@ public sealed class PdfSidecarTests
     }
 
     [Fact]
-    public void Extraction_waits_for_the_sidecars_30_seconds_and_a_margin()
+    public void Extraction_waits_for_a_full_queue_its_own_30_seconds_and_a_margin()
     {
-        Assert.Equal(TimeSpan.FromSeconds(35), Sidecar(new Stub((_, _) => throw new InvalidOperationException())).ExtractTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(95), PdfSidecar.ExtractTimeout);
     }
 
     /// <summary>A JPEG of SOI, one SOF0 frame header and EOI: enough for its header to say the size.</summary>

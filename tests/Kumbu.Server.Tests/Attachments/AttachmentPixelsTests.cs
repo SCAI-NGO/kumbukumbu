@@ -322,6 +322,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         Assert.Equal(("the region is over 15 MB as PNG; name the target .jpg", PixelsProblem.TooLarge), await Region("too_large"));
         Assert.Equal(("the region is over 15 MB even as JPEG at quality 60; crop a smaller region", PixelsProblem.TooLarge), await Region("too_large", jpeg: true));
         Assert.Equal(("the crop 10,10,5000,5 lies outside page 7", PixelsProblem.BadCrop), await Region("bad_crop"));
+        Assert.Equal(($"the images of page 7 of {path} couldn't be read", PixelsProblem.Failed), await List("too_large"));
         Assert.Equal(($"{path} has no page 7", PixelsProblem.Failed), await List("no_such_page"));
         Assert.Equal(("this PDF is password-protected; Kumbu² can't read it", PixelsProblem.Failed), await List("encrypted"));
         Assert.Equal(("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy), await List("busy"));

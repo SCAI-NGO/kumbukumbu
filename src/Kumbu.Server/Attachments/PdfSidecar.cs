@@ -29,10 +29,10 @@ public interface IPdfSidecar
     /// <summary>The images page <paramref name="page"/> (1-based) paints, with their boxes, sizes and hashes.</summary>
     Task<PdfPageImages> ListImagesAsync(ReadOnlyMemory<byte> pdf, int page, CancellationToken ct);
 
-    /// <summary>Image <paramref name="n"/> of page <paramref name="page"/> to store: turned as painted, within 8 megapixels and 15 MB.</summary>
+    /// <summary>Image <paramref name="n"/> of page <paramref name="page"/> to store: turned as painted, within 8 megapixels, 16,384 px on the long edge and 15 MB.</summary>
     Task<Picture> ExtractImageAsync(ReadOnlyMemory<byte> pdf, int page, int n, CancellationToken ct);
 
-    /// <summary>A region of page <paramref name="page"/> in displayed points to store, at 300 dpi within 8 megapixels, PNG or (<paramref name="jpeg"/>) JPEG, turned <paramref name="rotate"/> degrees clockwise.</summary>
+    /// <summary>A region of page <paramref name="page"/> in displayed points to store, at 300 dpi within 8 megapixels and 16,384 px on the long edge, PNG or (<paramref name="jpeg"/>) JPEG, turned <paramref name="rotate"/> degrees clockwise.</summary>
     Task<Picture> RenderRegionAsync(ReadOnlyMemory<byte> pdf, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct);
 }
 
@@ -83,8 +83,8 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     /// <summary>The largest text-boxes answer read: 50 pages of 20,000 items stay below it.</summary>
     internal const int MaxTextBoxBytes = 16 * 1024 * 1024;
 
-    /// <summary>The largest image list of a page read: 10,000 images stay below it.</summary>
-    internal const int MaxImageListBytes = 1024 * 1024;
+    /// <summary>The largest image list of a page read: 10,000 images stay below it at about 400 bytes each (an entry with its hash takes at least about 160).</summary>
+    internal const int MaxImageListBytes = 4 * 1024 * 1024;
 
     /// <summary>The most images a page's list may hold.</summary>
     internal const int MaxImagesOfPage = 10_000;
@@ -121,8 +121,14 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     internal TimeSpan RenderTimeout => TimeSpan.FromSeconds(Pdf.RenderSeconds + 5);
 
-    /// <summary>The sidecar's limit for an extraction (30 s), with a margin for the transfer.</summary>
-    internal TimeSpan ExtractTimeout => TimeSpan.FromSeconds(30 + 5);
+    /// <summary>The sidecar's limit for an extraction, whose timer starts when a job leaves the queue (<c>pdf/src/server.ts</c>).</summary>
+    internal const int ExtractSeconds = 30;
+
+    /// <summary>The jobs the sidecar's one extraction worker lets wait (<c>pdf/src/server.ts</c>); a job beyond them is refused as busy.</summary>
+    internal const int ExtractQueue = 2;
+
+    /// <summary>An extraction behind a full queue, then its own, with a margin for the transfer.</summary>
+    internal static TimeSpan ExtractTimeout => TimeSpan.FromSeconds(ExtractSeconds * (1 + ExtractQueue) + 5);
 
     public async Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct)
     {
@@ -155,7 +161,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     public async Task<PdfPageImages> ListImagesAsync(ReadOnlyMemory<byte> pdf, int page, CancellationToken ct)
     {
         var body = await SendAsync("images/list", $"page={page.ToString(CultureInfo.InvariantCulture)}", pdf, "application/pdf", ExtractTimeout, ct,
-            async (response, token) => await ReadAsync(response.Content, MaxImageListBytes, token) ?? throw Invalid("The image list is larger than 1 MiB"));
+            async (response, token) => await ReadAsync(response.Content, MaxImageListBytes, token) ?? throw Invalid("The image list is larger than 4 MiB"));
         return ParseImages(body, page);
     }
 
@@ -493,7 +499,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         for (var i = 0; i < a.Images.Count; i++)
         {
             if (a.Images[i] is not { X: { } x, Y: { } y, W: { } w, H: { } h, Small: { } small, Failed: { } failed } m
-                || m.N != i + 1 || !Point(x) || !Point(y) || !Point(w) || !Point(h)
+                || m.N != i + 1 || !Point(x) || !Point(y) || !Point(w) || !Point(h) || x + w > a.Width + 0.1 || y + h > a.Height + 0.1
                 || (failed ? m.Hash is not null || m.Width < 0 || m.Height < 0 : !Sha256(m.Hash) || m.Width <= 0 || m.Height <= 0))
             {
                 throw Invalid($"Image {i + 1} of the image list doesn't add up");
@@ -504,7 +510,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
         return new PdfPageImages(a.Page, a.PageCount, a.Width, a.Height, a.Over, images);
 
-        static bool Sha256(string? hash) => hash is { Length: 64 } && hash.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f');
+        static bool Sha256(string? hash) => hash is { Length: 64 } && hash.All(char.IsAsciiHexDigitLower);
     }
 
     private static bool Point(double v) => double.IsFinite(v) && v >= 0;

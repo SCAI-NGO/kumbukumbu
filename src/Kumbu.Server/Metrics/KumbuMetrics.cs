@@ -75,9 +75,13 @@ public static class KumbuMetrics
         foreach (var kind in Enum.GetValues<RenderKind>())
         {
             RenderDuration.WithLabels(Label(kind));
+            foreach (var reason in Enum.GetValues<FailReason>()) RenderFailures.WithLabels(Label(kind), Label(reason));
+        }
+
+        foreach (var kind in DeliveredKinds)
+        {
             DeliveredBytes.WithLabels(Label(kind));
             DeliveredLongEdge.WithLabels(Label(kind));
-            foreach (var reason in Enum.GetValues<FailReason>()) RenderFailures.WithLabels(Label(kind), Label(reason));
         }
     }
 
@@ -291,6 +295,9 @@ public static class KumbuMetrics
 
     // A page the analysis calls text, rendered anyway: the 25 % threshold's miss signal.
     private static readonly PdfMode[] TextPageModes = [PdfMode.ImagesAll, PdfMode.Crop];
+
+    // What is handed to the shell; an extraction is stored instead.
+    private static readonly RenderKind[] DeliveredKinds = [RenderKind.Page, RenderKind.Image];
 
     private static readonly double[] Coverage = [0, 0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 0.95, 1];
 
@@ -592,6 +599,7 @@ public static class KumbuMetrics
         var types = Values<PageKind>(Label);
         var analysed = new HashSet<string>(types.Where(t => t != "unknown"), StringComparer.Ordinal);
         var textVia = new HashSet<string>(TextPageModes.Select(Label), StringComparer.Ordinal);
+        var delivered = new HashSet<string>(DeliveredKinds.Select(Label), StringComparer.Ordinal);
         var result = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlySet<string>>>(StringComparer.Ordinal);
         void Metric(string name, params (string Label, HashSet<string> Values)[] labels) =>
             result[name] = labels.ToDictionary(l => l.Label, l => (IReadOnlySet<string>)l.Values, StringComparer.Ordinal);
@@ -636,8 +644,8 @@ public static class KumbuMetrics
         Metric("kumbu_rg_regions_total", ("outcome", Values<RegionOutcome>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));
         Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
-        Metric("kumbu_image_delivered_bytes", ("kind", kinds));
-        Metric("kumbu_image_delivered_long_edge_pixels", ("kind", kinds));
+        Metric("kumbu_image_delivered_bytes", ("kind", delivered));
+        Metric("kumbu_image_delivered_long_edge_pixels", ("kind", delivered));
         return result;
     }
 

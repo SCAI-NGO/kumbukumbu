@@ -30,19 +30,23 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "PDF rendering", path, page, crop, null));
     }
 
-    /// <summary>A render timed and counted: its duration whatever came of it, a failure by reason, a picture by size.</summary>
-    private static async Task<Picture> MeasuredAsync(KumbuMetrics.RenderKind kind, Func<Task<Picture>> render, Func<SidecarException, PixelsUnavailableException> refuse)
+    /// <summary>
+    /// A render timed and counted: its duration whatever came of it, a failure by reason, a picture for the model by size.
+    /// An extraction's picture is stored, not delivered, and its sidecar being busy is the queue at work, tried again.
+    /// </summary>
+    private static async Task<T> MeasuredAsync<T>(KumbuMetrics.RenderKind kind, Func<Task<T>> render, Func<SidecarException, PixelsUnavailableException> refuse)
     {
         var started = Stopwatch.GetTimestamp();
         try
         {
-            var picture = await render();
-            KumbuMetrics.ImageDelivered(kind, picture.Data.Length, picture.Width, picture.Height);
-            return picture;
+            var result = await render();
+            if (result is Picture picture && kind != KumbuMetrics.RenderKind.Extract) KumbuMetrics.ImageDelivered(kind, picture.Data.Length, picture.Width, picture.Height);
+            return result;
         }
         catch (SidecarException e)
         {
-            if (!KumbuMetrics.IsRequestMistake(e)) KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
+            var busy = kind == KumbuMetrics.RenderKind.Extract && e.Code == SidecarException.Busy;
+            if (!KumbuMetrics.IsRequestMistake(e) && !busy) KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
             throw refuse(e);
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -93,14 +97,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     public async Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        try
-        {
-            return await sidecar.ListImagesAsync(bytes, page, ct);
-        }
-        catch (SidecarException e)
-        {
-            throw RefusedStoring(e, Extraction.List, path, page, 0, null, false);
-        }
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ListImagesAsync(bytes, page, ct), e => RefusedStoring(e, Extraction.List, path, page, 0, null, false));
     }
 
     public async Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct)
@@ -171,7 +168,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
             "bad_crop" => $"the crop {crop} lies outside page {page}",
             "too_large" when asked == Extraction.Region && !jpeg => "the region is over 15 MB as PNG; name the target .jpg",
             "too_large" when asked == Extraction.Region => "the region is over 15 MB even as JPEG at quality 60; crop a smaller region",
-            "too_large" => $"{what} is over 15 MB even as JPEG at quality 60",
+            "too_large" when asked == Extraction.Image => $"{what} is over 15 MB even as JPEG at quality 60",
             _ => asked == Extraction.Region ? $"{what} couldn't be rendered" : $"{what} couldn't be read",
         }, e.Code switch
         {
@@ -179,7 +176,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
             SidecarException.Unavailable => PixelsProblem.Unavailable,
             "no_such_image" => PixelsProblem.NoSuchImage,
             "bad_crop" => PixelsProblem.BadCrop,
-            "too_large" => PixelsProblem.TooLarge,
+            "too_large" when asked != Extraction.List => PixelsProblem.TooLarge,
             _ => PixelsProblem.Failed,
         });
     }

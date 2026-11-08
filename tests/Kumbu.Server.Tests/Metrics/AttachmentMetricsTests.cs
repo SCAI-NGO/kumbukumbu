@@ -315,6 +315,41 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Extractions_are_timed_and_counted_as_extract_but_not_delivered_and_busy_isnt_a_failure()
+    {
+        const string duration = "kumbu_render_duration_seconds_count{kind=\"extract\"}";
+        const string failed = "kumbu_render_failures_total{kind=\"extract\",reason=\"failed\"}";
+        const string unavailable = "kumbu_render_failures_total{kind=\"extract\",reason=\"unavailable\"}";
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("manual.pdf", Pdf("a pump manual with pictures"));
+        var pixels = new AttachmentPixels(
+            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
+            host.Services.GetRequiredService<VaultCatalog>(), host.Services.GetRequiredService<IPdfSidecar>(),
+            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var state = await StateAsync(host, user, "manual.pdf");
+        var path = VaultWorld.P($"/{user.Vault}/manual.pdf");
+        var before = await Scrape.TextAsync(app);
+
+        await pixels.PdfImagesAsync(path, state, 1, Ct);
+        await pixels.PdfImageAsync(path, state, 1, 1, Ct);
+        await pixels.PdfRegionAsync(path, state, 1, new Crop(72, 72, 144, 72), 0, false, Ct);
+        sidecar.PageImages = (_, _) => throw new SidecarException(SidecarException.Busy, "Busy.");
+        await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PdfImagesAsync(path, state, 1, Ct));
+        sidecar.PageImages = (_, _) => throw new SidecarException(SidecarException.Failed, "No.");
+        await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PdfImagesAsync(path, state, 1, Ct));
+
+        var after = await Scrape.TextAsync(app);
+        double Rise(string s) => Scrape.Value(after, s) - Scrape.Value(before, s);
+        Assert.Equal(5, Rise(duration));
+        Assert.Equal(1, Rise(failed));
+        Assert.Equal(0, Rise(unavailable));
+        Assert.DoesNotContain("kumbu_image_delivered_bytes_count{kind=\"extract\"}", after);
+        Assert.DoesNotContain("kumbu_image_delivered_long_edge_pixels_count{kind=\"extract\"}", after);
+    }
+
+    [Fact]
     public async Task A_bad_frame_has_its_own_reason()
     {
         const string series = "kumbu_img_refusals_total{reason=\"bad_frame\"}";

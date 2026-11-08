@@ -116,12 +116,12 @@ public interface IAttachmentPixels
     Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct);
 
     /// <summary>
-    /// Image <paramref name="n"/> of a page to store: turned as painted, within 8 megapixels, a PNG, or a JPEG where the
+    /// Image <paramref name="n"/> of a page to store: turned as painted, within 8 megapixels and 16,384 px on the long edge, a PNG, or a JPEG where the
     /// PNG would pass 15 MB. Its original size is its pixels before scaling (turned).
     /// </summary>
     Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct);
 
-    /// <summary>A region of a page in displayed points to store, at 300 dpi within 8 megapixels, a PNG or (<paramref name="jpeg"/>) a JPEG; its original size is the page's in points.</summary>
+    /// <summary>A region of a page in displayed points to store, at 300 dpi within 8 megapixels and 16,384 px on the long edge, a PNG or (<paramref name="jpeg"/>) a JPEG; its original size is the page's in points.</summary>
     Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct);
 
     void Count(AttachmentUse use);
