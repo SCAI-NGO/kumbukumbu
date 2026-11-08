@@ -27,8 +27,8 @@ public static class DavRules
     /// <summary>What every share together may hold parked, in bytes, so that the shares' areas can't add up to all of the
     /// server's memory (a user has up to <see cref="Accounts.DavShares.MaxActive"/> shares, each with its own
     /// <see cref="ParkingCap"/>). Eight full areas; real junk is a fraction of one. Beyond it the oldest parked files of
-    /// any share go, as within one share: parked files are junk the design lets go, and a refusal would abort every
-    /// share's Finder copy rather than one share's leftovers.</summary>
+    /// the share holding the most go, so that whoever floods it pays: parked files are junk the design lets go, and a
+    /// refusal would abort every share's Finder copy rather than one share's leftovers.</summary>
     public const long ParkingTotalCap = 512L * 1024 * 1024;
 
     /// <summary>What every parked entry is charged beyond its bytes and its name: roughly what its objects take on the

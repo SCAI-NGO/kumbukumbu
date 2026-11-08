@@ -442,7 +442,7 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     /// <summary>What every share parks together is capped too (security review finding 4): past
-    /// <see cref="DavRules.ParkingTotalCap"/> the oldest parked files of any share go, as within one share, and the new
+    /// <see cref="DavRules.ParkingTotalCap"/> files of other shares go (of equally large ones, the oldest), and the new
     /// one is parked. One array stands for every file: the cap counts bytes, the test holds them once.</summary>
     [Fact]
     public void Parked_bytes_are_capped_across_shares_the_oldest_going_first()
@@ -464,5 +464,51 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Null(parking.Get("s0", "v", ".big"));
         Assert.All(Enumerable.Range(1, full - 1), i => Assert.NotNull(parking.Get($"s{i}", "v", ".big")));
         Assert.NotNull(parking.Get("new", "v", ".big"));
+    }
+
+    /// <summary>Past the server-wide cap, the share holding the most goes first, not whoever parked earliest: shares
+    /// flooding the parking area evict their own files, never another share's temp file between its PUT and its MOVE.</summary>
+    [Fact]
+    public void Past_the_total_cap_the_largest_share_loses_its_oldest_file_first()
+    {
+        var time = new FakeTimeProvider();
+        var parking = new DavParking(time);
+        parking.Put("victim", "v", ".~tmp", [1, 2, 3]);
+        time.Advance(TimeSpan.FromSeconds(1));
+        var big = new byte[DavRules.ParkingCap - 64 * 1024];
+        var flood = (int)(DavRules.ParkingTotalCap / big.Length) + 1;
+        for (var i = 0; i < flood; i++)
+        {
+            parking.Put($"flood{i}", "v", ".big", big);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        Assert.NotNull(parking.Get("victim", "v", ".~tmp"));
+        Assert.Null(parking.Get("flood0", "v", ".big"));
+        Assert.NotNull(parking.Get($"flood{flood - 1}", "v", ".big"));
+    }
+
+    /// <summary>While the writing share is the largest, room is made in its own area only, even when another share's
+    /// files are older.</summary>
+    [Fact]
+    public void A_writer_that_is_the_largest_share_evicts_its_own()
+    {
+        var time = new FakeTimeProvider();
+        var parking = new DavParking(time);
+        var other = new byte[46 * 1024 * 1024];
+        for (var i = 0; i < 10; i++)
+        {
+            parking.Put($"s{i}", "v", ".other", other);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        var half = new byte[30 * 1024 * 1024];
+        parking.Put("writer", "v", ".first", half);
+        time.Advance(TimeSpan.FromSeconds(1));
+        parking.Put("writer", "v", ".second", half);
+
+        Assert.All(Enumerable.Range(0, 10), i => Assert.NotNull(parking.Get($"s{i}", "v", ".other")));
+        Assert.Null(parking.Get("writer", "v", ".first"));
+        Assert.NotNull(parking.Get("writer", "v", ".second"));
     }
 }
