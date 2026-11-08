@@ -695,7 +695,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// publishes: "May publish" planted into a slot counts for nothing.
     /// </summary>
     internal async Task<IReadOnlyList<VaultAccess>> OpenForDavShareAsync(string shareId, string token, CancellationToken ct) =>
-        [.. (await OpenRightSlotsAsync(DavSlots, shareId, token, ct)).Select(a => a with { MayPublish = false })];
+        [.. (await OpenRightSlotsAsync(DavSlots, shareId, token, ct)).Select(a => a with { MayPublish = false, ViaShare = true })];
 
     /// <summary>The vaults a credential of <paramref name="kind"/> opens, as <see cref="OpenForApiKeyAsync"/> describes.</summary>
     private async Task<IReadOnlyList<VaultAccess>> OpenRightSlotsAsync(RightSlotKind kind, string id, string secret, CancellationToken ct)

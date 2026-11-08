@@ -34,6 +34,10 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     /// connection given "May publish" here. Never a member, nor the dev token.</summary>
     public bool MayPublish { get; init; }
 
+    /// <summary>The vault is opened through a WebDAV share, which never publishes: what publishing refuses it says so,
+    /// rather than send it to a right no share can be given.</summary>
+    public bool ViaShare { get; init; }
+
     /// <summary>The refusal's sentence for <see cref="ReadOnlyCode"/>, the vault named as the caller sees it.</summary>
     public static string ReadOnlySentence(string code, string vault) => code switch
     {

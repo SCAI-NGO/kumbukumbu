@@ -413,7 +413,7 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal(HttpStatusCode.Forbidden, move.StatusCode);
         Assert.Equal(
-            "/Work/Ideas/plan.md is published, and this key may not publish in Work, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app",
+            "/Work/Ideas/plan.md is published, and a WebDAV share never publishes, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app",
             await move.Content.ReadAsStringAsync(Ct));
         Assert.Equal("# Plan\n", await NoteAsync(dav.Owner, "Ideas/plan.md"));
         Assert.Null(await NoteAsync(dav.Owner, "Done/plan.md"));

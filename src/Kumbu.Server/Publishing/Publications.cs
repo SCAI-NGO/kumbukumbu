@@ -301,7 +301,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var shown = access.ToCaller(Parse(withdrawn[0].Entry.Note));
             throw new PublishedNoteException(access.Membership is not null
                 ? $"{shown} is published by the vault's owner; only the owner can remove it or move it into an unpublishable folder"
-                : $"{shown} is published, and this key may not publish in {access.Name}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
+                : $"{shown} is published, and {(access.ViaShare ? "a WebDAV share never publishes" : $"this key may not publish in {access.Name}")}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
         }
 
         if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)) return;
@@ -450,7 +450,9 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         {
             throw Refused(
                 Refusals.NoPublishRight,
-                $"this key may not publish in {access.Name}; its owner can allow it (\"May publish\") under API keys or Connections in the web app");
+                access.ViaShare
+                    ? $"a WebDAV share never publishes, in {access.Name} or any other vault"
+                    : $"this key may not publish in {access.Name}; its owner can allow it (\"May publish\") under Access → API keys or Apps in the web app");
         }
     }
 
