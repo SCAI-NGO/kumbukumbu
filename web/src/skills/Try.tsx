@@ -1,36 +1,36 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery } from "@tanstack/react-query";
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useFindSkills } from "../api/skills";
-import { FormError, inputClass, labelClass, primaryButtonClass } from "../components/form";
+import { FormError, inputClass, labelClass } from "../components/form";
 
 /** What `skills find` returns for a request, optionally as one of her agent keys or connections would see it. */
 export default function Try() {
   const id = useId();
   const [text, setText] = useState("");
-  const [asked, setAsked] = useState("");
   const [as, setAs] = useState("");
+  // The text and the credential are asked together, once typing pauses.
+  const [asked, setAsked] = useState({ q: "", as: "" });
+  useEffect(() => {
+    const timer = setTimeout(() => setAsked({ q: text.trim(), as }), 300);
+    return () => clearTimeout(timer);
+  }, [text, as]);
   const keys = useQuery({ queryKey: ["keys"], queryFn: () => call(api.GET("/api/keys")) });
   const connections = useQuery({ queryKey: ["connections"], queryFn: () => call(api.GET("/api/connections")) });
-  const hits = useFindSkills(asked, as || undefined);
+  const hits = useFindSkills(asked.q, asked.as || undefined);
   const credentials = [
     ...(keys.data ?? []).filter((k) => k.kind === "agent").map((k) => ({ id: k.id, name: k.name })),
     ...(connections.data ?? []).map((c) => ({ id: c.id, name: c.name })),
   ];
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    setAsked(text.trim());
-  };
 
   return (
     <section aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-4">
       <h2 id={`${id}-title`} className="text-[22px] font-bold text-text">
         Try
       </h2>
-      <form onSubmit={submit} className="flex flex-col gap-3">
+      <form onSubmit={(e) => e.preventDefault()} className="flex flex-col gap-3">
         <label htmlFor={`${id}-q`} className={labelClass}>
           What an agent asks for
         </label>
@@ -50,12 +50,9 @@ export default function Try() {
             </select>
           </>
         )}
-        <button type="submit" disabled={text.trim() === ""} className={primaryButtonClass}>
-          Find
-        </button>
       </form>
       {hits.isError && <FormError>{errorText(hits.error)}</FormError>}
-      {hits.data?.length === 0 && <p className="text-text-body">No skill fits.</p>}
+      {asked.q !== "" && hits.data?.length === 0 && <p className="text-text-body">No skill fits this request.</p>}
       {hits.data && hits.data.length > 0 && (
         <ol className="flex flex-col gap-3">
           {hits.data.map((h) => (
@@ -65,7 +62,7 @@ export default function Try() {
               </h3>
               <p className="break-words whitespace-pre-wrap text-text-body">{h.skill.description}</p>
               <p className="font-mono text-xs text-muted">
-                {h.skill.location === "system" ? "System" : h.skill.location} · score {Number(h.score).toFixed(3)}
+                {h.skill.location === "system" ? "System" : h.skill.location} · score {Number(h.score).toFixed(4)}
               </p>
             </li>
           ))}
