@@ -197,19 +197,26 @@ public static class MarketplaceIndex
         var read = manifest is null ? null : SkillManifest.Read(name, Encoding.UTF8.GetString(manifest));
         var description = Clean(read?.Description ?? "", SkillManifest.MaxDescription);
         var warnings = read is null ? [BadManifest] : read.Problems.Select(w => Clean(w, SkillManifest.MaxDescription)).ToList();
-        var bytes = files.Files.Sum(f => (long)f.Bytes.Length);
         var reason = FolderNameProblem(name) is { } problem ? $"its folder's name can't be kept: {problem}"
             : read is null ? "its " + BadManifest
-            : files.Files.Count > MaxSkillFiles ? $"it has {files.Files.Count} files; a skill has at most {MaxSkillFiles}"
-            : bytes > MaxSkillBytes ? $"it has {(bytes / (1024.0 * 1024)).ToString("F1", CultureInfo.InvariantCulture)} MB; a skill has at most 10 MB"
-            : null;
+            : SizeProblem(files.Files);
 
         return new MarketplaceSkill(folder, name, description, plugin, reason is null, reason, SkillPageApi.HasScripts(files.Files.Select(f => f.Path)), warnings);
     }
 
+    /// <summary>Why a skill of these files is too large to take: more than <see cref="MaxSkillFiles"/> files or
+    /// <see cref="MaxSkillBytes"/>; null if it isn't.</summary>
+    internal static string? SizeProblem(IReadOnlyList<(string Path, byte[] Bytes)> files)
+    {
+        var bytes = files.Sum(f => (long)f.Bytes.Length);
+        return files.Count > MaxSkillFiles ? $"it has {files.Count} files; a skill has at most {MaxSkillFiles}"
+            : bytes > MaxSkillBytes ? $"it has {(bytes / (1024.0 * 1024)).ToString("F1", CultureInfo.InvariantCulture)} MB; a skill has at most 10 MB"
+            : null;
+    }
+
     /// <summary>Why the skill's folder can't be made under its own name: what <see cref="SkillCopier.NameProblem"/> says, or a
     /// control or format character (bidi and zero-width marks), which would let a name pass for another.</summary>
-    private static string? FolderNameProblem(string name) =>
+    internal static string? FolderNameProblem(string name) =>
         SkillCopier.NameProblem(name)
         ?? (name.EnumerateRunes().Any(r => Rune.GetUnicodeCategory(r) is UnicodeCategory.Control or UnicodeCategory.Format)
             ? $"'{Clean(name, MaxText)}' contains a control or format character" : null);

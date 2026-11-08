@@ -39,6 +39,10 @@ internal sealed partial class SkillUpdateTaker(
     /// <summary>The <see cref="ApiError.Type"/> of a source withdrawn or vanished.</summary>
     public const string Gone = "gone";
 
+    /// <summary>The <see cref="ApiError.Type"/> of a source's new version that breaks a skill's limits, which an install
+    /// would refuse too (more than 200 files or 10 MB, a folder name that can't be kept).</summary>
+    public const string NotInstallable = "not-installable";
+
     private sealed record Copy(VaultAccess Access, VaultPath Folder, string Stored, PublishingRecord Record, SkillOrigin Origin);
 
     /// <summary>A file of her copy now: a note's or text file's text, or an attachment's bytes, and its version.</summary>
@@ -172,7 +176,7 @@ internal sealed partial class SkillUpdateTaker(
                 files.Add((file.Path, (await publishing.OpenSkillFileAsync(opened, file.Index, ct))?.Bytes ?? throw SourceGone(copy)));
             }
 
-            return Upstream(copy, copy.Origin.Source, null, null, null, files);
+            return Upstream(copy, copy.Origin.Source, null, null, null, files, null);
         }
 
         if (!marketplaces) throw MarketplaceApi.SwitchedOff();
@@ -187,7 +191,7 @@ internal sealed partial class SkillUpdateTaker(
                 return (now, await github.ArchiveAsync(repo, now, caller.User!.Id, ct));
             });
             var files = MarketplaceIndex.FilesOf(archive, path) ?? throw SourceGone(copy);
-            return Upstream(copy, $"github:{repo}/{path}@{commit}", repo, path, commit, files.Files);
+            return Upstream(copy, $"github:{repo}/{path}@{commit}", repo, path, commit, files.Files, path.Split('/')[^1]);
         }
         catch (ApiException e) when (e.Type == "not-found")
         {
@@ -195,9 +199,21 @@ internal sealed partial class SkillUpdateTaker(
         }
     }
 
-    private static SkillUpstream Upstream(Copy copy, string source, RepoName? repo, string? path, string? commit, IReadOnlyList<(string Path, byte[] Bytes)> files)
+    /// <summary>The new version, within the limits an install keeps (<see cref="MarketplaceIndex"/>): at most 200 files and
+    /// 10 MB, a GitHub folder's name (<paramref name="folderName"/>) that can be kept, and every path inside the folder;
+    /// else 409 <see cref="NotInstallable"/>, before anything is written.</summary>
+    private static SkillUpstream Upstream(
+        Copy copy, string source, RepoName? repo, string? path, string? commit, IReadOnlyList<(string Path, byte[] Bytes)> files, string? folderName)
     {
         if (!files.Any(f => f.Path == SkillPaths.Manifest)) throw SourceGone(copy);
+        var problem = (folderName is not null && MarketplaceIndex.FolderNameProblem(folderName) is { } name ? $"its folder's name can't be kept: {name}" : null)
+            ?? MarketplaceIndex.SizeProblem(files);
+        if (problem is not null)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, $"The new version of {copy.Folder.Value} can't be taken: {problem}.", type: NotInstallable);
+        }
+
+        foreach (var file in files) SkillCopier.Inside(copy.Folder, file.Path);
         return new SkillUpstream(source, repo, path, commit, SkillHash.Of(files.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes))), files);
     }
 

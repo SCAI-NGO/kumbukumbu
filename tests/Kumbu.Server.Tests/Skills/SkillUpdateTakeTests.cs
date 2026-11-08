@@ -246,6 +246,85 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
         Assert.Equal($"github:{Repo}/skills/pdf@{Sha}", Assert.Single((await RecordAsync(alice, "Work")).Origins).Source);
     }
 
+    private async Task<string[]> FilesAsync(RestClient user)
+    {
+        var store = new EncryptedNoteStore(user.Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
+        var folder = Kumbu.Core.Paths.VaultPath.TryParse(Folder, out var p) ? p : throw new InvalidOperationException();
+        var notes = await store.ListNotesUnderAsync(folder, Ct);
+        var files = await Kumbu.Core.Attachments.StoreAttachments.UnderAsync(store, folder, Ct);
+        return [.. notes.Concat(files.Select(f => f.Path)).Select(f => f.Value[(Folder.Length + 1)..]).Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>An upstream that outgrew a skill's limits is refused as an install would refuse it, before anything is written.</summary>
+    [Theory]
+    [InlineData("files")]
+    [InlineData("bytes")]
+    public async Task Take_refuses_an_upstream_over_the_install_limits(string limit)
+    {
+        await using var api = Api();
+        var alice = await InstalledAsync(api);
+        var next = NextVersion();
+        if (limit == "files")
+        {
+            for (var i = 0; i < MarketplaceIndex.MaxSkillFiles; i++) next[$"references/r{i:000}.md"] = "x\n"u8.ToArray();
+        }
+        else
+        {
+            foreach (var name in new[] { "a.pdf", "b.pdf" })
+            {
+                var pdf = new byte[6 * 1024 * 1024];
+                "%PDF-1.4\n"u8.CopyTo(pdf);
+                next[$"assets/{name}"] = pdf;
+            }
+        }
+
+        Publish(Newer, next);
+        var (manifest, files) = (await ManifestAsync(alice), await FilesAsync(alice));
+
+        using var review = await alice.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(Folder));
+        using var take = await TakeAsync(alice, HashOf(next));
+
+        foreach (var refused in new[] { review, take })
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            var body = await RestClient.JsonAsync(refused);
+            Assert.Equal(SkillUpdateTaker.NotInstallable, body["type"]!.GetValue<string>());
+            Assert.Contains(limit == "files" ? $"at most {MarketplaceIndex.MaxSkillFiles}" : "at most 10 MB", body["error"]!.GetValue<string>(), StringComparison.Ordinal);
+        }
+
+        Assert.Equal(manifest, await ManifestAsync(alice));
+        Assert.Equal(files, await FilesAsync(alice));
+        Assert.Equal($"github:{Repo}/skills/pdf@{Sha}", Assert.Single((await RecordAsync(alice, "Work")).Origins).Source);
+    }
+
+    [Fact]
+    public async Task Take_refuses_an_upstream_folder_whose_name_cant_be_kept()
+    {
+        await using var api = Api();
+        var alice = await InstalledAsync(api);
+        // A copy whose sealed source names a folder with a zero-width space, as install would never have taken it.
+        const string hidden = "skills/bad\u200Bname";
+        var source = $"github:{Repo}/{hidden}@{Sha}";
+        var content = await ManifestAsync(alice);
+        var hash = SkillManifest.Read("pdf", content).Hash!;
+        await PutNoteAsync(alice, "/Work/_skills/pdf/SKILL.md", SkillManifest.WithOrigin(content, source, hash), (await alice.ReadAsync("_skills/pdf/SKILL.md"))["version"]!.GetValue<string>());
+        var work = (await alice.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work");
+        await alice.Api.Services.GetRequiredService<PublicationStore>().ChangeAsync(work, r => r with { Origins = [new(Folder, source, hash)] }, Ct);
+        var next = NextVersion();
+        _github.Commit = Newer;
+        _github.Archives[Repo] = next.ToDictionary(f => hidden + "/" + f.Key, f => f.Value);
+        _time.Advance(GitHubClient.CommitAge);
+        var before = await FilesAsync(alice);
+
+        using var take = await TakeAsync(alice, HashOf(next));
+
+        Assert.Equal(HttpStatusCode.Conflict, take.StatusCode);
+        var body = await RestClient.JsonAsync(take);
+        Assert.Equal(SkillUpdateTaker.NotInstallable, body["type"]!.GetValue<string>());
+        Assert.Contains("control or format character", body["error"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(before, await FilesAsync(alice));
+    }
+
     [Fact]
     public async Task Take_refuses_an_edited_origin()
     {
