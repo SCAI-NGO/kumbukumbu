@@ -2,16 +2,16 @@
 
 Date: 2026-11-08. Brief: [2026-11-08-skills-brief.md](2026-11-08-skills-brief.md). Spec: [2026-11-08-skills-design.md](../specs/2026-11-08-skills-design.md). Plan: [2026-11-08-skills.md](../plans/2026-11-08-skills.md).
 
-**Pull request:** PENDING: PR link (draft, base `feature/webdav`; Chris retargets it to `master` once #152 is merged).
+**Pull request:** https://github.com/SCAI-NGO/kumbukumbu/pull/153 (draft, base `feature/webdav`, title "Skills: portable capability"; Chris retargets it to `master` once #152 is merged).
 
-**Status of this draft.** The coordinator fills the places marked PENDING. Tasks 0 to 44 are done and none was skipped. Task 45 (the security review) is done, its fixes are pending. Task 46 (the final gate) is PENDING. Task 47 (hand-off) is this report and the pull request.
+**Status.** Tasks 0 to 46 are done and none was skipped. The security review (Task 45) found 0 Critical, 4 Important and 6 Minor findings; the fix wave and its re-review are in section 7. The final gate (Task 46, Gate 5) passed. Task 47 (hand-off) is this report and the pull request.
 
 **In short.**
 
-- Branch `feature/skills`, 79 commits on top of `898cb9c` (3 for the plan and its review, 76 for the work), 215 files changed, 21,780 insertions, 442 deletions.
-- Gates 1 to 4 passed. The last full figures (Gate 4, at `19f0c19`): .NET 4995 tests, 4988 passed, 1 failed, 6 skipped; the failure is a load-flaky test that passed 3 of 3 alone. Web 112 files, 1829 tests; web build green; pdf 8 files, 146 tests; litmus exit 0.
-- The security review found 0 Critical, 4 Important and 6 Minor findings. A fix wave for 1, 2, 3, 4, 6, 7 and 10 is dispatched; its results are not in this draft.
-- Nothing is merged, no tag, no version change.
+- Branch `feature/skills`, 86 commits on top of `898cb9c` (3 for the plan and its review, 76 for the work, 7 for the security fix wave), 219 files changed (this report included), 23,671 insertions, 442 deletions.
+- All five gates passed. Gate 5 (final, at `33d7fce`): .NET 5037 tests, 5031 passed, 0 failed, 6 skipped; web 112 files, 1834 tests; web build green; pdf 8 files, 146 tests; builds 0 warnings, 0 errors; litmus exit 0.
+- The security review found 0 Critical, 4 Important and 6 Minor findings. Findings 1, 2, 3, 4, 5, 6, 7 (within the asked scope) and 10 are addressed and re-reviewed; 8 and 9 were accepted or parked; the half-way Take (rest of 7) is parked.
+- Nothing is merged, no tag, no version change. No new NuGet or npm package.
 
 ## 1. Environment
 
@@ -158,9 +158,9 @@ The figures equal the known state. The first .NET attempt crashed on the Mongo f
 | Task | Commit(s); fix | Tests |
 |---|---|---|
 | 44 Documentation | `a5ba3b8`; fix `67720ab` | `WelcomeTextTests` red 2 failed of 10; green with neighbours 30/30; after the fix 20/20 |
-| 45 Security review | none (read-only) | report: `.superpowers/sdd/2026-11-08-skills/task-45-security-review.md` |
-| 46 Final gate | PENDING | PENDING |
-| 47 Hand-off | this report, the pull request, an open-items row | PENDING |
+| 45 Security review and fix wave | `eb03ef1`, `87acd1b`, `df258aa`, `9861329`, `0814cd4`, `ecd496a`, `33d7fce` | review: `task-45-security-review.md`; fix wave: Debug full suite 5037 total, 0 failed, 6 skipped; web 112 files, 1834; re-review `task-45-rereview.md` (section 7) |
+| 46 Final gate (Gate 5) | none | .NET 5037 total, 5031 passed, 0 failed, 6 skipped; web 112 files, 1834; pdf 8/146; builds 0/0; litmus exit 0. Checks: no new package, version unchanged in `version.txt`, `Kumbu.Server.csproj` and `web/package.json`, organisation names only as the public example in the docs (and a test literal asserting its absence) |
+| 47 Hand-off | this report, the pull request, an open-items row | pull request #153 (draft); rows added to `open-items.md` |
 
 ## 6. Phase gates
 
@@ -171,7 +171,7 @@ The figures equal the known state. The first .NET attempt crashed on the Mongo f
 | 2 | `c66ade2` | 4692 / 4685 / 1 / 6 | 106 files, 1789, build green | 8 files, 146, build green | exit 0 |
 | 3 | `3147740` (web and pdf against the tree including `7c71a4f`) | 4855 / 4849 / 0 / 6 | 110 files, 1813, build green | 8 files, 146, build green | exit 0 |
 | 4 | `19f0c19` | 4995 / 4988 / 1 / 6 | 112 files, 1829, build green | 8 files, 146, build green | exit 0 |
-| 5 (final, Task 46) | PENDING | PENDING | PENDING | PENDING | PENDING |
+| 5 (final, Task 46) | `33d7fce` | 5037 / 5031 / 0 / 6 | 112 files, 1834, build green | 8 files, 146, build green | exit 0 |
 
 Every Release build had 0 errors and 0 warnings. litmus exit 0 means its failures are exactly the 21 in `tools/litmus/expected-failures.txt`.
 
@@ -195,24 +195,52 @@ Result: **0 Critical, 4 Important, 6 Minor.** The coordinator ruled on each; a f
 
 | # | Severity | Finding | What became of it |
 |---|---|---|---|
-| 1 | Important | `GET /api/skills/zip` bypasses the download ticket, the member-export event and every size bound (a remembered session could zip notes moved into a skill folder without the password; a member's export left no event; unbounded memory). The same unbounded source read feeds Copy and Move | Fix wave dispatched: ticket and password-window rule as the files ZIP, member export recorded, 200 files / 10 MB limits before reading, the same pre-read limit in `SourceAsync`. PENDING: fix wave results |
-| 2 | Important | A `kumbu-source` written into frontmatter without a sealed origin is shown as "from github:…" in `skills ls`, `find`, the handshake list and the Skills screen, so a forged provenance looks verified | Fix wave dispatched: show "from" only when the sealed origin agrees, otherwise "claims source …, not verified"; correct the security-architecture paragraph. PENDING: fix wave results |
-| 3 | Important | "Last changed by" and "another user" look at `SKILL.md` only; a member's change to the files the skill sends the agent to goes unmarked | Fix wave dispatched: compute over every file of the folder; "changed since taken" for copies. PENDING: fix wave results |
-| 4 | Important | No server-wide bound on archive downloads: one user could drive gigabytes into memory with many commits (preview goes straight to codeload without resolving a commit) | Fix wave dispatched: server-wide concurrency and byte budget, one download per user in flight, cancel detached downloads, accept only commits this server resolved for that repository. PENDING: fix wave results |
-| 5 | Minor | An installed copy's `github:owner/repo@commit` does not prove the commit belongs to the repository (a fork's commit under the parent's name) | Closed by finding 4's fix (only server-resolved commits accepted). Ruling in the ledger |
-| 6 | Minor | `SkillCopier.Inside` and the update taker's joins do not refuse `..`, `.` or empty segments; `SkillZip.Plain` lets `C:` and control characters through. Not reachable today, since all inputs are sanitised upstream | Fix wave dispatched: the guard `SkillsCommand.Inside` has, plus a "strictly below the folder" assertion; `Plain` refuses `:` and Cc/Cf. PENDING: fix wave results |
-| 7 | Minor | Take update skips the install limits, and a failed Take leaves a mixed folder that still reads "current" | Fix wave dispatched: install limits in `UpstreamAsync` (409 shown in Review); put back or mark "update incomplete". PENDING: fix wave results |
+| 1 | Important | `GET /api/skills/zip` bypasses the download ticket, the member-export event and every size bound (a remembered session could zip notes moved into a skill folder without the password; a member's export left no event; unbounded memory). The same unbounded source read feeds Copy and Move | **Fixed, `eb03ef1`.** The `.zip` of a vault skill needs an export ticket when "ask for downloads" is on or the password window is closed, records a member's export for the owner and is logged; 200 files / 10 MB are checked before any content is read (zip, Copy and Move). The web app asks for the password first (`ZipButton`). A system skill needs none |
+| 2 | Important | A `kumbu-source` written into frontmatter without a sealed origin is shown as "from github:…" in `skills ls`, `find`, the handshake list and the Skills screen, so a forged provenance looks verified | **Fixed, `87acd1b`.** "from …" only when the sealed origin agrees; otherwise "origin edited" or "unverified origin", in the shell, the handshake list (which now applies the marks, so it also marks "origin edited"), the API and the web list. Security-architecture text corrected |
+| 3 | Important | "Last changed by" and "another user" look at `SKILL.md` only; a member's change to the files the skill sends the agent to goes unmarked | **Fixed, `df258aa`** for the defect named: the editor and "another user" are computed over every note and attachment of the folder. The review's optional "changed since taken" content-hash mark was not done: parked, an open point for Chris (section 10) |
+| 4 | Important | No server-wide bound on archive downloads: one user could drive gigabytes into memory with many commits (preview goes straight to codeload without resolving a commit) | **Fixed, `9861329`.** At most 2 downloads in flight server-wide and 200 MB of unpacked bytes, one new download per user, beyond that 429 `github-busy` before anything is fetched; a download nobody waits for any more is cancelled; preview and install accept only a commit this server resolved for that repository within the last hour (409 `commit-unknown`, "browse again") |
+| 5 | Minor | An installed copy's `github:owner/repo@commit` does not prove the commit belongs to the repository (a fork's commit under the parent's name) | **Closed by finding 4's fix** (`9861329`: only server-resolved commits accepted). Ruling in the ledger |
+| 6 | Minor | `SkillCopier.Inside` and the update taker's joins do not refuse `..`, `.` or empty segments; `SkillZip.Plain` lets `C:` and control characters through. Not reachable today, since all inputs are sanitised upstream | **Fixed, `0814cd4`.** `Inside` refuses empty, `.`, `..`, `\` and NUL, re-parses and requires the result strictly below the folder (400); `Plain` also refuses `:` and control characters (Cc). Cf characters are not refused, because stored names may hold ZWJ emoji sequences |
+| 7 | Minor | Take update skips the install limits, and a failed Take leaves a mixed folder that still reads "current" | **Half fixed, `ecd496a`.** An update over 200 files / 10 MB, with a folder name that cannot be kept, or with a path that leaves the folder is refused (409 `not-installable`) in Review and Take before the first write. A Take that fails half-way is still not rolled back: parked by ruling (the old state stays in history; the folder reads current until the next check) |
 | 8 | Minor | Every MCP handshake touches every vault the credential reaches, which keeps their keys in memory | Accepted as specified (spec §3.6: "unlocks the connection's vaults at initialisation, as its first tool call would"). Ruling in the ledger. Cost if wrong: vault keys stay in memory for clients that reconnect often |
 | 9 | Minor | The Add-to-my-skills code stays in the tab's `sessionStorage` if she leaves `/skills/add` without Cancel or Add | Parked: clearing it on unmount would break the sign-in hand-over; the tab's `sessionStorage` dies with the tab. Ruling in the ledger |
-| 10 | Minor (privacy) | A shared skill's images keep EXIF/GPS metadata (verbatim by spec §3.7) | Not a code fix without a spec change; recorded in `open-items.md` for Chris. The fix wave adds a note in the Share dialog where a skill holds JPEG/PNG/WebP files. PENDING: fix wave results |
+| 10 | Minor (privacy) | A shared skill's images keep EXIF/GPS metadata (verbatim by spec §3.7) | **Notice added, `33d7fce`.** Share always asks first and says images go as they are, with any location data; nothing is stripped (spec). Still an open point for Chris whether to strip. The notice is not shown before Update of an existing link (Minor) |
 
 Everything else the review checked held: connection visibility, agents cannot bring in, share, move across vaults or update (the routes are session-only; `skills copy` copies system skills only), no change without the user's review, the fetch rules (two hosts, https, no redirects, public addresses only, the token to `api.github.com` only, the tar guard and caps), the share code leaking nowhere, text files only in skill folders and never rendered, path traversal at the sources, migration grants, `/k` isolation, re-keying races on the sealed record, and the password-window classification (except finding 1). The encryption scheme and slot derivations are unchanged.
 
 The review also triaged the ledger's deferred Minors: those it called security-relevant are covered by findings 1, 4, 6, 7, 8 and 10; the rest are test strength, duplication, messages and UI polish.
 
-### PENDING: fix wave results
+### The fix wave and its re-review
 
-PENDING: the coordinator fills this subsection. For each of findings 1, 2, 3, 4, 6, 7 and 10: the commit(s), the test that failed first, the test output, the mutations of the fix, and the re-review. Also the re-run of the documentation changes for `docs/security-architecture.md` §4 (findings 1, 2, 4) and the final gate's figures (Task 46).
+Seven commits, one per finding, each test written and seen failing first (fix report: `.superpowers/sdd/2026-11-08-skills/task-45-fix-report.md`). Debug full suite after the wave: 5037 total, 0 failed, 5031 succeeded, 6 skipped; web 112 files, 1834 tests, build green.
+
+| Finding | Commit | Red first | Green | Mutations of the fix |
+|---|---|---|---|---|
+| 1 | `eb03ef1` | all 5 new server tests failed (`Expected: Forbidden Actual: OK`, `Expected: BadRequest Actual: OK`, member event not found); web: 3 failed (no "Download .zip" button) | 150/150 (`SkillZipApi`, `SkillPageApi`, `SkillCopy`, `PasswordWindow`, `AddSkill`); web 1832/1832 | none recorded |
+| 2 | `87acd1b` | core compile errors (`SourceVerified`, a 3-argument `SkillMarks`); the 4 new server tests failed on the previous commit (`Assert.Null() … Actual: github:…`); web 1 failed (no "unverified origin") | core 68/68; server 94/94; web 1833 | none recorded |
+| 3 | `df258aa` | core 2 failed; server 3 failed on the previous code (`…last changed by <key label>): Deploys.`) | full core 1789 passed, 2 skipped; server 110/110 | none recorded |
+| 4 (+5) | `9861329` | compile errors naming the new fetcher members | 154/154 (fetcher, marketplace API, update check and take, GitHub client, `PasswordWindow`); the fetcher class 3 runs in a row | no cancel on abandonment: `A_download_nobody_waits_for_is_cancelled…` fails (timeout); no per-user check: `One_user_has_one_download…` fails |
+| 6 | `0814cd4` | 16 of 30 cases failed | 129/129 (`SkillCopy`, `SkillPageApi`, `AddSkill`, `MarketplaceApi`, `SkillUpdateTake`, `SkillZipApi`) | none recorded |
+| 7 | `ecd496a` | 3 failed (`Expected: Conflict Actual: OK`) | `SkillUpdateTake` 12/12; with check, index and marketplace classes 96/96 | none recorded |
+| 10 | `33d7fce` | 2 failed (a share posted before the notice; no alertdialog) | `Shared.test.tsx` 7/7; web 1834/1834 | none recorded |
+
+Notes from the fix report:
+
+- Commit `0814cd4` also carries the draft of this report, swept in from the working tree; this finished report replaces it.
+- Finding 4 added `MarketplaceFetcherTests` (5 tests); tests elsewhere that install or preview without browsing now mark the commit as shown, so their request counts are unchanged.
+- A `CancellationToken.Register` callback in the fetcher test's handler did not complete its task although the token was cancelled; the handler records the cancellation in a catch instead (an oddity of the test double).
+- Concerns: finding 7's half-way Take is not addressed; a `.zip` 403 reaches a plain browser download as a saved JSON file if the state changes between the dialog and the click; `SkillView.Source` is now null for unverified sources and clients get `sourceUnverified`.
+
+**Re-review** (fresh subagent, scope `67720ab..33d7fce`, read-only, `task-45-rereview.md`): findings 1, 2, 3, 4, 5, 6, 7 (within the asked scope) and 10 ADDRESSED; no new Critical or Important breakage. Residual Minors, parked by ruling as fail-closed robustness or fairness issues:
+
+- finding 7's half-way Take is not rolled back;
+- "from github:" verifies the origin fields against the sealed origin, not the folder's content hash, so an edited copy still reads as from its source (the last editor shows the edit); a "changed since taken" mark is an open point for Chris;
+- the update check aborts on a 429 `github-busy` and records nothing for folders already checked (`SkillUpdates.cs:102`);
+- the known-commit table is server-wide and capped at 1000, so one user browsing many repositories can evict another's (a 409 "browse again");
+- two accounts can hold both download slots and make others' uncached downloads wait;
+- the Share notice is not shown before Update; note bytes are counted after decrypting (at most 199 notes, each under the 16 MB document cap);
+- cosmetic: an indentation and a blank line in `MarketplaceApi.cs`;
+- also observed: a member's skill copied into the caller's own vault and then zipped there records no event for the original owner (consistent with the ruling that copying is an ordinary write).
 
 ## 8. Every mutation
 
@@ -595,12 +623,16 @@ The plan's "Decisions" section settles the brief's eleven open points (OP 1 to 1
 | Security finding 8 (the handshake touches every reachable vault) accepted as specified | Spec §3.6 | Vault keys stay in memory for clients that reconnect often |
 | Security finding 9 (the code stays in `sessionStorage`) parked | Clearing on unmount breaks the sign-in hand-over; the storage dies with the tab | The code stays in that tab until it closes |
 | Security finding 5 closed by finding 4's fix | Only server-resolved commits are accepted | — |
+| Finding 7, second half (a Take that fails half-way is not rolled back) parked | The old state stays in history and the folder reads current until the next check; rollback is a larger change | A mixed folder after a failed Take |
+| "from …" verifies the origin fields, not the folder's content hash; a "changed since taken" mark goes to open-items for Chris | Listings name the last editor across every file (finding 3), which shows such an edit | An edited copy still reads as from its source |
+| Re-review residuals parked: the update check aborting on a 429, the server-wide known-commit cap of 1000, two accounts holding both download slots, no Share notice before Update, note bytes counted after decrypting | Minor robustness and fairness issues that fail closed | A busy server makes users retry |
+| The draft report swept into `0814cd4` is replaced by the finished one as the last commit | A commit cannot be amended or force-pushed | — |
 
 ## 10. Deviations, surprises, tasks left, open points
 
 ### Tasks left
 
-None skipped. Tasks 0 to 44 are done. Task 45 (the review) is done, its fixes are pending (section 7). Task 46 (the final gate) is PENDING. Task 47 is this report and the pull request.
+None skipped. Tasks 0 to 46 are done. Task 45's fixes are in, apart from the parked residuals listed in section 7 and the open points below. Task 47 is this report and the pull request.
 
 ### Deviations from the spec and the plan
 
@@ -608,7 +640,7 @@ None skipped. Tasks 0 to 44 are done. Task 45 (the review) is done, its fixes ar
 - **`/k` offers Add to my skills only until the page is reloaded** (plan Decision 6 said always shown).
 - **The tar guard refuses a whole archive** with a header shape codeload never writes, where the spec speaks of skipping links.
 - **Review is offered only to someone who can write** (Task 42): Take writes.
-- **Code against Decision 19**: the skills list in the MCP instructions does not mark ", origin edited" (`skills ls`, `skills find` and the web list do).
+- **Decision 19** was met only partly until the security fix wave: the MCP instructions list did not mark ", origin edited"; `87acd1b` fixed it (the handshake now applies the marks), and its open-items row was removed.
 - **`SkillSearch` does its own rank fusion** with the shared constant `RankFusionK`, because `SectionSearch.FuseByRank` is private and typed to chunks (Task 15).
 - **A skill's name is always the folder's name** (Task 13): a manifest name is valid only when it equals the folder's, so a manifest cannot give its skill another skill's name.
 - **Task 8**: the brief's regex `/^_skills(\/|$)/` never matches an API path; `/^\/[^/]+\/_skills(\/|$)/` is used. A wrong password on the Skills vault's delete answers 409, not 401.
@@ -640,11 +672,11 @@ An implementer ran a checkout of a commit after `20f73de`, so HEAD was detached.
 - `RekeyTransitionTests.A_run_cancelled_in_its_transaction_completes_the_transition(inside-finish)`, Gate 1 rerun: 1 min 01 s timeout while implementers ran tests; the class alone, 3 times: 12/12 each.
 - `PairingTests.A_device_name_gets_the_same_answer…(dev)`, Gate 4: the class alone, 3 times: 55/55 each.
 
-Both are recorded as load-flaky, not regressions. If either shows again at Gate 5, PENDING: Task 46.
+Both are recorded as load-flaky, not regressions. Neither showed at Gate 5.
 
 ### Commit trailers
 
-The brief asks for the Opus trailer. 24 of the 79 commits, made by Sonnet-model implementers following the session's attribution reminder, carry "Co-Authored-By: Claude Sonnet 5.5" (`04bdcb5`, `81ad1a5`, `ab9fe1b`, `1b730ec`, `6aa4a5f`, `48129ae`, `9fc6471`, `c5f0cb2`, `4d213cd`, `82af5d8`, `65d1ae7`, `ecb24ea`, `f584cdc`, `20f73de`, `4ac75a1`, `75b822d`, `c66ade2`, `e251252`, `98aed59`, `be65122`, `25079ee`, `75e1280`, `19f0c19`, `2a7c753`). The other 55 carry the Opus line. The ledger counted 18 when it ruled; the count above is from `git log`. Changing them would need a force-push, which the brief forbids.
+The brief asks for the Opus trailer. 24 of the 86 commits, made by Sonnet-model implementers following the session's attribution reminder, carry "Co-Authored-By: Claude Sonnet 5.5" (`04bdcb5`, `81ad1a5`, `ab9fe1b`, `1b730ec`, `6aa4a5f`, `48129ae`, `9fc6471`, `c5f0cb2`, `4d213cd`, `82af5d8`, `65d1ae7`, `ecb24ea`, `f584cdc`, `20f73de`, `4ac75a1`, `75b822d`, `c66ade2`, `e251252`, `98aed59`, `be65122`, `25079ee`, `75e1280`, `19f0c19`, `2a7c753`). The other 62 (the 7 fix-wave commits included) carry the Opus line. The ledger counted 18 when it ruled; the count above is from `git log`. Changing them would need a force-push, which the brief forbids.
 
 ### Open points for Chris
 
@@ -658,11 +690,11 @@ From the rows this branch added to `docs/superpowers/open-items.md` (`git diff 8
 6. **`/k` Add to my skills** is offered only until the page is reloaded (deviation from plan Decision 6).
 7. **The archive guard** refuses a whole marketplace archive with a header shape codeload never writes, where the design speaks of skipping links.
 8. **Images keep EXIF and GPS** in a shared skill, unlike a published note's. Decide whether a skill's images should be stripped, or the Share dialog say so (the security review's finding 10).
-9. **The MCP instructions list does not mark ", origin edited"** (plan Decision 19), while the other listings do.
+9. **A "changed since taken" mark for copies.** "from …" verifies the origin fields against the sealed origin, not the folder's content hash, so an edited copy still reads as from its source (the last editor, named across every file, shows the edit). Decide whether a content-hash mark is wanted (the re-review's residual).
 
-Also for Chris, not in `open-items.md`: security findings 8 (handshake keeps vault keys in memory) and 9 (the code in `sessionStorage` until the tab closes) were accepted or parked on the grounds given in section 9; and the plan's open point 12 (no second link while one exists).
+Also for Chris, not in `open-items.md`: security findings 8 (handshake keeps vault keys in memory) and 9 (the code in `sessionStorage` until the tab closes) were accepted or parked on the grounds given in section 9; the plan's open point 12 (no second link while one exists); and the parked half-way Take.
 
-A row linking the pull request in `docs/superpowers/open-items.md` is added by the coordinator with the PR link. PENDING: PR link row.
+The pull request is linked in `docs/superpowers/open-items.md` (#153), in the format of the earlier overnighters' rows. Parked after the fix wave, no open-items row: the half-way Take, the update check aborting on a 429, the server-wide known-commit cap, two accounts holding both download slots, and the Share notice missing before Update (all fail closed).
 
 ## 11. The hand-test checklist
 
@@ -703,7 +735,7 @@ Follows spec §6 ("End to end"): Alice owns the vaults Work and Private; Bob is 
 **Step 5: a member's skill (spec §6.5).**
 
 15. As Bob, write `/Work/_skills/release-notes/SKILL.md` (and a file in a subfolder). **Passes:** Alice's Claude (key with Work) lists it as "shared by Alice" if Work is hers, with "last changed by Bob".
-16. As Bob, edit only `references/steps.md` of one of Alice's skills in Work. **Passes (after the security fix wave):** the skill is marked as changed by another user, not only when `SKILL.md` changes. PENDING: fix wave results.
+16. As Bob, edit only `references/steps.md` of one of Alice's skills in Work. **Passes:** the skill reads "last changed by Bob, another user" in `skills ls`, the connection's instructions and the Skills screen, whichever file Bob changed (an attachment such as `scripts/run.sh` too), not only `SKILL.md`.
 17. Use a key that has only Private. **Passes:** it neither lists nor reads `release-notes` (`skills ls`, `skills find`, `skills cat` all come back empty or as errors).
 18. Open the Skills screen, Try tab, choose "as seen by" the Private-only key. **Passes:** the results leave the skill out.
 
@@ -713,7 +745,7 @@ Follows spec §6 ("End to end"): Alice owns the vaults Work and Private; Bob is 
 20. Choose a skill that holds scripts, Install…. **Passes:** the preview shows repository, path, a 12-character commit, files with sizes, skipped files, and a notice that it contains scripts; the target dialog defaults to Skills; a taken name asks for another.
 21. Open the installed copy's `SKILL.md`. **Passes:** the frontmatter records `kumbu-source` as `github:<repo>/<path>@<commit>` and a `kumbu-hash`.
 22. Edit that frontmatter's `kumbu-source` by hand to another repository. **Passes:** the skill reads ", origin edited" and no update is offered or fetched.
-23. In a skill you wrote yourself add `kumbu-source: github:evil/x@<40 hex>` by hand. **Passes (after the security fix wave):** every listing shows it as unverified or as origin edited, never as "from github:…". PENDING: fix wave results.
+23. In a skill you wrote yourself add `kumbu-source: github:evil/x@<40 hex>` by hand. **Passes:** every listing (`skills ls`, `skills find`, the connection's instructions, the Skills screen) shows it as "unverified origin" (or "origin edited"), never as "from github:…"; only a copy whose sealed origin agrees reads "from …".
 
 **Step 7: update, review, take (spec §6.7).**
 
@@ -732,7 +764,7 @@ Follows spec §6 ("End to end"): Alice owns the vaults Work and Private; Bob is 
 33. As Alice change a file and press Update on the Shared tab; as Dave run the check. **Passes:** Dave's copy shows an update, Review and Take work as in step 7.
 34. As Alice `rm` the shared skill's `SKILL.md` from an agent (or move the folder out, or mark a file unpublishable). **Passes:** the link stops opening; Share then asks with "Copies made from the old link will be told their source is gone and get no more updates" (also after a reload).
 35. Try Move to… on a skill that is shared. **Passes:** refused with "shared" and nothing moves; Copy to… still works.
-36. Download .zip from the Installed tab for a vault skill, a skill in a vault with a space in its name and a system skill. **Passes:** each downloads; with "Ask for the password for downloads" on, or a closed password window, it asks first (after the security fix wave, as the files ZIP does). PENDING: fix wave results.
+36. Download .zip from the Installed tab for a vault skill, a skill in a vault with a space in its name and a system skill. **Passes:** each downloads; with "Ask for the password for downloads" on, or a closed password window, it asks for the password first and downloads with a ticket, as the files ZIP does; a system skill downloads without. As a member (Bob) download a skill of Alice's shared vault: Alice sees a "Bob exported Work." event. A skill over 200 files or 10 MB is refused.
 
 **Step 9: the injection that fails (spec §6.9).**
 
@@ -748,4 +780,4 @@ Follows spec §6 ("End to end"): Alice owns the vaults Work and Private; Bob is 
 43. Sync a vault with the Obsidian plugin. **Passes:** no text files reach it (open point 1).
 44. Documentation: README "Skills", `help skills` in `sh`, the Welcome vault's note "Skills" for a new account. **Passes:** they match what you saw (marketplace switch, the one link, update check on opening Installed).
 
-After the fix wave and the final gate, repeat steps 16, 23 and 36 and run the whole checklist once against the final head. PENDING: Task 46.
+Two further post-fix checks. Preview or install of a marketplace commit that was not browsed in the last hour (for example a hand-made request, or after waiting an hour on the preview) is refused with "Browse … again"; browsing again makes it work. Pressing Share on any skill first shows a confirmation that images are shared as they are, with any location data, and nothing is posted before you confirm. Run the whole checklist once against the final head, `33d7fce` or later.
