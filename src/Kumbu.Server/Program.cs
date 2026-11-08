@@ -18,6 +18,7 @@ using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Search;
+using Kumbu.Server.Skills;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
@@ -297,6 +298,7 @@ app.MapPairingApi();
 app.MapExportApi();
 app.MapSharingApi();
 app.MapPublicationApi();
+app.MapSkillsApi();
 app.MapReaderApi();
 // The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
 // HEAD too, which would otherwise fall through to the web app's shell.
