@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import { useMarketplaceSkill } from "../api/skills";
+import { sizeText } from "../components/Sheet";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import TargetDialog from "./TargetDialog";
@@ -30,8 +31,6 @@ const components: Components = {
   a: ({ children }) => <>{children}</>,
   img: ({ alt }) => (alt ? <span className="font-mono text-[0.85em] text-muted">{alt}</span> : null),
 };
-
-const sizeText = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`);
 
 type Props = { repo: string; commit: string; path: string; name: string; onClose(): void; onInstalled(path: string): void };
 
@@ -105,7 +104,7 @@ export default function InstallDialog({ repo, commit, path, name, onClose, onIns
               <section className="flex flex-col gap-1">
                 <h3 className={labelClass}>SKILL.md</h3>
                 <div className="max-h-72 overflow-y-auto rounded-[10px] border border-line p-3 text-sm text-text-body">
-                  <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
+                  <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
                     {data.manifest}
                   </ReactMarkdown>
                 </div>

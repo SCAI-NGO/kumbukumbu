@@ -15,6 +15,7 @@ const listing = {
   skills: [
     { path: "skills/write-well", name: "write-well", description: "Writes clearly.", plugin: null, installable: true, reason: null, hasScripts: true, warnings: [] },
     { path: "skills/too-big", name: "too-big", description: "Huge.", plugin: null, installable: false, reason: "it is larger than the limit", hasScripts: false, warnings: [] },
+    { path: "skills/odd", name: "odd", description: "Odd.", plugin: null, installable: true, reason: null, hasScripts: false, warnings: ["its name differs from its folder"] },
   ],
   plugins: [{ name: "elsewhere", source: "bob/plugins", installable: false }],
   note: null,
@@ -94,6 +95,9 @@ describe("Marketplaces", () => {
     const bad = screen.getByText("too-big").closest("li")!;
     expect(within(bad).getByText(/it is larger than the limit/)).toBeInTheDocument();
     expect(within(bad).queryByRole("button", { name: "Install…" })).not.toBeInTheDocument();
+    const odd = screen.getByText("odd").closest("li")!;
+    expect(within(odd).queryByText(/Not installable/)).not.toBeInTheDocument();
+    expect(within(odd).getByText(/its name differs from its folder/)).toBeInTheDocument();
     const plugin = screen.getByText("elsewhere").closest("li")!;
     expect(within(plugin).getByText(/in another repository, not installable here/)).toBeInTheDocument();
     expect(within(plugin).getByText(/bob\/plugins/)).toBeInTheDocument();
@@ -125,6 +129,7 @@ describe("Marketplaces", () => {
     // The manifest is text: no raw HTML is made, no image fetched.
     expect(within(dialog).getByText("Short sentences.")).toBeInTheDocument();
     expect(dialog.querySelector("script")).toBeNull();
+    expect(within(dialog).queryByText(/alert\(1\)/)).not.toBeInTheDocument();
     expect(dialog.querySelector("img")).toBeNull();
     expect(within(dialog).getByText("diagram")).toBeInTheDocument();
 
@@ -146,10 +151,11 @@ describe("Marketplaces", () => {
   });
 
   it("hides the tab when switched off", async () => {
-    api({ enabled: false });
+    const fetch = api({ enabled: false });
     renderApp("/skills/installed");
 
     await screen.findByRole("tablist", { name: "Skills" });
+    await waitFor(() => expect(fetch.mock.calls.some(([r]) => new URL((r as Request).url).pathname === "/api/skills/marketplaces")).toBe(true));
     await waitFor(() => expect(tab("Shared")).toBeNull());
     expect(tab("Marketplaces")).toBeNull();
   });

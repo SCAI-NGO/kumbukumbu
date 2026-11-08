@@ -66,7 +66,8 @@ export const useMarketplaceListing = (repo: string) =>
     queryKey: ["marketplace", repo],
     queryFn: () => call(api.GET("/api/skills/marketplaces/{owner}/{repo}", { params: { path: split(repo) } })),
     retry: false,
-    staleTime: Infinity,
+    // The server keeps a listing for an hour and the branch's commit for ten minutes: older than that, browsing asks again.
+    staleTime: 10 * 60_000,
   });
 
 /** The skill at `path` as of `commit`, for the install dialog. */
@@ -75,7 +76,8 @@ export const useMarketplaceSkill = (repo: string, commit: string, path: string) 
     queryKey: ["marketplace", repo, commit, path],
     queryFn: () => call(api.GET("/api/skills/marketplaces/{owner}/{repo}/skill", { params: { path: split(repo), query: { commit, path } } })),
     retry: false,
-    staleTime: Infinity,
+    // The server keeps a listing for an hour and the branch's commit for ten minutes: older than that, browsing asks again.
+    staleTime: 10 * 60_000,
   });
 
 /** The skill at `path` of `repo` as of the `commit` she was shown, into the vault `vault`; `name` when the folder's name is taken there. */

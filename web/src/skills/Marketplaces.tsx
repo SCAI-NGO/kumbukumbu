@@ -75,7 +75,7 @@ export default function Marketplaces() {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    aria-label={`Browse ${m.repo}`}
+                    aria-label={`${browsing === m.repo ? "Close" : "Browse"} ${m.repo}`}
                     aria-expanded={browsing === m.repo}
                     onClick={() => setBrowsing(browsing === m.repo ? null : m.repo)}
                     className={secondaryButtonClass}
@@ -129,7 +129,12 @@ function Offer({ data }: { data: MarketplaceListingView }) {
             </div>
             {s.description && <p className="text-text-body">{s.description}</p>}
             {s.plugin && <p className="text-sm text-muted">Plugin {s.plugin}</p>}
-            {!s.installable && <p className="text-text-body">Not installable: {s.reason}</p>}
+            {!s.installable && <p className="text-text-body">Not installable{s.reason ? `: ${s.reason}` : ""}.</p>}
+            {s.warnings.map((w) => (
+              <p key={w} className="text-sm text-muted">
+                {w}
+              </p>
+            ))}
           </li>
         ))}
         {data.plugins.map((p) => (
