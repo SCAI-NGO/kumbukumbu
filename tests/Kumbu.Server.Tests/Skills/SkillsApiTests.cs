@@ -8,6 +8,7 @@ using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Skills;
 
@@ -176,7 +177,12 @@ public sealed class SkillsApiTests(KumbuAppFactory app)
         var key = await KeyAsync(alice, "Work agent", new() { [await alice.VaultIdAsync()] = KeyRight.Read });
 
         await GetAsync(alice, $"/api/skills/find?q=notes&as={key.Id}");
+        await GetAsync(alice, "/api/skills");
 
+        // The last use is written beside the request: give it the time a use takes to show.
+        await Task.Delay(500, Ct);
+        var slot = Builders<SlotDocument>.Filter.Eq(s => s.KeyId, key.Id);
+        Assert.All(await app.Database.GetCollection<SlotDocument>("slots").Find(slot).ToListAsync(Ct), s => Assert.Null(s.UsedAt));
         var after = (await alice.Api.Services.GetRequiredService<ApiKeys>().ListAsync(alice.User, alice.UserKey, Ct)).Single(k => k.Id == key.Id);
         Assert.Null(after.LastUsedAt);
     }
