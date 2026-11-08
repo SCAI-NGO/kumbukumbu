@@ -3,7 +3,9 @@
 // A page's embedded images for storing as attachments: listed in painting order, each as pdf.js
 // decoded it, turned and mirrored as the page shows it (in quarter turns), scaled to fit 8 MP and
 // encoded anew; and regions rendered at 300 dpi. analyse.ts measures the same operators, but its
-// walk stays its own so the analysis cannot change through this one.
+// walk stays its own so the analysis cannot change through this one. Images in hidden optional
+// content and masks under a transparent fill are listed and stored too, as measureDrawing counts
+// them: kept on purpose, so an ingest loses nothing.
 
 import { createHash } from "node:crypto";
 import { type Canvas, ImageData, createCanvas } from "@napi-rs/canvas";
@@ -21,6 +23,8 @@ export const STORED_DPI = 300;
 export const MAX_BODY_STORED = 15 * 1024 * 1024;
 /** pdf.js's warning for an image it leaves out for exceeding maxImageSize. */
 export const OVERSIZE_WARNING = "Image exceeded maximum allowed size and was removed.";
+/** The placements a page's walk takes before it gives up. */
+export const MAX_PLACEMENTS = 10_000;
 
 export type ImageInfo = {
   n: number;
@@ -94,7 +98,7 @@ type Source =
 
 type Placement = { source: Source; turn: Turn; box: Box };
 
-// Pure white is the default of no fill; a pattern or anything else paints a mask black.
+// A fill other than an RGB hex colour (a pattern, transparent) paints a mask black.
 const HEX = /^#[0-9a-f]{6}$/i;
 
 // Walks the operator list keeping the current transformation matrix and fill as pdf.js's canvas
@@ -105,7 +109,9 @@ function walk(fns: ArrayLike<number>, args: ArrayLike<unknown[] | null>, page: P
   let ctm = IDENTITY;
   let fill = "#000000";
   const stack: { ctm: Matrix; fill: string }[] = [];
+  let placed = 0;
   const place = (source: Source, m: Matrix) => {
+    if (++placed > MAX_PLACEMENTS) throw new PdfError("The page paints more than 10,000 images.", "too_large");
     const shown = Util.transform(viewport.transform, m) as Matrix;
     const box = clip(unitBox(shown), viewport.width, viewport.height);
     if (box) out.push({ source, turn: turnOf(shown), box });
@@ -234,6 +240,8 @@ function objectOf(page: PDFPageProxy, id: string): Promise<ImgData | null> {
   return new Promise((resolve) => objs.get(id, (data: ImgData | null) => resolve(data ?? null)));
 }
 
+const positive = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
+
 const strideOf = (kind: number, width: number) => (kind === 2 ? width * 3 : kind === 3 ? width * 4 : (width + 7) >> 3);
 
 async function rasterOf(page: PDFPageProxy, source: Source): Promise<Raster | null> {
@@ -241,9 +249,16 @@ async function rasterOf(page: PDFPageProxy, source: Source): Promise<Raster | nu
     if (!img) return null;
     if (!img.data && img.bitmap) return fromBitmap(img);
     if (!img.data || !(kind === 0 || kind === 1 || kind === 2 || kind === 3)) return null;
+    if (!positive(img.width) || !positive(img.height)) return null;
     const stride = strideOf(kind, img.width);
-    if (img.data.length < stride * img.height) return null;
-    return { kind, data: img.data, stride, x0: 0, y0: 0, width: img.width, height: img.height, fill };
+    let data = img.data;
+    if (data.length < stride * img.height) {
+      if (kind !== 0) return null;
+      // A mask short of data paints nothing where it lacks it, as pdf.js pads it.
+      data = new Uint8Array(stride * img.height).fill(0xff);
+      data.set(img.data);
+    }
+    return { kind, data, stride, x0: 0, y0: 0, width: img.width, height: img.height, fill };
   };
   switch (source.from) {
     case "object":
@@ -286,51 +301,76 @@ function hashOf(r: Raster, t: Turn): string {
   return h.digest("hex");
 }
 
-// RGBA in the turned frame, converted and turned in one pass into one buffer.
-function rgbaOf(r: Raster, t: Turn): ImageData {
-  const { width, height } = turned(t, r.width, r.height);
-  const out = new Uint8ClampedArray(width * height * 4);
-  const [p, q, rr, s] = t;
-  // x' = p·u + q·v (+ the far edge where a step goes left), likewise y'.
-  const x0 = p < 0 || q < 0 ? width - 1 : 0;
-  const y0 = rr < 0 || s < 0 ? height - 1 : 0;
+// The raster's pixels, as they are (not turned), on a canvas of their size. They go over in strips
+// of 16 rows, as pdf.js's putBinaryImageData does, so the RGBA never exists twice in full.
+const STRIP = 16;
+
+function canvasOf(r: Raster): Canvas {
+  const canvas = createCanvas(r.width, r.height);
+  const ctx = canvas.getContext("2d");
   const fill = r.fill ? [1, 3, 5].map((i) => parseInt(r.fill!.slice(i, i + 2), 16)) : [0, 0, 0];
   const { data } = r;
-  for (let v = 0; v < r.height; v++) {
-    const row = (r.y0 + v) * r.stride;
-    for (let u = 0; u < r.width; u++) {
-      const at = ((y0 + rr * u + s * v) * width + (x0 + p * u + q * v)) * 4;
-      const x = r.x0 + u;
-      switch (r.kind) {
-        case 0:
-        case 1: {
-          const bit = (data[row + (x >> 3)]! >> (7 - (x & 7))) & 1;
-          if (r.kind === 1) {
-            const c = bit ? 255 : 0;
-            out[at] = out[at + 1] = out[at + 2] = c;
-            out[at + 3] = 255;
-          } else if (bit === 0) {
-            out[at] = fill[0]!;
-            out[at + 1] = fill[1]!;
-            out[at + 2] = fill[2]!;
-            out[at + 3] = 255;
+  let strip = new ImageData(r.width, Math.min(STRIP, r.height));
+  for (let top = 0; top < r.height; top += STRIP) {
+    const rows = Math.min(STRIP, r.height - top);
+    if (rows !== strip.height) strip = new ImageData(r.width, rows);
+    const out = strip.data;
+    // A mask's strip starts transparent each time; the other kinds set every byte.
+    if (r.kind === 0) out.fill(0);
+    for (let v = 0; v < rows; v++) {
+      const row = (r.y0 + top + v) * r.stride;
+      for (let u = 0; u < r.width; u++) {
+        const at = (v * r.width + u) * 4;
+        const x = r.x0 + u;
+        switch (r.kind) {
+          case 0:
+          case 1: {
+            const bit = (data[row + (x >> 3)]! >> (7 - (x & 7))) & 1;
+            if (r.kind === 1) {
+              const c = bit ? 255 : 0;
+              out[at] = out[at + 1] = out[at + 2] = c;
+              out[at + 3] = 255;
+            } else if (bit === 0) {
+              out[at] = fill[0]!;
+              out[at + 1] = fill[1]!;
+              out[at + 2] = fill[2]!;
+              out[at + 3] = 255;
+            }
+            break;
           }
-          break;
+          case 2: {
+            const from = row + x * 3;
+            out[at] = data[from]!;
+            out[at + 1] = data[from + 1]!;
+            out[at + 2] = data[from + 2]!;
+            out[at + 3] = 255;
+            break;
+          }
+          default:
+            out.set(data.subarray(row + x * 4, row + x * 4 + 4), at);
         }
-        case 2: {
-          const from = row + x * 3;
-          out[at] = data[from]!;
-          out[at + 1] = data[from + 1]!;
-          out[at + 2] = data[from + 2]!;
-          out[at + 3] = 255;
-          break;
-        }
-        default:
-          out.set(data.subarray(row + x * 4, row + x * 4 + 4), at);
       }
     }
+    ctx.putImageData(strip, 0, top);
   }
-  return new ImageData(out, width, height);
+  return canvas;
+}
+
+// The source turned and scaled onto a canvas of width × height in one drawImage. A source pixel
+// (u, v) lands at x' = p·u + q·v, y' = r·u + s·v, from the far edge where a step goes back.
+function turnOnto(source: Canvas, t: Turn, width: number, height: number): Canvas {
+  const [p, q, r, s] = t;
+  const shown = turned(t, source.width, source.height);
+  const [kx, ky] = [width / shown.width, height / shown.height];
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  if (kx < 1 || ky < 1) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+  } else ctx.imageSmoothingEnabled = false;
+  ctx.setTransform(p * kx, r * ky, q * kx, s * ky, p < 0 || q < 0 ? width : 0, r < 0 || s < 0 ? height : 0);
+  ctx.drawImage(source, 0, 0);
+  return canvas;
 }
 
 // --- The routes' work ---
@@ -361,30 +401,64 @@ const round1 = (v: number) => Math.round(v * 10) / 10;
 
 // The size pdf.js declares for an image it could not decode.
 function declared(source: Source): { width: number; height: number } {
-  if (source.from === "object") return { width: source.width ?? 0, height: source.height ?? 0 };
-  if (source.from === "atlas") return { width: source.w, height: source.h };
-  if (source.from === "mask") return { width: source.mask.width, height: source.mask.height };
-  return { width: source.img.width, height: source.img.height };
+  const side = (v: unknown) => (positive(v) ? v : 0);
+  const sides = (width: unknown, height: unknown) => ({ width: side(width), height: side(height) });
+  if (source.from === "object") return sides(source.width, source.height);
+  if (source.from === "atlas") return sides(source.w, source.h);
+  if (source.from === "mask") return sides(source.mask.width, source.mask.height);
+  return sides(source.img.width, source.img.height);
 }
 
-/** The images of the placements, one at a time (each decoded image is let go before the next). */
+// What tells one source from another within a page's walk: the object pdf.js resolves, or the
+// inline data itself, with what changes how it looks.
+function keyOf(source: Source, turn: Turn): [object | string, string] {
+  switch (source.from) {
+    case "object":
+      return [`o:${source.id}`, `${turn}`];
+    case "inline":
+      return [source.img, `${turn}`];
+    case "atlas":
+      return [source.img, `${turn}|${source.x},${source.y},${source.w},${source.h}`];
+    case "mask": {
+      const m = source.mask;
+      return [typeof m.data === "string" ? `m:${m.data}` : m, `${turn}|${source.fill}`];
+    }
+  }
+}
+
+/**
+ * The images of the placements. getOperatorList has decoded every image of the page into
+ * page.objs, where they stay until the page's cleanup; this only reads them, and hashes each
+ * source once however often it is placed.
+ */
 export async function imagesOf(p: PDFPageProxy, ops: { fnArray: ArrayLike<number>; argsArray: ArrayLike<unknown[] | null> }): Promise<ImageInfo[]> {
   const viewport = p.getViewport({ scale: 1 });
   const area = viewport.width * viewport.height;
+  type Seen = { width: number; height: number; hash: string | null; failed: boolean };
+  const seen = new Map<object | string, Map<string, Seen>>();
   const images: ImageInfo[] = [];
   for (const [i, { source, turn, box }] of walk(ops.fnArray, ops.argsArray, p).entries()) {
-    const raster = await rasterOf(p, source);
-    const size = raster ? turned(turn, raster.width, raster.height) : turned(turn, declared(source).width, declared(source).height);
+    const [what, how] = keyOf(source, turn);
+    const known = seen.get(what) ?? new Map<string, Seen>();
+    seen.set(what, known);
+    let found = known.get(how);
+    if (!found) {
+      const raster = await rasterOf(p, source);
+      const { width, height } = raster ?? declared(source);
+      found = { ...turned(turn, width, height), hash: raster ? hashOf(raster, turn) : null, failed: !raster };
+      known.set(how, found);
+    }
     images.push({
       n: i + 1,
-      ...size,
+      width: found.width,
+      height: found.height,
       x: round1(box.x),
       y: round1(box.y),
       w: round1(box.w),
       h: round1(box.h),
       small: box.w * box.h < MIN_FIGURE * area,
-      hash: raster ? hashOf(raster, turn) : null,
-      failed: !raster,
+      hash: found.hash,
+      failed: found.failed,
     });
   }
   return images;
@@ -410,27 +484,20 @@ export function extractImage(pdf: Uint8Array, page: number, n: number): Promise<
       if (!Number.isInteger(n) || n < 1 || n > all.length)
         throw new PdfError(`Page ${page} has no image ${n}; it has ${all.length}.`, "no_such_image");
       const { source, turn } = all[n - 1]!;
-      const raster = await rasterOf(p, source);
+      all.length = 0;
+      let raster = await rasterOf(p, source);
       if (!raster) throw new PdfError("The image could not be decoded.", "failed");
-      let canvas: Canvas = createCanvas(...sizeOf(turned(turn, raster.width, raster.height)));
-      canvas.getContext("2d").putImageData(rgbaOf(raster, turn), 0, 0);
-      const { width: ow, height: oh } = canvas;
+      const { width: ow, height: oh } = turned(turn, raster.width, raster.height);
       const scale = Math.min(1, Math.sqrt(MAX_STORED_PIXELS / (ow * oh)), MAX_SIDE / Math.max(ow, oh));
-      if (scale < 1) {
-        const { width, height } = pixels(ow, oh, scale);
-        const scaled = createCanvas(width, height);
-        const ctx = scaled.getContext("2d");
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(canvas, 0, 0, width, height);
-        canvas = scaled;
-      }
+      const { width, height } = scale < 1 ? pixels(ow, oh, scale) : { width: ow, height: oh };
+      let unturned: Canvas | null = canvasOf(raster);
+      raster = null;
+      const canvas = turnOnto(unturned, turn, width, height);
+      unturned = null;
       return { ...(await encodeStored(canvas, MAX_BODY_STORED)), originalWidth: ow, originalHeight: oh };
     }),
   );
 }
-
-const sizeOf = ({ width, height }: { width: number; height: number }) => [width, height] as const;
 
 /** A region at 300 dpi, at most 8 MP and 16,384 px on a side, encoded only as asked. */
 export function renderRegion(pdf: Uint8Array, page: number, crop: Crop, rotate: number, format: "png" | "jpeg"): Promise<RenderedPage> {

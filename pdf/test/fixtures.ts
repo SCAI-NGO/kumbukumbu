@@ -430,8 +430,8 @@ export const rgbPage = () =>
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(90, 0, 0, 60, 100, 600), drawObject(name), popGraphicsState());
   });
 
-// One image XObject placed REPEATS times in a row at the same size (pdf.js makes the later ones one
-// paintImageXObjectRepeat), 60 pt apart from x = 50.
+// One image XObject placed REPEATS times in a row at the same size, 60 pt apart from x = 50 (when
+// rendering, pdf.js's optimiser would make the later ones one paintImageXObjectRepeat).
 export const REPEATS = 5;
 
 export const repeatedImagePage = () =>
@@ -440,9 +440,9 @@ export const repeatedImagePage = () =>
     rawContent(doc, page, Array.from({ length: REPEATS }, (_, i) => `q 45 0 0 30 ${50 + i * 60} 500 cm ${name} Do Q`).join(" "));
   });
 
-// One stencil (left half painting) placed MASKS times in a row, in green: at one size (pdf.js makes
-// a paintImageMaskXObjectRepeat) or each larger than the last (a paintImageMaskXObjectGroup), from
-// x = 20, 45 pt apart.
+// One stencil (left half painting) placed MASKS times in a row, in green, from x = 20, 45 pt apart:
+// at one size or each larger than the last (when rendering, pdf.js's optimiser would make them a
+// paintImageMaskXObjectRepeat or a paintImageMaskXObjectGroup).
 export const MASKS = 12;
 export const MASKS_COLOUR = [0, 128, 0] as const;
 
@@ -456,7 +456,8 @@ export const manyMasksPage = (sizes: "same" | "growing") =>
   });
 
 // INLINES small inline images of 4 × 4 px, each of one colour (INLINE_COLOUR(i)), from x = 20, 45 pt
-// apart: pdf.js packs ten or more into one atlas (paintInlineImageXObjectGroup).
+// apart (when rendering, pdf.js's optimiser would pack ten or more into one atlas,
+// paintInlineImageXObjectGroup).
 export const INLINES = 12;
 export const INLINE_COLOUR = (i: number) => [i * 20, 255 - i * 20, (i * 50) % 256] as const;
 
@@ -493,4 +494,32 @@ export const brokenImagePage = () =>
     });
     const name = page.node.newXObject("Broken", doc.context.register(junk));
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(100, 0, 0, 60, 100, 600), drawObject(name), popGraphicsState());
+  });
+
+// RGB_PIXELS at 100,600, then image XObjects declaring a width of 12.5 and of -5 px (with data
+// enough for 13 × 4 px), at 100,400 and 100,200.
+export const hostileSizesPage = () =>
+  single((doc, page) => {
+    const good = page.node.newXObject("Rgb", rawImage(doc, 3, 2, new Uint8Array(RGB_PIXELS.flat()), { ColorSpace: "DeviceRGB", BitsPerComponent: 8 }));
+    const bad = [12.5, -5].map((width, i) =>
+      page.node.newXObject(`Bad${i}`, rawImage(doc, width, 4, new Uint8Array(13 * 4 * 3).fill(0x80), { ColorSpace: "DeviceRGB", BitsPerComponent: 8 })),
+    );
+    rawContent(doc, page, [good, ...bad].map((name, i) => `q 90 0 0 60 100 ${600 - i * 200} cm ${name} Do Q`).join(" "));
+  });
+
+// A 16 × 16 stencil with data for its first 8 rows only, all painting, drawn 160 × 160 pt at
+// 100,500 in MASK_COLOUR: pdf.js paints the missing rows as nothing.
+export const truncatedMaskPage = () =>
+  single((doc, page) => {
+    const mask = page.node.newXObject("Mask", rawImage(doc, 16, 16, new Uint8Array(16), { ImageMask: true, BitsPerComponent: 1 }));
+    rawContent(doc, page, `q 1 0 0 rg 160 0 0 160 100 500 cm ${mask} Do Q`);
+  });
+
+// One 2000 × 2000 px image placed `count` times, each 1 × 1 pt, row by row from the top left: hashed
+// anew for each placement, its 10,000 placements would take minutes.
+export const manyPlacementsPage = (count: number) =>
+  single((doc, page) => {
+    const side = 2000;
+    const name = page.node.newXObject("Grey", rawImage(doc, side, side, new Uint8Array(side * side).fill(0x80), { ColorSpace: "DeviceGray", BitsPerComponent: 8 }));
+    rawContent(doc, page, Array.from({ length: count }, (_, i) => `q 1 0 0 1 ${i % 500} ${800 - Math.floor(i / 500)} cm ${name} Do Q`).join("\n"));
   });

@@ -18,6 +18,7 @@ import { PdfError, openPdf } from "../src/pdfjs.js";
 import { renderPage } from "../src/render.js";
 import {
   A4,
+  CORNER_COLOURS,
   CORNER_IMAGE,
   INLINES,
   INLINE_COLOUR,
@@ -32,17 +33,21 @@ import {
   bigImagePage,
   brokenImagePage,
   cornerImagePage,
+  cornersPage,
+  hostileSizesPage,
   hugeImagePage,
   inlineImagesPage,
   logoOnEveryPage,
   longImagePage,
   manyMasksPage,
+  manyPlacementsPage,
   maskPage,
   offPageImagePage,
   oneBitPage,
   repeatedImagePage,
   rgbPage,
   transparentImagePage,
+  truncatedMaskPage,
   twoImagesPage,
   vectorDrawingPage,
   widePage,
@@ -129,6 +134,26 @@ describe("listImages", () => {
     expect((await failure(extractImage(await brokenImagePage(), 1, 1))).code).toBe("failed");
   });
 
+  it("lists an image declaring a width that is no whole positive number as failed, and the others", async () => {
+    const pdf = await hostileSizesPage();
+    const [good, ...bad] = (await listImages(pdf, 1)).images;
+    expect(good).toMatchObject({ n: 1, width: 3, height: 2, failed: false });
+    expect(bad).toHaveLength(2);
+    for (const image of bad) {
+      expect(image).toMatchObject({ hash: null, failed: true });
+      for (const side of [image.width, image.height]) expect(Number.isInteger(side) && side >= 0, `${side}`).toBe(true);
+      expect((await failure(extractImage(pdf, 1, image.n))).code).toBe("failed");
+    }
+  });
+
+  it("lists every placement of one image, hashing it once, up to 10,000 and refuses more", async () => {
+    const list = await listImages(await manyPlacementsPage(10_000), 1);
+    expect(list.images).toHaveLength(10_000);
+    expect(new Set(list.images.map((i) => i.hash)).size).toBe(1);
+    const e = await failure(listImages(await manyPlacementsPage(10_001), 1));
+    expect([e.code, e.message]).toEqual(["too_large", "The page paints more than 10,000 images."]);
+  });
+
   it("counts an image over 50 MP that pdf.js leaves out", async () => {
     const list = await listImages(await hugeImagePage(), 1);
     expect(list.images).toEqual([]);
@@ -152,7 +177,7 @@ describe("extractImage", () => {
     near((await pixels(square.data)).at(100, 100), [0xc0, 0x40, 0x20], 6);
   });
 
-  for (const [rotation, flip] of [[0, false], [90, false], [180, false], [270, false], [0, true], [90, true]] as const)
+  for (const [rotation, flip] of [[0, false], [90, false], [180, false], [270, false], [0, true], [90, true], [180, true], [270, true]] as const)
     it(`turns an image as painted: ${rotation}°${flip ? ", mirrored" : ""}`, async () => {
       const pdf = await cornerImagePage(rotation, flip);
       const [box] = (await listImages(pdf, 1)).images as [ImageInfo];
@@ -175,6 +200,15 @@ describe("extractImage", () => {
     expect([mask.width, mask.height]).toEqual([16, 16]);
     expect(mask.at(2, 8)).toEqual([...MASK_COLOUR, 255]);
     expect(mask.at(12, 8)[3]).toBe(0);
+  });
+
+  it("paints the rows a mask's data lacks as nothing", async () => {
+    const list = await listImages(await truncatedMaskPage(), 1);
+    expect(list.images).toMatchObject([{ width: 16, height: 16, failed: false }]);
+    const mask = await pixels((await extractImage(await truncatedMaskPage(), 1, 1)).data);
+    expect([mask.width, mask.height]).toEqual([16, 16]);
+    expect(mask.at(8, 3)).toEqual([...MASK_COLOUR, 255]);
+    expect(mask.at(8, 12)[3]).toBe(0);
   });
 
   it("keeps an image's alpha", async () => {
@@ -369,9 +403,14 @@ describe("renderRegion", () => {
   });
 
   it("renders as JPEG when asked, turned", async () => {
-    const r = await renderRegion(await vectorDrawingPage(), 1, { x: 0, y: 0, w: 100, h: 200 }, 90, "jpeg");
-    expect(r).toMatchObject({ mediaType: "image/jpeg", rotate: 90, width: Math.floor((100 * STORED_DPI) / 72) });
+    const r = await renderRegion(await cornersPage(), 1, { x: 0, y: 0, w: 100, h: 200 }, 90, "jpeg");
+    const [width, height] = [Math.floor((100 * STORED_DPI) / 72), Math.floor((200 * STORED_DPI) / 72)];
+    expect(r).toMatchObject({ mediaType: "image/jpeg", rotate: 90, width, height });
     starts(r.data, JPEG);
+    // Turned by 90°, the page's bottom-left square comes to its top left, and white is below it.
+    const p = await pixels(r.data);
+    near(p.at(width / 2, height / 4), CORNER_COLOURS[3], 8);
+    near(p.at(width / 2, (height * 3) / 4), [255, 255, 255], 8);
   });
 
   it("refuses a region outside the page and a page outside the PDF", async () => {
