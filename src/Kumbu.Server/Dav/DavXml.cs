@@ -35,6 +35,12 @@ public static class DavXml
 
     public const int MaxBodyBytes = 64 * 1024;
 
+    /// <summary>The distinct properties a <c>PROPFIND</c>'s <c>DAV:prop</c> may name. Clients ask for about a dozen
+    /// (Windows, Finder and Office alike); every resource of a <c>Depth: 1</c> answer reports each name it lacks, so
+    /// without a cap the 64 KB body's eleven thousand names times a folder's children would be an answer of gigabytes.
+    /// More is a 400: a client that asks for so many is no client of ours.</summary>
+    public const int MaxPropertyNames = 64;
+
     public const string ContentType = "application/xml; charset=utf-8";
 
     private static readonly XmlReaderSettings ReaderSettings = new()
@@ -97,8 +103,23 @@ public static class DavXml
             "allprop" => DavPropfind.AllProp,
             "propname" => new DavPropfind(DavPropfindKind.PropName, []),
             _ when !choice.HasElements => throw BadBody("A DAV:prop names the properties asked for, at least one."),
-            _ => new DavPropfind(DavPropfindKind.Prop, [.. choice.Elements().Select(e => e.Name).Distinct()]),
+            _ => new DavPropfind(DavPropfindKind.Prop, Named(choice)),
         };
+    }
+
+    /// <summary>The distinct names of a <c>DAV:prop</c>, at most <see cref="MaxPropertyNames"/> of them.</summary>
+    private static List<XName> Named(XElement prop)
+    {
+        var names = new List<XName>();
+        var seen = new HashSet<XName>();
+        foreach (var element in prop.Elements())
+        {
+            if (!seen.Add(element.Name)) continue;
+            if (names.Count == MaxPropertyNames) throw BadBody($"A DAV:prop may name at most {MaxPropertyNames} properties.");
+            names.Add(element.Name);
+        }
+
+        return names;
     }
 
     /// <summary>The properties a <c>PROPPATCH</c> body (RFC 4918 §14.19) sets or removes, in its order, each once. Nothing
@@ -170,19 +191,36 @@ public static class DavXml
     }
 
     /// <summary>A 207 with a <c>DAV:multistatus</c> of <paramref name="responses"/>.</summary>
-    public static Task WriteMultistatusAsync(HttpResponse response, IEnumerable<DavResponse> responses, CancellationToken ct)
+    public static Task WriteMultistatusAsync(HttpResponse response, IEnumerable<DavResponse> responses, CancellationToken ct) =>
+        WriteMultistatusAsync(response, responses.ToAsyncEnumerable(), ct);
+
+    /// <summary>
+    /// A 207 with a <c>DAV:multistatus</c> of <paramref name="responses"/>, written to the body one <c>response</c> at a
+    /// time as each is made, without a length: what is in memory is one resource's answer (at most
+    /// <see cref="MaxPropertyNames"/> properties) and the writer's buffer, however large the folder a <c>Depth: 1</c>
+    /// lists. Once the first bytes are out, a failure can only cut the answer short, as a dropped connection would.
+    /// </summary>
+    public static async Task WriteMultistatusAsync(HttpResponse response, IAsyncEnumerable<DavResponse> responses, CancellationToken ct)
     {
-        var multistatus = new XElement(
-            Dav + "multistatus",
-            new XAttribute(XNamespace.Xmlns + "D", Dav.NamespaceName),
-            responses.Select(r => new XElement(
+        response.StatusCode = StatusCodes.Status207MultiStatus;
+        response.ContentType = ContentType;
+        await using var writer = XmlWriter.Create(response.Body, new XmlWriterSettings { Encoding = Utf8, Async = true, CloseOutput = false });
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync("D", "multistatus", Dav.NamespaceName);
+        await foreach (var r in responses.WithCancellation(ct))
+        {
+            var element = new XElement(
                 Dav + "response",
                 new XElement(Dav + "href", r.Href),
                 r.PropStats.Select(s => new XElement(
                     Dav + "propstat",
                     new XElement(Dav + "prop", s.Properties),
-                    new XElement(Dav + "status", Status(s.Status)))))));
-        return WriteAsync(response, StatusCodes.Status207MultiStatus, multistatus, ct);
+                    new XElement(Dav + "status", Status(s.Status)))));
+            await element.WriteToAsync(writer, ct);
+        }
+
+        await writer.WriteEndElementAsync();
+        await writer.WriteEndDocumentAsync();
     }
 
     /// <summary>A <c>DAV:error</c> with one precondition element (RFC 4918 §16), such as <c>propfind-finite-depth</c>.</summary>

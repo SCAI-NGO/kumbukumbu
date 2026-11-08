@@ -150,14 +150,18 @@ public static class DavEndpoints
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
         var properties = new DavProperties(
             DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>(), http.RequestServices.GetRequiredService<Accounts.StorageQuota>(), propfind);
-        var responses = new List<DavResponse>(resources.Count);
-        foreach (var r in resources)
+        await DavXml.WriteMultistatusAsync(http.Response, Responses(), ct);
+
+        // One resource's answer at a time, made as the writer gets to it (DavXml.WriteMultistatusAsync).
+        async IAsyncEnumerable<DavResponse> Responses()
         {
-            // The resource asked about answers under the name it was asked by (Plan.MD), what is below it under its own.
-            var href = r == resource && target.Asked is { } asked ? DavPaths.Href(asked, r.IsCollection) : r.Href;
-            responses.Add(DavXml.Response(href, await properties.PropertiesAsync(r, ct), propfind));
+            foreach (var r in resources)
+            {
+                // The resource asked about answers under the name it was asked by (Plan.MD), what is below it under its own.
+                var href = r == resource && target.Asked is { } asked ? DavPaths.Href(asked, r.IsCollection) : r.Href;
+                yield return DavXml.Response(href, await properties.PropertiesAsync(r, ct), propfind);
+            }
         }
-        await DavXml.WriteMultistatusAsync(http.Response, responses, ct);
     }
 
     /// <summary>

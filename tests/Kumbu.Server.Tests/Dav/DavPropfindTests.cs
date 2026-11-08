@@ -201,6 +201,56 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
     }
 
+    /// <summary>A <c>DAV:prop</c> may name at most <see cref="Kumbu.Server.Dav.DavXml.MaxPropertyNames"/> distinct
+    /// properties: every resource of a <c>Depth: 1</c> answer reports each one it lacks, so a long list times a large
+    /// folder would be an answer of gigabytes (security review finding 1). Counted the same at either depth; a name given
+    /// twice counts once.</summary>
+    [Fact]
+    public async Task A_propfind_naming_more_than_the_cap_is_refused_at_either_depth()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("Ideas/a.md", "# A");
+        await dav.Owner.CreateAsync("Ideas/b.md", "# B");
+        var cap = Kumbu.Server.Dav.DavXml.MaxPropertyNames;
+        static HttpContent Naming(int count, int repeats = 1) => DavClient.Body(
+            "<D:propfind xmlns:D=\"DAV:\" xmlns:Z=\"urn:example:z\"><D:prop><D:getetag/>"
+            + string.Concat(Enumerable.Repeat(string.Concat(Enumerable.Range(1, count - 1).Select(i => $"<Z:p{i}/>")), repeats))
+            + "</D:prop></D:propfind>");
+
+        foreach (var depth in new[] { "0", "1" })
+        {
+            using var over = await dav.PropfindAsync("/dav/Work/Ideas/", depth: depth, body: Naming(cap + 1));
+            Assert.Equal(HttpStatusCode.BadRequest, over.StatusCode);
+        }
+
+        // At the cap, and with every name twice, each resource of the folder answers for every one of them.
+        var listing = await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/Ideas/", depth: "1", body: Naming(cap, repeats: 2)));
+        Assert.Equal(["/dav/Work/Ideas/", "/dav/Work/Ideas/a.md", "/dav/Work/Ideas/b.md"], DavAssert.Hrefs(listing));
+        foreach (var response in listing.Elements(D + "response"))
+        {
+            Assert.Equal(cap, response.Elements(D + "propstat").SelectMany(p => p.Element(D + "prop")!.Elements()).Count());
+        }
+    }
+
+    /// <summary>A listing is written one response at a time as it is made, never built whole first: no length is known
+    /// before the last one (security review finding 1).</summary>
+    [Fact]
+    public async Task A_depth_1_listing_is_streamed()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        using (var folder = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.junk")) Assert.Equal(HttpStatusCode.Created, folder.StatusCode);
+        for (var i = 0; i < 50; i++)
+        {
+            using var put = await dav.SendAsync(HttpMethod.Put, $"/dav/Work/.junk/{i}", new ByteArrayContent([1]));
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        }
+
+        using var response = await dav.PropfindAsync("/dav/Work/.junk/", depth: "1");
+        Assert.False(response.Content.Headers.NonValidated.Contains("Content-Length"));
+        var listing = await DavAssert.MultistatusAsync(response);
+        Assert.Equal(51, DavAssert.Hrefs(listing).Count);
+    }
+
     /// <summary>One reader for every XML body, <c>PROPFIND</c>'s and <c>PROPPATCH</c>'s; Task 7 adds <c>LOCK</c> to this test.</summary>
     [Fact]
     public async Task A_doctype_in_the_body_is_refused()
