@@ -347,21 +347,6 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     (dialog.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialog.current)?.focus();
   }, [view.kind, dialog]);
 
-  // A drop that misses the drop zone would make the browser open the file in place of the app, run and all.
-  useEffect(() => {
-    const swallow = (e: globalThis.DragEvent) => {
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
-    };
-    window.addEventListener("dragover", swallow);
-    window.addEventListener("drop", swallow);
-    return () => {
-      window.removeEventListener("dragover", swallow);
-      window.removeEventListener("drop", swallow);
-    };
-  }, []);
-
   const onDragOver = (e: DragEvent) => {
     if (view.kind === "pick" && e.dataTransfer.types.includes("Files")) e.preventDefault();
   };
