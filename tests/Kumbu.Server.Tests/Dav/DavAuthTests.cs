@@ -500,6 +500,20 @@ public sealed class DavAuthTests(KumbuAppFactory app)
         Assert.NotEqual("text/html", response.Content.Headers.ContentType?.MediaType);
     }
 
+    /// <summary>Switched off, <c>PROPFIND /</c> is answered as on any page of the web app, not with WebDAV's methods.</summary>
+    [Fact]
+    public async Task Propfind_on_root_says_nothing_of_DAV_when_it_is_switched_off()
+    {
+        await using var off = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Dav:Enabled", "false"));
+
+        using var root = await DavClient.SendAsync(off, DavClient.Propfind, "/", authorization: null);
+        using var page = await DavClient.SendAsync(off, DavClient.Propfind, "/settings", authorization: null);
+
+        Assert.Equal(page.StatusCode, root.StatusCode);
+        Assert.Equal(DavAssert.Header(page, "Allow"), DavAssert.Header(root, "Allow"));
+        Assert.DoesNotContain("PROPFIND", DavAssert.Header(root, "Allow"), StringComparison.Ordinal);
+    }
+
     /// <summary>The caller a share resolves to: its label marked "(dav)", an agent's reference with the share's id (its
     /// writes are not the user's own hand), but a person's changeset timing, and refusals that speak of the share.</summary>
     [Fact]

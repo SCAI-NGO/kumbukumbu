@@ -300,17 +300,17 @@ app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment e
     : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 
 // WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
-// With WebDAV switched off, / advertises nothing and OPTIONS there is answered as on any other page.
+// With WebDAV switched off, / advertises nothing: OPTIONS and PROPFIND there are answered as on any other page.
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Dav.Enabled)
 {
     app.MapMethods("/", [HttpMethods.Options], (HttpContext http) => DavHeaders.Options(http.Response, DavHeaders.RootMethods)).AllowAnonymous().ExcludeFromDescription();
+    app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
+    {
+        http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+        http.Response.Headers.Allow = DavHeaders.RootMethods;
+    }).AllowAnonymous().ExcludeFromDescription();
 }
 
-app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
-{
-    http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
-    http.Response.Headers.Allow = DavHeaders.RootMethods;
-}).AllowAnonymous().ExcludeFromDescription();
 // Everything under /dav, /dav itself included: CallerMiddleware lets OPTIONS through without a caller and everything else
 // only with a share's.
 app.MapDav();
