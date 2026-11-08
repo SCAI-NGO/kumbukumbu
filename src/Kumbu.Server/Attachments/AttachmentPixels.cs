@@ -90,6 +90,31 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         }
     }
 
+    public async Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        try
+        {
+            return await sidecar.ListImagesAsync(bytes, page, ct);
+        }
+        catch (SidecarException e)
+        {
+            throw RefusedStoring(e, Extraction.List, path, page, 0, null, false);
+        }
+    }
+
+    public async Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ExtractImageAsync(bytes, page, n, ct), e => RefusedStoring(e, Extraction.Image, path, page, n, null, false));
+    }
+
+    public async Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.RenderRegionAsync(bytes, page, crop, rotate, jpeg, ct), e => RefusedStoring(e, Extraction.Region, path, page, 0, crop, jpeg));
+    }
+
     public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
@@ -117,6 +142,46 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         }
 
         return $"{path} can't be looked at: {char.ToLowerInvariant(problem![0])}{problem[1..]}";
+    }
+
+    private enum Extraction { List, Image, Region }
+
+    /// <summary>
+    /// A refusal of a PDF's images or a region to store, in sentences of their own (<c>pdfimages</c> quotes them):
+    /// a busy sidecar is <see cref="PixelsProblem.Busy"/>, to be tried again in a moment.
+    /// </summary>
+    private static PixelsUnavailableException RefusedStoring(SidecarException e, Extraction asked, VaultPath path, int page, int n, Crop? crop, bool jpeg)
+    {
+        var what = asked switch
+        {
+            Extraction.List => $"the images of page {page} of {path}",
+            Extraction.Image => $"image {n} on page {page} of {path}",
+            _ => $"the region of page {page} of {path}",
+        };
+        var reading = asked == Extraction.Region ? "rendering" : "reading";
+        return new(e.Code switch
+        {
+            SidecarException.Busy => "PDF image extraction is busy; try again in a moment",
+            SidecarException.Unavailable => "PDF image extraction is unavailable right now; try again later",
+            SidecarException.Timeout => $"{reading} {what} took too long",
+            SidecarException.Aborted => $"{reading} {what} stopped part way (the renderer may have run out of memory)",
+            SidecarException.Encrypted => PdfAnalysisRunner.PasswordProtected,
+            "no_such_page" => $"{path} has no page {page}",
+            "no_such_image" => $"page {page} of {path} has no image {n}",
+            "bad_crop" => $"the crop {crop} lies outside page {page}",
+            "too_large" when asked == Extraction.Region && !jpeg => "the region is over 15 MB as PNG; name the target .jpg",
+            "too_large" when asked == Extraction.Region => "the region is over 15 MB even as JPEG at quality 60; crop a smaller region",
+            "too_large" => $"{what} is over 15 MB even as JPEG at quality 60",
+            _ => asked == Extraction.Region ? $"{what} couldn't be rendered" : $"{what} couldn't be read",
+        }, e.Code switch
+        {
+            SidecarException.Busy => PixelsProblem.Busy,
+            SidecarException.Unavailable => PixelsProblem.Unavailable,
+            "no_such_image" => PixelsProblem.NoSuchImage,
+            "bad_crop" => PixelsProblem.BadCrop,
+            "too_large" => PixelsProblem.TooLarge,
+            _ => PixelsProblem.Failed,
+        });
     }
 
     private static PixelsUnavailableException Refused(SidecarException e, string what, VaultPath path, int? page, Crop? crop, int? frame) => new(e.Code switch

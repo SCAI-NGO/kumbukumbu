@@ -700,6 +700,250 @@ public sealed class PdfSidecarTests
         Assert.Equal(known, e.Code);
     }
 
+    private const string Hash1 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// <summary>The sidecar's answer for the images of page 2, as <c>pdf/src/extract.ts</c> shapes it.</summary>
+    private static JsonObject PageTwoImages() => JsonNode.Parse($$"""
+        {
+          "page": 2, "pageCount": 5, "width": 595.28, "height": 841.89, "over": 1,
+          "images": [
+            { "n": 1, "width": 2400, "height": 1600, "x": 80, "y": 300.5, "w": 435.2, "h": 290, "small": false, "hash": "{{Hash1}}", "failed": false },
+            { "n": 2, "width": 120, "height": 60, "x": 0, "y": 0, "w": 60, "h": 30, "small": true, "hash": "{{Hash1}}", "failed": false },
+            { "n": 3, "width": 10, "height": 10, "x": 10, "y": 10, "w": 5, "h": 5, "small": true, "hash": null, "failed": true }
+          ]
+        }
+        """)!.AsObject();
+
+    [Fact]
+    public async Task The_images_of_a_page_are_asked_for_by_page_and_parse()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, PageTwoImages().ToJsonString()));
+
+        var images = await Sidecar(stub).ListImagesAsync(Pdf, 2, Ct);
+
+        var (request, body) = Assert.Single(stub.Seen);
+        Assert.Equal("http://pdf.test:8090/images/list?page=2", request.RequestUri!.ToString());
+        Assert.Equal(Pdf, body);
+        Assert.Equal((2, 5, 595.28, 841.89, 1), (images.Page, images.PageCount, images.Width, images.Height, images.Over));
+        Assert.Equal(
+            [
+                new PdfImageInfo(1, 2400, 1600, 80, 300.5, 435.2, 290, false, Hash1, false),
+                new PdfImageInfo(2, 120, 60, 0, 0, 60, 30, true, Hash1, false),
+                new PdfImageInfo(3, 10, 10, 10, 10, 5, 5, true, null, true),
+            ],
+            images.Images);
+    }
+
+    public static TheoryData<string, string> BrokenImages() => new()
+    {
+        { "another page", """{"op":"set","path":"page","value":3}""" },
+        { "fewer pages than the one asked", """{"op":"set","path":"pageCount","value":1}""" },
+        { "a negative over", """{"op":"set","path":"over","value":-1}""" },
+        { "no images", """{"op":"remove","path":"images"}""" },
+        { "a null image", """{"op":"set","path":"images.1","value":null}""" },
+        { "a hash in capitals", """{"op":"set","path":"images.0.hash","value":"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"}""" },
+        { "a short hash", """{"op":"set","path":"images.0.hash","value":"0123456789abcdef"}""" },
+        { "a hash that isn't hex", """{"op":"set","path":"images.0.hash","value":"0123456789abcdeg0123456789abcdef0123456789abcdef0123456789abcdef"}""" },
+        { "no hash on an image decoded", """{"op":"set","path":"images.0.hash","value":null}""" },
+        { "a negative box", """{"op":"set","path":"images.0.x","value":-0.5}""" },
+        { "a box of no width", """{"op":"set","path":"images.0.w","value":-1}""" },
+        { "a huge number", """{"op":"set","path":"images.0.h","value":1e400}""" },
+        { "no pixels", """{"op":"set","path":"images.1.width","value":0}""" },
+        { "a number out of order", """{"op":"set","path":"images.1.n","value":3}""" },
+        { "numbers not from 1", """{"op":"set","path":"images.0.n","value":0}""" },
+        { "no small", """{"op":"remove","path":"images.0.small"}""" },
+        { "no failed", """{"op":"remove","path":"images.0.failed"}""" },
+        { "a negative page width", """{"op":"set","path":"width","value":-1}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(BrokenImages))]
+    public async Task Images_of_a_page_that_dont_add_up_are_refused(string what, string change)
+    {
+        var json = PageTwoImages();
+        var op = JsonNode.Parse(change)!;
+        var steps = op["path"]!.GetValue<string>().Split('.');
+        JsonNode node = json;
+        foreach (var step in steps[..^1]) node = int.TryParse(step, out var i) ? node[i]! : node[step]!;
+        var last = steps[^1];
+        if (op["op"]!.GetValue<string>() == "remove") node.AsObject().Remove(last);
+        else if (node is JsonArray list) list[int.Parse(last, System.Globalization.CultureInfo.InvariantCulture)] = op["value"]?.DeepClone();
+        else node[last] = op["value"]?.DeepClone();
+        var text = json.ToJsonString().Replace("1E+400", "1e400", StringComparison.Ordinal);
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
+
+        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).ListImagesAsync(Pdf, 2, Ct));
+
+        Assert.True(e.Code == SidecarException.Failed, what);
+    }
+
+    [Fact]
+    public async Task More_than_10000_images_on_a_page_are_refused()
+    {
+        var json = PageTwoImages();
+        var images = new JsonArray();
+        for (var n = 1; n <= 10_001; n++)
+        {
+            images.Add(JsonNode.Parse($$"""{ "n": {{n}}, "width": 1, "height": 1, "x": 0, "y": 0, "w": 1, "h": 1, "small": true, "hash": "{{Hash1}}", "failed": false }"""));
+        }
+
+        json["images"] = images;
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, json.ToJsonString()));
+
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).ListImagesAsync(Pdf, 2, Ct))).Code);
+    }
+
+    [Fact]
+    public async Task Images_of_a_page_over_1_MiB_or_not_json_are_refused()
+    {
+        var huge = new Stub((_, _) => Json(HttpStatusCode.OK, PageTwoImages().ToJsonString() + new string(' ', 1024 * 1024)));
+        var notJson = new Stub((_, _) => Json(HttpStatusCode.OK, "<html>oops</html>"));
+
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(huge).ListImagesAsync(Pdf, 2, Ct))).Code);
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(notJson).ListImagesAsync(Pdf, 2, Ct))).Code);
+    }
+
+    private static Stub Extracted(byte[] bytes, string mediaType, int width, int height, int originalWidth, int originalHeight) =>
+        new((_, _) => Image(bytes, mediaType, width, height,
+            ("X-Kumbu-Original-Width", originalWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            ("X-Kumbu-Original-Height", originalHeight.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+
+    [Fact]
+    public async Task An_image_of_a_page_is_asked_for_by_number_and_comes_back_with_its_size_before_scaling()
+    {
+        var png = FakePdfSidecar.SolidPng(300, 200);
+        var stub = Extracted(png, "image/png", 300, 200, 4000, 3000);
+
+        var picture = await Sidecar(stub).ExtractImageAsync(Pdf, 3, 2, Ct);
+
+        var (request, body) = Assert.Single(stub.Seen);
+        Assert.Equal("http://pdf.test:8090/images/image?page=3&n=2", request.RequestUri!.ToString());
+        Assert.Equal(Pdf, body);
+        Assert.Equal(png, picture.Data);
+        Assert.Equal(("image/png", 300, 200, 4000d, 3000d), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
+    }
+
+    [Fact]
+    public async Task An_image_of_8_megapixels_and_16384_on_its_long_edge_is_accepted()
+    {
+        Assert.Equal(16_384, (await Sidecar(Extracted(Jpeg(16_384, 488), "image/jpeg", 16_384, 488, 20_000, 596)).ExtractImageAsync(Pdf, 1, 1, Ct)).Width);
+        Assert.Equal(4000, (await Sidecar(Extracted(Jpeg(4000, 2000), "image/jpeg", 4000, 2000, 8000, 4000)).ExtractImageAsync(Pdf, 1, 1, Ct)).Width);
+    }
+
+    public static TheoryData<string, byte[], string, int, int> WrongExtracted() => new()
+    {
+        { "a header that disagrees with the size given", Jpeg(300, 200), "image/jpeg", 300, 201 },
+        { "more than 8 megapixels", Jpeg(4000, 2010), "image/jpeg", 4000, 2010 },
+        { "a long edge over 16,384", Jpeg(16_386, 10), "image/jpeg", 16_386, 10 },
+        { "JPEG bytes said to be PNG", Jpeg(100, 100), "image/png", 100, 100 },
+        { "a type that isn't an image", FakePdfSidecar.SolidPng(100, 100), "text/html", 100, 100 },
+    };
+
+    [Theory]
+    [MemberData(nameof(WrongExtracted))]
+    public async Task An_image_of_a_page_that_isnt_what_it_says_is_refused(string what, byte[] bytes, string mediaType, int width, int height)
+    {
+        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Extracted(bytes, mediaType, width, height, width, height)).ExtractImageAsync(Pdf, 1, 1, Ct));
+
+        Assert.True(e.Code == SidecarException.Failed, what);
+    }
+
+    [Fact]
+    public async Task An_image_of_a_page_without_its_size_before_scaling_is_refused()
+    {
+        var stub = new Stub((_, _) => Image(Jpeg(300, 200), "image/jpeg", 300, 200, ("X-Kumbu-Original-Width", "4000")));
+
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).ExtractImageAsync(Pdf, 1, 1, Ct))).Code);
+    }
+
+    [Fact]
+    public async Task An_image_of_a_page_over_15_MiB_is_refused()
+    {
+        var bytes = new byte[15 * 1024 * 1024 + 1];
+        Jpeg(300, 200).CopyTo(bytes, 0);
+
+        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Extracted(bytes, "image/jpeg", 300, 200, 300, 200)).ExtractImageAsync(Pdf, 1, 1, Ct));
+
+        Assert.Equal(SidecarException.Failed, e.Code);
+    }
+
+    private static Stub Region(byte[] bytes, string mediaType, int width, int height, string? rotate = null)
+    {
+        List<(string, string)> headers = [("X-Kumbu-Page-Width", "595.28"), ("X-Kumbu-Page-Height", "841.89")];
+        if (rotate is not null) headers.Add(("X-Kumbu-Rotate", rotate));
+        return new((_, _) => Image(bytes, mediaType, width, height, [.. headers]));
+    }
+
+    [Fact]
+    public async Task A_region_is_asked_for_with_its_crop_format_and_turn()
+    {
+        var png = FakePdfSidecar.SolidPng(1083, 1879);
+        var stub = Region(png, "image/png", 1083, 1879, "90");
+
+        var picture = await Sidecar(stub).RenderRegionAsync(Pdf, 4, new Crop(72, 300.5, 451, 260), 90, false, Ct);
+
+        var (request, body) = Assert.Single(stub.Seen);
+        Assert.Equal("http://pdf.test:8090/images/region?page=4&crop=72,300.5,451,260&format=png&rotate=90", request.RequestUri!.ToString());
+        Assert.Equal(Pdf, body);
+        Assert.Equal(("image/png", 1083, 1879, 595.28, 841.89), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
+    }
+
+    [Fact]
+    public async Task A_region_asked_for_as_JPEG_says_so_and_leaves_out_no_turn()
+    {
+        var stub = Region(Jpeg(1879, 1083), "image/jpeg", 1879, 1083);
+
+        var picture = await Sidecar(stub).RenderRegionAsync(Pdf, 4, new Crop(72, 300.5, 451, 260), 0, true, Ct);
+
+        Assert.Equal("http://pdf.test:8090/images/region?page=4&crop=72,300.5,451,260&format=jpeg", Assert.Single(stub.Seen).Request.RequestUri!.ToString());
+        Assert.Equal("image/jpeg", picture.MediaType);
+    }
+
+    [Fact]
+    public async Task A_region_in_another_format_than_asked_is_refused()
+    {
+        var asPng = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Region(Jpeg(100, 100), "image/jpeg", 100, 100)).RenderRegionAsync(Pdf, 1, new Crop(0, 0, 10, 10), 0, false, Ct));
+        var asJpeg = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Region(FakePdfSidecar.SolidPng(100, 100), "image/png", 100, 100)).RenderRegionAsync(Pdf, 1, new Crop(0, 0, 10, 10), 0, true, Ct));
+
+        Assert.Equal((SidecarException.Failed, SidecarException.Failed), (asPng.Code, asJpeg.Code));
+    }
+
+    [Fact]
+    public async Task A_region_over_8_megapixels_or_not_turned_as_asked_is_refused()
+    {
+        var large = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Region(Jpeg(4000, 2010), "image/jpeg", 4000, 2010)).RenderRegionAsync(Pdf, 1, new Crop(0, 0, 10, 10), 0, true, Ct));
+        var unturned = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(Region(Jpeg(100, 100), "image/jpeg", 100, 100)).RenderRegionAsync(Pdf, 1, new Crop(0, 0, 10, 10), 90, true, Ct));
+
+        Assert.Equal((SidecarException.Failed, SidecarException.Failed), (large.Code, unturned.Code));
+    }
+
+    [Theory]
+    [InlineData(422, "no_such_image", "no_such_image")]
+    [InlineData(500, "no_such_image", "failed")]
+    [InlineData(413, "too_large", "too_large")]
+    [InlineData(503, "busy", "busy")]
+    public async Task Extraction_errors_map_to_codes(int status, string answered, string code)
+    {
+        var stub = new Stub((_, _) => Json((HttpStatusCode)status, $$"""{"error":"No.","code":"{{answered}}"}"""));
+        var sidecar = Sidecar(stub);
+
+        foreach (var call in new Func<Task>[]
+        {
+            () => sidecar.ListImagesAsync(Pdf, 1, Ct),
+            () => sidecar.ExtractImageAsync(Pdf, 1, 9, Ct),
+            () => sidecar.RenderRegionAsync(Pdf, 1, new Crop(0, 0, 10, 10), 0, false, Ct),
+        })
+        {
+            Assert.Equal(code, (await Assert.ThrowsAsync<SidecarException>(call)).Code);
+        }
+    }
+
+    [Fact]
+    public void Extraction_waits_for_the_sidecars_30_seconds_and_a_margin()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(35), Sidecar(new Stub((_, _) => throw new InvalidOperationException())).ExtractTimeout);
+    }
+
     /// <summary>A JPEG of SOI, one SOF0 frame header and EOI: enough for its header to say the size.</summary>
     private static byte[] Jpeg(int width, int height) =>
         [0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, (byte)(height >> 8), (byte)height, (byte)(width >> 8), (byte)width, 1, 1, 0x11, 0, 0xFF, 0xD9];

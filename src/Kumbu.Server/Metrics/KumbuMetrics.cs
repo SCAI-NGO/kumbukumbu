@@ -283,7 +283,8 @@ public static class KumbuMetrics
         return null;
     }
 
-    public enum RenderKind { Page, Image }
+    /// <summary>What the sidecar rendered: a page or an image for the model, or a PDF's image or region to store (<c>Extract</c>).</summary>
+    public enum RenderKind { Page, Image, Extract }
 
     /// <summary>Why the sidecar failed: the same four for an analysis and a render.</summary>
     public enum FailReason { Timeout, Unavailable, Invalid, Failed }
@@ -354,7 +355,7 @@ public static class KumbuMetrics
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
     private static readonly Histogram RenderDuration = Prometheus.Metrics.CreateHistogram(
-        "kumbu_render_duration_seconds", "How long the sidecar took to render a page or an image, failures included.", Hist(Seconds, "kind"));
+        "kumbu_render_duration_seconds", "How long the sidecar took to render a page or an image, or to extract one to store, failures included.", Hist(Seconds, "kind"));
 
     private static readonly Counter RenderFailures = Prometheus.Metrics.CreateCounter(
         "kumbu_render_failures_total", "Renders that failed, by kind and reason; a page or crop that the request got wrong (no such page, outside the page) is not a failure.", new CounterConfiguration { LabelNames = ["kind", "reason"] });
@@ -395,7 +396,7 @@ public static class KumbuMetrics
     public static void Rendered(RenderKind kind, TimeSpan elapsed) => RenderDuration.WithLabels(Label(kind)).Observe(elapsed.TotalSeconds);
 
     /// <summary>A page or crop the request got wrong: a refusal of the request, not a failure of the render.</summary>
-    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame";
+    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame" or "no_such_image";
 
     public static void RenderFailed(RenderKind kind, FailReason reason) => RenderFailures.WithLabels(Label(kind), Label(reason)).Inc();
 
@@ -478,7 +479,12 @@ public static class KumbuMetrics
         _ => "unavailable",
     };
 
-    private static string Label(RenderKind kind) => kind == RenderKind.Page ? "page" : "image";
+    private static string Label(RenderKind kind) => kind switch
+    {
+        RenderKind.Page => "page",
+        RenderKind.Image => "image",
+        _ => "extract",
+    };
 
     private static string Label(FailReason reason) => reason switch
     {

@@ -68,6 +68,12 @@ public class PdfCommandTests
 
         public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
 
+        public Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new NotSupportedException();
+
         public void Count(AttachmentUse use) => Used.Add(use);
     }
 
