@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -122,6 +123,44 @@ public sealed class DavShareApiTests(KumbuAppFactory app)
         using (var created = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", WorkPc)) Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         using var taken = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", WorkPc);
         Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
+    }
+
+    /// <summary>A user holds at most <see cref="DavShares.MaxActive"/> shares that are neither revoked nor expired
+    /// (security review finding 4): each one may park and lock in the server's memory. One more is a 409 with the
+    /// reason; a revoked or an expired one makes room.</summary>
+    [Fact]
+    public async Task Shares_beyond_the_limit_are_409_until_one_is_revoked_or_expires()
+    {
+        await using var api = Timed();
+        var alice = await RestClient.NewAsync(api, vault: "Work", remember: true);
+        object Share(int i, int? days = null) => days is null
+            ? new { label = $"PC {i}", vaults = new Dictionary<string, string> { ["Work"] = "read" } }
+            : new { label = $"PC {i}", vaults = new Dictionary<string, string> { ["Work"] = "read" }, expiresInDays = days };
+        string? first = null;
+        for (var i = 0; i < DavShares.MaxActive; i++)
+        {
+            using var created = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", Share(i, i == 1 ? 30 : null));
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            first ??= (await RestClient.JsonAsync(created))["share"]!["id"]!.GetValue<string>();
+        }
+
+        using (var refused = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", Share(100)))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal($"You can have at most {DavShares.MaxActive} WebDAV shares; revoke one you no longer use first.",
+                (await RestClient.JsonAsync(refused))["error"]!.GetValue<string>());
+        }
+
+        using (var revoked = await alice.SendAsync(HttpMethod.Delete, $"/api/dav-shares/{first}")) Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        using (var room = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", Share(101))) Assert.Equal(HttpStatusCode.Created, room.StatusCode);
+        using (var full = await alice.SendAsync(HttpMethod.Post, "/api/dav-shares", Share(102))) Assert.Equal(HttpStatusCode.Conflict, full.StatusCode);
+
+        // The share that expires in 30 days stops counting then (asked of the service: the session doesn't last so long).
+        var shares = api.Services.GetRequiredService<DavShares>();
+        var work = new Dictionary<string, KeyRight> { [await alice.VaultIdAsync()] = KeyRight.Read };
+        await Assert.ThrowsAsync<DavShareLimitException>(() => shares.CreateAsync(alice.User, alice.UserKey, _time.GetUtcNow().UtcDateTime, "PC 103", work, Ct));
+        _time.Advance(TimeSpan.FromDays(31));
+        await shares.CreateAsync(alice.User, alice.UserKey, _time.GetUtcNow().UtcDateTime, "PC 104", work, Ct);
     }
 
     [Fact]

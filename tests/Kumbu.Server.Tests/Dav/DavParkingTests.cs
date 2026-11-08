@@ -440,4 +440,29 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Null(parking.Get("s", "v", "b"));
         Assert.False(parking.Move("s", "v", "nothing", "c"));
     }
+
+    /// <summary>What every share parks together is capped too (security review finding 4): past
+    /// <see cref="DavRules.ParkingTotalCap"/> the oldest parked files of any share go, as within one share, and the new
+    /// one is parked. One array stands for every file: the cap counts bytes, the test holds them once.</summary>
+    [Fact]
+    public void Parked_bytes_are_capped_across_shares_the_oldest_going_first()
+    {
+        var time = new FakeTimeProvider();
+        var parking = new DavParking(time);
+        var big = new byte[DavRules.ParkingCap - 64 * 1024];
+        var full = (int)(DavRules.ParkingTotalCap / big.Length);
+        for (var i = 0; i < full; i++)
+        {
+            parking.Put($"s{i}", "v", ".big", big);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        Assert.All(Enumerable.Range(0, full), i => Assert.NotNull(parking.Get($"s{i}", "v", ".big")));
+
+        parking.Put("new", "v", ".big", big);
+
+        Assert.Null(parking.Get("s0", "v", ".big"));
+        Assert.All(Enumerable.Range(1, full - 1), i => Assert.NotNull(parking.Get($"s{i}", "v", ".big")));
+        Assert.NotNull(parking.Get("new", "v", ".big"));
+    }
 }

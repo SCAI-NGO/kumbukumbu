@@ -63,6 +63,11 @@ public sealed class DavShares(IMongoDatabase db, VaultCatalog catalog, TimeProvi
     /// <summary>An id is a million-to-one draw; a share id already taken is drawn again, up to this many times in all.</summary>
     private const int IdAttempts = 5;
 
+    /// <summary>The shares a user may hold that are neither revoked nor expired. Each may park
+    /// <see cref="Dav.DavRules.ParkingCap"/> and lock in this server's memory, so their number must be bounded; twenty is a
+    /// share per device and per app with room to spare (WebDAV design §3.2 expects a handful).</summary>
+    public const int MaxActive = 20;
+
     /// <summary>A burst of requests shouldn't write on each; "last used" may therefore lag by up to this much.</summary>
     private static readonly TimeSpan LastUsedGranularity = TimeSpan.FromMinutes(1);
 
@@ -84,7 +89,8 @@ public sealed class DavShares(IMongoDatabase db, VaultCatalog catalog, TimeProvi
     /// username and its password, formatted, the only time it is shown. Throws as <see cref="ApiKeys.CreateAsync"/> does:
     /// <see cref="ArgumentException"/> for an unusable label, no vaults, a vault the user can't give or an expiry not among
     /// <see cref="ApiKeys.ExpiryDays"/>, <see cref="DavShareLabelTakenException"/> if one of her shares that is neither
-    /// revoked nor expired has that label (compared case-insensitively), and <see cref="CredentialsChangedException"/>
+    /// revoked nor expired has that label (compared case-insensitively), <see cref="DavShareLimitException"/> if she has
+    /// <see cref="MaxActive"/> such shares already, and <see cref="CredentialsChangedException"/>
     /// if her credentials changed at or after <paramref name="credentialReadAt"/> or she is inactive. On a vault shared
     /// with her, the share is derived through her membership, which records it as <c>dav:{id}</c> with its marked label.
     /// </summary>
@@ -161,6 +167,9 @@ public sealed class DavShares(IMongoDatabase db, VaultCatalog catalog, TimeProvi
                         cancellationToken: token);
                     if (current.MatchedCount == 0) throw new CredentialsChangedException();
                     if (await LabelTakenAsync(s, user.Id, doc.NameId, Now, token)) throw new DavShareLabelTakenException(clean);
+                    // Read in the transaction that writes users.sharesCreated above: two concurrent creations conflict
+                    // there, so neither can slip past the limit beside the other.
+                    if (await ActiveCountAsync(s, user.Id, Now, token) >= MaxActive) throw new DavShareLimitException(MaxActive);
                     await catalog.RequireVaultsAsync(s, [.. vaultKeys.Keys], Noun, token);
                     await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys.ToDictionary(v => v.Key, v => v.Value.Key), token);
                     // A vault shared with the user: its membership must still be active, and records the share under an id
@@ -383,6 +392,13 @@ public sealed class DavShares(IMongoDatabase db, VaultCatalog catalog, TimeProvi
             .AnyAsync(ct);
     }
 
+    /// <summary>Inside a share's creation: how many shares of the user are neither revoked nor expired.</summary>
+    private Task<long> ActiveCountAsync(IClientSessionHandle session, string userId, DateTime now, CancellationToken ct)
+    {
+        var f = Builders<DavShareDocument>.Filter;
+        return Shares.CountDocumentsAsync(session, f.Eq(d => d.User, userId) & f.Eq(d => d.RevokedAt, null) & (f.Eq(d => d.ExpiresAt, null) | f.Gt(d => d.ExpiresAt, now)), cancellationToken: ct);
+    }
+
     /// <summary>A vault the share was given but has no slot for any more is lost, while the share could still open it.</summary>
     private DavShareInfo Info(DavShareDocument doc, DavShareMeta meta, string ownerUsername, IReadOnlySet<string> slotVaults)
     {
@@ -516,3 +532,6 @@ public sealed class DavShareDocument
 }
 
 public sealed class DavShareLabelTakenException(string label) : Exception($"You already have a WebDAV share labelled '{label}'.");
+
+/// <summary>The user holds <see cref="DavShares.MaxActive"/> shares that are neither revoked nor expired.</summary>
+public sealed class DavShareLimitException(int limit) : Exception($"You can have at most {limit} WebDAV shares; revoke one you no longer use first.");

@@ -18,8 +18,8 @@ public sealed record ParkedItem(string Path, byte[]? Bytes, DateTime Modified, s
 /// nothing. A file lives <see cref="DavRules.ParkingTtl"/> after its last write, checked on every call (no timer); a
 /// folder as long as what is below it, since a write below one counts as a write of the folders above it. A share holds
 /// at most <see cref="DavRules.ParkingCap"/> and <see cref="DavRules.ParkingEntries"/> entries, its oldest files
-/// evicted to make room. A restart forgets everything, which
-/// is harmless for junk.
+/// evicted to make room, and all shares together <see cref="DavRules.ParkingTotalCap"/>, the oldest files of any share
+/// evicted then. A restart forgets everything, which is harmless for junk.
 /// </summary>
 public sealed class DavParking(TimeProvider time)
 {
@@ -191,14 +191,25 @@ public sealed class DavParking(TimeProvider time)
 
     /// <summary>Evicts the share's oldest files, never one of <paramref name="keep"/> nor a folder, until
     /// <paramref name="adding"/> more bytes and <paramref name="entries"/> more entries fit under
-    /// <see cref="DavRules.ParkingCap"/> and <see cref="DavRules.ParkingEntries"/>.</summary>
-    private static void MakeRoom(Area area, long adding, int entries, HashSet<Entry> keep)
+    /// <see cref="DavRules.ParkingCap"/> and <see cref="DavRules.ParkingEntries"/>; then the oldest files of any share
+    /// until they fit under <see cref="DavRules.ParkingTotalCap"/> beside every share's.</summary>
+    private void MakeRoom(Area area, long adding, int entries, HashSet<Entry> keep)
     {
         while (area.Bytes + adding > DavRules.ParkingCap || area.Count + entries > DavRules.ParkingEntries)
         {
             var oldest = area.OldestFiles().FirstOrDefault(e => !keep.Contains(e))
                 ?? throw new DavException(StatusCodes.Status507InsufficientStorage, NoRoom);
             area.Remove(oldest);
+        }
+
+        while (_areas.Values.Sum(a => a.Bytes) + adding > DavRules.ParkingTotalCap)
+        {
+            var oldest = _areas
+                .SelectMany(a => a.Value.OldestFiles().Where(e => a.Value != area || !keep.Contains(e)).Take(1).Select(e => (Share: a.Key, Area: a.Value, Entry: e)))
+                .MinBy(o => o.Entry.Item.Modified);
+            if (oldest.Area is null) throw new DavException(StatusCodes.Status507InsufficientStorage, NoRoom);
+            oldest.Area.Remove(oldest.Entry);
+            if (oldest.Area != area) Forget(oldest.Share, oldest.Area);
         }
     }
 

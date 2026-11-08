@@ -24,6 +24,13 @@ public static class DavRules
     /// than the write failing: an error would abort a Finder copy of a folder with a <c>.git</c> in it.</summary>
     public const long ParkingCap = 64L * 1024 * 1024;
 
+    /// <summary>What every share together may hold parked, in bytes, so that the shares' areas can't add up to all of the
+    /// server's memory (a user has up to <see cref="Accounts.DavShares.MaxActive"/> shares, each with its own
+    /// <see cref="ParkingCap"/>). Eight full areas; real junk is a fraction of one. Beyond it the oldest parked files of
+    /// any share go, as within one share: parked files are junk the design lets go, and a refusal would abort every
+    /// share's Finder copy rather than one share's leftovers.</summary>
+    public const long ParkingTotalCap = 512L * 1024 * 1024;
+
     /// <summary>What every parked entry is charged beyond its bytes and its name: roughly what its objects take on the
     /// heap (the entry, its item, two index nodes, the strings). Without it, a share's empty files and folders would
     /// cost nothing against <see cref="ParkingCap"/> and could fill memory one MKCOL at a time.</summary>
@@ -43,6 +50,12 @@ public static class DavRules
     /// cap only bounds the memory a share's <c>LOCK</c>s take, each with an owner of up to <see cref="LockOwnerMax"/>.
     /// Beyond it the lock that expires first goes: nothing is enforced, so that costs nothing.</summary>
     public const int LockCap = 256;
+
+    /// <summary>The locks every share together may hold: sixteen shares' full <see cref="LockCap"/>, a few tens of MB at
+    /// the most with long owners and hrefs, where clients hold a handful each. Beyond it the lock of any share that
+    /// expires first goes; nothing is enforced, so that costs at most a client's refresh of it (412, and it locks
+    /// again).</summary>
+    public const int LockTotalCap = 4096;
 
     /// <summary>The longest <c>DAV:owner</c> a lock keeps, in characters of its XML. Clients send a name or a URL (Office
     /// a user name, litmus a short string); a longer one is left out of the lock, which still is granted, rather than

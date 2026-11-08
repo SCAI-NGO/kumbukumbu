@@ -25,7 +25,8 @@ public sealed class DavLocks(TimeProvider time)
     private readonly Dictionary<string, Dictionary<string, DavLock>> _byShare = new(StringComparer.Ordinal);
 
     /// <summary>A new lock for <paramref name="timeout"/>, at most <see cref="DavRules.LockDefault"/>. Past
-    /// <see cref="DavRules.LockCap"/> locks of the share, the one that expires first goes. An owner longer than
+    /// <see cref="DavRules.LockCap"/> locks of the share, the one that expires first goes; past
+    /// <see cref="DavRules.LockTotalCap"/> of all shares, the one of any share that does. An owner longer than
     /// <see cref="DavRules.LockOwnerMax"/> is left out.</summary>
     public DavLock Lock(string shareId, string vaultId, string path, string href, bool deep, bool exclusive, XElement? owner, TimeSpan? timeout)
     {
@@ -33,6 +34,14 @@ public sealed class DavLocks(TimeProvider time)
         {
             var locks = Of(shareId, create: true)!;
             while (locks.Count >= DavRules.LockCap) locks.Remove(locks.Values.MinBy(l => l.Expires)!.Token);
+            // Then across shares: the one of any share that expires first (an expired one of a share not asked since, first).
+            while (_byShare.Values.Sum(l => l.Count) >= DavRules.LockTotalCap)
+            {
+                var (share, oldest) = _byShare.SelectMany(b => b.Value.Values.Select(l => (b.Key, l))).MinBy(e => e.l.Expires);
+                _byShare[share].Remove(oldest.Token);
+                if (share != shareId && _byShare[share].Count == 0) _byShare.Remove(share);
+            }
+
             var granted = Granted(timeout);
             var text = owner?.ToString(SaveOptions.DisableFormatting);
             if (text?.Length > DavRules.LockOwnerMax) text = null;

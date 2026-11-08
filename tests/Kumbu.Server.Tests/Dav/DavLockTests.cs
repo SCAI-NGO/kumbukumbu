@@ -287,4 +287,32 @@ public sealed class DavLockTests(KumbuAppFactory app) : IAsyncDisposable
         var active = XDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).Descendants(D + "activelock").Single();
         Assert.Null(active.Element(D + "owner"));
     }
+
+    /// <summary>Locks are capped across shares too (security review finding 4): past <see cref="DavRules.LockTotalCap"/>
+    /// the lock of any share that expires first goes, and the new one is granted.</summary>
+    [Fact]
+    public void Locks_are_capped_across_shares_the_one_expiring_first_going()
+    {
+        var time = new FakeTimeProvider();
+        var locks = new DavLocks(time);
+        var first = locks.Lock("s0", "v", "a", "/dav/Work/a", deep: false, exclusive: true, owner: null, timeout: null);
+        for (var i = 1; i < DavRules.LockTotalCap; i++)
+        {
+            time.Advance(TimeSpan.FromMilliseconds(1));
+            // A share's own cap stays below LockCap: the total is what is full.
+            locks.Lock($"s{i / (DavRules.LockCap - 1)}", "v", $"a{i}", $"/dav/Work/a{i}", deep: false, exclusive: true, owner: null, timeout: null);
+        }
+
+        var second = locks.On("s0", "v", "a1").Single();
+        Assert.NotNull(locks.Refresh("s0", first.Token, null));
+        time.Advance(TimeSpan.FromMilliseconds(1));
+
+        var added = locks.Lock("new", "v", "b", "/dav/Work/b", deep: false, exclusive: true, owner: null, timeout: null);
+
+        // The refreshed lock expires last now; the one after it went.
+        Assert.Empty(locks.On("s0", "v", "a1"));
+        Assert.Null(locks.Refresh("s0", second.Token, null));
+        Assert.NotNull(locks.Refresh("s0", first.Token, null));
+        Assert.Single(locks.On("new", "v", "b"), l => l.Token == added.Token);
+    }
 }
