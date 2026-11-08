@@ -333,6 +333,24 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Empty(await store.ListTrashAsync(vault, Ct));
     }
 
+    /// <summary>A vault that turns read-only for the share during its write (its owner deactivated, the vault closing)
+    /// refuses the write in the store: 403 with the store's sentence, as on <c>/api</c>, not a 500.</summary>
+    [Fact]
+    public async Task A_vault_turned_read_only_during_a_write_is_403_with_its_sentence()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        await dav.Owner.CreateAsync("plan.md", "one");
+        const string sentence = "Work is read-only: its owner's account is deactivated.";
+        _race.Next = () => throw new Kumbu.Server.Vaults.VaultReadOnlyException("owner_inactive", sentence);
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("two"));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.Forbidden, put.StatusCode);
+        Assert.Equal(sentence, await BodyAsync(put));
+        Assert.Equal("one", await NoteAsync(dav, "plan.md"));
+    }
+
     [Fact]
     public async Task A_lost_race_of_an_attachment_is_retried_once_and_stored()
     {

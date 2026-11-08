@@ -122,6 +122,12 @@ public static class DavEndpoints
         {
             await DavXml.WriteTextAsync(response, StatusCodes.Status403Forbidden, e.Message, ct);
         }
+        // A vault read-only for the share whatever its right (its owner deactivated, the vault closing) that turned so
+        // after the request's own check: the store refuses the write, with its sentence, as /api does.
+        catch (VaultReadOnlyException e) when (!response.HasStarted)
+        {
+            await DavXml.WriteTextAsync(response, StatusCodes.Status403Forbidden, e.Message, ct);
+        }
         catch (VaultDeletedException e) when (!response.HasStarted)
         {
             await DavXml.WriteTextAsync(response, StatusCodes.Status404NotFound, e.Message, ct);
