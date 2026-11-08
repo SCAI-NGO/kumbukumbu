@@ -118,6 +118,7 @@ describe("Skills", () => {
     renderApp("/skills/installed");
     await screen.findByText("builtin");
     await waitFor(() => expect(checks).toBe(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
     await waitFor(() => expect(checks).toBe(2));
   });

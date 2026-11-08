@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../state/session";
@@ -49,6 +50,7 @@ describe("ReviewDialog", () => {
     const dialog = await open();
     await within(dialog).findByText("acme/skills");
     const text = dialog.textContent!;
+    for (const t of ["Repository", "def456789012", "SKILL.md"]) expect(text).toContain(t);
     expect(text.indexOf("Repository")).toBeLessThan(text.indexOf("SKILL.md"));
     expect(text.indexOf("def456789012")).toBeLessThan(text.indexOf("SKILL.md"));
     expect(within(dialog).getByText("pdf")).toBeInTheDocument();
@@ -102,5 +104,37 @@ describe("ReviewDialog", () => {
     const dialog = await open();
     expect(await within(dialog).findByText("GitHub is asked too often; try again in a minute.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Take update" })).toBeDisabled();
+  });
+
+  it("offers neither Take nor Skip while a re-review loads or after it failed", async () => {
+    let reviews = 0;
+    let release: () => void = () => {};
+    api({
+      "GET /api/skills/updates/review": async () => {
+        if (++reviews === 1) return json(200, review);
+        if (reviews === 2) await new Promise<void>((r) => (release = r));
+        return reviews === 2 ? json(200, review) : json(502, { error: "GitHub failed." });
+      },
+      "POST /api/skills/updates/take": () => json(409, { error: "The source changed since you reviewed it; review it again.", type: "moved-on" }),
+    });
+    const dialog = await open();
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Take update" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(reviews).toBe(2));
+    expect(within(dialog).getByRole("button", { name: "Take update" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Skip" })).toBeDisabled();
+    release();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Take update" })).toBeEnabled());
+  });
+
+  it("keeps the reviewed hash when the window regains focus", async () => {
+    let reviews = 0;
+    api({ "GET /api/skills/updates/review": () => json(200, { ...review, hash: `HASH-${++reviews}` }) });
+    const dialog = await open();
+    await within(dialog).findByText("acme/skills");
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(reviews).toBe(1);
   });
 });

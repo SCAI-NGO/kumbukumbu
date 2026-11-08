@@ -98,6 +98,8 @@ export const useSkillReview = (path: string) =>
     retry: false,
     gcTime: 0,
     staleTime: 0,
+    // The hash she reviewed must not change under her; after a moved-on refusal she asks again herself.
+    refetchOnWindowFocus: false,
   });
 
 /** The version the review named (`hash`) into her copy. */

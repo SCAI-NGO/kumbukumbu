@@ -156,7 +156,7 @@ export default function Installed() {
         </section>
       ))}
       {asking && <ConfirmShareAnew busy={share.isPending} onCancel={() => setAsking(null)} onShare={() => share.mutate(asking)} />}
-      {reviewing?.path && <ReviewDialog path={reviewing.path} name={reviewing.name} onClose={() => setReviewing(null)} onDone={() => setReviewing(null)} />}
+      {reviewing?.path && <ReviewDialog path={reviewing.path} name={reviewing.name} onClose={() => setReviewing(null)} />}
       {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data} onClose={() => setActing(null)} />}
     </>
   );

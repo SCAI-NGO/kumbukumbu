@@ -7,14 +7,14 @@ import { skipSkillUpdate, takeSkillUpdate, useSkillReview } from "../api/skills"
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 
-type Props = { path: string; name: string; onClose(): void; onDone(): void };
+type Props = { path: string; name: string; onClose(): void };
 
 /**
  * What an update would change (skills spec §3.10), before she decides: where it comes from first, then every file with its
  * change and hunks, as plain text, never rendered. Take and Skip name the hash the review gave, so a source that moved on
  * since is refused and reviewed again rather than taken unseen.
  */
-export default function ReviewDialog({ path, name, onClose, onDone }: Props) {
+export default function ReviewDialog({ path, name, onClose }: Props) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const queryClient = useQueryClient();
@@ -22,13 +22,14 @@ export default function ReviewDialog({ path, name, onClose, onDone }: Props) {
   const data = review.data;
   const done = () => {
     void queryClient.invalidateQueries({ queryKey: ["skills"] });
-    onDone();
+    onClose();
   };
   const take = useMutation({ mutationFn: (hash: string) => takeSkillUpdate(path, hash), onSuccess: done });
   const skip = useMutation({ mutationFn: (hash: string) => skipSkillUpdate(path, hash), onSuccess: done });
   const failed = take.error ?? skip.error;
   const movedOn = failed instanceof HttpError && failed.status === 409 && failed.type === "moved-on";
-  const busy = take.isPending || skip.isPending;
+  // Only a review in hand and settled may be acted on.
+  const blocked = !data || review.isFetching || review.isError || take.isPending || skip.isPending || movedOn;
   const reviewAgain = () => {
     take.reset();
     skip.reset();
@@ -102,10 +103,10 @@ export default function ReviewDialog({ path, name, onClose, onDone }: Props) {
           <button type="button" data-autofocus onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
             Close
           </button>
-          <button type="button" disabled={!data || busy || movedOn} onClick={() => data && skip.mutate(data.hash)} className={`${secondaryButtonClass} flex-1`}>
+          <button type="button" disabled={blocked} onClick={() => { if (data) { take.reset(); skip.mutate(data.hash); } }} className={`${secondaryButtonClass} flex-1`}>
             Skip
           </button>
-          <button type="button" disabled={!data || busy || movedOn} onClick={() => data && take.mutate(data.hash)} className={`${primaryButtonClass} flex-1`}>
+          <button type="button" disabled={blocked} onClick={() => { if (data) { skip.reset(); take.mutate(data.hash); } }} className={`${primaryButtonClass} flex-1`}>
             Take update
           </button>
         </div>
