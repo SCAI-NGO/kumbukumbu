@@ -337,7 +337,7 @@ public static class NoteApi
         CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         // A wrong password throws; null is a right one and no such vault.
         var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
@@ -363,7 +363,7 @@ public static class NoteApi
         Pairings pairings, CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
-        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
         // A wrong password throws; null is a right one and no such vault.
         RekeySummary? summary;
         var passwordRight = true;
