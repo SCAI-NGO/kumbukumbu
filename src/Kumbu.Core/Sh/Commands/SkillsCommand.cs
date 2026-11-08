@@ -17,6 +17,11 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
 {
     private const string Subcommands = "ls, find, cat, copy, check";
 
+    /// <summary>How a built-in skill is named when one of the caller's has its name.</summary>
+    private const string SystemPrefix = "system:";
+
+    private const string NotInAFolder = "is not in a skill's folder (/Skills/<name>/ or /<vault>/_skills/<name>/)";
+
     public string Name => "skills";
 
     public string Usage => "skills ls|find|cat|copy|check";
@@ -27,6 +32,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         skills ls [/<vault>]                 every skill you can see: name, where it is, who last changed it, its description
         skills find "<what the user wants>"  the skills that fit a request, best first
         skills cat <name|path>[/<file>]      a skill's SKILL.md, or one of its files
+        skills cat system:<name>[/<file>]    a built-in skill, also when a skill of yours has its name
         skills copy <system-skill> [/<vault>]  copy a built-in skill to /Skills/ (default) or to a vault's _skills/
         skills check [<path>]                check skills against the rules of SKILL.md
         A skill is a folder with SKILL.md and its files: /Skills/<name>/ for the user's own skills,
@@ -93,9 +99,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         }
 
         // As cat reads it: a note with its version block, a text file as it is, an image or a PDF as one line.
-        var path = folder;
-        foreach (var segment in file.Split('/')) path = path.Child(segment);
-        var read = await new Cat(notes, marks: marks).RunAsync([path.Value], null, ct);
+        var read = await new Cat(notes, marks: marks).RunAsync([Inside(folder, file)!.Value], null, ct);
         return read.IsError && read.Output.StartsWith("cat:", StringComparison.Ordinal) ? read with { Output = command + read.Output["cat".Length..] } : read;
     }
 
@@ -111,7 +115,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
             if (!CommandArgs.TryParsePath(command, address, out var path, out var pathError)) return (null, "", pathError! with { Kind = ShellErrorKind.Invalid });
             if (SkillPaths.FolderOf(path, await notes.SkillsVaultAsync(ct)) is not { } folder)
             {
-                return (null, "", Invalid($"{command}: {path.Value} is not in a skill's folder (/Skills/<name>/ or /<vault>/_skills/<name>/)"));
+                return (null, "", Invalid($"{command}: {path.Value} {NotInAFolder}"));
             }
 
             if (visible.FirstOrDefault(s => s.Folder == folder) is not { } found) return (null, "", NotFound($"{command}: there is no skill at {folder.Value} ('skills ls' lists them)"));
@@ -119,15 +123,19 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
             return (found, rest.Length == 0 ? SkillPaths.Manifest : rest, null);
         }
 
-        var slash = address.IndexOf('/');
-        var name = slash < 0 ? address : address[..slash];
-        var file = slash < 0 || slash == address.Length - 1 ? SkillPaths.Manifest : address[(slash + 1)..];
-        var named = visible.Where(s => s.Name == name).ToList();
-        return named.Count switch
+        var builtIn = address.StartsWith(SystemPrefix, StringComparison.Ordinal);
+        var named = builtIn ? address[SystemPrefix.Length..] : address;
+        var slash = named.IndexOf('/');
+        var name = slash < 0 ? named : named[..slash];
+        var file = slash < 0 || slash == named.Length - 1 ? SkillPaths.Manifest : named[(slash + 1)..];
+        // A name's file stays in its folder: no '.' or '..' segment leads out of it.
+        if (Inside(VaultPath.Root, file) is null) return (null, "", Invalid($"{command}: {address} {NotInAFolder}"));
+        var matches = visible.Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
+        return matches.Count switch
         {
-            0 => (null, "", NotFound($"{command}: no skill named '{name}' ('skills ls' lists them)")),
-            1 => (named[0], file, null),
-            _ => (null, "", Invalid($"{command}: '{name}' names {named.Count} skills: {string.Join(", ", named.Select(s => s.Folder?.Value ?? $"{s.Name} (system)"))}; give the path")),
+            0 => (null, "", NotFound(builtIn ? $"{command}: there is no built-in skill '{name}'" : $"{command}: no skill named '{name}' ('skills ls' lists them)")),
+            1 => (matches[0], file, null),
+            _ => (null, "", Invalid($"{command}: '{name}' names {matches.Count} skills: {string.Join(", ", matches.Select(s => s.Folder?.Value ?? SystemPrefix + s.Name))}; give the path")),
         };
     }
 
@@ -135,6 +143,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
     {
         const string command = "skills check";
         var checking = await skills.ListAsync(null, ct);
+        // The root holds every skill: as without a path.
+        if (pathText?.TrimEnd('/').Length == 0) pathText = null;
         if (pathText is not null)
         {
             if (!CommandArgs.TryParsePath(command, pathText.TrimEnd('/'), out var path, out var pathError)) return pathError! with { Kind = ShellErrorKind.Invalid };
@@ -143,7 +153,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
             if (checking.Count == 0) return NotFound($"{command}: there is no skill at {path.Value} ('skills ls' lists them)");
         }
 
-        var lines = checking.Select(s => $"{s.Folder?.Value ?? s.Name}: {(s.Warnings.Count == 0 ? "ok" : string.Join("; ", s.Warnings))}");
+        var lines = checking.Select(s => $"{s.Folder?.Value ?? s.Name}: {(s.Warnings.Count == 0 ? "ok" : string.Join("; ", s.Warnings.Select(Skill.Clean)))}");
         var output = string.Join('\n', lines);
         return checking.Any(s => s.Warnings.Count > 0) ? Invalid(output) : ShellResult.Ok(output);
     }
@@ -151,6 +161,12 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
     private async Task<ShellResult> CopyAsync(string name, string? vaultText, CancellationToken ct)
     {
         const string command = "skills copy";
+        if (name.StartsWith(SystemPrefix, StringComparison.Ordinal))
+        {
+            name = name[SystemPrefix.Length..];
+            if (SystemSkills.Find(name) is null) return NotFound($"{command}: there is no built-in skill '{name}'");
+        }
+
         if (SystemSkills.Find(name) is not { } system)
         {
             return name.StartsWith('/') || (await skills.ListAsync(null, ct)).Any(s => s.Name == name)
@@ -182,10 +198,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
 
         foreach (var (file, content) in system.Files)
         {
-            var path = target;
-            foreach (var segment in file.Split('/')) path = path.Child(segment);
             // write takes a skill's text files too, through the attachment writer.
-            var written = await writer.WriteAsync(path.Value, content, null, ct);
+            var written = await writer.WriteAsync(Inside(target, file)!.Value, content, null, ct);
             if (written.IsError)
             {
                 return written.Output.StartsWith("write:", StringComparison.Ordinal) ? written with { Output = command + written.Output["write".Length..] } : written;
@@ -194,6 +208,19 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
 
         var files = system.Files.Count == 1 ? "1 file" : $"{system.Files.Count} files";
         return ShellResult.Ok($"copied {system.Name} to {target.Value}/ ({files}); it is yours now, and changes to the built-in one don't reach it");
+    }
+
+    /// <summary>The file at <paramref name="relative"/> in <paramref name="folder"/>; null when a segment is empty, '.' or '..'.</summary>
+    private static VaultPath? Inside(VaultPath folder, string relative)
+    {
+        var path = folder;
+        foreach (var segment in relative.Split('/'))
+        {
+            if (segment is "" or "." or "..") return null;
+            path = path.Child(segment);
+        }
+
+        return path;
     }
 
     /// <summary>Whether <paramref name="path"/> is <paramref name="folder"/> or lies below it.</summary>

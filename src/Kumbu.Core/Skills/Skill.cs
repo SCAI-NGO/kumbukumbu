@@ -63,7 +63,7 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
     }
 
     /// <summary>Line breaks as spaces, controls (Cc) and format characters (Cf: bidi and zero-width marks) dropped.</summary>
-    private static string Clean(string text)
+    internal static string Clean(string text)
     {
         var clean = new StringBuilder(text.Length);
         foreach (var rune in text.Replace("\r\n", "\n").EnumerateRunes())
