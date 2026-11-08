@@ -85,13 +85,14 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
 
         var list = await skills.ListAsync(vault, ct);
         if (list.Count == 0) return ShellResult.Ok("") with { NoMatchHint = "no skills yet; 'skills copy create-skill' adds the one that writes skills" };
-        var known = await updates.AvailableAsync(ct);
-        return ShellResult.Ok(string.Join('\n', list.Select(s => s.Folder is { } folder && known.Contains(folder) ? s.Line() + " [update available: Skills screen]" : s.Line())));
+        var marks = await updates.MarksAsync(ct);
+        return ShellResult.Ok(string.Join('\n', list.Select(s => marks.HasUpdate(s) ? marks.Apply(s).Line() + " [update available: Skills screen]" : marks.Apply(s).Line())));
     }
 
     private async Task<ShellResult> FindSkillsAsync(string request, CancellationToken ct)
     {
-        var visible = await skills.ListAsync(null, ct);
+        var marks = await updates.MarksAsync(ct);
+        var visible = (await skills.ListAsync(null, ct)).Select(marks.Apply).ToList();
         var manifests = new List<(Skill, string?)>(visible.Count);
         foreach (var skill in visible) manifests.Add((skill, await skills.ManifestAsync(skill, ct)));
         var hits = await SkillSearch.RankAsync(manifests, request, Search, ct);

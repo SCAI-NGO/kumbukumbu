@@ -127,4 +127,35 @@ public sealed class SkillsShellTests(KumbuAppFactory app)
         using var refused = await alice.GetAsync("/api/vaults/Skills/versions?text=1", onWork);
         Assert.Equal(HttpStatusCode.NotFound, refused.StatusCode);
     }
+
+    [Fact]
+    public async Task An_origin_edited_after_a_check_is_shown_and_offers_no_update()
+    {
+        const string source = "github:alice-example/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567";
+        const string hash = "sha256:00ab";
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var content = Kumbu.Core.Skills.SkillManifest.WithOrigin("---\nname: pdf\ndescription: Reads PDFs.\n---\n# PDF\n", source, hash);
+        await alice.CreateAsync("_skills/pdf/SKILL.md", content);
+        var access = (await alice.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work");
+        await alice.Api.Services.GetRequiredService<Kumbu.Server.Publishing.PublicationStore>().ChangeAsync(
+            access, r => r with { Origins = [new("/Work/_skills/pdf", source, hash)], Updates = ["/Work/_skills/pdf"] }, Ct);
+        var key = await alice.KeyAsync("agent", KeyRight.Write);
+
+        var (_, before) = await alice.ShAsync("skills ls", key);
+        var line = Assert.Single(before.Split('\n'), l => l.StartsWith("pdf (", StringComparison.Ordinal));
+        Assert.EndsWith("[update available: Skills screen]", line);
+        Assert.DoesNotContain("origin edited", line);
+
+        var read = await alice.ReadAsync("_skills/pdf/SKILL.md");
+        var edited = Kumbu.Core.Skills.SkillManifest.WithOrigin(content, "github:bob-example/evil/x@0123456789abcdef0123456789abcdef01234567", hash);
+        var written = await alice.ToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Work/_skills/pdf/SKILL.md", ["content"] = edited, ["version"] = read["version"]!.GetValue<string>() }, key);
+        Assert.False(written.IsError ?? false);
+
+        var (_, after) = await alice.ShAsync("skills ls", key);
+        var edLine = Assert.Single(after.Split('\n'), l => l.StartsWith("pdf (", StringComparison.Ordinal));
+        Assert.Contains("from github:bob-example/evil/x@0123456789abcdef0123456789abcdef01234567, origin edited): Reads PDFs.", edLine);
+        Assert.DoesNotContain("update available", after);
+        var (_, found) = await alice.ShAsync("skills find \"read PDFs\"", key);
+        Assert.Contains("origin edited", Assert.Single(found.Split('\n'), l => l.Contains("pdf (", StringComparison.Ordinal)));
+    }
 }

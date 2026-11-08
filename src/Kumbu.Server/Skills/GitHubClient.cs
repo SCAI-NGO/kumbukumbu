@@ -104,6 +104,9 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
 
     private sealed record CachedCommit(string Commit, DateTimeOffset Stored);
 
+    /// <summary>Whether <see cref="ResolveCommitAsync"/> would answer from the cache, asking GitHub nothing.</summary>
+    public bool HasCachedCommit(RepoName repo) => _commits.TryGetValue(repo.ToString(), out var cached) && time.GetUtcNow() < cached.Stored + CommitAge;
+
     /// <summary>The commit the default branch points to, from the cache for <see cref="CommitAge"/>.</summary>
     public async Task<string> ResolveCommitAsync(RepoName repo, CancellationToken ct)
     {

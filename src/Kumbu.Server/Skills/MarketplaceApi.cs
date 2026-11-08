@@ -222,6 +222,8 @@ public sealed class MarketplaceFetcher(GitHubClient github, TimeProvider time)
 
     public Task<string> ResolveCommitAsync(RepoName repo, CancellationToken ct) => github.ResolveCommitAsync(repo, ct);
 
+    public bool HasCachedCommit(RepoName repo) => github.HasCachedCommit(repo);
+
     public async Task<MarketplaceListing> ListingAsync(RepoName repo, string commit, CancellationToken ct)
     {
         var key = Key(repo, commit);

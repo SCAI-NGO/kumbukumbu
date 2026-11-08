@@ -16,6 +16,7 @@ public class SkillsCommandTests
 
     private readonly InMemoryNoteStore _store = new();
     private readonly HashSet<VaultPath> _updates = [];
+    private readonly HashSet<VaultPath> _edited = [];
 
     public SkillsCommandTests()
     {
@@ -26,9 +27,9 @@ public class SkillsCommandTests
         Put("/Work/plan.md", "# Plan\n");
     }
 
-    private sealed class Updates(IReadOnlySet<VaultPath> folders) : ISkillUpdates
+    private sealed class Updates(IReadOnlySet<VaultPath> available, IReadOnlySet<VaultPath> edited) : ISkillUpdates
     {
-        public Task<IReadOnlySet<VaultPath>> AvailableAsync(CancellationToken ct) => Task.FromResult(folders);
+        public Task<SkillMarks> MarksAsync(CancellationToken ct) => Task.FromResult(new SkillMarks(available, edited));
     }
 
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
@@ -48,7 +49,7 @@ public class SkillsCommandTests
     {
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
         caller ??= new FixedCaller(Writers.Dev);
-        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), search: search, updates: new Updates(_updates));
+        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), search: search, updates: new Updates(_updates, _edited));
         return shell.RunAsync(line, CancellationToken.None);
     }
 
@@ -81,6 +82,20 @@ public class SkillsCommandTests
 
         Assert.EndsWith("Drafts release notes. [update available: Skills screen]", lines[2]);
         Assert.DoesNotContain("update available", lines[1]);
+    }
+
+    [Fact]
+    public async Task An_edited_origin_is_shown_and_offers_no_update()
+    {
+        _updates.Add(P("/Work/_skills/release-notes"));
+        _edited.Add(P("/Work/_skills/release-notes"));
+
+        var lines = (await Run("skills ls")).Output.Split('\n');
+        var found = (await Run("skills find \"release notes\"")).Output;
+
+        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[2]);
+        Assert.DoesNotContain("update available", string.Join('\n', lines));
+        Assert.StartsWith("1. release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", found);
     }
 
     [Fact]

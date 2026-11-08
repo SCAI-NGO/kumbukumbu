@@ -7,22 +7,42 @@ using Kumbu.Server.Vaults;
 namespace Kumbu.Server.Skills;
 
 /// <summary>
-/// What the last check in the Skills screen found (<see cref="SkillUpdates"/>), for <c>skills ls</c> (Decision 22): the
-/// folders with an update in the records of the vaults this credential opens, in its view. Reads only; nothing is fetched.
+/// What the vaults' records say of the copies, for <c>skills ls</c> and <c>skills find</c> (Decisions 19, 22, 33): the folders
+/// the last check in the Skills screen found an update for (<see cref="SkillUpdates"/>), and the copies whose
+/// <c>SKILL.md</c> now disagrees with the sealed origin, in the vaults this credential opens, in its view. Reads only;
+/// nothing is fetched.
 /// </summary>
 internal sealed class RecordedSkillUpdates(EncryptedNoteStore store, PublicationStore publishing) : ISkillUpdates
 {
-    public async Task<IReadOnlySet<VaultPath>> AvailableAsync(CancellationToken ct)
+    public async Task<SkillMarks> MarksAsync(CancellationToken ct)
     {
-        var folders = new HashSet<VaultPath>();
-        foreach (var access in await store.UnlockedVaultsAsync(ct))
+        var available = new HashSet<VaultPath>();
+        var edited = new HashSet<VaultPath>();
+        var counts = store.CountsUse;
+        store.CountsUse = false;
+        try
         {
-            foreach (var folder in (await publishing.ReadAsync(null, access.Vault, ct)).Record.Updates)
+            foreach (var access in await store.UnlockedVaultsAsync(ct))
             {
-                if (VaultPath.TryParse(folder, out var stored)) folders.Add(access.ToCaller(stored));
+                var record = (await publishing.ReadAsync(null, access.Vault, ct)).Record;
+                foreach (var origin in record.Origins)
+                {
+                    if (!VaultPath.TryParse(origin.Path, out var stored)) continue;
+                    var folder = access.ToCaller(stored);
+                    if (SkillUpdates.IsOriginEdited(folder, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct), origin)) edited.Add(folder);
+                }
+
+                foreach (var folder in record.Updates)
+                {
+                    if (VaultPath.TryParse(folder, out var stored)) available.Add(access.ToCaller(stored));
+                }
             }
         }
+        finally
+        {
+            store.CountsUse = counts;
+        }
 
-        return folders;
+        return new SkillMarks(available, edited);
     }
 }

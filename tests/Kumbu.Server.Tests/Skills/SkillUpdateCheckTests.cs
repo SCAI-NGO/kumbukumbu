@@ -78,6 +78,14 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         return (await user.Api.Services.GetRequiredService<PublicationStore>().ReadAsync(null, access.Vault, Ct)).Record;
     }
 
+    /// <summary>An update recorded for <paramref name="folder"/> as by an earlier check.</summary>
+    private static async Task SeedUpdateAsync(WebApplicationFactory<Program> api, RestClient user, string folder)
+    {
+        var access = (await api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == "Work");
+        await api.Services.GetRequiredService<PublicationStore>().ChangeAsync(access, r => r with { Updates = [folder] }, Ct);
+        Assert.Equal([folder], (await RecordAsync(user, "Work")).Updates);
+    }
+
     private static async Task PutNoteAsync(RestClient user, string path, string content)
     {
         using var put = await user.SendAsync(HttpMethod.Put, "/api/notes" + path, new { content });
@@ -202,6 +210,7 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
     {
         await using var api = Api();
         var alice = await InstalledAsync(api);
+        await SeedUpdateAsync(api, alice, "/Work/_skills/pdf");
         _github.NotFound = true;
 
         Assert.Equal("gone", StateOf(await CheckAsync(alice), "/Work/_skills/pdf")["state"]!.GetValue<string>());
@@ -338,5 +347,52 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.TooManyRequests, check.StatusCode);
         Assert.Equal(MarketplaceApi.Busy, (await RestClient.JsonAsync(check))["type"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_check_takes_a_token_per_repository_it_asks_and_records_nothing_when_they_run_out()
+    {
+        await using var api = Api();
+        var alice = await InstalledAsync(api);
+        _github.Archives["alice-example/more"] = new Dictionary<string, byte[]> { ["skills/zz/SKILL.md"] = "---\nname: zz\ndescription: Does zz.\n---\n"u8.ToArray() };
+        using (var installed = await alice.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = "alice-example/more", commit = Sha, path = "skills/zz", vault = "Work" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
+        }
+
+        _github.Commit = Newer;
+        _github.Archives[Repo]["skills/pdf/SKILL.md"] = Encoding.UTF8.GetBytes(Manifest + "More.\n");
+        var limits = api.Services.GetRequiredService<AccountLimits>();
+        // Two installs took two; one is left for the check, which needs one for each of the two repositories.
+        for (var i = 2; i < AccountLimits.GitHubFetchesPerUser - 1; i++) Assert.Null(limits.GitHubFetch(alice.User.Id));
+
+        using var check = await alice.SendAsync(HttpMethod.Post, "/api/skills/updates/check");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, check.StatusCode);
+        Assert.Equal(MarketplaceApi.Busy, (await RestClient.JsonAsync(check))["type"]!.GetValue<string>());
+        Assert.Contains(_github.Requests, r => r.Uri.AbsolutePath.Contains("/alice-example/skills/", StringComparison.Ordinal) && r.Uri.Host == GitHubClient.ApiHost);
+        Assert.DoesNotContain(_github.Requests, r => r.Uri.AbsolutePath.Contains("/alice-example/more/", StringComparison.Ordinal) && r.Uri.Host == GitHubClient.ApiHost);
+        Assert.Empty((await RecordAsync(alice, "Work")).Updates);
+    }
+
+    [Fact]
+    public async Task A_check_of_cached_commits_or_links_alone_takes_no_token()
+    {
+        await using var api = Api();
+        var alice = await InstalledAsync(api);
+        Assert.Equal("current", StateOf(await CheckAsync(alice), "/Work/_skills/pdf")["state"]!.GetValue<string>());
+        var limits = api.Services.GetRequiredService<AccountLimits>();
+        while (limits.GitHubFetch(alice.User.Id) is null) { }
+
+        // The commit is in the cache for ten minutes: no token needed.
+        Assert.Equal("current", StateOf(await CheckAsync(alice), "/Work/_skills/pdf")["state"]!.GetValue<string>());
+
+        var (_, dave, _) = await LinkCopyAsync(api);
+        while (limits.GitHubFetch(dave.User.Id) is null) { }
+        Assert.Equal("current", StateOf(await CheckAsync(dave), "/Writing/_skills/write-as-alice")["state"]!.GetValue<string>());
+
+        _time.Advance(GitHubClient.CommitAge);
+        using var check = await alice.SendAsync(HttpMethod.Post, "/api/skills/updates/check");
+        Assert.Equal(HttpStatusCode.TooManyRequests, check.StatusCode);
     }
 }

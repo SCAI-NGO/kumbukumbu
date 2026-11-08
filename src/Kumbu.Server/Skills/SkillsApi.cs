@@ -228,8 +228,7 @@ public static class SkillsApi
         store.CountsUse = false;
         try
         {
-            var manifest = SkillManifest.Read(folder.Name, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct));
-            return !string.Equals(manifest.Source, origin.Source, StringComparison.Ordinal) || !string.Equals(manifest.Hash, origin.Hash, StringComparison.Ordinal);
+            return SkillUpdates.IsOriginEdited(folder, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct), origin);
         }
         finally
         {

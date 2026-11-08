@@ -28,18 +28,17 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
 
     private const string GitHubPrefix = "github:", LinkPrefix = "link:";
 
-    /// <summary>One check counts once against her GitHub limit, whether or not GitHub is asked; GitHub's rate limit stops
-    /// the whole check, 429, with nothing recorded.</summary>
+    /// <summary>Each repository whose commit isn't in the cache counts once against her GitHub limit, as it is reached; a
+    /// check that asks GitHub nothing counts not at all. Her limit running out (429 <see cref="MarketplaceApi.Busy"/>) or
+    /// GitHub's rate limit stops the whole check with nothing recorded: what is written comes only after every copy.</summary>
     public async Task<IReadOnlyList<SkillUpdateState>> CheckAsync(CancellationToken ct)
     {
-        if (limits.GitHubFetch(caller.User!.Id) is { } retryAfter)
-            throw new ApiException(StatusCodes.Status429TooManyRequests, "Too many requests to GitHub; try again in a minute.", retryAfter, type: MarketplaceApi.Busy);
-
         var counts = store.CountsUse;
         store.CountsUse = false;
         try
         {
             var states = new List<SkillUpdateState>();
+            var results = new List<(VaultAccess Access, List<(SkillOrigin Origin, SkillUpdateState? State)> Found)>();
             foreach (var access in await store.UnlockedVaultsAsync(ct))
             {
                 if (await store.VaultInfoAsync(access.Name, ct) is not { Level: >= AccessLevel.Write }) continue;
@@ -56,8 +55,10 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
                     if (state is not null) states.Add(state);
                 }
 
-                await RecordAsync(access, found, ct);
+                results.Add((access, found));
             }
+
+            foreach (var (access, found) in results) await RecordAsync(access, found, ct);
 
             return states;
         }
@@ -71,8 +72,7 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
     /// last check found.</summary>
     private async Task<SkillUpdateState?> StateAsync(PublishingRecord record, SkillOrigin origin, VaultPath folder, CancellationToken ct)
     {
-        var manifest = SkillManifest.Read(folder.Name, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct));
-        if (!string.Equals(manifest.Source, origin.Source, StringComparison.Ordinal) || !string.Equals(manifest.Hash, origin.Hash, StringComparison.Ordinal))
+        if (IsOriginEdited(folder, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct), origin))
         {
             return new SkillUpdateState(folder, OriginEdited, origin.Source, null);
         }
@@ -92,6 +92,8 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
         if (GitHubSource(origin.Source) is not var (repo, path, commit)) return new SkillUpdateState(folder, Gone, origin.Source, null);
         try
         {
+            if (!github.HasCachedCommit(repo) && limits.GitHubFetch(caller.User!.Id) is { } retryAfter)
+                throw new ApiException(StatusCodes.Status429TooManyRequests, "Too many requests to GitHub; try again in a minute.", retryAfter, type: MarketplaceApi.Busy);
             var now = await github.ResolveCommitAsync(repo, ct);
             if (string.Equals(now, commit, StringComparison.Ordinal)) return new SkillUpdateState(folder, Current, origin.Source, now);
             if (MarketplaceIndex.FilesOf(await github.ArchiveAsync(repo, now, ct), path) is not { } files) return new SkillUpdateState(folder, Gone, origin.Source, now);
@@ -109,6 +111,14 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
         {
             return null;
         }
+    }
+
+    /// <summary>Whether the <c>kumbu-source</c> or <c>kumbu-hash</c> of <paramref name="manifest"/>, the text of the
+    /// folder's <c>SKILL.md</c> (null if it has none), disagrees with the sealed origin (Decision 33).</summary>
+    internal static bool IsOriginEdited(VaultPath folder, string? manifest, SkillOrigin origin)
+    {
+        var read = SkillManifest.Read(folder.Name, manifest);
+        return !string.Equals(read.Source, origin.Source, StringComparison.Ordinal) || !string.Equals(read.Hash, origin.Hash, StringComparison.Ordinal);
     }
 
     /// <summary>The hash of the files behind the link the sealed <paramref name="code"/> opens; null when there is no code,
