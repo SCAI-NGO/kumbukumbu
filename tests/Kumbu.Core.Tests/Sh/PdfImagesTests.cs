@@ -663,6 +663,58 @@ public class PdfImagesTests
     }
 
     [Fact]
+    public async Task A_stop_within_a_page_says_how_to_store_it_and_where_to_go_on()
+    {
+        await Upload();
+        _pixels.Pages[1] = [Image(1, 100, 100, 0, 0, 100, 100, "a")];
+        _pixels.Pages[2] = [Image(1, 1200, 400, 72, 40, 451, 150, "b1"), Image(2, 640, 480, 0, 0, 320, 240, "b2"), Image(3, 16, 16, 40, 40, 8, 8, "dot", small: true)];
+        _pixels.Pages[3] = [Image(1, 640, 480, 0, 0, 320, 240, "c")];
+        _pixels.Over[2] = 1;
+        _pixels.Images[(1, 1)] = Png(1000, 100, 100);
+        _pixels.Images[(2, 1)] = Png(90_112, 1200, 400);
+        _pixels.Images[(2, 2)] = Png(30_000, 640, 480);
+        var full = _pixels.Images[(2, 2)].Data;
+        _store.BlobFails = b => b.Span.SequenceEqual(full) ? new QuotaExceededException(owner: true) : null;
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 2 images in /Work/images/
+            /Work/images/manual-p1-1.png  p1  100×100  1000 B  at 0,0,100,100
+            /Work/images/manual-p2-1.png  p2  1200×400  88 KB  at 72,40,451,150
+            page 2 is stored only in part: /Work/images/manual-p2-1.png; to store page 2, run it again into another folder, or remove these files first
+            not stored: p2 #2, p3 #1
+            go on with pages 3-
+            This vault is out of space. See `df`.
+            """,
+            result.Output);
+        Assert.Equal((ShellErrorKind.Refused, Refusals.Quota), (result.Kind, result.Code));
+    }
+
+    [Fact]
+    public async Task A_stop_within_the_last_page_names_no_pages_to_go_on_with()
+    {
+        await Upload();
+        _pixels.Pages[3] = [Image(1, 1200, 400, 72, 40, 451, 150, "c1"), Image(2, 640, 480, 0, 0, 320, 240, "c2")];
+        _pixels.Images[(3, 1)] = Png(90_112, 1200, 400);
+        _pixels.ImageFails[(3, 2)] = new PixelsUnavailableException("PDF image extraction is unavailable right now; try again later", PixelsProblem.Unavailable);
+
+        var result = await Run("pdfimages /Work/manual.pdf 2-3 /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 1 image in /Work/images/
+            /Work/images/manual-p3-1.png  p3  1200×400  88 KB  at 72,40,451,150
+            page 3 is stored only in part: /Work/images/manual-p3-1.png; to store page 3, run it again into another folder, or remove these files first
+            not stored: p3 #2
+            pdfimages: PDF image extraction is unavailable right now; try again later
+            """,
+            result.Output);
+        Assert.Equal(ShellErrorKind.Unavailable, result.Kind);
+    }
+
+    [Fact]
     public async Task A_full_vault_tells_a_member_the_sentence_alone()
     {
         await TwoPages();
@@ -957,11 +1009,11 @@ public class PdfImagesTests
     public async Task Crop_scaled_down_says_from_what()
     {
         await PumpManual();
-        _pixels.Region = Png(5_000_000, 3384, 2391, 842, 595);
+        _pixels.Region = Png(5_000_000, 3364, 2377, 842, 595);
 
         var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 1 --crop 0,0,842,595 --rotate 90 \"{Diagram}.png\"");
 
-        Assert.Equal($"stored {Diagram}.png  p1  3384×2391 (scaled down from 3508×2479)  4.8 MB  at 0,0,842,595 of the page turned 90°", result.Output);
+        Assert.Equal($"stored {Diagram}.png  p1  3364×2377 (scaled down from 3508×2479)  4.8 MB  at 0,0,842,595 of the page turned 90°", result.Output);
     }
 
     [Fact]
@@ -1052,6 +1104,20 @@ public class PdfImagesTests
     }
 
     [Fact]
+    public async Task Crop_the_writer_refuses_after_rendering_is_quoted()
+    {
+        await PumpManual();
+        var refused = (await _files.WriteAsync("/Nope/wiring diagram.png", _pixels.Region!.Data, (1958, 1583), null, Ct)).Result;
+
+        var result = await Run("pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"/Nope/wiring diagram.png\"");
+
+        Assert.StartsWith("upload: ", refused.Output);
+        Assert.Equal(refused with { Output = "pdfimages: " + refused.Output }, result);
+        Assert.Equal(["region 12 60,120,470,380 0 png"], _pixels.Calls);
+        Assert.Null(await Stored("/Nope/wiring diagram.png"));
+    }
+
+    [Fact]
     public async Task Help_lists_pdfimages_after_pdf()
     {
         var help = await Run("help");
@@ -1064,7 +1130,8 @@ public class PdfImagesTests
         Assert.Contains("at most 500 images in one call", own.Output);
         Assert.Contains("300 dpi", own.Output);
         Assert.Contains("Only drawings need it", own.Output);
-        Assert.Contains("x,y,w,h counts in the turned page", own.Output);
+        Assert.Contains("--crop then counts in the turned page, from\n                    its top left", own.Output);
+        Assert.Contains("(-90, -180 and -270 turn the other way)", own.Output);
         Assert.Contains("can't be read: the output names their pages, to look at with pdf --crop", own.Output);
         Assert.Contains("A call stopped within a page says which of its", own.Output);
         Assert.Contains("\n  pdfimages <pdf> [pages] <dir>/  ", Manual.ToolDescription);

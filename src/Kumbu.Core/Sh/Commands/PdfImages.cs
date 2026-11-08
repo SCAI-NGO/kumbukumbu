@@ -43,9 +43,9 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
                             .jpg or .jpeg file: a PNG unless the target is .jpg or .jpeg. x,y,w,h in points, as 'pdf
                             info' gives the regions. Only drawings need it (charts, diagrams, schematics): the images
                             of a page come whole and sharper from the folder form
-          --rotate D        with --crop: turn the page clockwise by 90, 180 or 270 degrees first, as with pdf;
-                            x,y,w,h counts in the turned page, from its top left (see 'help pdf' for turning a
-                            region from 'pdf info')
+          --rotate D        with --crop: turn the page clockwise by 90, 180 or 270 degrees first, as with pdf
+                            (-90, -180 and -270 turn the other way); --crop then counts in the turned page, from
+                            its top left (see 'help pdf' for turning a region from 'pdf info')
           --list            only list the images: page, number, pixel size, where on the page in points; writes nothing
           --all             also the small ones (under 1 % of their page: bullets, rules, icons), left out otherwise
           An image is stored at 8 megapixels at most (a larger one is scaled down, and the output says from what), as
@@ -314,8 +314,8 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var stored = 0;
         // What a stop reports of the pages it leaves out: the header's small ones and the over lines are of the pages before it.
         string HeaderBefore(int page) => Header(stored, into, call.All ? 0 : listing.Pages.Where(p => p.Page < page).Sum(p => p.Images.Count(i => i.Small)), call.All);
-        ShellResult StoppedAt(ShellResult why, int i) => Stopped(why, HeaderBefore(plan[i].Page.Page), lines, plan.Skip(i), listing, plan[i].Page.Page, call.Range.Last is null);
         var ofPage = new List<string>();
+        ShellResult StoppedAt(ShellResult why, int i) => Stopped(why, HeaderBefore(plan[i].Page.Page), lines, ofPage, plan.Skip(i), listing, plan[i].Page.Page, call.Range.Last is null);
         int? goOn = listing.Next;
         string? partly = null;
         for (var i = 0; i < plan.Count; i++)
@@ -335,7 +335,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
                 if (ofPage.Count > 0)
                 {
                     var page = item.Page.Page;
-                    partly = $"page {page} is stored only in part, as time ran out: {string.Join(", ", ofPage)}; to store page {page}, run it again into another folder, or remove these files first";
+                    partly = Partly(page, ofPage, ", as time ran out");
                 }
 
                 break;
@@ -445,17 +445,31 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
 
     /// <summary>
     /// A stop part way at <paramref name="page"/>: what was stored, the over lines of the pages before it, which images
-    /// were not stored, the pages not listed, and why. With nothing to tell but the reason, the reason alone.
+    /// were not stored, the pages not listed, and why. With nothing to tell but the reason, the reason alone. A page
+    /// stored in part (<paramref name="ofPage"/>) is told how to store it, as at the ceiling, and the pages after it
+    /// where to go on.
     /// </summary>
-    private static ShellResult Stopped(ShellResult why, string header, List<string> lines, IEnumerable<Planned> rest, Listing listing, int page, bool open)
+    private static ShellResult Stopped(ShellResult why, string header, List<string> lines, List<string> ofPage, IEnumerable<Planned> rest, Listing listing, int page, bool open)
     {
         if (lines.Count == 0) return why;
         var left = rest.Where(p => !p.Failed).Select(p => p.Ref).ToList();
         List<string> told = [header, .. lines, .. OverLines(listing.Pages.Where(p => p.Page < page))];
+        if (ofPage.Count > 0) told.Add(Partly(page, ofPage, ""));
         if (left.Count > 0) told.Add($"not stored: {string.Join(", ", left)}");
-        if (listing.Next is { } next) told.Add($"not listed: {GoOn(next, listing.Last, open)}");
+        if (ofPage.Count > 0)
+        {
+            if (page < listing.Last) told.Add($"go on with {GoOn(page + 1, listing.Last, open)}");
+        }
+        else if (listing.Next is { } next)
+        {
+            told.Add($"not listed: {GoOn(next, listing.Last, open)}");
+        }
+
         return why with { Output = string.Join('\n', [.. told, why.Output]) };
     }
+
+    private static string Partly(int page, List<string> stored, string why) =>
+        $"page {page} is stored only in part{why}: {string.Join(", ", stored)}; to store page {page}, run it again into another folder, or remove these files first";
 
     /// <summary>"/Work/images/manual-p4-1.png  p4, p9  2400×1600  1.9 MB  at 80,300,435,290", as spec §3.1 words a stored image.</summary>
     private static string Line(VaultPath path, Planned item, Picture picture, bool jpeg)
