@@ -8,7 +8,7 @@ import { usePublishEnabled } from "../api/publications";
 import { checkSkillUpdates, shareSkill, useSkills, type SkillView } from "../api/skills";
 import { FormError, secondaryButtonClass } from "../components/form";
 import ReviewDialog from "./ReviewDialog";
-import { ConfirmShareAnew, SkillLinkReveal } from "./Shared";
+import { ConfirmShare, SkillLinkReveal } from "./Shared";
 import TargetDialog from "./TargetDialog";
 import ZipButton from "./ZipButton";
 
@@ -78,8 +78,9 @@ export default function Installed() {
   // Her own vaults: a member never shares (skills design §3.7).
   const own = new Set((vaults.data ?? []).filter((v) => v.owner == null).map((v) => v.name));
   const mayShare = (s: SkillView) => publishEnabled === true && s.path != null && s.location !== "system" && own.has(s.location) && !s.shared;
-  // A link of it was withdrawn since it was last shared: the copies made from that link lose their updates.
-  const onShare = (s: SkillView) => (s.withdrawnBefore ? setAsking(s) : share.mutate(s));
+  // Asked every time, with what goes out; a link of it withdrawn since it was last shared also costs the copies made from
+  // that link their updates.
+  const onShare = (s: SkillView) => setAsking(s);
 
   return (
     <>
@@ -154,7 +155,9 @@ export default function Installed() {
           </ul>
         </section>
       ))}
-      {asking && <ConfirmShareAnew busy={share.isPending} onCancel={() => setAsking(null)} onShare={() => share.mutate(asking)} />}
+      {asking && (
+        <ConfirmShare name={asking.name} anew={asking.withdrawnBefore === true} busy={share.isPending} onCancel={() => setAsking(null)} onShare={() => share.mutate(asking)} />
+      )}
       {reviewing?.path && <ReviewDialog path={reviewing.path} name={reviewing.name} onClose={() => setReviewing(null)} />}
       {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data} onClose={() => setActing(null)} />}
     </>

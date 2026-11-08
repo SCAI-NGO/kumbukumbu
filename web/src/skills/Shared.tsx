@@ -96,8 +96,14 @@ function ConfirmWithdraw({ busy, onKeep, onWithdraw }: { busy: boolean; onKeep()
   );
 }
 
-/** Before a new link for a skill whose old link she withdrew: what that means for the copies made from the old one. */
-export function ConfirmShareAnew({ busy, onCancel, onShare }: { busy: boolean; onCancel(): void; onShare(): void }) {
+/** What a link gives out, said before every Share: the files as they are, a photo's metadata with it (a note's
+ * publication strips that, a skill's doesn't, since a skill must work as it was written). */
+export const sharingAsIs =
+  "Anyone with the link can open the skill and download its files as they are. Images are shared as they are, with any location data and other metadata they carry, such as where a photo was taken.";
+
+/** Before a skill's link: what goes out with it, and, for a skill whose old link she withdrew, what that means for the
+ * copies made from the old one. */
+export function ConfirmShare({ name, anew, busy, onCancel, onShare }: { name: string; anew: boolean; busy: boolean; onCancel(): void; onShare(): void }) {
   const dialog = useDialog<HTMLDivElement>(onCancel);
   const id = useId();
   return (
@@ -107,17 +113,22 @@ export function ConfirmShareAnew({ busy, onCancel, onShare }: { busy: boolean; o
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
+        aria-describedby={`${id}-text`}
         className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
       >
-        <p id={`${id}-title`} className="text-text-body">
-          {sharingAnew}
-        </p>
+        <h2 id={`${id}-title`} className="font-bold break-words text-text">
+          Share “{name}” by link?
+        </h2>
+        <div id={`${id}-text`} className="flex flex-col gap-2 text-text-body">
+          <p>{sharingAsIs}</p>
+          {anew && <p>{sharingAnew}</p>}
+        </div>
         <div className="flex gap-3">
           <button type="button" data-autofocus onClick={onCancel} className={`${secondaryButtonClass} flex-1`}>
             Cancel
           </button>
           <button type="button" disabled={busy} onClick={onShare} className={`${primaryButtonClass} flex-1`}>
-            Share anew
+            {anew ? "Share anew" : "Share"}
           </button>
         </div>
       </div>

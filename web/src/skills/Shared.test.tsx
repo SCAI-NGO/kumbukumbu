@@ -59,6 +59,9 @@ describe("Shared", () => {
     expect(within(await card("theirs")).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
     expect(within(await card("builtin")).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
     await userEvent.click(within(await card("mine")).getByRole("button", { name: "Share" }));
+    // Asked first: the files go out as they are.
+    expect(body).toBeUndefined();
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Share" }));
 
     expect(await screen.findByText(link)).toBeInTheDocument();
     expect(body).toEqual({ path: "/Skills/mine" });
@@ -73,6 +76,20 @@ describe("Shared", () => {
     expect(await screen.findByText("/Skills/mine")).toBeInTheDocument();
     expect(screen.queryByText(/#/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /copy link/i })).not.toBeInTheDocument();
+  });
+
+  it("says before sharing that images go as they are, location data included", async () => {
+    let shared = false;
+    api({ shared: false }, true, { "POST /api/skills/shared": () => ((shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })) });
+    renderApp("/skills/installed");
+
+    await userEvent.click(within(await card("mine")).getByRole("button", { name: "Share" }));
+
+    const dialog = screen.getByRole("alertdialog", { name: "Share “mine” by link?" });
+    expect(dialog).toHaveTextContent("Images are shared as they are, with any location data and other metadata they carry, such as where a photo was taken.");
+    expect(within(dialog).queryByText(/old link/)).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(shared).toBe(false);
   });
 
   it("offers no second link while one exists", async () => {
