@@ -415,4 +415,35 @@ public sealed class SkillCopyTests(KumbuAppFactory app)
         Assert.DoesNotContain(Code, new SkillCode("/Skills/x", Code).ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(Code, (PublishingRecord.Empty with { SkillCodes = [new SkillCode("/Skills/x", Code)] }).ToString(), StringComparison.Ordinal);
     }
+
+    /// <summary>The relative paths copy, add, install and update join to a skill's folder: each segment as it is, so one
+    /// that would leave the folder after the writers parse the path again is refused, whatever checked it before.</summary>
+    [Theory]
+    [InlineData("../../Private/n.md")]
+    [InlineData("scripts/../../x.md")]
+    [InlineData("..")]
+    [InlineData("./SKILL.md")]
+    [InlineData("scripts//run.py")]
+    [InlineData("scripts/")]
+    [InlineData("")]
+    [InlineData("scripts\\run.py")]
+    [InlineData("scripts/run\u0000.py")]
+    public void A_relative_path_that_leaves_the_folder_is_refused(string relative)
+    {
+        var folder = VaultPath.TryParse("/Skills/x", out var p) ? p : throw new InvalidOperationException();
+
+        var refused = Assert.Throws<ApiException>(() => SkillCopier.Inside(folder, relative));
+
+        Assert.Equal(StatusCodes.Status400BadRequest, refused.Status);
+    }
+
+    [Fact]
+    public void A_relative_path_inside_the_folder_is_joined()
+    {
+        var folder = VaultPath.TryParse("/Skills/x", out var p) ? p : throw new InvalidOperationException();
+
+        Assert.Equal("/Skills/x/scripts/run.py", SkillCopier.Inside(folder, "scripts/run.py").Value);
+        Assert.Equal("/Skills/x/SKILL.md", SkillCopier.Inside(folder, "SKILL.md").Value);
+    }
 }
+

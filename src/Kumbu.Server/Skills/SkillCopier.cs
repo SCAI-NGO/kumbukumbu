@@ -265,7 +265,27 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
     private static IEnumerable<SourceFile> Ordered(IEnumerable<SourceFile> files) =>
         files.OrderBy(f => f.Path != SkillPaths.Manifest).ThenBy(f => f.Path, TextOrder.Default);
 
-    internal static VaultPath Inside(VaultPath folder, string relative) => relative.Split('/').Aggregate(folder, (path, segment) => path.Child(segment));
+    /// <summary>
+    /// The file at <paramref name="relative"/> in <paramref name="folder"/>. <see cref="VaultPath.Child"/> keeps a segment as
+    /// given and the writers parse the path again, where a <c>..</c> would collapse; so an empty, <c>.</c> or <c>..</c>
+    /// segment, a backslash or a NUL is refused here, 400, and the result must lie strictly below the folder as parsed,
+    /// whatever checked the path before (the archive's reader, the publication's paths).
+    /// </summary>
+    internal static VaultPath Inside(VaultPath folder, string relative)
+    {
+        var path = folder;
+        foreach (var segment in relative.Split('/'))
+        {
+            if (segment is "" or "." or ".." || segment.Contains('\\') || segment.Contains('\0')) throw OutsideFolder();
+            path = path.Child(segment);
+        }
+
+        if (!VaultPath.TryParse(path.Value, out var parsed) || parsed != path || !parsed.Value.StartsWith(folder.Value + "/", StringComparison.Ordinal)) throw OutsideFolder();
+        return path;
+    }
+
+    // The path itself stays out of the answer: it may come from an archive or a publication, anyone's text.
+    private static ApiException OutsideFolder() => ApiErrors.BadRequest("A file of the skill has a path that would leave its folder.");
 
     private void RequireWritable(string vault)
     {

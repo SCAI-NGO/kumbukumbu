@@ -314,6 +314,14 @@ public sealed class SkillPageApiTests(KumbuAppFactory app)
     [InlineData("x", "scripts//run.py")]
     [InlineData("x", "scripts/")]
     [InlineData("x", "scripts\\run.py")]
+    // A drive prefix, or a control character, that some unzip tools on Windows mishandle.
+    [InlineData("C:", "SKILL.md")]
+    [InlineData("x", "C:/SKILL.md")]
+    [InlineData("x", "scripts/c:run.py")]
+    [InlineData("x\u0007", "SKILL.md")]
+    [InlineData("x", "scripts/run\u0000.py")]
+    [InlineData("x", "scripts/run\u001b.py")]
+    [InlineData("x", "scripts/run\u0085.py")]
     public void The_zip_refuses_a_path_that_leaves_its_root(string folderName, string path) =>
         Assert.Throws<ArgumentException>(() => SkillZip.Of(folderName, [(path, [1])], DateTime.UtcNow));
 
