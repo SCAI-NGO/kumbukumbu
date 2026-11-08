@@ -66,7 +66,16 @@ public sealed class MarketplaceApiTests(KumbuAppFactory app)
         });
     });
 
-    private static Task<RestClient> UserAsync(WebApplicationFactory<Program> api) => RestClient.NewAsync(api, vault: "Work", remember: true);
+    /// <summary>A user of <paramref name="api"/>, whose browsing showed <see cref="Sha"/> of <see cref="Repo"/>: the server takes
+    /// only a commit it resolved itself lately.</summary>
+    private static Task<RestClient> UserAsync(WebApplicationFactory<Program> api)
+    {
+        Shown(api, Repo, Sha);
+        return RestClient.NewAsync(api, vault: "Work", remember: true);
+    }
+
+    internal static void Shown(WebApplicationFactory<Program> api, string repo, string commit) =>
+        api.Services.GetRequiredService<MarketplaceFetcher>().Remember(RepoName.Parse(repo)!, commit);
 
     private static Task<HttpResponseMessage> InstallAsync(RestClient user, object body, string? bearer = null) =>
         user.SendAsync(HttpMethod.Post, "/api/skills/install", body, bearer);
@@ -289,6 +298,34 @@ public sealed class MarketplaceApiTests(KumbuAppFactory app)
         Assert.DoesNotContain(_github.Requests, r => r.Uri.ToString().Contains(Other, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task A_commit_the_server_didnt_resolve_lately_is_refused_before_anything_is_fetched()
+    {
+        await using var api = Api();
+        var alice = await UserAsync(api);
+
+        using var preview = await alice.GetAsync($"/api/skills/marketplaces/alice-example/skills/skill?commit={Other}&path=skills/pdf");
+        using var installed = await InstallAsync(alice, Install(commit: Other));
+        // Another repository's commit is no commit of this one.
+        using var elsewhere = await InstallAsync(alice, Install(repo: "bob-example/skills"));
+
+        foreach (var refused in new[] { preview, installed, elsewhere })
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal(MarketplaceApi.UnknownCommit, await TypeAsync(refused));
+            Assert.Contains("Browse", await RestClient.ErrorAsync(refused), StringComparison.Ordinal);
+        }
+
+        Assert.Empty(_github.Requests);
+        Assert.Empty(await FilesAsync(alice, "/Skills"));
+
+        // Once browsing resolved it, it is taken.
+        _github.Commit = Other;
+        using (var browse = await alice.GetAsync("/api/skills/marketplaces/alice-example/skills")) Assert.Equal(HttpStatusCode.OK, browse.StatusCode);
+        using var shown = await InstallAsync(alice, Install(commit: Other));
+        Assert.Equal(HttpStatusCode.Created, shown.StatusCode);
+    }
+
     [Theory]
     [InlineData(Repo, "main", "skills/pdf")]
     [InlineData(Repo, "0123", "skills/pdf")]
@@ -484,7 +521,7 @@ public sealed class MarketplaceApiTests(KumbuAppFactory app)
         var fetcher = new MarketplaceFetcher(client, _time);
         var repo = RepoName.Parse(Repo)!;
 
-        var fetches = Enumerable.Range(0, 5).Select(_ => fetcher.ArchiveAsync(repo, Sha, Ct)).ToList();
+        var fetches = Enumerable.Range(0, 5).Select(i => fetcher.ArchiveAsync(repo, Sha, $"u{i}", Ct)).ToList();
         gate.Open();
         var archives = await Task.WhenAll(fetches);
 
@@ -492,7 +529,7 @@ public sealed class MarketplaceApiTests(KumbuAppFactory app)
         Assert.All(archives, a => Assert.Same(archives[0], a));
 
         // Once it's done, the next one is the client's to answer from its cache.
-        await fetcher.ArchiveAsync(repo, Sha, Ct);
+        await fetcher.ArchiveAsync(repo, Sha, "u0", Ct);
         Assert.Equal(1, ArchiveRequests);
     }
 

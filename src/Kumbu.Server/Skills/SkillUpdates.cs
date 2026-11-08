@@ -99,7 +99,7 @@ internal sealed class SkillUpdates(
                 throw new ApiException(StatusCodes.Status429TooManyRequests, "Too many requests to GitHub; try again in a minute.", retryAfter, type: MarketplaceApi.Busy);
             var now = await github.ResolveCommitAsync(repo, ct);
             if (string.Equals(now, commit, StringComparison.Ordinal)) return new SkillUpdateState(folder, Current, origin.Source, now);
-            if (MarketplaceIndex.FilesOf(await github.ArchiveAsync(repo, now, ct), path) is not { } files) return new SkillUpdateState(folder, Gone, origin.Source, now);
+            if (MarketplaceIndex.FilesOf(await github.ArchiveAsync(repo, now, caller.User!.Id, ct), path) is not { } files) return new SkillUpdateState(folder, Gone, origin.Source, now);
             return new SkillUpdateState(folder, StateOf(SkillHash.Of(files.Files.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes)))), origin.Source, now);
         }
         catch (GitHubException e) when (e.Kind == "not-found")

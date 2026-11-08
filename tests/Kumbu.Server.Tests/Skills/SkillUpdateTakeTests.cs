@@ -61,6 +61,7 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
     private static async Task<RestClient> InstalledAsync(WebApplicationFactory<Program> api)
     {
         var alice = await RestClient.NewAsync(api, vault: "Work", remember: true);
+        MarketplaceApiTests.Shown(api, Repo, Sha);
         using var installed = await alice.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = Repo, commit = Sha, path = "skills/pdf", vault = "Work" });
         Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
         return alice;

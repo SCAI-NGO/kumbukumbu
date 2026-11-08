@@ -124,6 +124,9 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         return commit;
     }
 
+    /// <summary>The repository's files at <paramref name="commit"/> if the cache holds them, asking GitHub nothing.</summary>
+    public RepoArchive? CachedArchive(RepoName repo, string commit) => _archives.Get($"{repo.ToString().ToLowerInvariant()}@{commit}");
+
     /// <summary>The repository's files at <paramref name="commit"/>, from the cache if it still holds them. The archive is
     /// read within <see cref="MaxArchiveBytes"/> compressed, <see cref="MaxUnpackedBytes"/> decompressed (headers and
     /// padding included) and <see cref="MaxEntries"/> entries of any kind, no file over <see cref="AttachmentFormat.MaxBytes"/>.</summary>

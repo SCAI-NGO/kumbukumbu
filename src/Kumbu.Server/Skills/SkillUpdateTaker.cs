@@ -184,7 +184,7 @@ internal sealed partial class SkillUpdateTaker(
             var (commit, archive) = await MarketplaceApi.GitHubAsync(async () =>
             {
                 var now = await github.ResolveCommitAsync(repo, ct);
-                return (now, await github.ArchiveAsync(repo, now, ct));
+                return (now, await github.ArchiveAsync(repo, now, caller.User!.Id, ct));
             });
             var files = MarketplaceIndex.FilesOf(archive, path) ?? throw SourceGone(copy);
             return Upstream(copy, $"github:{repo}/{path}@{commit}", repo, path, commit, files.Files);

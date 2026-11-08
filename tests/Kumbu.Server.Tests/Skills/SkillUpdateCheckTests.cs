@@ -59,6 +59,7 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
     private static async Task<RestClient> InstalledAsync(WebApplicationFactory<Program> api)
     {
         var alice = await RestClient.NewAsync(api, vault: "Work", remember: true);
+        MarketplaceApiTests.Shown(api, Repo, Sha);
         using var installed = await alice.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = Repo, commit = Sha, path = "skills/pdf", vault = "Work" });
         Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
         return alice;
@@ -356,6 +357,7 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         await using var api = Api();
         var alice = await InstalledAsync(api);
         _github.Archives["alice-example/more"] = new Dictionary<string, byte[]> { ["skills/zz/SKILL.md"] = "---\nname: zz\ndescription: Does zz.\n---\n"u8.ToArray() };
+        MarketplaceApiTests.Shown(api, "alice-example/more", Sha);
         using (var installed = await alice.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = "alice-example/more", commit = Sha, path = "skills/zz", vault = "Work" }))
         {
             Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
