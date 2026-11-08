@@ -198,13 +198,15 @@ public static class DavXml
     /// A 207 with a <c>DAV:multistatus</c> of <paramref name="responses"/>, written to the body one <c>response</c> at a
     /// time as each is made, without a length: what is in memory is one resource's answer (at most
     /// <see cref="MaxPropertyNames"/> properties) and the writer's buffer, however large the folder a <c>Depth: 1</c>
-    /// lists. Once the first bytes are out, a failure can only cut the answer short, as a dropped connection would.
+    /// lists. Once the first bytes are out, a failure can only cut the answer short, as a dropped connection would; the
+    /// writer never closes the elements it opened then (<c>WriteEndDocumentOnClose</c> off), so a cut-off answer is never
+    /// well-formed XML that a sync client could take for the whole folder, and Kestrel drops the connection.
     /// </summary>
     public static async Task WriteMultistatusAsync(HttpResponse response, IAsyncEnumerable<DavResponse> responses, CancellationToken ct)
     {
         response.StatusCode = StatusCodes.Status207MultiStatus;
         response.ContentType = ContentType;
-        await using var writer = XmlWriter.Create(response.Body, new XmlWriterSettings { Encoding = Utf8, Async = true, CloseOutput = false });
+        await using var writer = XmlWriter.Create(response.Body, new XmlWriterSettings { Encoding = Utf8, Async = true, CloseOutput = false, WriteEndDocumentOnClose = false });
         await writer.WriteStartDocumentAsync();
         await writer.WriteStartElementAsync("D", "multistatus", Dav.NamespaceName);
         await foreach (var r in responses.WithCancellation(ct))

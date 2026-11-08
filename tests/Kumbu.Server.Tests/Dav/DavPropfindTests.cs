@@ -251,6 +251,29 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         Assert.Equal(51, DavAssert.Hrefs(listing).Count);
     }
 
+    /// <summary>A listing that fails part-way is never a well-formed one: the writer must not close the elements it
+    /// opened, or a sync client would take the first children for the whole folder and remove the rest.</summary>
+    [Fact]
+    public async Task A_listing_cut_short_is_not_well_formed()
+    {
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        var body = new MemoryStream();
+        http.Response.Body = body;
+
+        async IAsyncEnumerable<Kumbu.Server.Dav.DavResponse> FailingAfterOne()
+        {
+            yield return new Kumbu.Server.Dav.DavResponse("/dav/Work/a.md", [(200, [new XElement(D + "getetag", "\"1\"")])]);
+            await Task.Yield();
+            throw new TimeoutException("MongoDB is away");
+        }
+
+        await Assert.ThrowsAsync<TimeoutException>(() => Kumbu.Server.Dav.DavXml.WriteMultistatusAsync(http.Response, FailingAfterOne(), Ct));
+
+        var text = Encoding.UTF8.GetString(body.ToArray());
+        Assert.DoesNotContain("multistatus>", text.Replace("<D:multistatus", "", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Throws<System.Xml.XmlException>(() => XDocument.Parse(text));
+    }
+
     /// <summary>One reader for every XML body, <c>PROPFIND</c>'s and <c>PROPPATCH</c>'s; Task 7 adds <c>LOCK</c> to this test.</summary>
     [Fact]
     public async Task A_doctype_in_the_body_is_refused()
