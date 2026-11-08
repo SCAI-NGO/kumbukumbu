@@ -76,6 +76,8 @@ public class RgPdfTests
         public void Count(AttachmentUse use)
         {
         }
+
+        public IDisposable? TryStartExtraction() => throw new NotSupportedException();
     }
 
     private readonly InMemoryNoteStore _store = new(

@@ -75,6 +75,8 @@ public class PdfCommandTests
         public Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new NotSupportedException();
 
         public void Count(AttachmentUse use) => Used.Add(use);
+
+        public IDisposable? TryStartExtraction() => throw new NotSupportedException();
     }
 
     private readonly InMemoryNoteStore _store = new(("/Papers/plan.md", "a note\n"), ("/Work/plan.md", "a note\n"));

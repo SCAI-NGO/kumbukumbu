@@ -89,6 +89,24 @@ public class PdfImagesTests
         public void Count(AttachmentUse use)
         {
         }
+
+        /// <summary>Another pdfimages call of the caller runs: no place is given.</summary>
+        public bool Busy { get; set; }
+
+        /// <summary>Places taken and not yet given back.</summary>
+        public int Held { get; private set; }
+
+        public IDisposable? TryStartExtraction()
+        {
+            if (Busy) return null;
+            Held++;
+            return new Place(this);
+        }
+
+        private sealed class Place(FakePixels pixels) : IDisposable
+        {
+            public void Dispose() => pixels.Held--;
+        }
     }
 
     private readonly InMemoryNoteStore _store = new(("/Work/plan.md", "a note\n"));
@@ -452,6 +470,50 @@ public class PdfImagesTests
         _pixels.Pages[3] = [Image(1, 2400, 1600, 80, 300, 435, 290, "bb")];
         _pixels.Images[(1, 1)] = Png(90_112, 1200, 400);
         _pixels.Images[(3, 1)] = Png(1_992_294, 2400, 1600);
+    }
+
+    private static readonly ShellResult StillRunning =
+        ShellResult.Error("pdfimages: another pdfimages call of yours is still running; try again when it has finished") with { Kind = ShellErrorKind.Unavailable };
+
+    [Theory]
+    [InlineData("pdfimages --list /Work/manual.pdf")]
+    [InlineData("pdfimages /Work/manual.pdf /Work/images/")]
+    [InlineData("pdfimages /Work/manual.pdf 1 --crop 60,120,410,260 /Work/images/region.png")]
+    public async Task While_another_call_of_the_caller_runs_it_refuses_and_asks_nothing(string command)
+    {
+        await TwoPages();
+        _pixels.Region = Png(1000, 10, 10);
+        _pixels.Busy = true;
+
+        Assert.Equal(StillRunning, await Run(command));
+        Assert.Empty(_pixels.Calls);
+        Assert.Empty(await StoredUnder("/Work/images"));
+    }
+
+    [Theory]
+    [InlineData("pdfimages --list /Work/manual.pdf")]
+    [InlineData("pdfimages /Work/manual.pdf /Work/images/")]
+    [InlineData("pdfimages /Work/manual.pdf 1 --crop 60,120,410,260 /Work/images/region.png")]
+    public async Task A_call_gives_its_place_back_when_it_ends(string command)
+    {
+        await TwoPages();
+        _pixels.Region = Png(1000, 10, 10);
+
+        Assert.False((await Run(command)).IsError);
+        Assert.Equal(0, _pixels.Held);
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("the sidecar is unavailable", PixelsProblem.Unavailable));
+        Assert.True((await Run("pdfimages --list /Work/manual.pdf")).IsError);
+        Assert.Equal(0, _pixels.Held);
+    }
+
+    [Fact]
+    public async Task A_mistaken_call_is_answered_without_a_place()
+    {
+        await TwoPages();
+        _pixels.Busy = true;
+
+        Assert.Equal(Usage("missing operand"), await Run("pdfimages /Work/manual.pdf"));
+        Assert.Equal(ShellErrorKind.Invalid, (await Run("pdfimages /Work/plan.md /Work/images/")).Kind);
     }
 
     [Fact]

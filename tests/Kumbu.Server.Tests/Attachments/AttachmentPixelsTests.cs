@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Attachments;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -17,12 +18,15 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user) => new(
+    /// <summary>The pixels a session of <paramref name="user"/> gets, made by hand; <paramref name="sidecar"/> in place of the host's.</summary>
+    internal static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user, IPdfSidecar? sidecar = null) => new(
         new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
         host.Services.GetRequiredService<VaultCatalog>(),
-        host.Services.GetRequiredService<IPdfSidecar>(),
+        sidecar ?? host.Services.GetRequiredService<IPdfSidecar>(),
         host.Services.GetRequiredService<PdfAnalyses>(),
-        host.Services.GetRequiredService<PdfAnalysisRunner>());
+        host.Services.GetRequiredService<PdfAnalysisRunner>(),
+        new ExtractionGate(),
+        RequestCaller.ForSession(user.User, user.UserKey, DateTime.UtcNow, windowOpen: false, host.Services.GetRequiredService<VaultCatalog>()));
 
     private static VaultPath At(RestClient user, string path) => P($"/{user.Vault}/{path}");
 
@@ -147,10 +151,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("paper.pdf", Pdf("a short paper"));
         var state = await StateAsync(host, user, "paper.pdf");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), sidecar,
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, sidecar);
 
         async Task<string> Says(string code, Crop? crop = null)
         {
@@ -174,9 +175,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("paper.pdf", Pdf("a short paper"));
         var state = await StateAsync(host, user, "paper.pdf");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), sidecar, host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, sidecar);
 
         var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), state, 1, SizeStep.Medium, null, 90, Ct));
 
@@ -224,10 +223,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("clip.png", FakePdfSidecar.SolidPng(20, 20));
         var state = await StateAsync(host, user, "clip.png");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), new RefusingSidecar { Code = code },
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, new RefusingSidecar { Code = code });
         var path = At(user, "clip.png");
 
         return (await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.ImageAsync(path, state, SizeStep.Medium, null, 0, frame, Ct)), path);
@@ -290,10 +286,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("manual.pdf", Pdf("a pump manual"));
         var state = await StateAsync(host, user, "manual.pdf");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), sidecar,
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, sidecar);
         var path = At(user, "manual.pdf");
 
         async Task<(string, PixelsProblem)> List(string code)

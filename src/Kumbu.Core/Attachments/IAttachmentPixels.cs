@@ -126,4 +126,10 @@ public interface IAttachmentPixels
     Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct);
 
     void Count(AttachmentUse use);
+
+    /// <summary>
+    /// The caller's one place for a <c>pdfimages</c> call, held until disposed of; null while another call of theirs holds
+    /// it. One account's calls then never fill the sidecar's extraction queue for everyone.
+    /// </summary>
+    IDisposable? TryStartExtraction();
 }

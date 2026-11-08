@@ -10,6 +10,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Attachments;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
@@ -750,7 +751,8 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         // The pixels the shell's pdf and img get, as the owner opens them.
         var store = new EncryptedNoteStore(Catalog, new UserCredential(w.Alice.User.Id, w.Alice.UserKey));
         var pixels = new AttachmentPixels(
-            store, Catalog, Api.Services.GetRequiredService<IPdfSidecar>(), Api.Services.GetRequiredService<PdfAnalyses>(), Api.Services.GetRequiredService<PdfAnalysisRunner>());
+            store, Catalog, Api.Services.GetRequiredService<IPdfSidecar>(), Api.Services.GetRequiredService<PdfAnalyses>(), Api.Services.GetRequiredService<PdfAnalysisRunner>(),
+            new ExtractionGate(), RequestCaller.ForSession(w.Alice.User, w.Alice.UserKey, DateTime.UtcNow, windowOpen: false, Catalog));
         var pdf = P("/Garten/x.pdf");
         var page = await pixels.PageAsync(pdf, (await store.GetAttachmentAsync(pdf, Ct))!.Current, 1, SizeStep.Small, null, 0, Ct);
         Assert.NotEmpty(page.Data);

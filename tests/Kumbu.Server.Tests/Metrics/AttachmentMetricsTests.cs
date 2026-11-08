@@ -298,10 +298,7 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
         await using var host = Host(app, new FakePdfSidecar { FramesOf = _ => 3 });
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("Samples/clip.png", FakePdfSidecar.SolidPng(40, 30));
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), host.Services.GetRequiredService<IPdfSidecar>(),
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = AttachmentPixelsTests.Pixels(host, user);
         var state = await StateAsync(host, user, "Samples/clip.png");
         var path = VaultWorld.P($"/{user.Vault}/Samples/clip.png");
         var before = await Scrape.TextAsync(app);
@@ -324,10 +321,7 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
         await using var host = Host(app, sidecar);
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("manual.pdf", Pdf("a pump manual with pictures"));
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), host.Services.GetRequiredService<IPdfSidecar>(),
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = AttachmentPixelsTests.Pixels(host, user);
         var state = await StateAsync(host, user, "manual.pdf");
         var path = VaultWorld.P($"/{user.Vault}/manual.pdf");
         var before = await Scrape.TextAsync(app);

@@ -45,6 +45,8 @@ public class SemsearchPdfTests
         public void Count(AttachmentUse use)
         {
         }
+
+        public IDisposable? TryStartExtraction() => throw new NotSupportedException();
     }
 
     private static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);

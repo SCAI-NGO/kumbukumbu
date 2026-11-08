@@ -17,7 +17,7 @@ public sealed class PdfImagesToolTests(KumbuAppFactory app)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static async Task<CallToolResult> ShAsync(WebApplicationFactory<Program> host, string key, string command)
+    internal static async Task<CallToolResult> ShAsync(WebApplicationFactory<Program> host, string key, string command)
     {
         var transport = new HttpClientTransport(
             new HttpClientTransportOptions
@@ -35,7 +35,7 @@ public sealed class PdfImagesToolTests(KumbuAppFactory app)
     /// <summary>A size as the shell gives it, for the small files here.</summary>
     private static string Size(int bytes) => bytes < 1024 ? $"{bytes} B" : $"{Math.Round(bytes / 1024.0)} KB";
 
-    private static string Text(CallToolResult result) => Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+    internal static string Text(CallToolResult result) => Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
 
     [Fact]
     public async Task The_images_of_a_page_are_stored_as_attachments_ls_lists()

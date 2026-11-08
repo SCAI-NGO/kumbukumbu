@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 
@@ -14,7 +15,9 @@ namespace Kumbu.Server.Attachments;
 /// An expected failure (sidecar away, a refused page or crop, a PDF that can't be read) becomes a
 /// <see cref="PixelsUnavailableException"/> with a sentence for the model.
 /// </summary>
-public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner) : IAttachmentPixels
+public sealed class AttachmentPixels(
+    EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner, ExtractionGate extractions, RequestCaller caller)
+    : IAttachmentPixels
 {
     /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.</summary>
     public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
@@ -113,6 +116,9 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     }
 
     public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
+
+    /// <summary>Keyed by the account, whichever of its credentials calls; the dev token has none, and one place.</summary>
+    public IDisposable? TryStartExtraction() => extractions.TryStart(caller.User?.Id ?? "");
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
         await store.VaultOfAsync(path, ct) is { } vault && EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId) ? (vault, blobId) : null;

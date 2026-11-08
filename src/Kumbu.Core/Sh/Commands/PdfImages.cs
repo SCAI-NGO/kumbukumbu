@@ -141,14 +141,24 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         if (opened is null) return error!;
         var call = new Call(opened.Value.Path, opened.Value.State, range, all, started);
 
-        if (list) return await ListAsync(call, ct);
-        // Asked as the writer will ask it, before the sidecar is: a reader learns at once, not after the listing.
-        var probe = crop is not null ? into! : into!.Child(Path.GetFileNameWithoutExtension(call.Path.Name) + ".png");
-        if (files.Caller.Refuse(AttachmentWriter.Upload, probe) is { } refused)
+        if (!list)
         {
-            return refused with { Output = $"pdfimages: {refused.Output}", Kind = ShellErrorKind.Refused };
+            // Asked as the writer will ask it, before the sidecar is: a reader learns at once, not after the listing.
+            var probe = crop is not null ? into! : into!.Child(Path.GetFileNameWithoutExtension(call.Path.Name) + ".png");
+            if (files.Caller.Refuse(AttachmentWriter.Upload, probe) is { } refused)
+            {
+                return refused with { Output = $"pdfimages: {refused.Output}", Kind = ShellErrorKind.Refused };
+            }
         }
 
+        // One call per account at a time; a moment's wait, not a mistake in the call, so Unavailable.
+        using var place = pixels.TryStartExtraction();
+        if (place is null)
+        {
+            return ShellResult.Error("pdfimages: another pdfimages call of yours is still running; try again when it has finished") with { Kind = ShellErrorKind.Unavailable };
+        }
+
+        if (list) return await ListAsync(call, ct);
         if (crop is not null) return await StoreRegionAsync(call, crop, rotate, into!, ct);
 
         return await StoreAsync(call, into!, ct);

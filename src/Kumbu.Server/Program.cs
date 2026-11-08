@@ -182,6 +182,7 @@ builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
+builder.Services.AddSingleton<ExtractionGate>();
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
