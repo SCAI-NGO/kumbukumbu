@@ -3,7 +3,11 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Api;
 using Kumbu.Server.Dav;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -510,5 +514,39 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.All(Enumerable.Range(0, 10), i => Assert.NotNull(parking.Get($"s{i}", "v", ".other")));
         Assert.Null(parking.Get("writer", "v", ".first"));
         Assert.NotNull(parking.Get("writer", "v", ".second"));
+    }
+
+    /// <summary>The <c>/dav</c> endpoint lets a body through up to the parking cap and a little more, so that what
+    /// DavBody counts, and refuses with its own sentence, is what Kestrel lets in: its default of 30,000,000 bytes would
+    /// refuse a parked file of 29 to 64 MiB, a <c>.git</c> pack in a Finder copy, say.</summary>
+    [Fact]
+    public void The_dav_endpoint_takes_a_body_up_to_the_parking_cap()
+    {
+        // The methods WebDAV has; the 405 for any other reads no body.
+        var endpoint = Api.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == DavPaths.Prefix + "/{**path}" && e.Order == 0);
+
+        Assert.True(endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize > DavRules.ParkingCap);
+    }
+
+    /// <summary>A parked PUT of 30 MB, above Kestrel's default body limit, through a real Kestrel (TestServer enforces
+    /// no limit): parked, 201.</summary>
+    [Fact]
+    public async Task A_30_MB_parked_put_goes_through_kestrel()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await using var real = app.PublicApi.WithWebHostBuilder(_ => { });
+        real.UseKestrel(0);
+        real.StartServer();
+        var address = real.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
+        using var client = new HttpClient { BaseAddress = new Uri(address) };
+        using var request = new HttpRequestMessage(HttpMethod.Put, "/dav/Work/.pack") { Content = new ByteArrayContent(new byte[30 * 1024 * 1024]) };
+        request.Headers.TryAddWithoutValidation("Authorization", dav.Authorization);
+        request.Headers.Add("X-Forwarded-Proto", "https");
+        request.Headers.Add("X-Forwarded-For", DavClient.NewIp());
+
+        using var put = await client.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
     }
 }

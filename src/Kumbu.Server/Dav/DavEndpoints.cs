@@ -3,6 +3,7 @@ using System.Xml.Linq;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 
 namespace Kumbu.Server.Dav;
@@ -20,8 +21,12 @@ public static class DavEndpoints
 {
     public static IEndpointRouteBuilder MapDav(this IEndpointRouteBuilder app)
     {
-        // The pattern matches /dav itself too, so the web app never answers there.
-        app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
+        // The pattern matches /dav itself too, so the web app never answers there. The body may be as large as a parked
+        // file and a little more, rather than Kestrel's default of 30,000,000 bytes: each method counts what it reads
+        // against its own limit (DavBody), and refuses beyond it with its own sentence.
+        app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync)
+            .WithMetadata(FileContentMetadata.Instance, new RequestSizeLimitAttribute(DavRules.ParkingCap + 64 * 1024))
+            .ExcludeFromDescription();
         // Any other method, after the ones above (a higher order loses when both match).
         app.Map(DavPaths.Prefix + "/{**path}", NotAllowed).WithOrder(1).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
         return app;
