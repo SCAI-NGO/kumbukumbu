@@ -21,6 +21,9 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
     public string? Source => Metadata.GetValueOrDefault(SourceKey);
     public string? Hash => Metadata.GetValueOrDefault(HashKey);
 
+    /// <summary>Whether a name keeps the rules: lowercase letters, digits and hyphens, at most <see cref="MaxName"/> characters.</summary>
+    public static bool IsValidName(string name) => ValidName().IsMatch(name);
+
     public static SkillManifest Read(string folderName, string? content)
     {
         if (content is null) return Failed("SKILL.md is missing");
