@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
+using Kumbu.Server.Api;
+using Kumbu.Server.Auth;
+using Kumbu.Server.Publishing;
+using Kumbu.Server.Vaults;
+
+namespace Kumbu.Server.Skills;
+
+/// <summary><c>From</c>: a skill's folder ("/Skills/x", "/Work/_skills/x") or a system skill ("system:create-skill"); <c>To</c>:
+/// the name of a vault; <c>Name</c>: the folder's name there, by default the source folder's.</summary>
+public sealed record SkillCopyRequest(string From, string To, string? Name = null);
+
+/// <summary>The copy's folder, in the caller's view.</summary>
+public sealed record SkillCopiedView(string Path);
+
+/// <summary>
+/// Copy to… and Move to… of the Skills screen (skills design §5, Decision 21): a skill into the skill location of another
+/// vault the caller may write, also one shared with her (Decision 34). The files are read from the one vault and written
+/// to the other through the request's writers, so rights, the storage quota and the history apply as to any write; a
+/// write that fails removes what this request wrote. A link copy's sealed code and origin go into the target vault's
+/// record, and with a move leave the source's. The folder's name is the source folder's, never the manifest's.
+/// </summary>
+internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, PublicationStore publishing, RequestCaller caller)
+{
+    public const string SystemPrefix = "system:";
+
+    /// <summary>The <see cref="ApiError.Type"/> of a target folder that exists: the web app asks for another name.</summary>
+    public const string NameTaken = "name-taken";
+
+    public Task<VaultPath> CopyAsync(SkillCopyRequest request, CancellationToken ct) => RunAsync(request, move: false, ct);
+
+    public Task<VaultPath> MoveAsync(SkillCopyRequest request, CancellationToken ct) => RunAsync(request, move: true, ct);
+
+    /// <summary>The skill's folder in <paramref name="target"/>: <c>/&lt;vault&gt;/&lt;name&gt;</c> in the marked vault
+    /// Skills, else <c>/&lt;vault&gt;/_skills/&lt;name&gt;</c>.</summary>
+    public static VaultPath TargetOf(VaultAccess target, string folderName)
+    {
+        var vault = VaultPath.Root.Child(target.Name);
+        return (target.IsSkillsVault ? vault : vault.Child(SkillPaths.LocationFolder)).Child(folderName);
+    }
+
+    /// <summary>Why a skill's folder can't take the name; null if it can.</summary>
+    public static string? NameProblem(string name) =>
+        string.IsNullOrWhiteSpace(name) ? "a skill's name isn't empty"
+        : name.Contains('/', StringComparison.Ordinal) ? "a skill's name has no '/'"
+        : NoteNames.NameProblem(VaultPath.Root.Child("x").Child(name));
+
+    private sealed record Source(VaultAccess? Access, VaultPath? Folder, string Name, IReadOnlyList<SourceFile> Files);
+
+    /// <summary>A file relative to the skill's folder: a note's or text file's text, or an attachment's bytes.</summary>
+    private sealed record SourceFile(string Path, string? Text, byte[]? Bytes, (int W, int H)? Dimensions);
+
+    private async Task<VaultPath> RunAsync(SkillCopyRequest request, bool move, CancellationToken ct)
+    {
+        var command = move ? "move" : "copy";
+        var open = await caller.OpenVaultsAsync(ct);
+        var marked = open.FirstOrDefault(v => v.IsSkillsVault)?.Name;
+        var source = await SourceAsync(request.From, open, marked, ct);
+        var target = open.FirstOrDefault(v => string.Equals(v.Name, request.To, StringComparison.Ordinal))
+            ?? throw ApiErrors.NotFound($"There is no vault '{request.To}'.");
+        var name = request.Name ?? source.Name;
+        if (NameProblem(name) is { } problem) throw ApiErrors.BadRequest($"Choose another name: {problem}.");
+        var folder = TargetOf(target, name);
+
+        if (source.Folder is { } from && SkillPaths.LocationOf(from, marked) == SkillPaths.LocationOf(folder, marked))
+        {
+            throw ApiErrors.BadRequest($"{from.Value} is in {target.Name} already; choose another vault.");
+        }
+
+        if (move)
+        {
+            if (source.Folder is not { } moved) throw ApiErrors.BadRequest("A system skill stays where it is; copy it instead.");
+            RequireWritable(moved.Vault!);
+            if (((ICaller)caller).RefuseFolder("mv", moved) is { } refused) throw NoteApi.Refused(refused);
+            // A skill shared by link stays where its link reads it from: skill publications refuse its move here.
+        }
+
+        RequireWritable(target.Name);
+        if (((ICaller)caller).Refuse(command, folder) is { } refusedHere) throw NoteApi.Refused(refusedHere);
+        if ((await store.ListNotesUnderAsync(folder, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, folder, ct)).Count > 0)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, $"{folder.Value} is taken; choose another name.", type: NameTaken);
+        }
+
+        var attachments = writer.ForAttachments() ?? throw new InvalidOperationException("The server's store keeps attachments.");
+        var written = new List<VaultPath>();
+        try
+        {
+            foreach (var file in source.Files)
+            {
+                var path = Inside(folder, file.Path);
+                var result = file.Bytes is { } bytes
+                    ? (await attachments.WriteAsync(path.Value, bytes, file.Dimensions, null, ct)).Result
+                    : await writer.WriteAsync(path.Value, file.Text!, null, ct);
+                if (result.IsError) throw Failed(result);
+                written.Add(path);
+            }
+
+            if (source is { Access: { } access, Folder: { } at }) await CarryStateAsync(access, at, target, folder, ct);
+        }
+        catch
+        {
+            await RemoveAsync(attachments, written);
+            throw;
+        }
+
+        if (move) await LeaveAsync(attachments, source, folder, ct);
+        return folder;
+    }
+
+    private async Task<Source> SourceAsync(string from, IReadOnlyList<VaultAccess> open, string? marked, CancellationToken ct)
+    {
+        if (from.StartsWith(SystemPrefix, StringComparison.Ordinal))
+        {
+            var system = SystemSkills.Find(from[SystemPrefix.Length..]) ?? throw ApiErrors.NotFound($"There is no system skill '{from[SystemPrefix.Length..]}'.");
+            return new Source(null, null, system.Name, [.. Ordered(system.Files.Select(f => new SourceFile(f.Path, f.Content, null, null)))]);
+        }
+
+        if (!VaultPath.TryParse(from.TrimEnd('/'), out var folder) || SkillPaths.FolderOf(folder, marked) != folder
+            || open.FirstOrDefault(v => string.Equals(v.Name, folder.Vault, StringComparison.Ordinal)) is not { } access)
+        {
+            throw ApiErrors.NotFound($"There is no skill at {from}.");
+        }
+
+        var prefix = folder.Value.Length + 1;
+        var files = new List<SourceFile>();
+        foreach (var note in await store.ReadNotesUnderAsync(folder, ct)) files.Add(new SourceFile(note.Path.Value[prefix..], note.Content, null, null));
+        foreach (var attachment in await StoreAttachments.UnderAsync(store, folder, ct))
+        {
+            var bytes = await StoreAttachments.ReadBytesAsync(store, attachment.Path, attachment.Current, ct)
+                ?? throw new ContentMissingException($"The content of {attachment.Path.Value} is missing.");
+            var dimensions = attachment.Current is { Width: { } w, Height: { } h } ? (w, h) : ((int W, int H)?)null;
+            files.Add(new SourceFile(attachment.Path.Value[prefix..], null, bytes, dimensions));
+        }
+
+        if (files.Count == 0) throw ApiErrors.NotFound($"There is no skill at {from}.");
+        return new Source(access, folder, folder.Name, [.. Ordered(files)]);
+    }
+
+    /// <summary><c>SKILL.md</c> first, so a copy that stops short has its manifest, then by path.</summary>
+    private static IEnumerable<SourceFile> Ordered(IEnumerable<SourceFile> files) =>
+        files.OrderBy(f => f.Path != SkillPaths.Manifest).ThenBy(f => f.Path, TextOrder.Default);
+
+    private static VaultPath Inside(VaultPath folder, string relative) => relative.Split('/').Aggregate(folder, (path, segment) => path.Child(segment));
+
+    private void RequireWritable(string vault)
+    {
+        if (caller.CanWrite(vault)) return;
+        var sentence = caller.ReadOnlySentence(vault);
+        throw new ApiException(StatusCodes.Status403Forbidden, char.ToUpperInvariant(sentence[0]) + sentence[1..] + ".", code: caller.ReadOnlyCode(vault) ?? Refusals.ReadOnly);
+    }
+
+    private static ApiException Failed(ShellResult result) => result.Kind switch
+    {
+        ShellErrorKind.Refused => NoteApi.Refused(result),
+        ShellErrorKind.Conflict => new ApiException(StatusCodes.Status409Conflict, result.Output),
+        ShellErrorKind.NotFound => ApiErrors.NotFound(result.Output),
+        _ => ApiErrors.BadRequest(result.Output),
+    };
+
+    /// <summary>The source's sealed code and origin of the skill, in the target vault's record under the new folder.</summary>
+    private async Task CarryStateAsync(VaultAccess source, VaultPath from, VaultAccess target, VaultPath to, CancellationToken ct)
+    {
+        var (stored, into) = (source.ToVault(from).Value, target.ToVault(to).Value);
+        var record = (await publishing.ReadAsync(null, source.Vault, ct)).Record;
+        var codes = record.SkillCodes.Where(c => Under(c.Path, stored)).Select(c => c with { Path = into + c.Path[stored.Length..] }).ToList();
+        var origins = record.Origins.Where(o => Under(o.Path, stored)).Select(o => o with { Path = into + o.Path[stored.Length..] }).ToList();
+        if (codes.Count == 0 && origins.Count == 0) return;
+        await publishing.ChangeAsync(target, r => r with
+        {
+            SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, into)), .. codes],
+            Origins = [.. r.Origins.Where(o => !Under(o.Path, into)), .. origins],
+        }, ct);
+    }
+
+    /// <summary>A move's end: the source's files to its vault's trash, and its sealed state out of the source's record.</summary>
+    private async Task LeaveAsync(AttachmentWriter attachments, Source source, VaultPath copied, CancellationToken ct)
+    {
+        var (access, folder) = (source.Access!, source.Folder!);
+        var stayed = new List<string>();
+        foreach (var file in source.Files)
+        {
+            var path = Inside(folder, file.Path);
+            var removed = path.IsNote ? await writer.RemoveAsync(path, ct) : await attachments.RemoveAsync(path.Value, ct);
+            if (removed.IsError) stayed.Add(path.Value);
+        }
+
+        var stored = access.ToVault(folder).Value;
+        await publishing.ChangeAsync(access, r => r.SkillCodes.Any(c => Under(c.Path, stored)) || r.Origins.Any(o => Under(o.Path, stored))
+            ? r with { SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, stored))], Origins = [.. r.Origins.Where(o => !Under(o.Path, stored))] }
+            : null, ct);
+        if (stayed.Count > 0)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, $"Copied to {copied.Value}, but these stayed where they were: {string.Join(", ", stayed)}.");
+        }
+    }
+
+    /// <summary>What a failed copy wrote, to the target's trash: never cancelled, so a client gone away leaves nothing half-copied.</summary>
+    private async Task RemoveAsync(AttachmentWriter attachments, IReadOnlyList<VaultPath> written)
+    {
+        foreach (var path in written)
+        {
+            if (path.IsNote) await writer.RemoveAsync(path, CancellationToken.None);
+            else await attachments.RemoveAsync(path.Value, CancellationToken.None);
+        }
+    }
+
+    private static bool Under(string path, string folder) =>
+        string.Equals(path, folder, StringComparison.Ordinal) || path.StartsWith(folder + "/", StringComparison.Ordinal);
+}

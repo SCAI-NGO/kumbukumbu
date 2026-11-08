@@ -23,7 +23,8 @@ public sealed record SkillsView(SkillView[] Skills, string[] WithoutSkills);
 public sealed record SkillHitView(int Rank, double Score, SkillView Skill);
 
 /// <summary>
-/// The Skills screen's list and find (skills design §5), for a session only. <c>as</c> shows what one of her agent keys or
+/// The Skills screen's list and find, and its Copy to… and Move to… (<see cref="SkillCopier"/>) (skills design §5), for a
+/// session only: only a session reaches both vaults. <c>as</c> shows what one of her agent keys or
 /// connections would find: its vaults alone, besides the system skills. Listing reads every vault she reaches, which is
 /// no use of any (<see cref="EncryptedNoteStore.CountsUse"/>), and the credential asked about acts on nothing, so its
 /// last use stays.
@@ -35,7 +36,17 @@ public static class SkillsApi
         var group = app.MapGroup("/api/skills").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         group.MapGet("", ListAsync).Errors(401, 403, 503);
         group.MapGet("/find", FindAsync).Errors(400, 401, 403, 404, 503);
+        group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
     }
+
+    private static async Task<Ok<SkillCopiedView>> CopyAsync(
+        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, CancellationToken ct) =>
+        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller).CopyAsync(body, ct)).Value));
+
+    private static async Task<Ok<SkillCopiedView>> MoveAsync(
+        SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, CancellationToken ct) =>
+        TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller).MoveAsync(body, ct)).Value));
 
     private static async Task<Ok<SkillsView>> ListAsync(
         RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections, TimeProvider time, CancellationToken ct)

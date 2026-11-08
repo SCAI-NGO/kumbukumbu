@@ -78,6 +78,30 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         if (replaced.MatchedCount == 0) throw new PublishingConflictException();
     }
 
+    /// <summary>
+    /// Changes the vault's record by itself, with nothing else in the same write: <paramref name="change"/> gets the record
+    /// as read and returns the next one, or null to leave it. Read again when it changed meanwhile, up to three times; then
+    /// <see cref="PublishingConflictException"/>.
+    /// </summary>
+    public async Task ChangeAsync(VaultAccess access, Func<PublishingRecord, PublishingRecord?> change, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            catalog.CheckWritable(access.Vault, access);
+            var (doc, record) = await ReadAsync(null, access.Vault, ct);
+            if (change(record) is not { } next) return;
+            using var session = await catalog.StartSessionAsync(ct);
+            try
+            {
+                await WriteAsync(session, access.Vault, doc, next, ct);
+                return;
+            }
+            catch (PublishingConflictException) when (attempt < 3)
+            {
+            }
+        }
+    }
+
     /// <summary>A new copy under <paramref name="code"/>, sealed under <paramref name="key"/>; file n is <paramref name="files"/>[n].</summary>
     public async Task InsertCopyAsync(
         IClientSessionHandle session, string vaultId, string code, byte[] key, string ownerId, PublishedCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct)
