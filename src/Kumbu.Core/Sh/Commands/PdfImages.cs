@@ -399,12 +399,13 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         return ShellResult.Ok(string.Join('\n', lines));
     }
 
-    /// <summary>One region of one page, rendered and stored at <paramref name="target"/>, which must not stand yet.</summary>
+    /// <summary>One region of one page, rendered and stored at <paramref name="target"/>, which must not stand yet, in any case.</summary>
     private async Task<ShellResult> StoreRegionAsync(Call call, Crop crop, int rotate, VaultPath target, CancellationToken ct)
     {
         if (await StoreAttachments.GetAsync(notes, target, ct) is not null
             || (await notes.ListNotesUnderAsync(target, ct)).Count > 0
-            || (await StoreAttachments.PathsUnderAsync(notes, target, ct))?.Count > 0)
+            || (await StoreAttachments.PathsUnderAsync(notes, target, ct))?.Count > 0
+            || await StandsInOtherCaseAsync(target, ct))
         {
             return ShellResult.Error($"pdfimages: {target.Value} exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict };
         }
@@ -439,6 +440,16 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var scaled = picture.Width < fullW || picture.Height < fullH ? $" (scaled down from {fullW}×{fullH})" : "";
         var turned = rotate == 0 ? "" : $" of the page turned {rotate}°";
         return ShellResult.Ok($"stored {target.Value}  p{page}  {picture.Width}×{picture.Height}{scaled}  {AttachmentText.Size(picture.Data.Length)}  at {crop}{turned}");
+    }
+
+    /// <summary>Whether a note, file or folder beside <paramref name="target"/> has its path but for case (a vault's name is unique in any case already).</summary>
+    private async Task<bool> StandsInOtherCaseAsync(VaultPath target, CancellationToken ct)
+    {
+        var slash = target.Value.LastIndexOf('/');
+        if (target.Segments.Count < 2 || !VaultPath.TryParse(target.Value[..slash], out var folder)) return false;
+        var beside = (await notes.ListNotesUnderAsync(folder, ct)).Concat(await StoreAttachments.PathsUnderAsync(notes, folder, ct) ?? []);
+        return beside.Any(p => p.Value.Equals(target.Value, StringComparison.OrdinalIgnoreCase)
+            || p.Value.StartsWith(target.Value + "/", StringComparison.OrdinalIgnoreCase));
     }
 
     private const int StoredDpi = 300;
@@ -511,10 +522,13 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         return Invalid($"pdfimages: {toStore.Count} images in {listed}, more than {MaxImages} in one call; give a page range, e.g. {(last == first ? $"{first}" : $"{first}-{last}")}");
     }
 
-    /// <summary>The targets that stand already, as a note, a file or a folder, in either extension an image may get.</summary>
+    /// <summary>
+    /// The targets that stand already, as a note, a file or a folder, in either extension an image may get, in any
+    /// case: on a case-insensitive file system (a synced Obsidian vault) the two would be one file.
+    /// </summary>
     private async Task<List<string>> ExistingAsync(List<Planned> plan, VaultPath into, CancellationToken ct)
     {
-        var taken = new HashSet<string>(StringComparer.Ordinal);
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var under = (await notes.ListNotesUnderAsync(into, ct)).Concat(await StoreAttachments.PathsUnderAsync(notes, into, ct) ?? []);
         foreach (var path in under)
         {

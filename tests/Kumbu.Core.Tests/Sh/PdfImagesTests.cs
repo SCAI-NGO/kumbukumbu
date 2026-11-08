@@ -673,6 +673,22 @@ public class PdfImagesTests
     }
 
     [Fact]
+    public async Task A_target_that_differs_only_in_case_refuses_and_writes_nothing()
+    {
+        await TwoPages();
+        await _files.WriteAsync("/Work/images/Manual-P1-1.png", Png(100, 1, 1).Data, (1, 1), null, Ct);
+        await _files.WriteAsync("/Work/images/MANUAL-p3-1.JPG/old.png", Png(101, 1, 1).Data, (1, 1), null, Ct);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(
+            ShellResult.Error("pdfimages: these exist already: /Work/images/manual-p1-1.png, /Work/images/manual-p3-1.jpg; choose another folder, or remove them first") with { Kind = ShellErrorKind.Conflict },
+            result);
+        Assert.DoesNotContain(_pixels.Calls, c => c.StartsWith("image", StringComparison.Ordinal));
+        Assert.Equal(["/Work/images/MANUAL-p3-1.JPG/old.png", "/Work/images/Manual-P1-1.png"], (await StoredUnder("/Work/images")).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task More_than_500_to_store_refuses_with_a_range_that_fits()
     {
         await Upload();
@@ -1095,6 +1111,22 @@ public class PdfImagesTests
         var stored = (await Stored(Diagram + ".png"))!;
         Assert.Equal(before.Data, await StoreAttachments.ReadBytesAsync(_store, stored.Path, stored.Current, Ct));
         Assert.Null(await Stored(Diagram + ".jpg"));
+    }
+
+    [Fact]
+    public async Task Crop_over_a_target_that_differs_only_in_case_refuses_and_writes_nothing()
+    {
+        await PumpManual();
+        Assert.False((await _files.WriteAsync("/Work/Pump manual/images/Wiring Diagram.png", Png(1000, 10, 10).Data, (10, 10), null, Ct)).Result.IsError);
+        await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync("/Work/Pump manual/images/WIRING DIAGRAM.jpg/notes.md", "a note\n", null, Ct);
+
+        var file = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+        var folder = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.jpg\"");
+
+        Assert.Equal(ShellResult.Error($"pdfimages: {Diagram}.png exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict }, file);
+        Assert.Equal(ShellResult.Error($"pdfimages: {Diagram}.jpg exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict }, folder);
+        Assert.Empty(_pixels.Calls);
+        Assert.Null(await Stored(Diagram + ".png"));
     }
 
     [Fact]
