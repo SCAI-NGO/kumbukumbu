@@ -37,6 +37,7 @@ public static class Manual
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
           publish ls|add|update|rm <note> share one note as a read-only copy behind a secret link
+          skills ls|find|cat|copy|check   the user's skills: find one for the task, read and follow it (help skills)
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 

@@ -35,7 +35,7 @@ public sealed class Shell
     public Shell(
         INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
         IAttachmentPixels? pixels = null, IWriterLabels? labels = null, Publishing.IPublisher? publisher = null, string version = "0.0.0-dev",
-        IStorageFigures? figures = null)
+        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null)
     {
         _observer = observer;
         _pixels = pixels;
@@ -51,7 +51,9 @@ public sealed class Shell
             new History(notes, () => writer.Now, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
             new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
             new Df(notes, figures ?? NoStorageFigures.Instance), new Du(notes),
-            new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints), new PublishCommand(publisher),
+            new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
+            new SkillsCommand(new Skills.SkillDirectory(notes, labels ?? PlainWriterLabels.Instance), notes, writer, search ?? new Search.NoSearchIndex(), updates ?? Skills.NoSkillUpdates.Instance, marks),
+            new PublishCommand(publisher),
             new Uname(version), new Help(_commands),
         ];
         foreach (var command in commands)
