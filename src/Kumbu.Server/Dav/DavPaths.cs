@@ -20,13 +20,13 @@ public sealed record DavTarget(VaultPath Path, bool Bare = false)
 /// in a decoded path, where it can't be told from a name holding "%2F". So each segment of the raw target is decoded
 /// on its own, an encoded slash refused before it could become a separator, and the result goes through
 /// <see cref="ApiPaths.Parse(string, string?, PathKind)"/> as every REST path does (NFC; no empty, <c>.</c> or
-/// <c>..</c> segment, no backslash).
+/// <c>..</c> segment, no backslash); a control character is refused too, also where the path is a parked name.
 /// </summary>
 public static class DavPaths
 {
     public const string Prefix = "/dav";
 
-    private const string Refused = "A path may not contain empty, '.' or '..' segments, backslashes or encoded slashes.";
+    private const string Refused = "A path may not contain empty, '.' or '..' segments, backslashes, encoded slashes or control characters.";
 
     /// <summary>A request target never carries a fragment (RFC 9112 §3.2), and a <c>Destination</c> names a resource, not
     /// a part of one. Kestrel keeps a raw <c>#</c> in the path; cut at it, <c>DELETE …/Projects/#1 ideas.md</c> would act
@@ -58,7 +58,12 @@ public static class DavPaths
         foreach (var part in parts)
         {
             if (part.Contains("%2F", StringComparison.OrdinalIgnoreCase)) throw new DavException(StatusCodes.Status400BadRequest, Refused);
-            segments.Add(Uri.UnescapeDataString(part));
+            // No control character, NUL included, sent raw or encoded: the store's names refuse them, but a parked name
+            // or a hold's would keep one (DavHolds keys rest on a path never holding a NUL), and a Destination is decoded
+            // here, not by Kestrel, which refuses only %00 in the target.
+            var segment = Uri.UnescapeDataString(part);
+            if (segment.Any(char.IsControl)) throw new DavException(StatusCodes.Status400BadRequest, Refused);
+            segments.Add(segment);
         }
 
         try

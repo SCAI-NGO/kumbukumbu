@@ -703,6 +703,30 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("# A", await NoteAsync(dav.Owner, "a.md"));
     }
 
+    /// <summary>A destination is held to the request target's rules: no control character, NUL included, even under a
+    /// parked name, where nothing else would refuse it (security review finding 9).</summary>
+    [Theory]
+    [InlineData("https://localhost/dav/Work/.a%00b")]
+    [InlineData("https://localhost/dav/Work/.a%01b")]
+    [InlineData("/dav/Work/a%1Fb.md~")]
+    [InlineData("/dav/Work/.junk%7F/a.md")]
+    public async Task Move_or_copy_to_a_destination_with_a_control_character_is_502(string destination)
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("a.md", "# A");
+        using (var folder = await dav.SendAsync(DavClient.Mkcol, "/dav/Work/.junk%7F")) Assert.Equal(HttpStatusCode.BadRequest, folder.StatusCode);
+
+        foreach (var method in new[] { DavClient.Move, DavClient.Copy })
+        {
+            using var sent = await dav.SendAsync(method, "/dav/Work/a.md", headers: new Dictionary<string, string> { ["Destination"] = destination });
+            Assert.Equal(HttpStatusCode.BadGateway, sent.StatusCode);
+        }
+
+        // Not held under the name either: the share still sees the note where it is.
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/a.md");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+    }
+
     [Theory]
     [InlineData("/dav/Work/", "https://localhost/dav/Work/Inner/")]
     [InlineData("/dav/", "https://localhost/dav/Work/Inner/")]
