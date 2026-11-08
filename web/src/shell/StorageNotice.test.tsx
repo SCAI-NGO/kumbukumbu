@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fakeApi, json } from "../test/app";
+import { fakeApi, json, user } from "../test/app";
 import StorageNotice from "./StorageNotice";
 
 afterEach(() => {
@@ -13,18 +13,24 @@ afterEach(() => {
 const MB = 1024 ** 2;
 const GB = 1024 ** 3;
 
+const session = (storageLimited: boolean) => () =>
+  json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: false, storageLimited });
+
 /** The notice for her own storage at `used` of `limit`; resolves once the figure was asked. */
 async function renderAt(used: number, limit: number | null) {
-  const fetch = fakeApi({ "GET /api/account/storage": () => json(200, { used, limit }) });
+  const fetch = fakeApi({ "GET /api/session": session(true), "GET /api/account/storage": () => json(200, { used, limit }) });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
       <StorageNotice />
     </QueryClientProvider>,
   );
-  await waitFor(() => expect(fetch).toHaveBeenCalled());
   await waitFor(() => expect(queryClient.getQueryState(["account", "storage"])?.status).toBe("success"));
+  return fetch;
 }
+
+const storageAsked = (fetch: ReturnType<typeof fakeApi>) =>
+  fetch.mock.calls.filter(([request]) => new URL((request as Request).url).pathname === "/api/account/storage").length;
 
 describe("StorageNotice", () => {
   it("warns the owner from 90 %", async () => {
@@ -46,5 +52,29 @@ describe("StorageNotice", () => {
   it("says nothing without a limit", async () => {
     await renderAt(50 * GB, null);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("doesn't ask for the storage when the session says no limit applies", async () => {
+    // Counting her storage costs the server a read of every document of her vaults; without a limit it buys nothing.
+    const fetch = fakeApi({ "GET /api/session": session(false), "GET /api/account/storage": () => json(200, { used: 0, limit: null }) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <StorageNotice />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(queryClient.getQueryState(["session"])?.status).toBe("success"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(storageAsked(fetch)).toBe(0);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("asks once a minute at most, not on every focus", async () => {
+    const fetch = await renderAt(0, 2 * GB);
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    focusManager.setFocused(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(storageAsked(fetch)).toBe(1);
   });
 });

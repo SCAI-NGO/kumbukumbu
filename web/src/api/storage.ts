@@ -2,6 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "../state/session";
 import { api, call } from "./client";
+import { sessionQuery } from "./publications";
 import type { components } from "./schema";
 
 export type AccountStorage = components["schemas"]["AccountStorageView"];
@@ -38,9 +39,16 @@ export const fullSentence = (limit: number | null) =>
 /** The owner's sentence for a write refused for her full storage, with the limit last asked for the signed-in user. */
 export const quotaSentence = () => fullSentence(known && known.user === useSession.getState().user?.id ? known.limit : null);
 
-/** What the session's own vaults take, and her limit (Settings, the shell's notice). */
-export const useAccountStorage = () =>
+/** Whether a storage limit applies to the signed-in user, as the session says (no count of her storage); undefined until
+ * the session is in. */
+export const useStorageLimited = (): boolean | undefined => useQuery({ ...sessionQuery, select: (s) => s.storageLimited === true }).data;
+
+/** What the session's own vaults take, and her limit (Settings, the shell's notice). The server counts it at most every
+ * 30 seconds, reading every document of her vaults: the shell's notice asks with `enabled` only when a limit applies,
+ * and no more than once a minute. */
+export const useAccountStorage = (options: { enabled?: boolean; staleTime?: number; refetchOnWindowFocus?: boolean } = {}) =>
   useQuery({
+    ...options,
     queryKey: ["account", "storage"],
     queryFn: async () => {
       const storage = await call(api.GET("/api/account/storage"));

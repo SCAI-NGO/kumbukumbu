@@ -729,6 +729,31 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(2, Seen(seen, "count"));
     }
 
+    /// <summary>The session says whether a limit applies to the user, from her limit alone: the shell's notice asks for
+    /// the storage only then, so a user without a limit is never counted for it (breaks nothing).</summary>
+    [Fact]
+    public async Task The_session_says_whether_a_limit_applies_without_counting()
+    {
+        var api = Own(time: new FakeTimeProvider(_time.GetUtcNow()));
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var seen = Watch(Quota(api), user.User.Id);
+
+        async Task<bool> LimitedAsync()
+        {
+            using var session = await user.GetAsync("/api/session");
+            Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+            return (await RestClient.JsonAsync(session))["storageLimited"]!.GetValue<bool>();
+        }
+
+        Assert.False(await LimitedAsync());
+        await OverrideAsync(user, OneMb);
+        Assert.True(await LimitedAsync());
+        await OverrideAsync(user, StorageQuota.Unlimited);
+        Assert.False(await LimitedAsync());
+        await Quota(api).SettledAsync();
+        Assert.Equal(0, Seen(seen, "count"));
+    }
+
     /// <summary>Emptying the trash counts again at once: Settings asks right after it, and shows what it freed.</summary>
     [Fact]
     public async Task Emptying_the_trash_shows_in_the_storage_at_once()

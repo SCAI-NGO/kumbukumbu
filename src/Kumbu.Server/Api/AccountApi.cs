@@ -19,8 +19,10 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// changes: a sign-in or, for a remembered session, the first request after 30 minutes without one.
 /// <c>passwordWindowOpen</c>: whether the actions that need the password lately given go ahead without asking for it
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
-/// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled);
+/// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
+/// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
+/// the shell's notice asks for the storage only then.</summary>
+public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited);
 
 /// <summary><c>remember</c>: "Keep me signed in on this device", a session of 30 days (7 idle) with the normal limits
 /// for the actions that need the password; false when left out.</summary>
@@ -217,7 +219,7 @@ public static class AccountApi
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -242,7 +244,8 @@ public static class AccountApi
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
-        return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled));
+        return TypedResults.Ok(new SessionView(
+            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitAsync(user.Id, ct) is not null));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -302,8 +305,10 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
-    private static Ok<SessionView> Session(RequestCaller caller, IOptions<KumbuOptions> options) =>
-        TypedResults.Ok(new SessionView(UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled));
+    private static async Task<Ok<SessionView>> Session(RequestCaller caller, StorageQuota quota, IOptions<KumbuOptions> options, CancellationToken ct) =>
+        TypedResults.Ok(new SessionView(
+            UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
+            await quota.LimitAsync(caller.User.Id, ct) is not null));
 
     /// <summary>
     /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No
@@ -453,7 +458,8 @@ public static class AccountApi
                 StorageQuota.Kind(u.Quota), quota.Effective(u.Quota)))
             .ToArray());
 
-    /// <summary>The session's own storage (Settings shows it, the shell's notice asks on every focus of the tab): the
+    /// <summary>The session's own storage (Settings shows it; the shell's notice asks once a minute, and only when the
+    /// session says a limit applies, <see cref="SessionView"/>): the
     /// limit as it is now, one document read, and the usage as <c>df</c> has it, counted at most once per
     /// <see cref="StorageQuota.ShownFor"/>, since a count reads every document of her vaults. Settings shows the usage
     /// without a limit too, so it is counted then as well.</summary>

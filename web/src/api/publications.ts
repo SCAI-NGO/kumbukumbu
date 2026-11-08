@@ -15,7 +15,8 @@ export const pdfsNotYet = "PDFs are not published yet";
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
-const sessionQuery = { queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) };
+/** The session view, shared by the questions asked of it. */
+export const sessionQuery = { queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) };
 
 /**
  * Whether the server publishes at all (`Kumbu:Publish:Enabled`): off, the web app offers no Publish and no Update.

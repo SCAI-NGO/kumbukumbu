@@ -9850,6 +9850,7 @@ export interface components {
             previousSignInAt: null | string;
             passwordWindowOpen: boolean;
             publishEnabled: boolean;
+            storageLimited: boolean;
         };
         SetConnectionVaultsRequest: {
             vaults: {
