@@ -16,11 +16,13 @@ using Microsoft.Extensions.Options;
 namespace Kumbu.Server.Skills;
 
 /// <summary>A skill for the Skills screen. <c>Location</c> is "system" or the vault's name; <c>Path</c> its folder, null for a
-/// system skill; <c>CanWrite</c> whether the caller may change it; <c>Shared</c> whether it is shared by link, and
-/// <c>WithdrawnBefore</c> whether a link of it was withdrawn since it was last shared (Decision 15).</summary>
+/// system skill; <c>Source</c> a copy's source where its sealed origin agrees, else null, with <c>SourceUnverified</c>
+/// when the frontmatter claims one that nothing backs (Decision 33); <c>CanWrite</c> whether the caller may change it;
+/// <c>Shared</c> whether it is shared by link, and <c>WithdrawnBefore</c> whether a link of it was withdrawn since it was
+/// last shared (Decision 15).</summary>
 public sealed record SkillView(
     string Name, string Description, string Location, string? Path, string? Source, string? LastEditor, bool ByOther, string[] Warnings,
-    string? Update = null, bool Shared = false, bool CanWrite = false, bool OriginEdited = false, bool WithdrawnBefore = false);
+    string? Update = null, bool Shared = false, bool CanWrite = false, bool OriginEdited = false, bool WithdrawnBefore = false, bool SourceUnverified = false);
 
 /// <summary>The skills the caller sees, and her live agent keys and connections that lack the vault Skills (by name).</summary>
 public sealed record SkillsView(SkillView[] Skills, string[] WithoutSkills);
@@ -234,12 +236,15 @@ public static class SkillsApi
         foreach (var s in skills)
         {
             var canWrite = s.Vault is { } vault && await store.VaultInfoAsync(vault, ct) is { Level: >= AccessLevel.Write };
-            var edited = s.Folder is { } copy && origins.TryGetValue(copy.Value, out var origin) && await OriginEditedAsync(store, copy, origin, ct);
+            var sealedOrigin = s.Folder is { } copy && origins.TryGetValue(copy.Value, out var origin) ? origin : null;
+            var edited = s.OriginEdited || sealedOrigin is not null && await OriginEditedAsync(store, s.Folder!, sealedOrigin, ct);
             var update = !edited && s.Folder is { } checkedFolder && updates.Contains(checkedFolder.Value) ? SkillUpdates.Available : null;
+            // "From" a source only where the sealed origin agrees: anyone who may write the folder can write a kumbu-source.
+            var verified = sealedOrigin is not null && !edited;
             views.Add(new SkillView(
-                s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, s.Source, s.LastEditor, s.ByOther, [.. s.Warnings],
-                Update: update, Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited || edited,
-                WithdrawnBefore: s.Folder is { } at && withdrawn.Contains(at.Value)));
+                s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, verified ? s.Source : null, s.LastEditor, s.ByOther, [.. s.Warnings],
+                Update: update, Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: edited,
+                WithdrawnBefore: s.Folder is { } at && withdrawn.Contains(at.Value), SourceUnverified: s.Source is not null && !verified && !edited));
         }
 
         return views;

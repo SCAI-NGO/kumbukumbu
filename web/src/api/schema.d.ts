@@ -12083,6 +12083,7 @@ export interface components {
             canWrite?: boolean;
             originEdited?: boolean;
             withdrawnBefore?: boolean;
+            sourceUnverified?: boolean;
         };
         SkillsNoticeView: {
             renamed: string;

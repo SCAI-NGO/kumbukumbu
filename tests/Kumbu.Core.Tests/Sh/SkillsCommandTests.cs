@@ -17,6 +17,7 @@ public class SkillsCommandTests
     private readonly InMemoryNoteStore _store = new();
     private readonly HashSet<VaultPath> _updates = [];
     private readonly HashSet<VaultPath> _edited = [];
+    private readonly HashSet<VaultPath> _verified = [];
 
     public SkillsCommandTests()
     {
@@ -27,9 +28,9 @@ public class SkillsCommandTests
         Put("/Work/plan.md", "# Plan\n");
     }
 
-    private sealed class Updates(IReadOnlySet<VaultPath> available, IReadOnlySet<VaultPath> edited) : ISkillUpdates
+    private sealed class Updates(IReadOnlySet<VaultPath> available, IReadOnlySet<VaultPath> edited, IReadOnlySet<VaultPath> verified) : ISkillUpdates
     {
-        public Task<SkillMarks> MarksAsync(CancellationToken ct) => Task.FromResult(new SkillMarks(available, edited));
+        public Task<SkillMarks> MarksAsync(CancellationToken ct) => Task.FromResult(new SkillMarks(available, edited, verified));
     }
 
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
@@ -49,7 +50,7 @@ public class SkillsCommandTests
     {
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
         caller ??= new FixedCaller(Writers.Dev);
-        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), search: search, updates: new Updates(_updates, _edited));
+        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), search: search, updates: new Updates(_updates, _edited, _verified));
         return shell.RunAsync(line, CancellationToken.None);
     }
 
@@ -96,6 +97,24 @@ public class SkillsCommandTests
         Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[2]);
         Assert.DoesNotContain("update available", string.Join('\n', lines));
         Assert.StartsWith("1. release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", found);
+    }
+
+    [Fact]
+    public async Task A_source_counts_only_where_the_sealed_origin_agrees()
+    {
+        const string claimed = "---\nname: pdf\ndescription: Fills PDFs.\nmetadata:\n  kumbu-source: \"github:anthropics/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567\"\n---\n";
+        Put("/Skills/pdf/SKILL.md", claimed);
+        Put("/Skills/real/SKILL.md", claimed.Replace("name: pdf", "name: real"));
+        _verified.Add(P("/Skills/real"));
+
+        var ls = (await Run("skills ls")).Output.Split('\n');
+        var found = (await Run("skills find \"fill PDFs\"")).Output;
+
+        Assert.Equal("pdf (/Skills/pdf, last changed by claude, unverified origin): Fills PDFs.", Assert.Single(ls, l => l.StartsWith("pdf (", StringComparison.Ordinal)));
+        Assert.Equal("real (/Skills/real, last changed by claude, from github:anthropics/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567): Fills PDFs.",
+            Assert.Single(ls, l => l.StartsWith("real (", StringComparison.Ordinal)));
+        Assert.DoesNotContain("pdf (/Skills/pdf, last changed by claude, from", found);
+        Assert.Contains("pdf (/Skills/pdf, last changed by claude, unverified origin)", found);
     }
 
     [Fact]

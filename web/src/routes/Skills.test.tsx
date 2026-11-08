@@ -53,6 +53,24 @@ describe("Skills", () => {
     expect(screen.getByText(/last changed by Ada/)).toBeInTheDocument();
   });
 
+  it("names a copy's source only when the server verified it", async () => {
+    api([], {
+      "GET /api/skills": () =>
+        json(200, {
+          skills: [
+            skill({ name: "claimed", location: "Skills", path: "/Skills/claimed", sourceUnverified: true }),
+            skill({ name: "real", location: "Skills", path: "/Skills/real", source: "github:alice-example/skills/real@abc" }),
+          ],
+          withoutSkills: [],
+        }),
+    });
+    renderApp("/skills/installed");
+    const claimed = (await screen.findByText("claimed")).closest("li")!;
+    expect(within(claimed).getByText(/unverified origin/)).toBeInTheDocument();
+    expect(within(claimed).queryByText(/from /)).not.toBeInTheDocument();
+    expect(within(screen.getByText("real").closest("li")!).getByText(/from github:alice-example\/skills\/real@abc/)).toBeInTheDocument();
+  });
+
   it("names connections without Skills and links to Access", async () => {
     api(["Claude", "Desk key"]);
     renderApp("/skills/installed");

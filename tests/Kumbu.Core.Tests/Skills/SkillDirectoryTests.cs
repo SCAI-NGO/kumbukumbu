@@ -138,8 +138,10 @@ public class SkillDirectoryTests
         var skill = await One("/Skills/pdf");
 
         Assert.Equal("github:alice-example/skills/pdf", skill.Source);
-        Assert.Equal("pdf (/Skills/pdf, last changed by Bob, from github:alice-example/skills/pdf): Reads PDFs.", skill.Line());
-        Assert.Equal("pdf (/Skills/pdf, last changed by Bob, from github:alice-example/skills/pdf, origin edited): Reads PDFs.", (skill with { OriginEdited = true }).Line());
+        // "from" only for a source the sealed origin agrees with; the frontmatter alone proves nothing, whoever wrote it.
+        Assert.Equal("pdf (/Skills/pdf, last changed by Bob, unverified origin): Reads PDFs.", skill.Line());
+        Assert.Equal("pdf (/Skills/pdf, last changed by Bob, from github:alice-example/skills/pdf): Reads PDFs.", (skill with { SourceVerified = true }).Line());
+        Assert.Equal("pdf (/Skills/pdf, last changed by Bob, origin edited): Reads PDFs.", (skill with { OriginEdited = true }).Line());
     }
 
     [Theory]

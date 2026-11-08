@@ -8,8 +8,8 @@ namespace Kumbu.Core.Skills;
 /// <summary>
 /// A skill as a caller sees it: a system skill (<see cref="Folder"/> null) or a folder in a skill location, with where
 /// it comes from. <see cref="LastEditor"/> is the label of <c>SKILL.md</c>'s last writer, <see cref="ByOther"/> whether
-/// that was another user, <see cref="Source"/> the manifest's <c>kumbu-source</c>, <see cref="Warnings"/> the rules
-/// it breaks.
+/// that was another user, <see cref="Source"/> the manifest's <c>kumbu-source</c> (a claim until
+/// <see cref="SourceVerified"/>), <see cref="Warnings"/> the rules it breaks.
 /// </summary>
 public sealed record Skill(string Name, VaultPath? Folder, string Description, string? Source, string? LastEditor, bool ByOther, IReadOnlyList<string> Warnings)
 {
@@ -20,12 +20,17 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
     /// <summary>Whether the frontmatter's origin disagrees with the sealed one (Decision 33); set by the server, never by the core.</summary>
     public bool OriginEdited { get; init; }
 
+    /// <summary>Whether a sealed origin agrees with <see cref="Source"/>: only then is the skill "from" it. Anyone who may write
+    /// the folder can write a <c>kumbu-source</c>, so without it the source is "unverified origin". Set by the server.</summary>
+    public bool SourceVerified { get; init; }
+
     /// <summary>The owner as <c>VaultInfoAsync</c> names her (quoted), for a vault shared with the caller; null for her own.</summary>
     public string? SharedBy { get; init; }
 
     /// <summary>
     /// One line for a listing: "name (system): description" or "name (/Work/_skills/x, shared by "Alice", last changed by
-    /// Bob, another user, from github:…, origin edited): description [warning: …]". A name that breaks the rules is quoted,
+    /// Bob, another user, from github:…): description [warning: …]", where "from …" gives way to "origin edited" or
+    /// "unverified origin" unless the sealed origin agrees. A name that breaks the rules is quoted,
     /// control and format characters are stripped and line breaks become spaces, so no line can pass for another origin;
     /// with <paramref name="maxDescription"/> a longer description is cut and ends with "…".
     /// </summary>
@@ -44,8 +49,8 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
             if (SharedBy is not null) origin.Add($"shared by {Clean(SharedBy)}");
             if (LastEditor is not null) origin.Add($"last changed by {Clean(LastEditor)}");
             if (ByOther) origin.Add("another user");
-            if (Source is not null) origin.Add($"from {Clean(Source)}");
             if (OriginEdited) origin.Add("origin edited");
+            else if (Source is not null) origin.Add(SourceVerified ? $"from {Clean(Source)}" : "unverified origin");
         }
 
         line.Append(" (").AppendJoin(", ", origin).Append(')');

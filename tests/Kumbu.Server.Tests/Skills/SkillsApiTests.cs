@@ -104,6 +104,33 @@ public sealed class SkillsApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_source_is_shown_only_where_the_sealed_origin_agrees()
+    {
+        const string source = "github:anthropics/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567";
+        var alice = await AliceAsync();
+        var claimed = Kumbu.Core.Skills.SkillManifest.WithOrigin("---\nname: pdf\ndescription: Fills PDFs.\n---\n", source, "sha256:00ab");
+        await alice.CreateAsync("_skills/pdf/SKILL.md", claimed);
+        await alice.CreateAsync("_skills/real/SKILL.md", claimed.Replace("name: pdf", "name: real"));
+        var work = (await alice.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work");
+        await alice.Api.Services.GetRequiredService<Kumbu.Server.Publishing.PublicationStore>().ChangeAsync(
+            work, r => r with { Origins = [new("/Work/_skills/real", source, "sha256:00ab")] }, Ct);
+
+        var skills = (await GetAsync(alice, "/api/skills"))["skills"]!.AsArray();
+        var hits = (await GetAsync(alice, "/api/skills/find?q=" + Uri.EscapeDataString("fill PDFs"))).AsArray().Select(h => h!["skill"]!);
+
+        foreach (var pdf in new[] { skills.Single(s => s!["name"]!.GetValue<string>() == "pdf")!, hits.Single(s => s["name"]!.GetValue<string>() == "pdf") })
+        {
+            Assert.Null(pdf["source"]);
+            Assert.True(pdf["sourceUnverified"]!.GetValue<bool>());
+            Assert.False(pdf["originEdited"]!.GetValue<bool>());
+        }
+
+        var real = skills.Single(s => s!["name"]!.GetValue<string>() == "real")!;
+        Assert.Equal(source, real["source"]!.GetValue<string>());
+        Assert.False(real["sourceUnverified"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task Find_returns_rank_and_score()
     {
         var alice = await AliceAsync();

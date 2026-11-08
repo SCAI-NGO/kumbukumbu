@@ -106,7 +106,9 @@ internal static class HandshakeInstructions
         store.CountsUse = false;
         try
         {
-            return await new SkillDirectory(store, services.GetRequiredService<IWriterLabels>()).ListAsync(null, ct);
+            // Marked as skills ls marks them: "from" a source only where the sealed origin agrees.
+            var marks = await services.GetRequiredService<ISkillUpdates>().MarksAsync(ct);
+            return [.. (await new SkillDirectory(store, services.GetRequiredService<IWriterLabels>()).ListAsync(null, ct)).Select(marks.Apply)];
         }
         finally
         {

@@ -96,6 +96,32 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
         Assert.DoesNotContain("Keeps the diary", text);
     }
 
+    /// <summary>As <c>skills ls</c>: "from" only where the sealed origin agrees with the frontmatter; a source the frontmatter
+    /// alone claims is "unverified origin", one that disagrees with the sealed origin "origin edited".</summary>
+    [Fact]
+    public async Task The_list_marks_sources_the_sealed_origin_doesnt_back()
+    {
+        const string source = "github:anthropics/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567";
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var claimed = Kumbu.Core.Skills.SkillManifest.WithOrigin("---\nname: pdf\ndescription: Fills PDFs.\n---\n", source, "sha256:00ab");
+        await PutAsync(alice, "/Skills/pdf/SKILL.md", claimed);
+        await PutAsync(alice, "/Work/_skills/real/SKILL.md", claimed.Replace("name: pdf", "name: real"));
+        await PutAsync(alice, "/Work/_skills/edited/SKILL.md", claimed.Replace("name: pdf", "name: edited"));
+        var work = (await app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work");
+        await app.PublicApi.Services.GetRequiredService<Kumbu.Server.Publishing.PublicationStore>().ChangeAsync(
+            work, r => r with { Origins = [new("/Work/_skills/real", source, "sha256:00ab"), new("/Work/_skills/edited", "github:alice-example/skills/x@" + new string('a', 40), "sha256:00ab")] }, Ct);
+
+        var lines = (await InstructionsAsync(key)).Split('\n');
+
+        var claimedLine = Assert.Single(lines, l => l.StartsWith("- pdf (", StringComparison.Ordinal));
+        Assert.Contains("unverified origin", claimedLine);
+        Assert.DoesNotContain("from github", claimedLine);
+        Assert.Contains($"from {source})", Assert.Single(lines, l => l.StartsWith("- real (", StringComparison.Ordinal)));
+        var editedLine = Assert.Single(lines, l => l.StartsWith("- edited (", StringComparison.Ordinal));
+        Assert.Contains("origin edited", editedLine);
+        Assert.DoesNotContain("from github", editedLine);
+    }
+
     [Fact]
     public async Task A_key_without_Skills_sees_none_of_its_skills()
     {

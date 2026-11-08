@@ -153,9 +153,39 @@ public sealed class SkillsShellTests(KumbuAppFactory app)
 
         var (_, after) = await alice.ShAsync("skills ls", key);
         var edLine = Assert.Single(after.Split('\n'), l => l.StartsWith("pdf (", StringComparison.Ordinal));
-        Assert.Contains("from github:bob-example/evil/x@0123456789abcdef0123456789abcdef01234567, origin edited): Reads PDFs.", edLine);
+        Assert.EndsWith(", origin edited): Reads PDFs.", edLine);
+        Assert.DoesNotContain("bob-example", edLine);
         Assert.DoesNotContain("update available", after);
         var (_, found) = await alice.ShAsync("skills find \"read PDFs\"", key);
         Assert.Contains("origin edited", Assert.Single(found.Split('\n'), l => l.Contains("pdf (", StringComparison.Ordinal)));
+    }
+
+    /// <summary>The probe of the security review: an agent writes a manifest that claims a marketplace source. Without a
+    /// sealed origin nothing backs it, so no listing calls it "from" there.</summary>
+    [Fact]
+    public async Task A_source_only_the_frontmatter_claims_is_unverified()
+    {
+        const string source = "github:anthropics/skills/skills/pdf@0123456789abcdef0123456789abcdef01234567";
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var key = await KeyAsync(alice, new() { [await SkillsIdAsync(alice)] = KeyRight.Write });
+        var claimed = Kumbu.Core.Skills.SkillManifest.WithOrigin("---\nname: pdf\ndescription: Fills PDFs.\n---\n# PDF\n", source, "sha256:00ab");
+        var written = await alice.ToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Skills/pdf/SKILL.md", ["content"] = claimed }, key);
+        Assert.False(written.IsError ?? false);
+        // A copy whose sealed origin agrees is "from" its source.
+        await alice.CreateAsync("_skills/real/SKILL.md", claimed.Replace("name: pdf", "name: real"));
+        var work = (await alice.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work");
+        await alice.Api.Services.GetRequiredService<Kumbu.Server.Publishing.PublicationStore>().ChangeAsync(
+            work, r => r with { Origins = [new("/Work/_skills/real", source, "sha256:00ab")] }, Ct);
+        var both = (await alice.Api.Services.GetRequiredService<ApiKeys>().CreateAsync(alice.User, alice.UserKey, DateTime.UtcNow, "Both",
+            new Dictionary<string, KeyRight> { [await SkillsIdAsync(alice)] = KeyRight.Read, [await alice.VaultIdAsync()] = KeyRight.Read }, Ct)).Key;
+
+        var (_, ls) = await alice.ShAsync("skills ls", both);
+        var (_, found) = await alice.ShAsync("skills find \"fill PDFs\"", both);
+
+        var line = Assert.Single(ls.Split('\n'), l => l.StartsWith("pdf (", StringComparison.Ordinal));
+        Assert.Contains("unverified origin", line);
+        Assert.DoesNotContain("from github", line);
+        Assert.DoesNotContain("from github", Assert.Single(found.Split('\n'), l => l.Contains("pdf (/Skills/pdf", StringComparison.Ordinal)));
+        Assert.EndsWith($", from {source}): Fills PDFs.", Assert.Single(ls.Split('\n'), l => l.StartsWith("real (", StringComparison.Ordinal)));
     }
 }

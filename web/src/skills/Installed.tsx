@@ -25,7 +25,8 @@ function origin(s: SkillView): string[] {
     ...(s.path ? [s.path] : []),
     ...(s.lastEditor ? [`last changed by ${s.lastEditor}`] : []),
     ...(s.byOther ? ["another user"] : []),
-    ...(s.source ? [`from ${s.source}`] : []),
+    // The server names a source only where the copy's sealed origin agrees; a claim nothing backs is only a claim.
+    ...(s.source ? [`from ${s.source}`] : s.sourceUnverified ? ["unverified origin"] : []),
     ...(s.shared ? ["shared by link"] : []),
   ];
 }
