@@ -672,10 +672,12 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         }
     }
 
+    /// <summary>The limit as it is now, the usage as counted within <see cref="StorageQuota.ShownFor"/>: the web app asks
+    /// on every focus of its tab.</summary>
     [Fact]
     public async Task Account_storage_reports_used_and_limit()
     {
-        var user = await RestClient.NewAsync(Api, vault: "Work");
+        var user = await RestClient.NewAsync(Timed, vault: "Work");
         async Task<(long Used, long? Limit)> StorageAsync()
         {
             using var storage = await user.GetAsync("/api/account/storage");
@@ -688,10 +690,67 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         await OverrideAsync(user, OneMb);
         Assert.Equal(OneMb, (await StorageAsync()).Limit);
         await FillAsync(user);
+        _time.Advance(StorageQuota.ShownFor);
         Assert.True((await StorageAsync()).Used > OneMb);
 
         // The session's own figure: not for a key.
         using var keyed = await user.GetAsync("/api/account/storage", bearer: await user.KeyAsync("Claude", KeyRight.Read));
         Assert.Equal(HttpStatusCode.Forbidden, keyed.StatusCode);
+    }
+
+    /// <summary><c>GET /api/account/storage</c> counts as <c>df</c> does (security review finding 5): calls within
+    /// <see cref="StorageQuota.ShownFor"/> share one count, with a limit or without one; the limit is read each time.</summary>
+    [Fact]
+    public async Task Account_storage_counts_at_most_once_in_30_seconds()
+    {
+        var time = new FakeTimeProvider(_time.GetUtcNow());
+        var api = Own(time: time);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var seen = Watch(Quota(api), user.User.Id);
+
+        async Task<long?> LimitAsync()
+        {
+            using var storage = await user.GetAsync("/api/account/storage");
+            Assert.Equal(HttpStatusCode.OK, storage.StatusCode);
+            return (await RestClient.JsonAsync(storage))["limit"]?.GetValue<long>();
+        }
+
+        Assert.Null(await LimitAsync());
+        Assert.Null(await LimitAsync());
+        Assert.Equal(1, Seen(seen, "count"));
+
+        time.Advance(StorageQuota.ShownFor);
+        Assert.Null(await LimitAsync());
+        Assert.Equal(2, Seen(seen, "count"));
+
+        // A limit set in between shows at once, from the same count.
+        await OverrideAsync(user, OneMb);
+        Assert.Equal(OneMb, await LimitAsync());
+        Assert.Equal(2, Seen(seen, "count"));
+    }
+
+    /// <summary>Emptying the trash counts again at once: Settings asks right after it, and shows what it freed.</summary>
+    [Fact]
+    public async Task Emptying_the_trash_shows_in_the_storage_at_once()
+    {
+        var api = Own(time: new FakeTimeProvider(_time.GetUtcNow()));
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        await FillAsync(user);
+        using (var deleted = await user.SendAsync(HttpMethod.Delete, user.Url("big.md"))) Assert.True(deleted.IsSuccessStatusCode);
+
+        async Task<long> UsedAsync()
+        {
+            using var storage = await user.GetAsync("/api/account/storage");
+            return (await RestClient.JsonAsync(storage))["used"]!.GetValue<long>();
+        }
+
+        var before = await UsedAsync();
+        Assert.True(before > OneMb);
+        using (var purged = await user.SendAsync(HttpMethod.Post, $"/api/vaults/Work/trash/purge", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, purged.StatusCode);
+        }
+
+        Assert.True(await UsedAsync() < OneMb);
     }
 }

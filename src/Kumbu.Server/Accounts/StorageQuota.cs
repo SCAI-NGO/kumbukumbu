@@ -213,8 +213,9 @@ public sealed class StorageQuota
         }
     }
 
-    /// <summary>Counts <paramref name="ownerId"/>'s usage again, in the background, now: a sweep freed space, or an admin
-    /// changed the limit. One count runs at a time per owner; asked for during one, it runs once more.</summary>
+    /// <summary>Counts <paramref name="ownerId"/>'s usage again, in the background, now: a sweep freed space, the trash was
+    /// emptied, or an admin changed the limit; <see cref="RecentFigureAsync"/> counts afresh at its next call as well. One
+    /// count runs at a time per owner; asked for during one, it runs once more.</summary>
     public void Recount(string ownerId) => _ = RecountAsync(ownerId);
 
     /// <summary><see cref="Recount"/>, and when it is done.</summary>
@@ -222,6 +223,8 @@ public sealed class StorageQuota
     {
         lock (_lock)
         {
+            // What df and Settings were shown is stale too: their next ask counts again.
+            _shown.Remove(ownerId);
             var account = AccountOf(ownerId);
             if (account.Refresh is { } running)
             {

@@ -453,11 +453,15 @@ public static class AccountApi
                 StorageQuota.Kind(u.Quota), quota.Effective(u.Quota)))
             .ToArray());
 
-    /// <summary>The session's own storage, counted now (Settings shows it).</summary>
+    /// <summary>The session's own storage (Settings shows it, the shell's notice asks on every focus of the tab): the
+    /// limit as it is now, one document read, and the usage as <c>df</c> has it, counted at most once per
+    /// <see cref="StorageQuota.ShownFor"/>, since a count reads every document of her vaults. Settings shows the usage
+    /// without a limit too, so it is counted then as well.</summary>
     private static async Task<Ok<AccountStorageView>> StorageAsync(RequestCaller caller, StorageQuota quota, CancellationToken ct)
     {
-        var figure = await quota.FigureAsync(caller.User!.Id, ct);
-        return TypedResults.Ok(new AccountStorageView(figure.Used, figure.Limit));
+        var limit = await quota.LimitAsync(caller.User!.Id, ct);
+        var figure = await quota.RecentFigureAsync(caller.User.Id, ct);
+        return TypedResults.Ok(new AccountStorageView(figure.Used, limit));
     }
 
     /// <summary>An override as the request gives it: <c>"default"</c> (null), <c>"unlimited"</c>, or whole bytes.</summary>
