@@ -3,6 +3,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -47,10 +48,29 @@ public sealed class Backlinks(INoteReader notes) : ICommand
         if (note.IsError) return note;
 
         var archive = ArchiveFolder.Shown(path, options.Has("archive"));
-        var output = (await NoteLinks.ToAsync(notes, path, ct))
+        var links = await NoteLinks.ToAsync(notes, path, ct);
+        var output = links
             .Where(b => archive || !ArchiveFolder.Contains(b.Source))
             .Select(b => $"{b.Source.Value}:{b.Line + 1}:{b.Text}{(b.Ambiguous ? $"  (ambiguous, may mean this {(attachment is null ? "note" : "file")})" : "")}")
             .ToList();
-        return note with { Output = output.Count > 0 ? Lines.Join(output) : "(no notes link here)" };
+
+        // Saying that nothing links here while archived notes do could get the target removed or renamed.
+        var hidden = archive ? 0 : links.Select(b => b.Source).Where(ArchiveFolder.Contains).Distinct().Count();
+        var asking = $"backlinks --archive {SectionLookup.Quote(path)}";
+        if (output.Count == 0)
+        {
+            return note with
+            {
+                Output = hidden == 0 ? "(no notes link here)" : $"(no notes outside the archive link here; {Archived(hidden)} {(hidden == 1 ? "does" : "do")}: {asking})",
+            };
+        }
+
+        return note with
+        {
+            Output = Lines.Join(output),
+            Notice = hidden == 0 ? null : $"{Archived(hidden)} link{(hidden == 1 ? "s" : "")} here too: {asking}",
+        };
+
+        static string Archived(int count) => $"{count} archived note{(count == 1 ? "" : "s")}";
     }
 }

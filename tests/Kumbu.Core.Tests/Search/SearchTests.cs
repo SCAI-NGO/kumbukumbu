@@ -105,6 +105,11 @@ public class SearchTests
             Assert.False(empty.IsError, empty.Output);
             Assert.StartsWith("(nothing found for 'rules' below /Gone)", empty.Output);
         }
+
+        var tagged = new InMemoryNoteStore(("/Demo/gate.md", "rules\n"), ("/Demo/_archive/old.md", "#old rules\n"));
+        Assert.Equal(
+            ShellResult.Error("semsearch: only archived notes below /Demo carry #old; with --archive, semsearch searches them"),
+            await Run("semsearch --words --tag old rules /Demo", index, tagged));
     }
 
     [Fact]

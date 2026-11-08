@@ -82,6 +82,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         // A PDF carries no tags, so a search by tag leaves them out.
         var pages = pixels is not null && !options.Has("tag");
         IReadOnlyList<Note> found;
+        IReadOnlyList<Note> archived = [];
         if (!scope.IsRoot && await notes.ReadAsync(scope, ct) is { } single) found = [new Note(scope, single)];
         else if (pages && AttachmentFormat.IsPdf(scope) && await StoreAttachments.GetAsync(notes, scope, ct) is { } pdf
             && AttachmentText.IsPdf(pdf.Current))
@@ -100,12 +101,16 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
             }
 
             // After the check above, so that a vault holding nothing but its archive finds nothing rather than nothing there.
-            if (!ArchiveFolder.Shown(scope, options.Has("archive"))) found = [.. found.Where(n => !ArchiveFolder.Contains(n.Path))];
+            if (!ArchiveFolder.Shown(scope, options.Has("archive")))
+            {
+                archived = [.. found.Where(n => ArchiveFolder.Contains(n.Path))];
+                found = [.. found.Where(n => !ArchiveFolder.Contains(n.Path))];
+            }
         }
 
         if (options.Values("tag") is { Count: > 0 } tags)
         {
-            var (carrying, tagError) = TagFilter.Narrow(found, tags, scope);
+            var (carrying, tagError) = TagFilter.Narrow(found, tags, scope, archived, _ => "with --archive, semsearch searches them");
             if (carrying is null) return ShellResult.Error($"semsearch: {tagError}");
             found = carrying;
         }
