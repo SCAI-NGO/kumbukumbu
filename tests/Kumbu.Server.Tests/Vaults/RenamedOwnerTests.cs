@@ -258,7 +258,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     {
         // The session's list names the new vault on purpose; the renamed vault's entry still mustn't.
         var vaults = await OkAsync(w, HttpMethod.Get, "/api/vaults", bearer: w.Bearer(key), decoy: !key);
-        string[] expected = key ? ["Garten"] : ["Garten", "Gartenarbeit"];
+        string[] expected = key ? ["Garten"] : ["Garten", "Gartenarbeit", "Skills"];
         Assert.Equal(expected, vaults.Json.AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal));
         var garten = vaults.Json.AsArray().Single(v => v!["name"]!.GetValue<string>() == "Garten")!.ToJsonString();
         Assert.DoesNotContain(Decoy, garten, StringComparison.Ordinal);
@@ -1082,7 +1082,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         Assert.Contains(stored.Notes.Keys, p => p.Value == "/Gartenarbeit/plan.md");
 
         // 3. Alice's tab shows Garten, with plan.md; her activity tells of the rename.
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", (await NoteAsync(w, "plan.md"))["content"]!.GetValue<string>());
         var activity = (await GetAsync(w, "/api/vaults/Garten/activity")).Json;
         Assert.Contains("You renamed this vault.", activity["events"]!.AsArray().Select(e => e!["text"]!.GetValue<string>()));
@@ -1096,7 +1096,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         Assert.True(unknown, unknownText);
 
         // 5. Bob sees Beet as before; his history and his agent don't notice.
-        Assert.Equal(["Beet", "Work"], await NamesAsync(bob));
+        Assert.Equal(["Beet", "Skills", "Work"], await NamesAsync(bob));
         using (var read = await bob.GetAsync("/api/notes/Beet/plan.md"))
         {
             Assert.Equal(HttpStatusCode.OK, read.StatusCode);
@@ -1137,7 +1137,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         // 7. A new vault Gartenarbeit: a vault of its own.
         w = w with { DecoyId = await NewDecoyAsync(alice) };
         Assert.NotEqual(w.Id, w.DecoyId);
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
         using (var versions = await alice.GetAsync("/api/vaults/Gartenarbeit/versions", device))
         {
             Assert.Equal(HttpStatusCode.NotFound, versions.StatusCode);
@@ -1149,7 +1149,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
         }
 
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", (await NoteAsync(w, "plan.md"))["content"]!.GetValue<string>());
         await AssertDecoyUntouchedAsync(w);
 
@@ -1173,7 +1173,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         var meta = await RawMetaAsync(w.Id, await Catalog.OwnerVaultKeyAsync(alice.User.Id, alice.UserKey, w.Id, Ct));
         Assert.Equal("Gartenarbeit", meta["Name"]!.GetValue<string>());
         Assert.False(meta.ContainsKey("DisplayName"));
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]

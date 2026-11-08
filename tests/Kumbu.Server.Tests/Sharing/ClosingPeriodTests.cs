@@ -282,7 +282,7 @@ public sealed class ClosingPeriodTests(KumbuAppFactory app)
         if (choice is null)
         {
             Assert.Equal(2, closing.Count);
-            Assert.Equal(1, receipt["vaults"]!.GetValue<int>());
+            Assert.Equal(2, receipt["vaults"]!.GetValue<int>());
             Assert.Equal(2, receipt["sharedVaultsScheduled"]!.AsArray().Count);
             Assert.Equal(("read", "read"), ((await GartenAsync(w.Bob))!["level"]!.GetValue<string>(), (await GartenAsync(w.Bob, "alices"))!["level"]!.GetValue<string>()));
         }
@@ -290,7 +290,7 @@ public sealed class ClosingPeriodTests(KumbuAppFactory app)
         {
             Assert.Empty(closing);
             Assert.False(await Vaults.Find(v => v.Id == w.VaultId || v.Id == privatId).AnyAsync(Ct));
-            Assert.Equal((3, 2), (receipt["vaults"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
+            Assert.Equal((4, 2), (receipt["vaults"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
             Assert.Empty(receipt["sharedVaultsScheduled"]!.AsArray());
             Assert.Null(await GartenAsync(w.Bob));
         }

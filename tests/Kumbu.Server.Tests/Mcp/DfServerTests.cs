@@ -82,7 +82,8 @@ public sealed class DfServerTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("1", row.Groups[2].Value);
         Assert.Equal("0", row.Groups[3].Value);
         Assert.True(long.Parse(row.Groups[1].Value) > "One\nTwo\n".Length);
-        Assert.Matches(@"^Total +\d+  of 2147483648 \(\d+ %\)$", lines[^1]);
+        // His vault Skills, which the key doesn't open, counts against the limit too.
+        Assert.Matches(@"^Total +\d+  \(vaults this key opens; your other vaults count against the 2147483648 limit too\)$", lines[^1]);
 
         var shared = await bob.ShAsync("df /garten", key);
         Assert.True(shared.IsError);

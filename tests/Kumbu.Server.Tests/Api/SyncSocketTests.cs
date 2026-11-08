@@ -111,7 +111,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
         using var socket = await ConnectAsync(await TicketAsync(user, key));
         var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
-        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single();
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
 
         // The events of thirty commits within 100 ms, as an agent writing many notes makes them.
         for (var i = 0; i < 30; i++)
@@ -185,7 +185,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(Changed("garten"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
         await bob.CreateAsync("eigen.md", "y\n");
         Assert.Equal(Changed("Work"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
-        Assert.Equal([("Work", AccessLevel.Owner), ("garten", AccessLevel.Write)], SessionVaults(bob));
+        Assert.Equal([("Skills", AccessLevel.Owner), ("Work", AccessLevel.Owner), ("garten", AccessLevel.Write)], SessionVaults(bob));
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         // Six connections of one person: none is replaced, each subject holds its own four.
         await user.CreateAsync("plan.md", "x\n");
         foreach (var socket in sockets.Append(others).Append(keys)) Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
-        Assert.Equal(SyncHub.MaxPerKey + 2, Hub.Held.Count(h => h.Subject.User == user.User.Id));
+        Assert.Equal(SyncHub.MaxPerKey + 2, Hub.Held.Count(h => h.Subject.User == user.User.Id && h.Name == user.Vault));
 
         // A fifth tab of the first session replaces that session's oldest, not the other session's.
         using var fifth = await SyncSockets.OpenAsync(Api, user);
@@ -245,7 +245,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Revoked);
         await Hub.CheckAsync(Ct);
 
-        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        Assert.Equal([("Skills", AccessLevel.Owner), ("Work", AccessLevel.Owner)], SessionVaults(bob));
         await alice.CreateAsync("plan.md", "x\n");
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
         await bob.CreateAsync("eigen.md", "y\n");
@@ -460,7 +460,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         using var socket = await ConnectAsync(await TicketAsync(user, key));
         var hub = Api.Services.GetRequiredService<SyncHub>();
         var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
-        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single();
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
         var keys = Api.Services.GetRequiredService<ApiKeys>();
         var listed = await keys.ListAsync(user.User, user.UserKey, Ct);
         var stuck = new StuckSocket();
@@ -546,7 +546,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
             Hub.BeforeAccessChange = null;
         }
 
-        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        Assert.Equal([("Skills", AccessLevel.Owner), ("Work", AccessLevel.Owner)], SessionVaults(bob));
         await alice.CreateAsync("plan.md", "x\n");
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
     }

@@ -116,13 +116,13 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
         }
 
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" }))
         {
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         }
 
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
         using (var read = await alice.GetAsync("/api/notes/Garten/plan.md"))
         {
             Assert.Equal(HttpStatusCode.OK, read.StatusCode);
@@ -142,7 +142,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
         Assert.Equal("Andere\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
-        var vaults = await Catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct);
+        var vaults = (await Catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Where(v => v.Vault.Kind != VaultKinds.Skills).ToList();
         Assert.Equal(2, vaults.Select(v => v.Id).Distinct().Count());
         Assert.All(vaults, v => Assert.Equal("Gartenarbeit", v.Vault.Name));
         Assert.Equal(["Garten", "Gartenarbeit"], vaults.OrderBy(v => v.Id == id ? 0 : 1).Select(v => v.Name).ToArray());
@@ -252,7 +252,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal("You already have a vault named 'Gartenarbeit'.", await RestClient.ErrorAsync(taken));
         }
 
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
 
         using (var deleted = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/delete", new { password = RestClient.Password, confirm = "Gartenarbeit" }))
         {
@@ -265,7 +265,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, back.StatusCode);
         }
 
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
         var meta = await RawMetaAsync(id, vaultKey);
         Assert.False(meta.ContainsKey("DisplayName"), meta.ToJsonString());
@@ -282,7 +282,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         Assert.Equal((true, false), (await ExistsAsync(id), await ExistsAsync(newId)));
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
     }
 
@@ -296,7 +296,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         Assert.Equal((false, true), (await ExistsAsync(id), await ExistsAsync(newId)));
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal("Andere\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
     }
 
@@ -308,7 +308,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Catalog.Forget(Catalog.Current(id)!, new InvalidOperationException("test"));
 
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
         Assert.Equal("Andere\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
         Assert.Equal("Garten", Catalog.Current(id)!.Shown);
@@ -329,7 +329,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var vaults = (await RestClient.JsonAsync(response)).AsArray()
                 .Select(v => (v!["name"]!.GetValue<string>(), v["pending"]!.GetValue<bool>())).Order().ToArray();
-            Assert.Equal([("Garten", true), ("Gartenarbeit", false)], vaults);
+            Assert.Equal([("Garten", true), ("Gartenarbeit", false), ("Skills", false)], vaults);
         }
         finally
         {
@@ -344,7 +344,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
         var (alice, id, _, _) = await AliceAsync(api);
         var catalog = api.Services.GetRequiredService<VaultCatalog>();
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
 
         // As a cancellation or a lost answer after the commit: the exception's message may hold the name asked for.
         catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer to renaming to Zq7Rename was lost.") : Task.CompletedTask;
@@ -358,7 +358,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         }
 
         Assert.Null(catalog.Current(id));
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.DoesNotContain(log.Lines, line => line.Contains("Zq7Rename", StringComparison.Ordinal));
 
         // A refusal as taken is an outcome known: the object stays.
@@ -381,10 +381,10 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
     public async Task A_rename_through_an_older_object_tells_the_current_one()
     {
         var (alice, id, _, _) = await AliceAsync();
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         var old = Catalog.Current(id)!;
         Catalog.Forget(old, new InvalidOperationException("test"));
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         var current = Catalog.Current(id)!;
         Assert.NotSame(old, current);
 
@@ -392,14 +392,14 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal("Garten", current.DisplayName);
         Assert.Same(current, Catalog.Current(id));
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
     public async Task A_meta_that_does_not_open_answers_just_reencrypted()
     {
         var (alice, id, _, _) = await AliceAsync();
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         var before = Catalog.Current(id);
         Assert.NotNull(before);
         var nameId = await NameIdAsync(id);
@@ -463,9 +463,9 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
         }
 
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         Catalog.Forget(Catalog.Current(id)!, new InvalidOperationException("test"));
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
         // Opened by the object loaded under the new key.
         var meta = Catalog.Current(id)!.OpenMeta(await StoredMetaAsync(id));
@@ -484,7 +484,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
         catalog.Forget(catalog.Current(id)!, new InvalidOperationException("test"));
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
     }
 
@@ -534,7 +534,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         }
 
         catalog.Forget(catalog.Current(id)!, new InvalidOperationException("test"));
-        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Gartenarbeit", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -650,7 +650,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             await RefusedAsync();
         }
 
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal(nameId, await NameIdAsync(id));
     }
 
@@ -675,7 +675,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
     public async Task A_bug_inside_the_rename_is_not_answered_as_not_found()
     {
         var (alice, id, vaultKey, _) = await AliceAsync();
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         // An ArgumentException's subclass comes from a bug, not from a vault that isn't hers.
         Catalog.MetaFaultAt = point => point == "inside-rename" ? throw new ArgumentNullException("vault") : Task.CompletedTask;
         try
@@ -691,7 +691,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         // Not an outcome known: the object is let go and read again.
         Assert.Null(Catalog.Current(id));
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
     }
 
@@ -705,7 +705,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
         }
 
-        Assert.Equal(["gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Skills", "gartenarbeit"], await NamesAsync(alice));
         Assert.Equal(("Gartenarbeit", "gartenarbeit", null), Fields(await RawMetaAsync(id, vaultKey)));
         Assert.Equal("gartenarbeit", Catalog.Current(id)!.DisplayName);
         using (var read = await alice.GetAsync("/api/notes/gartenarbeit/plan.md"))
@@ -719,7 +719,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, back.StatusCode);
         }
 
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
         Assert.Null(Catalog.Current(id)!.DisplayName);
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
@@ -749,7 +749,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         using var refused = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }, bearer: key);
 
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -772,7 +772,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
 
         Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -789,7 +789,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         await RenamedToGartenAsync(alice);
 
-        Assert.Equal(["Beet", "Work"], await NamesAsync(bob));
+        Assert.Equal(["Beet", "Skills", "Work"], await NamesAsync(bob));
         using (var read = await bob.GetAsync("/api/notes/Beet/plan.md"))
         {
             Assert.Equal(HttpStatusCode.OK, read.StatusCode);
@@ -829,7 +829,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
         }
 
-        Assert.Equal(["Beet"], await NamesAsync(alice));
+        Assert.Equal(["Beet", "Skills"], await NamesAsync(alice));
         Assert.Equal(nameId, await NameIdAsync(id));
         Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Beet/plan.md"));
         // The lookup is exact: the stored name no longer reaches it.
@@ -850,7 +850,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, same.StatusCode);
         Assert.Equal(meta, await StoredMetaAsync(id));
         Assert.Equal(events, await KindsAsync(alice, "/api/vaults/Garten/activity"));
-        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -865,7 +865,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
         Assert.Equal("You already have a vault named 'beet'.", await RestClient.ErrorAsync(taken));
-        Assert.Equal(["Beet", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Beet", "Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal(nameId, await NameIdAsync(id));
         Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
     }
@@ -883,7 +883,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         using var refused = await RenameAsync(alice, "Gartenarbeit", name);
 
         Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
         Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
     }
 
@@ -914,7 +914,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.NotNull(limited.Headers.RetryAfter);
-        Assert.Equal(["Garten", "Work"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills", "Work"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -948,7 +948,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
         }
 
-        Assert.Equal(["Garten", "Work"], await NamesAsync(alice));
+        Assert.Equal(["Garten", "Skills", "Work"], await NamesAsync(alice));
         Assert.NotEmpty(log.Lines);
         Assert.DoesNotContain(log.Lines, line => line.Contains(secret, StringComparison.OrdinalIgnoreCase));
     }

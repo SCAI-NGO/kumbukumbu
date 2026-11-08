@@ -55,7 +55,7 @@ public sealed class MemberViewTests(KumbuAppFactory app)
         Assert.Null(work["owner"]);
 
         // Alice's own vault is shared; she is its owner, and nobody's name is on it.
-        var hers = (await VaultsAsync(alice)).Single()!;
+        var hers = (await VaultsAsync(alice)).Single(v => v!["name"]!.GetValue<string>() == "Gartenarbeit")!;
         Assert.Equal(("owner", true), (hers["level"]!.GetValue<string>(), hers["shared"]!.GetValue<bool>()));
         Assert.Null(hers["owner"]);
 
@@ -80,7 +80,7 @@ public sealed class MemberViewTests(KumbuAppFactory app)
         Assert.Equal(garten["owner"]!.GetValue<string>(), beete["owner"]!.GetValue<string>());
         Assert.Equal((alice.User.Username, carol.User.Username), (garten["ownerUsername"]!.GetValue<string>(), beete["ownerUsername"]!.GetValue<string>()));
         Assert.Null(bobs.Single(v => v!["name"]!.GetValue<string>() == "Work")!["ownerUsername"]);
-        Assert.Null((await VaultsAsync(alice)).Single()!["ownerUsername"]);
+        Assert.Null((await VaultsAsync(alice)).Single(v => v!["name"]!.GetValue<string>() == "Gartenarbeit")!["ownerUsername"]);
     }
 
     [Fact]

@@ -123,6 +123,7 @@ builder.Services.AddSingleton<RestoredDeletions>();
 builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<Kumbu.Server.Welcome.WelcomeVault>();
+builder.Services.AddSingleton<Kumbu.Server.Skills.SkillsVaults>();
 builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<PublicationStore>();
 builder.Services.AddSingleton<Publications>();

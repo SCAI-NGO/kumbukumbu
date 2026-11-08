@@ -131,6 +131,11 @@ public sealed class UserDocument
     [BsonElement("askPasswordForDownloads"), BsonDefaultValue(true), BsonIgnoreIfDefault]
     public bool AskPasswordForDownloads { get; set; } = true;
 
+    /// <summary>When the user's vault Skills was found or made (<see cref="Skills.SkillsVaults"/>); null until then, so a
+    /// user from before it gets it at her next sign-in.</summary>
+    [BsonElement("skillsAt"), BsonIgnoreIfNull]
+    public DateTime? SkillsAt { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

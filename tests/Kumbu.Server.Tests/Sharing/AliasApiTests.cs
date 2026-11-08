@@ -30,11 +30,11 @@ public sealed class AliasApiTests(KumbuAppFactory app)
         using var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias = " Beete " });
 
         Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
-        Assert.Equal(["Beete", "Work"], await NamesAsync(bob));
+        Assert.Equal(["Beete", "Skills", "Work"], await NamesAsync(bob));
         using var read = await bob.GetAsync("/api/notes/Beete/plan.md");
         Assert.Equal(HttpStatusCode.OK, read.StatusCode);
         // Alice's own name for it is hers alone.
-        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await NamesAsync(alice));
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public sealed class AliasApiTests(KumbuAppFactory app)
         using var empty = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias = "  " });
 
         Assert.Equal((HttpStatusCode.Conflict, HttpStatusCode.BadRequest, HttpStatusCode.BadRequest), (taken.StatusCode, slash.StatusCode, empty.StatusCode));
-        Assert.Equal(["garten", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        Assert.Equal(["garten", "Skills", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     [Fact]
@@ -65,8 +65,8 @@ public sealed class AliasApiTests(KumbuAppFactory app)
         using var byAlice = await alice.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias = "Mine" });
 
         Assert.Equal((HttpStatusCode.NotFound, HttpStatusCode.NotFound), (byCarol.StatusCode, byAlice.StatusCode));
-        Assert.Equal(["garten", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
-        Assert.Equal(["Beete", "Privat"], await NamesAsync(carol));
+        Assert.Equal(["garten", "Skills", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        Assert.Equal(["Beete", "Privat", "Skills"], await NamesAsync(carol));
 
         // A membership she left is no longer hers to rename either.
         using var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/leave");
@@ -117,7 +117,7 @@ public sealed class AliasApiTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NotFound, byCarol.StatusCode);
         }
 
-        Assert.Equal(["garten", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        Assert.Equal(["garten", "Skills", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
         using var after = await RenameAsync(bob, membershipId, "Beete");
         Assert.Equal(HttpStatusCode.NoContent, after.StatusCode);
         using var read = await bob.GetAsync("/api/notes/Beete/plan.md");
@@ -144,7 +144,7 @@ public sealed class AliasApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.TooManyRequests, over.StatusCode);
         Assert.NotNull(over.Headers.RetryAfter);
-        Assert.Equal(["garten29", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        Assert.Equal(["garten29", "Skills", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
         // Counted per user: Carol's rename isn't held back by Bob's.
         Assert.Equal(HttpStatusCode.NoContent, byCarol.StatusCode);
     }

@@ -82,7 +82,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
                 json["label"]!.GetValue<string>(), json["status"]!.GetValue<string>(), json["redeemer"]!["name"]!.GetValue<string>(), json["redeemer"]!["username"]!.GetValue<string>()));
         }
 
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         using var confirmed = await alice.SendAsync(HttpMethod.Post, Url(alice, invite.MembershipId, "confirm"));
 
         Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
@@ -94,7 +94,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
         Assert.Equal(MembershipStatus.Active, doc.Status);
         Assert.NotNull(doc.AcceptedAt);
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
         using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.OK, note.StatusCode);
         // Once: an active membership isn't confirmed again.
         using var again = await alice.SendAsync(HttpMethod.Post, Url(alice, invite.MembershipId, "confirm"));
@@ -118,7 +118,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         using (var confirm = await alice.SendAsync(HttpMethod.Post, "/api/session/confirm", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.NoContent, confirm.StatusCode);
         using var confirmed = await alice.SendAsync(HttpMethod.Post, Url(alice, invite.MembershipId, "confirm"));
         Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         using (var confirm = await alice.SendAsync(HttpMethod.Post, "/api/session/confirm", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.NoContent, confirm.StatusCode);
         using var late = await alice.SendAsync(HttpMethod.Post, Url(alice, invite.MembershipId, "confirm"));
         Assert.Equal(HttpStatusCode.NotFound, late.StatusCode);
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
     }
 
     [Fact]
@@ -226,7 +226,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         var accepted = await memberships.AcceptAsync(bob.User.Id, bob.UserKey, again.Secret, "Garten", Ct);
 
         Assert.Equal(MembershipStatus.Active, accepted.Status);
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
         // The tombstone stays beside it; a second live one doesn't.
         Assert.Equal(MembershipStatus.Revoked, (await Share.MembershipAsync(app.Database, declined.MembershipId)).Status);
         var third = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Bob", MemberRole.Read, TimeSpan.FromDays(7), confirm: false, Ct);
@@ -329,7 +329,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         // The socket closes with the request, not at the hub's 30-second check.
         Assert.Equal($"close {(int)SyncHub.KeyInactive}", await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
         using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.NotFound, note.StatusCode);
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         // The key had no other vault: revoked by the cleanup.
         using (var byKey = await bob.GetAsync("/api/vaults", key)) Assert.Equal(HttpStatusCode.Unauthorized, byKey.StatusCode);
         using (var after = await InitializeAsync(api, connection, access)) Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
@@ -398,7 +398,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.Equal((MembershipStatus.Left, revision + 1), (doc.Status, doc.Revision));
         Assert.NotNull(doc.RevokedAt);
         Assert.Null(doc.Pin);
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         Assert.NotNull((await KeyDocAsync(only.Id)).RevokedAt);
         Assert.False(await Slots.Find(s => s.Membership == membershipId || s.GrantedVia == membershipId).AnyAsync(Ct));
         // Alice can't leave for him, nor he twice.
@@ -431,7 +431,7 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.Null(doc.Pin);
         Assert.Equal(1, await SlotsAsync(SlotDocument.Member, membershipId));
         Assert.Null((await KeyDocAsync(only.Id)).RevokedAt);
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
 
         await api.Services.GetRequiredService<MembershipSweeper>().SweepAsync(Ct);
 

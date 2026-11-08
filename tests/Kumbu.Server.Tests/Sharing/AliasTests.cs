@@ -58,7 +58,7 @@ public sealed class AliasTests(KumbuAppFactory app)
         var (alice, bob, vaultId) = await SharedAsync(MemberRole.Maintain);
 
         // The session.
-        Assert.Equal(["Work", "garten"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work", "garten"], await VaultNamesAsync(bob));
         using (var read = await bob.GetAsync("/api/notes/garten/a.md"))
         {
             Assert.Equal(HttpStatusCode.OK, read.StatusCode);
@@ -122,8 +122,8 @@ public sealed class AliasTests(KumbuAppFactory app)
         Assert.DoesNotContain("Gartenarbeit", listing, StringComparison.Ordinal);
         var shared = catalog.Current(vaultId);
         Assert.NotNull(shared);
-        Assert.Equal(["Gartenarbeit"], await VaultNamesAsync(alice));
-        Assert.Equal(["Work", "garten"], await VaultNamesAsync(bob));
+        Assert.Equal(["Gartenarbeit", "Skills"], await VaultNamesAsync(alice));
+        Assert.Equal(["Skills", "Work", "garten"], await VaultNamesAsync(bob));
         var (_, owners) = await alice.ShAsync("cat /Gartenarbeit/a.md", aliceKey);
         Assert.Contains("Kompost", owners, StringComparison.Ordinal);
         var (_, members) = await bob.ShAsync("cat /garten/a.md", bobKey);
@@ -217,7 +217,7 @@ public sealed class AliasTests(KumbuAppFactory app)
         var vaultId = await alice.VaultIdAsync();
         Assert.False(await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Vault == vaultId).AnyAsync(Ct));
         Assert.False(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).AnyAsync(Ct));
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         // An alias of another share is taken the same way.
         var carol = await RestClient.NewAsync(Api, vault: "Notizen");
         await carol.ShareWithAsync(bob, "notizen");
@@ -239,10 +239,10 @@ public sealed class AliasTests(KumbuAppFactory app)
         var after = await Slots.Find(s => s.Membership == membershipId).SingleAsync(Ct);
         Assert.Equal(slot.NameId, after.NameId);
         Assert.Equal(slot.Alias, after.Alias);
-        Assert.Equal(["Work", "garten", "notizen"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work", "garten", "notizen"], await VaultNamesAsync(bob));
         // Only the member herself renames her alias.
         await Assert.ThrowsAsync<ArgumentException>(() => Catalog.RenameAliasAsync(carol.User.Id, carol.UserKey, membershipId, "Beet", Ct));
-        Assert.Equal(["Work", "garten", "notizen"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work", "garten", "notizen"], await VaultNamesAsync(bob));
     }
 
     [Fact]
@@ -254,10 +254,10 @@ public sealed class AliasTests(KumbuAppFactory app)
 
         await Catalog.RenameAliasAsync(bob.User.Id, bob.UserKey, membershipId, "Beet", Ct);
 
-        Assert.Equal(["Beet", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Beet", "Skills", "Work"], await VaultNamesAsync(bob));
         using (var read = await bob.GetAsync("/api/notes/Beet/a.md")) Assert.Equal(HttpStatusCode.OK, read.StatusCode);
         using (var old = await bob.GetAsync("/api/notes/garten/a.md")) Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
-        Assert.Equal(["Gartenarbeit"], await VaultNamesAsync(alice));
+        Assert.Equal(["Gartenarbeit", "Skills"], await VaultNamesAsync(alice));
 
         // His key, made before the rename, follows it: it reads the alias the member slot holds now.
         var (_, root) = await bob.ShAsync("ls /", key);
@@ -275,7 +275,7 @@ public sealed class AliasTests(KumbuAppFactory app)
         Assert.Contains("garten", listing, StringComparison.Ordinal);
         (failed, listing) = await bob.ShAsync("ls /", key);
         Assert.False(failed, listing);
-        Assert.Equal(["Beet", "Work", "garten"], await VaultNamesAsync(bob));
+        Assert.Equal(["Beet", "Skills", "Work", "garten"], await VaultNamesAsync(bob));
     }
 
     [Fact]

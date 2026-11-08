@@ -194,7 +194,7 @@ public sealed class RestClient
     public static async Task<string> ErrorAsync(HttpResponseMessage response) =>
         (await JsonAsync(response))["error"]!.GetValue<string>();
 
-    private static async Task<HttpResponseMessage> SendAsync(
+    internal static async Task<HttpResponseMessage> SendAsync(
         WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer,
         IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null, CancellationToken? cancel = null)
     {

@@ -500,14 +500,14 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, noOrigin.StatusCode);
         using (var before = await SendAsync(HttpMethod.Get, "/api/vaults", session: session))
         {
-            Assert.Equal(2, (await JsonAsync(before)).AsArray().Count);
+            Assert.Equal(3, (await JsonAsync(before)).AsArray().Count);
         }
 
         using var deleted = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "Alt Ablage" }, session: session);
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
 
         using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
-        Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
+        Assert.Equal(["Arbeit", "Skills"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -526,7 +526,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
-        Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
+        Assert.Equal(["Arbeit", "Skills"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -588,7 +588,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(id, json["userId"]!.GetValue<string>());
         Assert.Equal(target.Username, json["username"]!.GetValue<string>());
         Assert.Equal(adminName, json["deletedBy"]!.GetValue<string>());
-        Assert.Equal(1, json["vaults"]!.GetValue<int>());
+        Assert.Equal(2, json["vaults"]!.GetValue<int>());
         Assert.Equal(1, json["notes"]!.GetValue<long>());
         Assert.Equal(0, json["attachments"]!.GetValue<long>());
         Assert.Equal(0, json["apiKeys"]!.GetValue<int>());
@@ -1421,7 +1421,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
         var receipt = await AdminDeletesAsync(bob);
 
-        Assert.Equal((1, 1, 1), (receipt["vaults"]!.GetValue<int>(), receipt["memberships"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
+        Assert.Equal((2, 1, 1), (receipt["vaults"]!.GetValue<int>(), receipt["memberships"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
         Assert.Equal("Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history.", receipt["sharedNotes"]!.GetValue<string>());
         var body = receipt.ToJsonString();
         foreach (var name in new[] { "Geheimgarten", "Kraeuterbeet", "Werkstatt", "Rosenbeet", "Minze", "Schuppen" }) Assert.DoesNotContain(name, body, StringComparison.Ordinal);

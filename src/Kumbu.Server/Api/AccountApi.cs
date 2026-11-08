@@ -219,7 +219,7 @@ public static class AccountApi
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        StorageQuota quota, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -244,6 +244,8 @@ public static class AccountApi
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
+        // Never fails the sign-in, and not cancellable by the client, as at the join.
+        await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct)));
     }
@@ -257,8 +259,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<JoinedView>> JoinAsync(
-        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, Welcome.WelcomeVault welcome, AccountLimits limits,
-        CancellationToken ct)
+        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, Welcome.WelcomeVault welcome, Skills.SkillsVaults skills,
+        AccountLimits limits, CancellationToken ct)
     {
         if (limits.Join(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (user, recoveryKey) = await invitations.RedeemAsync(body.Code, body.Username, body.Password, ct);
@@ -272,6 +274,7 @@ public static class AccountApi
             SetSessionCookie(http, secret, remember: false);
             // Never fails the join, and not cancellable, like the rest of the join after the claim.
             await welcome.CreateAsync(signedIn, userKey, readAt, CancellationToken.None);
+            await skills.EnsureAsync(signedIn, userKey, readAt, CancellationToken.None);
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
@@ -305,10 +308,15 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
-    private static async Task<Ok<SessionView>> Session(RequestCaller caller, StorageQuota quota, IOptions<KumbuOptions> options, CancellationToken ct) =>
-        TypedResults.Ok(new SessionView(
+    /// <summary>The session's user; a kept session, which may not sign in for weeks, gets the vault Skills here.</summary>
+    private static async Task<Ok<SessionView>> Session(
+        RequestCaller caller, StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, CancellationToken ct)
+    {
+        await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
+        return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
             await quota.LimitedAsync(caller.User.Id, ct)));
+    }
 
     /// <summary>
     /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No

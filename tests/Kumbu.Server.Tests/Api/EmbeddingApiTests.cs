@@ -146,7 +146,7 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
 
         using (var list = await user.GetAsync("/api/vaults"))
         {
-            Assert.Equal("internal", (await JsonAsync(list)).AsArray().Single()!["embeddings"]!.GetValue<string>());
+            Assert.Equal("internal", (await JsonAsync(list)).AsArray().Single(v => v!["name"]!.GetValue<string>() == user.Vault)!["embeddings"]!.GetValue<string>());
         }
 
         using var chosen = await ChooseAsync(user, "remote");
@@ -162,7 +162,7 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
 
         using (var list = await user.GetAsync("/api/vaults"))
         {
-            Assert.Equal("remote", (await JsonAsync(list)).AsArray().Single()!["embeddings"]!.GetValue<string>());
+            Assert.Equal("remote", (await JsonAsync(list)).AsArray().Single(v => v!["name"]!.GetValue<string>() == user.Vault)!["embeddings"]!.GetValue<string>());
         }
 
         // And back: the notes are embedded on the server again.
@@ -191,7 +191,7 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.NotFound, others.StatusCode);
 
         using var list = await user.GetAsync("/api/vaults");
-        Assert.Equal("internal", (await JsonAsync(list)).AsArray().Single()!["embeddings"]!.GetValue<string>());
+        Assert.Equal("internal", (await JsonAsync(list)).AsArray().Single(v => v!["name"]!.GetValue<string>() == user.Vault)!["embeddings"]!.GetValue<string>());
     }
 
     [Fact]
