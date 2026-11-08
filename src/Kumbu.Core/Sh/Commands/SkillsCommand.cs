@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -8,7 +9,7 @@ using Kumbu.Core.Skills;
 namespace Kumbu.Core.Sh.Commands;
 
 /// <summary>
-/// <c>skills ls|cat|check|copy</c>: the skills the caller can see, read and checked. Nothing here fetches, shares,
+/// <c>skills ls|find|cat|check|copy</c>: the skills the caller can see, found for a request, read and checked. Nothing here fetches, shares,
 /// installs, moves a skill between vaults or takes an update; those are the user's, in the Skills screen. The one write
 /// is <c>copy</c> of a built-in skill, through the caller's <see cref="NoteWriter"/>, so only where she may write.
 /// Paths are taken as given: <see cref="Skill.Line"/> cleans what it shows, never what is looked up.
@@ -63,6 +64,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         {
             "ls" when operands.Count <= 1 => await ListAsync(operands.FirstOrDefault(), ct),
             "cat" when operands.Count == 1 => await CatAsync(operands[0], ct),
+            "find" when operands.Count == 1 => await FindSkillsAsync(operands[0], ct),
+            "find" => Invalid(operands.Count == 0 ? "skills find: missing operand (help skills)" : "skills find: give the request as one quoted argument"),
             "check" when operands.Count <= 1 => await CheckAsync(operands.FirstOrDefault(), ct),
             "copy" when operands.Count is 1 or 2 => await CopyAsync(operands[0], operands.ElementAtOrDefault(1), ct),
             "ls" or "check" => Invalid($"{command}: too many arguments{CommandArgs.QuoteHint}"),
@@ -84,6 +87,16 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         if (list.Count == 0) return ShellResult.Ok("") with { NoMatchHint = "no skills yet; 'skills copy create-skill' adds the one that writes skills" };
         var known = await updates.AvailableAsync(ct);
         return ShellResult.Ok(string.Join('\n', list.Select(s => s.Folder is { } folder && known.Contains(folder) ? s.Line() + " [update available: Skills screen]" : s.Line())));
+    }
+
+    private async Task<ShellResult> FindSkillsAsync(string request, CancellationToken ct)
+    {
+        var visible = await skills.ListAsync(null, ct);
+        var manifests = new List<(Skill, string?)>(visible.Count);
+        foreach (var skill in visible) manifests.Add((skill, await skills.ManifestAsync(skill, ct)));
+        var hits = await SkillSearch.RankAsync(manifests, request, Search, ct);
+        if (hits.Count == 0) return ShellResult.Ok("") with { NoMatchHint = "no skill fits; skills ls lists them all" };
+        return ShellResult.Ok(string.Join('\n', hits.Select(h => $"{h.Rank}. {h.Skill.Line()}  score {h.Score.ToString("0.0000", CultureInfo.InvariantCulture)}")));
     }
 
     private async Task<ShellResult> CatAsync(string address, CancellationToken ct)

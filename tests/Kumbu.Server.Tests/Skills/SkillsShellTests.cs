@@ -48,6 +48,10 @@ public sealed class SkillsShellTests(KumbuAppFactory app)
         Assert.DoesNotContain("write-as-alice", ls);
         var (_, lsSkills) = await alice.ShAsync("skills ls /Skills", workOnly);
         Assert.DoesNotContain("write-as-alice", lsSkills);
+        var (_, found) = await alice.ShAsync("skills find \"write posts in Alice's voice\"", workOnly);
+        Assert.DoesNotContain("write-as-alice", found);
+        var (_, foundWork) = await alice.ShAsync("skills find \"draft release notes\"", workOnly);
+        Assert.StartsWith("1. release-notes (/Work/_skills/release-notes", foundWork);
         foreach (var line in new[] { "skills cat write-as-alice", "skills cat /Skills/write-as-alice", "skills cat /Skills/write-as-alice/SKILL.md", "skills check /Skills" })
         {
             var (isError, text) = await alice.ShAsync(line, workOnly);
@@ -60,7 +64,9 @@ public sealed class SkillsShellTests(KumbuAppFactory app)
         var (_, other) = await alice.ShAsync("skills ls", skillsOnly);
         Assert.Contains("write-as-alice (/Skills/write-as-alice", other);
         Assert.DoesNotContain("release-notes", other);
-        foreach (var line in new[] { "skills cat release-notes", "skills cat /Work/_skills/release-notes", "skills ls /Work" })
+        var (_, foundSkills) = await alice.ShAsync("skills find \"write posts in Alice's voice\"", skillsOnly);
+        Assert.StartsWith("1. write-as-alice (/Skills/write-as-alice", foundSkills);
+        foreach (var line in new[] { "skills cat release-notes", "skills cat /Work/_skills/release-notes", "skills ls /Work", "skills find \"draft release notes\"" })
         {
             var (_, text) = await alice.ShAsync(line, skillsOnly);
             Assert.DoesNotContain("Drafts release notes", text);

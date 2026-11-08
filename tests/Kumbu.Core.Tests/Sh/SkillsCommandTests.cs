@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Skills;
 using Kumbu.Core.Tests.Fakes;
@@ -37,11 +38,17 @@ public class SkillsCommandTests
     private void Put(VaultPath path, string content) =>
         _store.Put(new StoredNote(path, content, 1, "claude", InMemoryNoteStore.Seeded, [], content, Ref: WriterRef.ForOwner(WriterRef.Agent, "k1")));
 
-    private Task<ShellResult> Run(string line, ICaller? caller = null)
+    private sealed class FakeIndex(params SemanticHit[] hits) : ISearchIndex
+    {
+        public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) =>
+            Task.FromResult(new SemanticResult(SemanticState.Ready, hits, 0));
+    }
+
+    private Task<ShellResult> Run(string line, ICaller? caller = null, ISearchIndex? search = null)
     {
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
         caller ??= new FixedCaller(Writers.Dev);
-        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), updates: new Updates(_updates));
+        var shell = new Shell(_store, new NoteWriter(_store, time, caller), new NoteMover(_store, time, caller), search: search, updates: new Updates(_updates));
         return shell.RunAsync(line, CancellationToken.None);
     }
 
@@ -293,6 +300,40 @@ public class SkillsCommandTests
         }
 
         Assert.Empty(await _store.ListNotesUnderAsync(P("/Work/_skills/write-as-alice"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Find_prints_rank_origin_and_score() => Assert.StartsWith("1. create-skill (system): ", (await Run("skills find \"write a new skill\"")).Output);
+
+    [Fact]
+    public async Task Find_prints_each_hit_on_a_line_with_its_score()
+    {
+        var result = await Run("skills find \"release notes\"", search: new FakeIndex(new SemanticHit(P("/Skills/write-as-alice/SKILL.md"), 0, 0.4)));
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(
+            [
+                // Words over name and description, words over the body ("# Notes"): 2/61 + 1/61.
+                "1. release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.  score 0.0492",
+                // Meaning alone, first in the vault Skills: 1/61.
+                "2. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
+            ],
+            result.Output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task Find_without_a_fit_says_so() => Assert.Equal("no skill fits; skills ls lists them all", (await Run("skills find \"plant tomatoes\"")).Output);
+
+    [Fact]
+    public async Task Find_takes_one_request()
+    {
+        var two = await Run("skills find write a new skill");
+        Assert.Equal("skills find: give the request as one quoted argument", two.Output);
+        Assert.Equal(ShellErrorKind.Invalid, two.Kind);
+
+        var none = await Run("skills find");
+        Assert.True(none.IsError);
+        Assert.Equal(ShellErrorKind.Invalid, none.Kind);
     }
 
     [Theory, InlineData("install"), InlineData("share"), InlineData("update"), InlineData("mv"), InlineData("add"), InlineData("fetch")]
