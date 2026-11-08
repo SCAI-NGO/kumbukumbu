@@ -34,11 +34,12 @@ namespace Kumbu.Server.Api;
 /// active again, and she may still export it (the banner: "Alice's account is deactivated …", <c>owner</c> named).
 /// <c>closingAt</c>: on a vault shared with her, its owner deleted her account and gave the members time: it is
 /// read-only, may be exported, and is deleted at this time. <c>ownerUsername</c>: on a vault shared with her, the
-/// owner's username beside <c>owner</c>, which is free text: two owners of one display name stay two.</summary>
+/// owner's username beside <c>owner</c>, which is free text: two owners of one display name stay two. <c>kind</c>: on her
+/// own vault, what it is marked as (<c>skills</c>); absent for an ordinary vault and for one shared with her.</summary>
 public sealed record VaultView(
     string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
     int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false, DateTime? ClosingAt = null,
-    string? OwnerUsername = null);
+    string? OwnerUsername = null, string? Kind = null);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c>, <c>connections</c> and <c>shares</c>: what would lose
 /// access if the vault were re-encrypted, the names of her API keys with access to it, of her connected apps that list
@@ -321,7 +322,8 @@ public static class NoteApi
             name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
             members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access), access.ReadOnlyCode == Refusals.OwnerInactive,
             access.ReadOnlyCode == Refusals.Closing ? access.Membership?.ClosingAt : null,
-            access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null);
+            access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null,
+            access.Membership is null && access.IsOwner ? vault.Kind : null);
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)

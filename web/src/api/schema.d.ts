@@ -10039,6 +10039,7 @@ export interface components {
             /** Format: date-time */
             closingAt?: null | string;
             ownerUsername?: null | string;
+            kind?: null | string;
         };
         VersionEntry: {
             path: string;

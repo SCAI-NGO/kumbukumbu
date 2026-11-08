@@ -40,6 +40,17 @@ public sealed class VaultDocument
     /// the vault then takes no new member.</summary>
     [BsonElement("closingAt"), BsonIgnoreIfNull]
     public DateTime? ClosingAt { get; set; }
+
+    /// <summary>What the vault is for, when it is more than a vault (<see cref="VaultKinds"/>); null for an ordinary one.</summary>
+    [BsonElement("kind"), BsonIgnoreIfNull]
+    public string? Kind { get; set; }
+}
+
+/// <summary>The kinds a vault can be marked with (<see cref="VaultDocument.Kind"/>).</summary>
+public static class VaultKinds
+{
+    /// <summary>The vault that holds its owner's skills.</summary>
+    public const string Skills = "skills";
 }
 
 /// <summary>A key slot: the vault key, wrapped with a key derived from one credential.</summary>

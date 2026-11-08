@@ -54,6 +54,9 @@ public interface INoteReader
     /// doesn't say (an own vault nobody else reaches), or there is no such vault.</summary>
     Task<VaultInfo?> VaultInfoAsync(string vault, CancellationToken ct) => Task.FromResult<VaultInfo?>(null);
 
+    /// <summary>The caller's name for her vault marked as the vault Skills; null if she has none, or the store doesn't say.</summary>
+    Task<string?> SkillsVaultAsync(CancellationToken ct) => Task.FromResult<string?>(null);
+
     /// <summary>How many vaults exist that the caller's credential doesn't open. Only meaningful while the dev
     /// token is the only credential; with per-user keys (step 8) this would tell one user about another's vaults.</summary>
     Task<int> CountLockedVaultsAsync(CancellationToken ct);

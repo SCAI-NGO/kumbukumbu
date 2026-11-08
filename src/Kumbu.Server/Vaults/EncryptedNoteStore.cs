@@ -93,6 +93,10 @@ public sealed class EncryptedNoteStore(
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
 
+    /// <summary>The vault marked as the vault Skills, by the name the caller has for it: her own vault only, never one shared with her.</summary>
+    public async Task<string?> SkillsVaultAsync(CancellationToken ct) =>
+        (await VaultsAsync(ct)).Values.FirstOrDefault(a => a.Vault.Kind == VaultKinds.Skills && a.IsOwner && a.Membership is null)?.Name;
+
     private readonly Dictionary<string, VaultInfo> _infos = new(StringComparer.Ordinal);
 
     /// <summary>
