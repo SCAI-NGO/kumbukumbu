@@ -7,12 +7,14 @@ namespace Kumbu.Server.Publishing;
 /// A vault's record of what it publishes (publish spec §4), sealed under the vault key, one document per vault in
 /// <c>publishing</c> (<see cref="UnlockedVault.SealPublishing"/>): its publications with their keys, the unpublishable
 /// marks and a log of the newest <see cref="Publications.LogLimit"/> changes; for the skills of the vault, the share codes
-/// of link copies and the sealed origins of copies (Decisions 13, 33). Paths as the vault stores them, under its own name. A
+/// of link copies, the sealed origins of copies, the folders the last check found an update for and the updates skipped
+/// (Decisions 13, 22, 33). Paths as the vault stores them, under its own name. A
 /// record written before a field existed reads it as empty.
 /// </summary>
 internal sealed record PublishingRecord(
     IReadOnlyList<PublicationEntry> Publications, IReadOnlyList<string> Unpublishable, IReadOnlyList<PublishingLogEntry> Log,
-    IReadOnlyList<SkillCode>? SkillCodes = null, IReadOnlyList<SkillOrigin>? Origins = null)
+    IReadOnlyList<SkillCode>? SkillCodes = null, IReadOnlyList<SkillOrigin>? Origins = null, IReadOnlyList<SkippedUpdate>? Skipped = null,
+    IReadOnlyList<string>? Updates = null)
 {
     public static readonly PublishingRecord Empty = new([], [], []);
 
@@ -20,8 +22,12 @@ internal sealed record PublishingRecord(
 
     public IReadOnlyList<SkillOrigin> Origins { get; init; } = Origins ?? [];
 
+    public IReadOnlyList<SkippedUpdate> Skipped { get; init; } = Skipped ?? [];
+
+    public IReadOnlyList<string> Updates { get; init; } = Updates ?? [];
+
     public override string ToString() =>
-        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count} }}";
+        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count}, Skipped = {Skipped.Count}, Updates = {Updates.Count} }}";
 }
 
 /// <summary>The share code a link copy came from, by the copy's folder: kept only here, sealed (Global Constraints). Not
@@ -34,6 +40,9 @@ internal sealed record SkillCode(string Path, string Code)
 /// <summary>Where a copy of a skill came from, by its folder: its <c>kumbu-source</c> and <c>kumbu-hash</c> as written
 /// when it came in, which the frontmatter's are checked against (Decision 33).</summary>
 internal sealed record SkillOrigin(string Path, string Source, string Hash);
+
+/// <summary>An update of the skill at <see cref="Path"/> its owner chose to skip, by the <c>kumbu-hash</c> it would have brought.</summary>
+internal sealed record SkippedUpdate(string Path, string Hash);
 
 /// <summary>
 /// One publication. Id: 16 random bytes in lower-case hex. Code: the share code, normalised (for Copy link again).

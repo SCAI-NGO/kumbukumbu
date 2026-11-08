@@ -251,7 +251,9 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             }
 
             string[] marks = [.. record.Unpublishable, stored.Value];
-            var withdrawn = record.Publications.Where(p => Covered(marks, p.Note) || p.Files.Any(f => Covered(marks, f.Path))).ToList();
+            // A skill's link also goes for a mark on a file its copy doesn't hold yet: it is shared as a whole.
+            var withdrawn = record.Publications.Where(p =>
+                Covered(marks, p.Note) || p.Files.Any(f => Covered(marks, f.Path)) || (p.Kind == PublicationKinds.Skill && Covered([p.Note], stored.Value))).ToList();
             var at = Now;
             var logged = withdrawn.Select(p => LogEntry(PublishingKinds.Withdrawn, Parse(p.Note), at, by, byRef, WithdrawalReasons.Unpublishable)).ToList();
             var next = record with
@@ -281,15 +283,22 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// the owner's session can lift a mark (<paramref name="bySession"/>); for anyone else, each note or file the batch
     /// moves out from under a mark takes a mark of its own along. A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
     /// under a mark too (<c>unpublishable</c>); otherwise it follows its note and files, under the same link. Edits
-    /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw: anyone else
-    /// gets <see cref="PublishedNoteException"/>, which aborts the batch.
+    /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw a note's:
+    /// anyone else gets <see cref="PublishedNoteException"/>, which aborts the batch. A skill's link follows its folder to
+    /// another skill folder of the vault and is withdrawn by any writer's batch that trashes its <c>SKILL.md</c> or takes
+    /// it out of a skill folder (<c>removed</c>), or lands any of its files under a mark (Decision 31); the record's sealed
+    /// skill state follows and goes with the folder the same way (<see cref="SkillFolderAfter"/>).
     /// </summary>
     internal async Task FollowAsync(
         IClientSessionHandle session, VaultAccess access, bool device, bool bySession, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
         var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
-        if (record.Publications.Count == 0 && record.Unpublishable.Count == 0) return;
+        if (record.Publications.Count == 0 && record.Unpublishable.Count == 0 && record.SkillCodes.Count == 0 && record.Origins.Count == 0
+            && record.Updates.Count == 0 && record.Skipped.Count == 0)
+        {
+            return;
+        }
 
         var moved = batch.Moves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value))
             .Concat(batch.AttachmentMoves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value)))
@@ -309,8 +318,16 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         var withdrawn = new List<(PublicationEntry Entry, string Reason)>();
         foreach (var entry in record.Publications)
         {
-            var note = moved.GetValueOrDefault(entry.Note, entry.Note);
             var files = entry.Files.Select(f => f with { Path = moved.GetValueOrDefault(f.Path, f.Path) }).ToList();
+            if (entry.Kind == PublicationKinds.Skill)
+            {
+                if (SkillFolderAfter(access.Vault, entry.Note, moved, trashed) is not { } folder) withdrawn.Add((entry, WithdrawalReasons.Removed));
+                else if (entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
+                else kept.Add(folder == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = folder, Files = files });
+                continue;
+            }
+
+            var note = moved.GetValueOrDefault(entry.Note, entry.Note);
             if (trashed.Contains(entry.Note)) withdrawn.Add((entry, WithdrawalReasons.Removed));
             // A skill is shared as a whole, by link; a note that lands in a skill's place is no longer a note publication.
             else if (note != entry.Note && InSkillPlace(access.Vault, Parse(note))) withdrawn.Add((entry, WithdrawalReasons.Removed));
@@ -318,15 +335,32 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             else kept.Add(note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files });
         }
 
-        if (withdrawn.Count > 0 && !(IsOwner(access) && (access.MayPublish || device)))
+        // A skill's link goes whoever changes its folder (Decision 31); only a note's publication holds the write back.
+        if (withdrawn.FirstOrDefault(w => w.Entry.Kind is null).Entry is { } held && !(IsOwner(access) && (access.MayPublish || device)))
         {
-            var shown = access.ToCaller(Parse(withdrawn[0].Entry.Note));
+            var shown = access.ToCaller(Parse(held.Note));
             throw new PublishedNoteException(access.Membership is not null
                 ? $"{shown} is published by the vault's owner; only the owner can remove it or move it into an unpublishable folder"
                 : $"{shown} is published, and {(access.ViaShare ? "a WebDAV share never publishes" : $"this key may not publish in {access.Name}")}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
         }
 
-        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)) return;
+        // The sealed skill state, by folder, follows the folder as a link does and goes with it.
+        string? After(string folder) => SkillFolderAfter(access.Vault, folder, moved, trashed);
+        var next = record with
+        {
+            Publications = kept,
+            Unpublishable = marks,
+            SkillCodes = [.. record.SkillCodes.Select(c => After(c.Path) is { } to ? c with { Path = to } : null).OfType<SkillCode>()],
+            Origins = [.. record.Origins.Select(o => After(o.Path) is { } to ? o with { Path = to } : null).OfType<SkillOrigin>()],
+            Updates = [.. record.Updates.Select(After).OfType<string>()],
+            Skipped = [.. record.Skipped.Select(k => After(k.Path) is { } to ? k with { Path = to } : null).OfType<SkippedUpdate>()],
+        };
+        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)
+            && next.SkillCodes.SequenceEqual(record.SkillCodes) && next.Origins.SequenceEqual(record.Origins)
+            && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped))
+        {
+            return;
+        }
 
         // Each withdrawal is logged under the path its note had before the batch.
         var logged = withdrawn.Select(w => LogEntry(PublishingKinds.Withdrawn, Parse(w.Entry.Note), at, by, byRef, w.Reason)).ToList();
@@ -336,7 +370,23 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             await EventAsync(session, access, log, ct);
         }
 
-        await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = Appended(record.Log, [.. logged]) }, ct);
+        await store.WriteAsync(session, access.Vault, doc, next with { Log = Appended(record.Log, [.. logged]) }, ct);
+    }
+
+    /// <summary>
+    /// Where the skill folder <paramref name="folder"/> (stored) is after the batch, by its <c>SKILL.md</c>: where it was
+    /// while the batch leaves that alone, the folder it moves to when that is a skill folder of the vault, and null when
+    /// the batch trashes it or moves it anywhere else (out of a skill location, deeper down, or under another name).
+    /// </summary>
+    private static string? SkillFolderAfter(UnlockedVault vault, string folder, IReadOnlyDictionary<string, string> moved, IReadOnlySet<string> trashed)
+    {
+        var manifest = folder + "/" + SkillPaths.Manifest;
+        if (trashed.Contains(manifest)) return null;
+        if (!moved.TryGetValue(manifest, out var to)) return folder;
+        var target = Parse(to);
+        if (target.Segments[^1] != SkillPaths.Manifest) return null;
+        var parent = to[..^(SkillPaths.Manifest.Length + 1)];
+        return SkillPaths.FolderOf(target, vault.Kind == VaultKinds.Skills ? vault.Name : null)?.Value == parent ? parent : null;
     }
 
     /// <summary>
