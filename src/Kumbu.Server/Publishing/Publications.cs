@@ -260,6 +260,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             {
                 Publications = [.. record.Publications.Except(withdrawn)],
                 Unpublishable = marks,
+                Withdrawn = WithdrawnWith(record.Withdrawn, withdrawn.Where(p => p.Kind == PublicationKinds.Skill).Select(p => p.Note)),
                 Log = Appended(record.Log, [.. logged]),
             };
             var written = await WriteAsync(access, attempt, async session =>
@@ -295,7 +296,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
         var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
         if (record.Publications.Count == 0 && record.Unpublishable.Count == 0 && record.SkillCodes.Count == 0 && record.Origins.Count == 0
-            && record.Updates.Count == 0 && record.Skipped.Count == 0)
+            && record.Updates.Count == 0 && record.Skipped.Count == 0 && record.Withdrawn.Count == 0)
         {
             return;
         }
@@ -346,6 +347,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
         // The sealed skill state, by folder, follows the folder as a link does and goes with it.
         string? After(string folder) => SkillFolderAfter(access.Vault, folder, moved, trashed);
+        // A withdrawn link's folder is remembered where its SKILL.md went to the trash too: restored or written anew, it warns.
+        string? Stays(string folder) => After(folder) ?? (trashed.Contains(folder + "/" + SkillPaths.Manifest) ? folder : null);
         var next = record with
         {
             Publications = kept,
@@ -354,10 +357,13 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             Origins = [.. record.Origins.Select(o => After(o.Path) is { } to ? o with { Path = to } : null).OfType<SkillOrigin>()],
             Updates = [.. record.Updates.Select(After).OfType<string>()],
             Skipped = [.. record.Skipped.Select(k => After(k.Path) is { } to ? k with { Path = to } : null).OfType<SkippedUpdate>()],
+            Withdrawn = WithdrawnWith(
+                [.. record.Withdrawn.Select(Stays).OfType<string>()],
+                withdrawn.Where(w => w.Entry.Kind == PublicationKinds.Skill).Select(w => Stays(w.Entry.Note) ?? w.Entry.Note)),
         };
         if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)
             && next.SkillCodes.SequenceEqual(record.SkillCodes) && next.Origins.SequenceEqual(record.Origins)
-            && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped))
+            && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped) && next.Withdrawn.SequenceEqual(record.Withdrawn))
         {
             return;
         }
@@ -529,7 +535,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
             if (FindSkill(record, stored) is not null)
             {
-                throw new PublishRefusedException($"{folder} is already shared; withdraw its link first", ShellErrorKind.Conflict);
+                throw new PublishRefusedException($"{folder} is already shared; withdraw its link first", ShellErrorKind.Conflict, Refusals.SkillShared);
             }
 
             var made = await MakeSkillAsync(access, notes, folder, record, ct);
@@ -538,6 +544,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var next = record with
             {
                 Publications = [.. record.Publications, entry],
+                Withdrawn = [.. record.Withdrawn.Where(w => !string.Equals(w, stored.Value, StringComparison.Ordinal))],
                 Log = Appended(record.Log, LogEntry(PublishingKinds.Published, stored, at, by, byRef, null)),
             };
             var written = await WriteAsync(access, attempt, async session =>
@@ -589,6 +596,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var next = record with
             {
                 Publications = [.. record.Publications.Where(p => p.Id != entry.Id)],
+                Withdrawn = WithdrawnWith(record.Withdrawn, [entry.Note]),
                 Log = Appended(record.Log, LogEntry(PublishingKinds.Withdrawn, Parse(entry.Note), Now, by, byRef, WithdrawalReasons.ByRight)),
             };
             var written = await WriteAsync(access, attempt, async session =>
@@ -848,6 +856,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     }
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
+
+    /// <summary><paramref name="withdrawn"/> with the folders of skill links that just went, each once.</summary>
+    private static IReadOnlyList<string> WithdrawnWith(IReadOnlyList<string> withdrawn, IEnumerable<string> folders) =>
+        [.. withdrawn.Concat(folders).Distinct(StringComparer.Ordinal)];
 
     /// <summary>A note's publication; a skill's (<see cref="FindSkill"/>) is none.</summary>
     private static PublicationEntry? Find(PublishingRecord record, VaultPath stored) =>

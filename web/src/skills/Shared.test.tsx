@@ -4,14 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
-import { useWithdrawn } from "./withdrawn";
 
 const link = "https://kumbu.example.org/k#ABCD-EFGH-JKMN-PQRS-TVWX-YZ23-4567-89AB";
 
 const skill = (o: Record<string, unknown>) => ({ description: "Does it.", source: null, lastEditor: null, byOther: false, warnings: [], canWrite: true, shared: false, ...o });
 
 /** Alice's /Skills/mine, shared or not as `state.shared` says, and Bob's /Team/_skills/theirs in a vault shared with her. */
-function api(state: { shared: boolean; changed?: boolean }, publishEnabled = true, overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
+function api(state: { shared: boolean; changed?: boolean; withdrawnBefore?: boolean }, publishEnabled = true, overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null, publishEnabled }),
     "GET /api/vaults": () =>
@@ -22,7 +21,7 @@ function api(state: { shared: boolean; changed?: boolean }, publishEnabled = tru
     "GET /api/skills": () =>
       json(200, {
         skills: [
-          skill({ name: "mine", location: "Skills", path: "/Skills/mine", shared: state.shared }),
+          skill({ name: "mine", location: "Skills", path: "/Skills/mine", shared: state.shared, withdrawnBefore: state.withdrawnBefore ?? false }),
           skill({ name: "theirs", location: "Team", path: "/Team/_skills/theirs" }),
           skill({ name: "builtin", location: "system", path: null }),
         ],
@@ -41,7 +40,6 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useSession.getState().reset();
-  useWithdrawn.getState().reset();
 });
 
 describe("Shared", () => {
@@ -109,11 +107,11 @@ describe("Shared", () => {
   });
 
   it("warns before sharing anew", async () => {
-    const state = { shared: true };
+    const state = { shared: true, withdrawnBefore: false };
     let withdrawn = false;
     let shared = false;
     api(state, true, {
-      "DELETE /api/skills/shared/p1": () => ((withdrawn = true), (state.shared = false), noContent()),
+      "DELETE /api/skills/shared/p1": () => ((withdrawn = true), (state.shared = false), (state.withdrawnBefore = true), noContent()),
       "POST /api/skills/shared": () => ((shared = true), (state.shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })),
     });
     renderApp("/skills/shared");
@@ -132,6 +130,17 @@ describe("Shared", () => {
 
     await waitFor(() => expect(shared).toBe(true));
     expect(await screen.findByText(link)).toBeInTheDocument();
+  });
+
+  it("warns after a reload too, as the server remembers the withdrawal", async () => {
+    let shared = false;
+    api({ shared: false, withdrawnBefore: true }, true, { "POST /api/skills/shared": () => ((shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })) });
+    renderApp("/skills/installed");
+
+    await userEvent.click(within(await card("mine")).getByRole("button", { name: "Share" }));
+    expect(within(screen.getByRole("alertdialog")).getByText("Copies made from the old link will be told their source is gone and get no more updates.")).toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    expect(shared).toBe(false);
   });
 
   it("hides the tab when publishing is off", async () => {

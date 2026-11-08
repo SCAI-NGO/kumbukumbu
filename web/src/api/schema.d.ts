@@ -10981,6 +10981,7 @@ export interface components {
             shared?: boolean;
             canWrite?: boolean;
             originEdited?: boolean;
+            withdrawnBefore?: boolean;
         };
         SkillsNoticeView: {
             renamed: string;

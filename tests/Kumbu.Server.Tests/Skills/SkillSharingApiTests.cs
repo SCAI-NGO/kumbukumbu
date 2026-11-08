@@ -49,6 +49,14 @@ public sealed class SkillSharingApiTests(KumbuAppFactory app)
         return (await RestClient.JsonAsync(response)).AsArray();
     }
 
+    /// <summary>The skill at <paramref name="path"/> as <c>GET /api/skills</c> lists it.</summary>
+    private static async Task<JsonNode> SkillAsync(RestClient user, string path)
+    {
+        using var response = await user.GetAsync("/api/skills");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await RestClient.JsonAsync(response))["skills"]!.AsArray().Single(s => s!["path"]?.GetValue<string>() == path)!;
+    }
+
     private static async Task<string> IdAsync(RestClient user) => Assert.Single(await SharedAsync(user))!["id"]!.GetValue<string>();
 
     /// <summary>That <paramref name="text"/> holds neither a '#' nor any eight characters of the code in a row.</summary>
@@ -111,7 +119,9 @@ public sealed class SkillSharingApiTests(KumbuAppFactory app)
         using var again = await ShareAsync(alice, "/Work/_skills/x");
 
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
-        Assert.Equal("/Work/_skills/x is shared already: withdraw its link first to make a new one.", await RestClient.ErrorAsync(again));
+        var refused = await RestClient.JsonAsync(again);
+        Assert.Equal("/Work/_skills/x is shared already: withdraw its link first to make a new one.", refused["error"]!.GetValue<string>());
+        Assert.Equal("skill-shared", refused["code"]!.GetValue<string>());
         Assert.Single(await SharedAsync(alice));
     }
 
@@ -188,11 +198,13 @@ public sealed class SkillSharingApiTests(KumbuAppFactory app)
     public async Task Only_a_session_shares()
     {
         var alice = await AliceAsync();
+        await alice.CreateAsync("_skills/y/SKILL.md", Manifest.Replace("name: x", "name: y", StringComparison.Ordinal));
         var key = await alice.KeyAsync("agent", KeyRight.Write, mayPublish: true);
         await LinkAsync(alice, "/Work/_skills/x");
         var id = await IdAsync(alice);
 
-        using var share = await ShareAsync(alice, "/Work/_skills/x", bearer: key);
+        // y isn't shared yet: without the session's gate, the key's share would make a link.
+        using var share = await ShareAsync(alice, "/Work/_skills/y", bearer: key);
         using var list = await alice.GetAsync("/api/skills/shared", bearer: key);
         using var update = await alice.SendAsync(HttpMethod.Post, $"/api/skills/shared/{id}/update", bearer: key);
         using var withdraw = await alice.SendAsync(HttpMethod.Delete, $"/api/skills/shared/{id}", bearer: key);
@@ -202,6 +214,57 @@ public sealed class SkillSharingApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, withdraw.StatusCode);
         Assert.Equal(id, await IdAsync(alice));
+        Assert.False((await SkillAsync(alice, "/Work/_skills/y"))["shared"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_withdrawn_skill_says_so_until_it_is_shared_anew()
+    {
+        var alice = await AliceAsync();
+        Assert.False((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
+        await LinkAsync(alice, "/Work/_skills/x");
+        Assert.False((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
+
+        using (var withdrawn = await alice.SendAsync(HttpMethod.Delete, $"/api/skills/shared/{await IdAsync(alice)}"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, withdrawn.StatusCode);
+        }
+
+        var after = await SkillAsync(alice, "/Work/_skills/x");
+        Assert.False(after["shared"]!.GetValue<bool>());
+        Assert.True(after["withdrawnBefore"]!.GetValue<bool>());
+
+        await LinkAsync(alice, "/Work/_skills/x");
+        Assert.False((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_link_withdrawn_by_a_change_or_a_mark_counts_too()
+    {
+        var alice = await AliceAsync();
+        await alice.CreateAsync("_skills/x/ref.md", "# Ref\n");
+        await LinkAsync(alice, "/Work/_skills/x");
+
+        // SKILL.md to the trash withdraws the link (Decision 31); written again, the skill remembers.
+        using (var deleted = await alice.SendAsync(HttpMethod.Delete, alice.Url("_skills/x/SKILL.md")))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+
+        await alice.CreateAsync("_skills/x/SKILL.md", Manifest);
+        Assert.Empty(await SharedAsync(alice));
+        Assert.True((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
+
+        // Shared anew, then a mark on one of its files withdraws it.
+        await LinkAsync(alice, "/Work/_skills/x");
+        Assert.False((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
+        using (var marked = await alice.SendAsync(HttpMethod.Put, "/api/unpublishable/Work/_skills/x/ref.md"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, marked.StatusCode);
+        }
+
+        Assert.Empty(await SharedAsync(alice));
+        Assert.True((await SkillAsync(alice, "/Work/_skills/x"))["withdrawnBefore"]!.GetValue<bool>());
     }
 
     [Fact]

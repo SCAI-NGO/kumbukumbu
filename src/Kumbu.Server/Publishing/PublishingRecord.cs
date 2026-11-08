@@ -7,14 +7,14 @@ namespace Kumbu.Server.Publishing;
 /// A vault's record of what it publishes (publish spec §4), sealed under the vault key, one document per vault in
 /// <c>publishing</c> (<see cref="UnlockedVault.SealPublishing"/>): its publications with their keys, the unpublishable
 /// marks and a log of the newest <see cref="Publications.LogLimit"/> changes; for the skills of the vault, the share codes
-/// of link copies, the sealed origins of copies, the folders the last check found an update for and the updates skipped
-/// (Decisions 13, 22, 33). Paths as the vault stores them, under its own name. A
+/// of link copies, the sealed origins of copies, the folders the last check found an update for, the updates skipped
+/// and the skill folders whose link was withdrawn since they were last shared (Decisions 13, 15, 22, 33). Paths as the vault stores them, under its own name. A
 /// record written before a field existed reads it as empty.
 /// </summary>
 internal sealed record PublishingRecord(
     IReadOnlyList<PublicationEntry> Publications, IReadOnlyList<string> Unpublishable, IReadOnlyList<PublishingLogEntry> Log,
     IReadOnlyList<SkillCode>? SkillCodes = null, IReadOnlyList<SkillOrigin>? Origins = null, IReadOnlyList<SkippedUpdate>? Skipped = null,
-    IReadOnlyList<string>? Updates = null)
+    IReadOnlyList<string>? Updates = null, IReadOnlyList<string>? Withdrawn = null)
 {
     public static readonly PublishingRecord Empty = new([], [], []);
 
@@ -26,8 +26,12 @@ internal sealed record PublishingRecord(
 
     public IReadOnlyList<string> Updates { get; init; } = Updates ?? [];
 
+    /// <summary>Skill folders whose link went (by any withdrawal) and that weren't shared again since: sharing one anew
+    /// warns that copies made from the old link lose their updates (Decision 15).</summary>
+    public IReadOnlyList<string> Withdrawn { get; init; } = Withdrawn ?? [];
+
     public override string ToString() =>
-        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count}, Skipped = {Skipped.Count}, Updates = {Updates.Count} }}";
+        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count}, Skipped = {Skipped.Count}, Updates = {Updates.Count}, Withdrawn = {Withdrawn.Count} }}";
 }
 
 /// <summary>The share code a link copy came from, by the copy's folder: kept only here, sealed (Global Constraints). Not

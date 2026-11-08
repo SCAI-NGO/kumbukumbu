@@ -31,6 +31,9 @@ public static class Refusals
     /// <summary>The server's switch, <c>Kumbu:Publish:Enabled</c>, is off (publish design §3.13).</summary>
     public const string PublishingOff = "publishing-off";
 
+    /// <summary>The skill is shared by link already: one link per skill, so it is withdrawn before a new one (skills plan, Decision 15).</summary>
+    public const string SkillShared = "skill-shared";
+
     /// <summary>The note is published, and this caller may not withdraw it (publish design §3.7).</summary>
     public const string Published = "published";
 

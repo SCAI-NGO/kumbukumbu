@@ -3,7 +3,6 @@ using System.Text;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
-using Kumbu.Core.Sh;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
@@ -17,10 +16,11 @@ using Microsoft.Extensions.Options;
 namespace Kumbu.Server.Skills;
 
 /// <summary>A skill for the Skills screen. <c>Location</c> is "system" or the vault's name; <c>Path</c> its folder, null for a
-/// system skill; <c>CanWrite</c> whether the caller may change it.</summary>
+/// system skill; <c>CanWrite</c> whether the caller may change it; <c>Shared</c> whether it is shared by link, and
+/// <c>WithdrawnBefore</c> whether a link of it was withdrawn since it was last shared (Decision 15).</summary>
 public sealed record SkillView(
     string Name, string Description, string Location, string? Path, string? Source, string? LastEditor, bool ByOther, string[] Warnings,
-    string? Update = null, bool Shared = false, bool CanWrite = false, bool OriginEdited = false);
+    string? Update = null, bool Shared = false, bool CanWrite = false, bool OriginEdited = false, bool WithdrawnBefore = false);
 
 /// <summary>The skills the caller sees, and her live agent keys and connections that lack the vault Skills (by name).</summary>
 public sealed record SkillsView(SkillView[] Skills, string[] WithoutSkills);
@@ -170,25 +170,29 @@ public static class SkillsApi
 
     private static async Task<List<SkillView>> ViewsAsync(EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
     {
-        var shared = await SharedFoldersAsync(store, publishing, skills, ct);
+        var (shared, withdrawn) = await SharedFoldersAsync(store, publishing, skills, ct);
         var views = new List<SkillView>(skills.Count);
         foreach (var s in skills)
         {
             var canWrite = s.Vault is { } vault && await store.VaultInfoAsync(vault, ct) is { Level: >= AccessLevel.Write };
             views.Add(new SkillView(
                 s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, s.Source, s.LastEditor, s.ByOther, [.. s.Warnings],
-                Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited));
+                Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited,
+                WithdrawnBefore: s.Folder is { } at && withdrawn.Contains(at.Value)));
         }
 
         return views;
     }
 
-    /// <summary>The folders of <paramref name="skills"/> shared by link, in the caller's view: whether, not how (no link).</summary>
-    private static async Task<HashSet<string>> SharedFoldersAsync(EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
+    /// <summary>The folders of <paramref name="skills"/> shared by link, and those whose link was withdrawn since they were
+    /// last shared, in the caller's view: whether, not how (no link).</summary>
+    private static async Task<(HashSet<string> Shared, HashSet<string> Withdrawn)> SharedFoldersAsync(
+        EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
     {
         var folders = new HashSet<string>(StringComparer.Ordinal);
+        var withdrawn = new HashSet<string>(StringComparer.Ordinal);
         var vaults = skills.Select(s => s.Vault).OfType<string>().ToHashSet(StringComparer.Ordinal);
-        if (vaults.Count == 0) return folders;
+        if (vaults.Count == 0) return (folders, withdrawn);
         foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(a => vaults.Contains(a.Name)))
         {
             var record = (await publishing.ReadAsync(null, access.Vault, ct)).Record;
@@ -196,9 +200,14 @@ public static class SkillsApi
             {
                 if (VaultPath.TryParse(entry.Note, out var stored)) folders.Add(access.ToCaller(stored).Value);
             }
+
+            foreach (var folder in record.Withdrawn)
+            {
+                if (VaultPath.TryParse(folder, out var stored)) withdrawn.Add(access.ToCaller(stored).Value);
+            }
         }
 
-        return folders;
+        return (folders, withdrawn);
     }
 
     /// <summary>The skills of her own vaults shared by link.</summary>
@@ -229,9 +238,9 @@ public static class SkillsApi
             return TypedResults.Created((string?)null, new SkillLinkView(shared.Link, shared.SnapshotAt));
         }
         // One link per skill: the Shared tab withdraws it, then Share makes a new one.
-        catch (PublishRefusedException e) when (e.Kind == ShellErrorKind.Conflict && e.Message.StartsWith($"{folder} is already shared", StringComparison.Ordinal))
+        catch (PublishRefusedException e) when (e.Code == Refusals.SkillShared)
         {
-            throw new ApiException(StatusCodes.Status409Conflict, $"{folder.Value} is shared already: withdraw its link first to make a new one.");
+            throw new ApiException(StatusCodes.Status409Conflict, $"{folder.Value} is shared already: withdraw its link first to make a new one.", code: Refusals.SkillShared);
         }
     }
 

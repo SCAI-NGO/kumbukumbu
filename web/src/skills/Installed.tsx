@@ -7,10 +7,8 @@ import { errorText } from "../api/error-text";
 import { usePublishEnabled } from "../api/publications";
 import { shareSkill, useSkills, type SkillView } from "../api/skills";
 import { FormError, secondaryButtonClass } from "../components/form";
-import { useSession } from "../state/session";
 import { ConfirmShareAnew, SkillLinkReveal } from "./Shared";
 import TargetDialog from "./TargetDialog";
-import { useWithdrawn, withdrawnKey } from "./withdrawn";
 
 /** The groups in the order shown: System, Skills, then the other vaults as they come. */
 function groups(skills: SkillView[]) {
@@ -39,8 +37,6 @@ export default function Installed() {
   const [acting, setActing] = useState<{ skill: SkillView; mode: "copy" | "move" } | null>(null);
   const queryClient = useQueryClient();
   const publishEnabled = usePublishEnabled();
-  const user = useSession((s) => s.user?.id ?? "");
-  const withdrawn = useWithdrawn((s) => s.keys);
   const [asking, setAsking] = useState<SkillView | null>(null);
   // The new link, in this component's state alone: the mutation is reset once it is in, so no cache keeps it.
   const [revealed, setRevealed] = useState<{ name: string; link: string } | null>(null);
@@ -62,7 +58,8 @@ export default function Installed() {
   // Her own vaults: a member never shares (skills design §3.7).
   const own = new Set((vaults.data ?? []).filter((v) => v.owner == null).map((v) => v.name));
   const mayShare = (s: SkillView) => publishEnabled === true && s.path != null && s.location !== "system" && own.has(s.location) && !s.shared;
-  const onShare = (s: SkillView) => (withdrawn.includes(withdrawnKey(user, s.path!)) ? setAsking(s) : share.mutate(s));
+  // A link of it was withdrawn since it was last shared: the copies made from that link lose their updates.
+  const onShare = (s: SkillView) => (s.withdrawnBefore ? setAsking(s) : share.mutate(s));
 
   return (
     <>

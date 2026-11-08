@@ -6,8 +6,6 @@ import { updateSharedSkill, useSharedSkills, withdrawSharedSkill, type SharedSki
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
-import { useSession } from "../state/session";
-import { useWithdrawn } from "./withdrawn";
 
 const dayAndTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -37,17 +35,12 @@ export default function Shared() {
 
 function SharedItem({ item }: { item: SharedSkillView }) {
   const queryClient = useQueryClient();
-  const user = useSession((s) => s.user?.id ?? "");
-  const addWithdrawn = useWithdrawn((s) => s.add);
   const [asking, setAsking] = useState(false);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["skills"] });
   const update = useMutation({ mutationFn: () => updateSharedSkill(item.id), onSuccess: refresh });
   const withdraw = useMutation({
     mutationFn: () => withdrawSharedSkill(item.id),
-    onSuccess: () => {
-      addWithdrawn(user, item.path);
-      return refresh();
-    },
+    onSuccess: refresh,
     onSettled: () => setAsking(false),
   });
   const error = update.error ?? withdraw.error;
