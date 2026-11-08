@@ -187,12 +187,16 @@ builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, Bu
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type
 // and silently registers no tools; the IEnumerable<Type> overload needs the collection expression.
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
+// The message filters add the skills section to the handshake's instructions only (HandshakeInstructions).
+builder.Services.AddSingleton<HandshakeCounter>();
 builder.Services.AddMcpServer(o =>
     {
         o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
         o.Filters.Request.CallToolFilters.Add(Notices.Filter);
+        o.Filters.Message.IncomingFilters.Add(HandshakeInstructions.Incoming);
+        o.Filters.Message.OutgoingFilters.Add(HandshakeInstructions.Outgoing);
     })
     .WithHttpTransport()
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
