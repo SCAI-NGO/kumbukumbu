@@ -85,6 +85,12 @@ public static class DavPaths
         return collection ? href + "/" : href;
     }
 
+    /// <summary>The folder <paramref name="path"/> is in; the root for the root.</summary>
+    public static VaultPath Parent(VaultPath path) => First(path, path.Segments.Count - 1);
+
+    /// <summary>The path of the first <paramref name="count"/> segments of <paramref name="path"/>.</summary>
+    public static VaultPath First(VaultPath path, int count) => path.Segments.Take(count).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
+
     /// <summary>The path of a request target in origin or absolute form, without its query; null for any other (none,
     /// <c>*</c>), and then the decoded path is read instead. A target with a <c>#</c> is a 400 (<see cref="Fragment"/>).</summary>
     private static string? RawPath(string? target)

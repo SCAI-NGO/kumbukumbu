@@ -10,4 +10,13 @@ public sealed class DavException(int status, string message, XElement? body = nu
     public int Status { get; } = status;
 
     public XElement? Body { get; } = body;
+
+    /// <summary>404: nothing the share sees is there.</summary>
+    public static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
+
+    /// <summary>405: a folder or a file is where one would be made.</summary>
+    public static DavException Exists() => new(StatusCodes.Status405MethodNotAllowed, "Something exists there already.");
+
+    /// <summary>405: content written at a folder.</summary>
+    public static DavException FolderHasNoContent() => new(StatusCodes.Status405MethodNotAllowed, "A folder has no content to write.");
 }

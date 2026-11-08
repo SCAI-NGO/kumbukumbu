@@ -50,7 +50,7 @@ internal sealed partial class DavWrites(
     public async Task PutAsync(DavTarget target, CancellationToken ct)
     {
         var place = Writable(target.Path);
-        if (await tree.FindAsync(target.Path, ct) is { IsCollection: true }) throw new DavException(StatusCodes.Status405MethodNotAllowed, "A folder has no content to write.");
+        if (await tree.FindAsync(target.Path, ct) is { IsCollection: true }) throw DavException.FolderHasNoContent();
         await ParentAsync(target.Path, ct);
         if (!await ParkedAsync(target.Path, place, ct, itself: false))
         {
@@ -145,7 +145,7 @@ internal sealed partial class DavWrites(
     {
         var place = Writable(target.Path);
         if (DavBody.Has(Request)) throw new DavException(StatusCodes.Status415UnsupportedMediaType, "MKCOL takes no body.");
-        if (await tree.FindAsync(target.Path, ct) is not null) throw new DavException(StatusCodes.Status405MethodNotAllowed, "Something exists there already.");
+        if (await tree.FindAsync(target.Path, ct) is not null) throw DavException.Exists();
         await ParentAsync(target.Path, ct);
         if (!await ParkedAsync(target.Path, place, ct))
         {
@@ -153,13 +153,13 @@ internal sealed partial class DavWrites(
             var made = await files.MakeFolderAsync(target.Path, ct);
             if (made.IsError) throw Refusal(made);
             // Made by another request meanwhile: mkdir leaves it as it is, and writes nothing.
-            if (made.Version is null) throw new DavException(StatusCodes.Status405MethodNotAllowed, "Something exists there already.");
+            if (made.Version is null) throw DavException.Exists();
             Response.StatusCode = StatusCodes.Status201Created;
             return;
         }
 
         // Another request of the share may have made it meanwhile.
-        if (!parking.MakeFolder(caller.ShareId, place.VaultId, place.Path)) throw new DavException(StatusCodes.Status405MethodNotAllowed, "Something exists there already.");
+        if (!parking.MakeFolder(caller.ShareId, place.VaultId, place.Path)) throw DavException.Exists();
         Response.StatusCode = StatusCodes.Status201Created;
     }
 
@@ -167,7 +167,7 @@ internal sealed partial class DavWrites(
     public async Task DeleteAsync(DavTarget target, CancellationToken ct)
     {
         var place = Writable(target.Path);
-        if (await tree.FindAsync(target.Path, ct) is null) throw NotFound();
+        if (await tree.FindAsync(target.Path, ct) is null) throw DavException.NotFound();
         // Not parked, a name the share holds a note under: the note goes in its minute as it would have, and the
         // DELETE does nothing more (WebDAV design §3.6 case 4).
         if (await ParkedAsync(target.Path, place, ct))
@@ -239,7 +239,7 @@ internal sealed partial class DavWrites(
         // Over a folder above it, the destination's removal would take the source with it.
         if (from.Path.StartsWith(to.Path + "/", StringComparison.Ordinal)) throw new DavException(StatusCodes.Status403Forbidden, "Nothing can go onto a folder it is in.");
 
-        if (await tree.FindAsync(source.Path, ct) is null) throw NotFound();
+        if (await tree.FindAsync(source.Path, ct) is null) throw DavException.NotFound();
         await ParentAsync(destination.Path, ct);
         var existing = await tree.FindAsync(destination.Path, ct);
         if (existing is not null && !overwrite) throw new DavException(StatusCodes.Status412PreconditionFailed, "Something exists at the destination, and Overwrite is F.");
@@ -251,7 +251,7 @@ internal sealed partial class DavWrites(
                 return;
             }
 
-            (source, from) = (new DavTarget(original), caller.Place(original) ?? throw NotFound());
+            (source, from) = (new DavTarget(original), caller.Place(original) ?? throw DavException.NotFound());
         }
 
         var stored = await tree.FindStoredAsync(source.Path, ct) is not null;
@@ -281,7 +281,7 @@ internal sealed partial class DavWrites(
         if (existing is not null) parking.Remove(caller.ShareId, to.VaultId, to.Path);
         var done = move ? parking.Move(caller.ShareId, from.VaultId, from.Path, to.Path) : parking.Copy(caller.ShareId, from.VaultId, from.Path, to.Path, deep);
         // Expired or removed by another request of the share since it was found.
-        if (!done) throw NotFound();
+        if (!done) throw DavException.NotFound();
         Response.StatusCode = existing is null ? StatusCodes.Status201Created : StatusCodes.Status204NoContent;
     }
 
@@ -365,7 +365,7 @@ internal sealed partial class DavWrites(
     private async Task CopyIntoParkingAsync(VaultPath from, DavPlace to, bool deep, bool replaced, CancellationToken ct)
     {
         var plan = new ParkingPlan();
-        await PlanParkingAsync(await tree.FindAsync(from, ct) ?? throw NotFound(), to.Path, deep, plan, ct);
+        await PlanParkingAsync(await tree.FindAsync(from, ct) ?? throw DavException.NotFound(), to.Path, deep, plan, ct);
         var files = new List<(string Path, byte[]? Bytes)>(plan.Items.Count);
         long read = 0;
         foreach (var (at, source) in plan.Items)
@@ -376,7 +376,7 @@ internal sealed partial class DavWrites(
                 continue;
             }
 
-            var content = await tree.ContentAsync(source, ct) ?? throw NotFound();
+            var content = await tree.ContentAsync(source, ct) ?? throw DavException.NotFound();
             // The listing's length is what the plan counted; a file that grew since is held to the cap all the same.
             read += DavParking.Cost(at, content.Length);
             if (read > DavRules.ParkingCap) throw ParkingFull();
@@ -436,9 +436,9 @@ internal sealed partial class DavWrites(
     /// </summary>
     private async Task CopyOutOfParkingAsync(VaultPath from, DavTarget destination, DavPlace to, bool move, CancellationToken ct)
     {
-        if (tree.Parked(from) is not { } item) throw NotFound();
+        if (tree.Parked(from) is not { } item) throw DavException.NotFound();
         if (item.IsFolder) throw new DavException(StatusCodes.Status403Forbidden, "A parked folder can't be copied or moved out of where it is parked; take its files one at a time.");
-        if (await tree.FindAsync(destination.Path, ct) is { IsCollection: true }) throw new DavException(StatusCodes.Status405MethodNotAllowed, "A folder has no content to write.");
+        if (await tree.FindAsync(destination.Path, ct) is { IsCollection: true }) throw DavException.FolderHasNoContent();
         var path = destination.Path;
         if (path.IsNote) await PutNoteAsync(destination, ct, item.Bytes, moved: move);
         else if (AttachmentFormat.ForName(path.Name) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(path, to, format, ct, item.Bytes);
@@ -458,7 +458,7 @@ internal sealed partial class DavWrites(
     {
         if (target.Path.IsRoot) throw new DavException(StatusCodes.Status403Forbidden, "The share's root can't be locked; what is in it can.");
         var name = target.Path.Segments[0];
-        var place = caller.Place(target.Path) ?? throw NotFound();
+        var place = caller.Place(target.Path) ?? throw DavException.NotFound();
         if (!caller.CanWrite(name)) throw new DavException(StatusCodes.Status403Forbidden, caller.ReadOnly(name));
 
         var body = await DavXml.ReadBodyAsync(Request, ct);
@@ -533,7 +533,7 @@ internal sealed partial class DavWrites(
             throw new DavException(StatusCodes.Status415UnsupportedMediaType, "A note is UTF-8 text; this one isn't.");
         }
 
-        var place = caller.Place(path) ?? throw NotFound();
+        var place = caller.Place(path) ?? throw DavException.NotFound();
         var arrived = holds.TakeArrival(caller.ShareId, place.VaultId, place.Path) is not null;
         var existing = await tree.FindStoredAsync(path, ct);
         if (copied is null) Preconditions(arrived ? null : existing?.Version);
@@ -686,8 +686,6 @@ internal sealed partial class DavWrites(
 
     private static DavException NoAttachments() => new(StatusCodes.Status404NotFound, "This server keeps no attachments.");
 
-    private static VaultPath Parent(VaultPath path) => path.Segments.SkipLast(1).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
-
     /// <summary>
     /// Where a method writes at <paramref name="path"/>: the vault and the path below it. The root and a vault's own folder
     /// are never written to (403; brief open point 6), a vault the share doesn't have is not found, and one it may only
@@ -696,7 +694,7 @@ internal sealed partial class DavWrites(
     private DavPlace Writable(VaultPath path)
     {
         if (path.Segments.Count < 2) throw new DavException(StatusCodes.Status403Forbidden, "The share's root and a vault's own folder can't be changed; what is in them can.");
-        var place = caller.Place(path) ?? throw NotFound();
+        var place = caller.Place(path) ?? throw DavException.NotFound();
         if (!caller.CanWrite(path.Segments[0])) throw new DavException(StatusCodes.Status403Forbidden, caller.ReadOnly(path.Segments[0]));
         return place;
     }
@@ -717,14 +715,14 @@ internal sealed partial class DavWrites(
         var below = itself ? place.Path : place.Path[..Math.Max(0, place.Path.LastIndexOf('/'))];
         if (parking.Holder(caller.ShareId, place.VaultId, below) is not { } holder) return false;
         if (holder == place.Path) return true;
-        var folder = path.Segments.Take(2 + holder.Count(c => c == '/')).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
+        var folder = DavPaths.First(path, 2 + holder.Count(c => c == '/'));
         return await tree.FindStoredAsync(folder, ct) is null;
     }
 
     /// <summary>A 409 if the folder <paramref name="path"/> would be in doesn't exist (RFC 4918 §9.3.1, §9.7.1).</summary>
     private async Task ParentAsync(VaultPath path, CancellationToken ct)
     {
-        if (await tree.FindAsync(Parent(path), ct) is not { IsCollection: true }) throw new DavException(StatusCodes.Status409Conflict, "The folder it would be in doesn't exist.");
+        if (await tree.FindAsync(DavPaths.Parent(path), ct) is not { IsCollection: true }) throw new DavException(StatusCodes.Status409Conflict, "The folder it would be in doesn't exist.");
     }
 
     /// <summary>The <c>Depth</c> header, one of <paramref name="allowed"/>; none means <c>infinity</c> (RFC 4918 §10.2).</summary>
@@ -760,6 +758,4 @@ internal sealed partial class DavWrites(
 
     [GeneratedRegex("<(opaquelocktoken:[^>]+)>", RegexOptions.IgnoreCase)]
     private static partial Regex LockToken();
-
-    private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }

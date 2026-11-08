@@ -41,7 +41,7 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
     {
         if (path.Segments.Count < 2 || path.IsNote || !path.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) return path;
         if (await FindAsync(path, ct) is not null) return path;
-        return path.Segments.SkipLast(1).Aggregate(VaultPath.Root, (p, s) => p.Child(s)).Child(path.Name[..^3] + ".md");
+        return DavPaths.Parent(path).Child(path.Name[..^3] + ".md");
     }
 
     /// <summary>The resource at <paramref name="path"/> as the share sees it, or null if there is none.</summary>

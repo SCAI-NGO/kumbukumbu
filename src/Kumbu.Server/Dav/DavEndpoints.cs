@@ -157,7 +157,7 @@ public static class DavEndpoints
         var depth = Depth(http.Request);
         var propfind = DavXml.ParsePropfind(await DavXml.ReadBodyAsync(http.Request, ct));
         var tree = Tree(http);
-        var resource = await tree.FindAsync(target.Path, ct) ?? throw NotFound();
+        var resource = await tree.FindAsync(target.Path, ct) ?? throw DavException.NotFound();
         var resources = depth == 1 && resource.IsCollection ? [resource, .. await tree.ChildrenAsync(resource, ct)] : new List<DavResource> { resource };
         var properties = new DavProperties(
             DavCaller.Of(http), http.RequestServices.GetRequiredService<DavLocks>(), http.RequestServices.GetRequiredService<Accounts.StorageQuota>(), propfind);
@@ -183,7 +183,7 @@ public static class DavEndpoints
     private static async Task ProppatchAsync(HttpContext http, DavTarget target, CancellationToken ct)
     {
         var names = DavXml.ParsePropertyUpdate(await DavXml.ReadBodyAsync(http.Request, ct));
-        var resource = await Tree(http).FindAsync(target.Path, ct) ?? throw NotFound();
+        var resource = await Tree(http).FindAsync(target.Path, ct) ?? throw DavException.NotFound();
         await DavXml.WriteMultistatusAsync(
             http.Response, [new DavResponse(resource.Href, [(StatusCodes.Status200OK, [.. names.Select(n => new XElement(n))])])], ct);
     }
@@ -198,7 +198,7 @@ public static class DavEndpoints
             return;
         }
 
-        if (await tree.FindAsync(target.Path, ct) is not { IsCollection: true }) throw NotFound();
+        if (await tree.FindAsync(target.Path, ct) is not { IsCollection: true }) throw DavException.NotFound();
         http.Response.Headers.Allow = DavHeaders.CollectionMethods;
         await DavXml.WriteTextAsync(http.Response, StatusCodes.Status405MethodNotAllowed, "A folder has no content to read; PROPFIND lists it.", ct);
     }
@@ -264,6 +264,4 @@ public static class DavEndpoints
             http.RequestServices.GetRequiredService<NoteWriter>(), http.RequestServices.GetRequiredService<TreeWriter>(), http.RequestServices.GetRequiredService<NoteMover>(),
             http.RequestServices.GetRequiredService<DavHolds>(), http.RequestServices.GetRequiredService<Publishing.Publications>(),
             http.RequestServices.GetRequiredService<ILogger<DavWrites>>());
-
-    private static DavException NotFound() => new(StatusCodes.Status404NotFound, "Not found.");
 }
