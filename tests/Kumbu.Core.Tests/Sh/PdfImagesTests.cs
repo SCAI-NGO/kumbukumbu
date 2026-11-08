@@ -9,7 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Sh;
 
-/// <summary><c>pdfimages</c>: its arguments, and <c>--list</c>, a PDF's images page by page.</summary>
+/// <summary><c>pdfimages</c>: its arguments, <c>--list</c>, a PDF's images page by page, and storing them.</summary>
 public class PdfImagesTests
 {
     private const string UsageLine = "usage: pdfimages <pdf> [pages] <folder>/ | <pdf> <page> --crop x,y,w,h <file.png> | --list <pdf> [pages]";
@@ -65,9 +65,17 @@ public class PdfImagesTests
             return Task.FromResult(new PdfPageImages(page, PageCount, 595, 842, Over.GetValueOrDefault(page), Pages.GetValueOrDefault(page, [])));
         }
 
+        /// <summary>The exception fetching an image throws, every time it is asked for.</summary>
+        public Dictionary<(int Page, int N), Exception> ImageFails { get; } = [];
+
+        /// <summary>Thrown by the next image fetches, one each.</summary>
+        public Queue<Exception> ImageThrows { get; } = new();
+
         public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct)
         {
             Called($"image {page} {n}");
+            if (ImageThrows.TryDequeue(out var next)) throw next;
+            if (ImageFails.TryGetValue((page, n), out var e)) throw e;
             return Task.FromResult(Images[(page, n)]);
         }
 
@@ -389,6 +397,385 @@ public class PdfImagesTests
         Assert.EndsWith("\nlisted pages 3-7; go on with pages 8-", result.Output);
     }
 
+    private static byte[] Bytes(int size, params byte[] magic)
+    {
+        var bytes = new byte[size];
+        magic.CopyTo(bytes, 0);
+        // Distinct bytes for distinct pictures, as the blob store keys them by content.
+        BitConverter.GetBytes(size).CopyTo(bytes, magic.Length);
+        return bytes;
+    }
+
+    private static Picture Png(int size, int w, int h, double? fromW = null, double? fromH = null) =>
+        new(Bytes(size, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A), "image/png", w, h, fromW ?? w, fromH ?? h);
+
+    private static Picture Jpeg(int size, int w, int h) => new(Bytes(size, 0xFF, 0xD8, 0xFF), "image/jpeg", w, h, w, h);
+
+    private static VaultPath P(string path) => VaultPath.TryParse(path, out var parsed) ? parsed : throw new ArgumentException(path);
+
+    private Task<StoredAttachment?> Stored(string path) => _store.GetAttachmentAsync(P(path), Ct);
+
+    private async Task<IReadOnlyList<string>> StoredUnder(string folder) =>
+        [.. (await _store.ListAttachmentsUnderAsync(P(folder), Ct)).Select(a => a.Path.Value)];
+
+    /// <summary>Two images on page 1, one on page 3: the call the store tests start from.</summary>
+    private async Task TwoPages()
+    {
+        await Upload();
+        _pixels.Pages[1] = [Image(1, 1200, 400, 72, 40, 451, 150, "aa")];
+        _pixels.Pages[3] = [Image(1, 2400, 1600, 80, 300, 435, 290, "bb")];
+        _pixels.Images[(1, 1)] = Png(90_112, 1200, 400);
+        _pixels.Images[(3, 1)] = Png(1_992_294, 2400, 1600);
+    }
+
+    [Fact]
+    public async Task Stores_the_images_each_with_its_line()
+    {
+        await TwoPages();
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/Manual/images/");
+
+        Assert.Equal(
+            """
+            stored 2 images in /Work/Manual/images/
+            /Work/Manual/images/manual-p1-1.png  p1  1200×400  88 KB  at 72,40,451,150
+            /Work/Manual/images/manual-p3-1.png  p3  2400×1600  1.9 MB  at 80,300,435,290
+            """,
+            result.Output);
+        Assert.False(result.IsError);
+        Assert.Equal(["list 1", "list 2", "list 3", "image 1 1", "image 3 1"], _pixels.Calls);
+        var first = await Stored("/Work/Manual/images/manual-p1-1.png");
+        Assert.NotNull(first);
+        Assert.Equal(("image/png", 1200, 400, 90_112L), (first.Current.MediaType, first.Current.Width, first.Current.Height, first.Current.Size));
+        Assert.Equal(_pixels.Images[(1, 1)].Data, await StoreAttachments.ReadBytesAsync(_store, first.Path, first.Current, Ct));
+        Assert.NotNull(await Stored("/Work/Manual/images/manual-p3-1.png"));
+    }
+
+    [Fact]
+    public async Task A_range_stores_its_pages_only()
+    {
+        await TwoPages();
+
+        var result = await Run("pdfimages /Work/manual.pdf 2- /Work/images/");
+
+        Assert.Equal("stored 1 image in /Work/images/\n/Work/images/manual-p3-1.png  p3  2400×1600  1.9 MB  at 80,300,435,290", result.Output);
+        Assert.Equal(["/Work/images/manual-p3-1.png"], await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task An_image_on_several_pages_is_stored_once_naming_each_page()
+    {
+        await Upload();
+        for (var page = 1; page <= 3; page++) _pixels.Pages[page] = [Image(1, 300, 100, 20, 20, 120, 40, "logo"), Image(2, 800, 600, 72, 100, 400, 300, $"photo{page}")];
+        _pixels.Images[(1, 1)] = Png(4096, 300, 100);
+        for (var page = 1; page <= 3; page++) _pixels.Images[(page, 2)] = Png(50_000 + page, 800, 600);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 4 images in /Work/images/
+            /Work/images/manual-p1-1.png  p1, p2, p3  300×100  4 KB  at 20,20,120,40
+            /Work/images/manual-p1-2.png  p1  800×600  49 KB  at 72,100,400,300
+            /Work/images/manual-p2-2.png  p2  800×600  49 KB  at 72,100,400,300
+            /Work/images/manual-p3-2.png  p3  800×600  49 KB  at 72,100,400,300
+            """,
+            result.Output);
+        Assert.DoesNotContain("image 2 1", _pixels.Calls);
+        Assert.DoesNotContain("image 3 1", _pixels.Calls);
+        Assert.Equal(4, (await StoredUnder("/Work/images")).Count);
+    }
+
+    [Fact]
+    public async Task Small_ones_are_left_out_and_counted_all_keeps_them_under_the_same_numbers()
+    {
+        await Upload();
+        _pixels.Pages[2] = [Image(1, 16, 16, 40, 40, 8, 8, "dot", small: true), Image(2, 800, 600, 72, 100, 400, 300, "photo"), Image(3, 16, 16, 40, 60, 8, 8, "rule", small: true)];
+        _pixels.Images[(2, 1)] = Png(100, 16, 16);
+        _pixels.Images[(2, 2)] = Png(50_000, 800, 600);
+        _pixels.Images[(2, 3)] = Png(101, 16, 16);
+
+        var plain = await Run("pdfimages /Work/manual.pdf 2 /Work/plain/");
+        var all = await Run("pdfimages --all /Work/manual.pdf 2 /Work/all/");
+
+        Assert.Equal(
+            "stored 1 image in /Work/plain/ (2 left out as smaller than 1 % of their page, --all keeps them)\n/Work/plain/manual-p2-2.png  p2  800×600  49 KB  at 72,100,400,300",
+            plain.Output);
+        Assert.Equal(
+            """
+            stored 3 images in /Work/all/
+            /Work/all/manual-p2-1.png  p2  16×16  100 B  at 40,40,8,8
+            /Work/all/manual-p2-2.png  p2  800×600  49 KB  at 72,100,400,300
+            /Work/all/manual-p2-3.png  p2  16×16  101 B  at 40,60,8,8
+            """,
+            all.Output);
+    }
+
+    [Fact]
+    public async Task A_jpeg_answer_is_named_jpg_and_a_scaled_down_one_says_from_what()
+    {
+        await Upload();
+        _pixels.Pages[1] = [Image(1, 4000, 3000, 0, 0, 595, 842, "big"), Image(2, 5000, 2000, 10, 10, 300, 120, "wide")];
+        _pixels.Images[(1, 1)] = Jpeg(6_501_171, 3264, 2448) with { OriginalWidth = 4000, OriginalHeight = 3000 };
+        _pixels.Images[(1, 2)] = Png(1_000_000, 4472, 1788, 5000, 2000);
+
+        var result = await Run("pdfimages /Work/manual.pdf 1 /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 2 images in /Work/images/
+            /Work/images/manual-p1-1.jpg  p1  3264×2448 (scaled down from 4000×3000)  6.2 MB (JPEG: PNG over 15 MB)  at 0,0,595,842
+            /Work/images/manual-p1-2.png  p1  4472×1788 (scaled down from 5000×2000)  977 KB  at 10,10,300,120
+            """,
+            result.Output);
+        Assert.Equal("image/jpeg", (await Stored("/Work/images/manual-p1-1.jpg"))!.Current.MediaType);
+        Assert.Null(await Stored("/Work/images/manual-p1-1.png"));
+    }
+
+    [Fact]
+    public async Task Images_too_large_or_not_decoded_are_named_as_skipped()
+    {
+        await Upload();
+        _pixels.Pages[1] = [Image(1, 300, 200, 10, 10, 100, 80, null, failed: true), Image(2, 9000, 9000, 0, 0, 595, 842, "noise"), Image(3, 1200, 400, 72, 40, 451, 150, "aa")];
+        _pixels.ImageFails[(1, 2)] = new PixelsUnavailableException("image 2 on page 1 of /Work/manual.pdf is over 15 MB even as JPEG at quality 60", PixelsProblem.TooLarge);
+        _pixels.Images[(1, 3)] = Png(90_112, 1200, 400);
+
+        var result = await Run("pdfimages /Work/manual.pdf 1 /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 1 image in /Work/images/
+            p1 #1 skipped: could not be decoded
+            p1 #2 skipped: over 15 MB even as JPEG
+            /Work/images/manual-p1-3.png  p1  1200×400  88 KB  at 72,40,451,150
+            """,
+            result.Output);
+        Assert.False(result.IsError);
+        Assert.DoesNotContain("image 1 1", _pixels.Calls);
+        Assert.Equal(["/Work/images/manual-p1-3.png"], await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task An_existing_target_refuses_and_writes_nothing()
+    {
+        await TwoPages();
+        await _files.WriteAsync("/Work/images/manual-p3-1.jpg", Jpeg(100, 1, 1).Data, (1, 1), null, Ct);
+        await _files.WriteAsync("/Work/images/manual-p1-1.png/old.png", Png(100, 1, 1).Data, (1, 1), null, Ct);
+        await _files.WriteAsync("/Work/images/other.png", Png(101, 1, 1).Data, (1, 1), null, Ct);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(
+            ShellResult.Error("pdfimages: these exist already: /Work/images/manual-p1-1.png, /Work/images/manual-p3-1.jpg; choose another folder, or remove them first") with { Kind = ShellErrorKind.Conflict },
+            result);
+        Assert.DoesNotContain(_pixels.Calls, c => c.StartsWith("image", StringComparison.Ordinal));
+        Assert.Equal(["/Work/images/manual-p1-1.png/old.png", "/Work/images/manual-p3-1.jpg", "/Work/images/other.png"], (await StoredUnder("/Work/images")).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_existing_note_of_a_targets_name_refuses()
+    {
+        await TwoPages();
+        await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync("/Work/images/manual-p1-1.png/notes.md", "a note\n", null, Ct);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal("pdfimages: these exist already: /Work/images/manual-p1-1.png; choose another folder, or remove them first", result.Output);
+        Assert.Empty(await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task More_than_500_to_store_refuses_with_a_range_that_fits()
+    {
+        await Upload();
+        _pixels.Pages[1] = [.. Enumerable.Range(1, 200).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"a{n}"))];
+        _pixels.Pages[2] = [.. Enumerable.Range(1, 200).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"b{n}")), Image(201, 100, 100, 0, 0, 100, 100, "a1")];
+        _pixels.Pages[3] = [.. Enumerable.Range(1, 101).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"c{n}")), Image(102, 4, 4, 0, 0, 2, 2, "dot", small: true)];
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(ShellResult.Error("pdfimages: 501 images in pages 1-3, more than 500 in one call; give a page range, e.g. 1-2") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(["list 1", "list 2", "list 3"], _pixels.Calls);
+        Assert.Empty(await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task More_than_500_on_the_first_page_alone_says_so()
+    {
+        await Upload();
+        _pixels.Pages[2] = [.. Enumerable.Range(1, 501).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"a{n}"))];
+
+        var result = await Run("pdfimages /Work/manual.pdf 2- /Work/images/");
+
+        Assert.Equal("pdfimages: 501 images on page 2, more than 500 in one call; store that page's pictures in regions with --crop", result.Output);
+        Assert.Empty(await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task A_full_vault_stops_keeping_what_was_stored_and_naming_the_rest()
+    {
+        await TwoPages();
+        _pixels.Pages[2] = [Image(1, 640, 480, 0, 0, 320, 240, "cc")];
+        _pixels.Images[(2, 1)] = Png(30_000, 640, 480);
+        var second = _pixels.Images[(2, 1)].Data;
+        _store.BlobFails = b => b.Span.SequenceEqual(second) ? new QuotaExceededException(owner: true) : null;
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(
+            """
+            stored 1 image in /Work/images/
+            /Work/images/manual-p1-1.png  p1  1200×400  88 KB  at 72,40,451,150
+            not stored: p2 #1, p3 #1
+            This vault is out of space. See `df`.
+            """,
+            result.Output);
+        Assert.True(result.IsError);
+        Assert.Equal((ShellErrorKind.Refused, Refusals.Quota), (result.Kind, result.Code));
+        Assert.Equal(["/Work/images/manual-p1-1.png"], await StoredUnder("/Work/images"));
+        Assert.DoesNotContain("image 3 1", _pixels.Calls);
+    }
+
+    [Fact]
+    public async Task A_full_vault_tells_a_member_the_sentence_alone()
+    {
+        await TwoPages();
+        _store.BlobFails = _ => new QuotaExceededException(owner: false);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(ShellResult.Error(QuotaExceededException.Sentence) with { Kind = ShellErrorKind.Refused }, result);
+    }
+
+    [Fact]
+    public async Task A_refusal_of_the_writer_is_quoted()
+    {
+        await TwoPages();
+        var reader = new FixedCaller(Writers.Dev, CanWriteVault: _ => false);
+        var sh = new Shell(_store, new NoteWriter(_store, _time, reader), new NoteMover(_store, _time, reader), pixels: _pixels);
+        var refused = (await new AttachmentWriter(_store, _store, _time, reader).WriteAsync("/Work/images/manual-p1-1.png", _pixels.Images[(1, 1)].Data, (1200, 400), null, Ct)).Result;
+
+        var result = await sh.RunAsync("pdfimages /Work/manual.pdf /Work/images/", Ct);
+
+        Assert.StartsWith("upload: ", refused.Output);
+        Assert.Equal(refused with { Output = "pdfimages: " + refused.Output }, result);
+        Assert.Equal(ShellErrorKind.Refused, result.Kind);
+        Assert.Empty(await StoredUnder("/Work/images"));
+    }
+
+    [Fact]
+    public async Task A_failure_of_the_writer_midway_keeps_what_was_stored()
+    {
+        await TwoPages();
+        _pixels.Images[(3, 1)] = Png(1000, 2400, 1600) with { MediaType = "image/jpeg" };
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.True(result.IsError);
+        Assert.Equal(ShellErrorKind.Invalid, result.Kind);
+        Assert.Equal(
+            "stored 1 image in /Work/images/\n/Work/images/manual-p1-1.png  p1  1200×400  88 KB  at 72,40,451,150\nnot stored: p3 #1\npdfimages: upload: manual-p3-1.jpg isn't a JPEG image (its content doesn't match its name)",
+            result.Output);
+    }
+
+    [Fact]
+    public async Task Pages_with_images_over_50_megapixels_are_named()
+    {
+        await TwoPages();
+        _pixels.Over[2] = 1;
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.EndsWith("\npage 2: 1 image over 50 MP left out (look with pdf --crop)", result.Output);
+    }
+
+    [Fact]
+    public async Task Writing_stops_at_a_page_boundary_once_the_budget_is_spent()
+    {
+        await Upload();
+        _pixels.PerCall = TimeSpan.FromSeconds(3);
+        _pixels.Pages[1] = [Image(1, 100, 100, 0, 0, 100, 100, "a")];
+        _pixels.Pages[2] = [.. Enumerable.Range(1, 4).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"b{n}"))];
+        _pixels.Pages[3] = [Image(1, 100, 100, 0, 0, 100, 100, "c")];
+        _pixels.Images[(1, 1)] = Png(1000, 100, 100);
+        for (var n = 1; n <= 4; n++) _pixels.Images[(2, n)] = Png(1000 + n, 100, 100);
+        _pixels.Images[(3, 1)] = Png(2000, 100, 100);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(["list 1", "list 2", "list 3", "image 1 1", "image 2 1", "image 2 2", "image 2 3", "image 2 4"], _pixels.Calls);
+        Assert.StartsWith("stored 5 images in /Work/images/\n", result.Output);
+        Assert.EndsWith("/Work/images/manual-p2-4.png  p2  100×100  1004 B  at 0,0,100,100\nstored 5 images; go on with pages 3-", result.Output);
+        Assert.False(result.IsError);
+        Assert.Equal(5, (await StoredUnder("/Work/images")).Count);
+    }
+
+    [Fact]
+    public async Task Writing_names_the_pages_listing_left_for_later()
+    {
+        await Upload();
+        _pixels.PageCount = 10;
+        _pixels.PerCall = TimeSpan.FromSeconds(4);
+        _pixels.Pages[2] = [Image(1, 1200, 400, 72, 40, 451, 150, "aa")];
+        _pixels.Images[(2, 1)] = Png(90_112, 1200, 400);
+
+        var result = await Run("pdfimages /Work/manual.pdf 1-8 /Work/images/");
+
+        Assert.Equal(["list 1", "list 2", "list 3", "image 2 1"], _pixels.Calls);
+        Assert.Equal("stored 1 image in /Work/images/\n/Work/images/manual-p2-1.png  p2  1200×400  88 KB  at 72,40,451,150\nstored 1 image; go on with pages 4-8", result.Output);
+    }
+
+    [Fact]
+    public async Task The_ceiling_stops_within_a_page_and_says_what_of_it_was_stored()
+    {
+        await Upload();
+        _pixels.PerCall = TimeSpan.FromSeconds(10);
+        _pixels.Pages[1] = [.. Enumerable.Range(1, 4).Select(n => Image(n, 100, 100, 0, 0, 100, 100, $"a{n}"))];
+        for (var n = 1; n <= 4; n++) _pixels.Images[(1, n)] = Png(1000 + n, 100, 100);
+        _sh.Register(new PdfImages(_store, _pixels, _files, _time) { Ceiling = TimeSpan.FromSeconds(30) });
+
+        var result = await Run("pdfimages /Work/manual.pdf 1 /Work/images/");
+
+        Assert.Equal(["list 1", "image 1 1", "image 1 2"], _pixels.Calls);
+        Assert.Equal(
+            """
+            stored 2 images in /Work/images/
+            /Work/images/manual-p1-1.png  p1  100×100  1001 B  at 0,0,100,100
+            /Work/images/manual-p1-2.png  p1  100×100  1002 B  at 0,0,100,100
+            page 1 is stored only in part, as time ran out: /Work/images/manual-p1-1.png, /Work/images/manual-p1-2.png; to store page 1, run it again into another folder, or remove these files first
+            stored 2 images; go on with page 1
+            """,
+            result.Output);
+    }
+
+    [Fact]
+    public async Task Busy_while_fetching_an_image_is_tried_again()
+    {
+        await TwoPages();
+        _pixels.Pages[3] = [];
+        _pixels.ImageThrows.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
+
+        var result = await RunWaiting("pdfimages /Work/manual.pdf 1 /Work/images/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Stored("/Work/images/manual-p1-1.png"));
+        Assert.Equal(["list 1", "image 1 1", "image 1 1"], _pixels.Calls);
+    }
+
+    [Fact]
+    public async Task A_sidecar_failure_while_fetching_stops_keeping_what_was_stored()
+    {
+        await TwoPages();
+        _pixels.ImageFails[(3, 1)] = new PixelsUnavailableException("PDF image extraction is unavailable right now; try again later", PixelsProblem.Unavailable);
+
+        var result = await Run("pdfimages /Work/manual.pdf /Work/images/");
+
+        Assert.Equal(ShellErrorKind.Unavailable, result.Kind);
+        Assert.Equal(
+            "stored 1 image in /Work/images/\n/Work/images/manual-p1-1.png  p1  1200×400  88 KB  at 72,40,451,150\nnot stored: p3 #1\npdfimages: PDF image extraction is unavailable right now; try again later",
+            result.Output);
+    }
+
     [Fact]
     public async Task Help_lists_pdfimages_after_pdf()
     {
@@ -399,6 +786,7 @@ public class PdfImagesTests
         Assert.Contains("store a PDF's pictures as images, to place in notes", help.Output);
         Assert.StartsWith("pdfimages <pdf> [pages] <folder>/\npdfimages <pdf> <page> --crop x,y,w,h <file.png>\npdfimages --list <pdf> [pages]\n", own.Output);
         Assert.Contains("duplicates are found within one call", own.Output);
+        Assert.Contains("at most 500 images in one call", own.Output);
         Assert.Contains("\n  pdfimages <pdf> [pages] <dir>/  ", Manual.ToolDescription);
     }
 

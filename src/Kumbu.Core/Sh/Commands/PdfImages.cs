@@ -46,6 +46,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
           An image is stored at most 8 megapixels (a larger one is scaled down, and the output says from what), as a
           PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
           naming every page; duplicates are found within one call, so a later call stores a repeated image again.
+          It stores at most 500 images in one call; for more, it stores nothing and names a page range that fits.
           pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
           can't be read; the output names their pages, look at them with pdf --crop. A long PDF stops after about
           20 seconds, the last line naming the pages to go on with. A writing command: it needs write access to
@@ -57,6 +58,9 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         """;
 
     public bool ReadsInput => false;
+
+    /// <summary>At most this many images are stored in one call, counted after the small ones and duplicates are left out.</summary>
+    private const int MaxImages = 500;
 
     private sealed record Call(VaultPath Path, AttachmentState State, PageRange Range, bool All, long Started);
 
@@ -132,8 +136,13 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var call = new Call(opened.Value.Path, opened.Value.State, range, all, started);
 
         if (list) return await ListAsync(call, ct);
-        _ = (into, crop, rotate, files);
-        return Invalid("pdfimages: only --list works in this version");
+        if (crop is not null)
+        {
+            _ = rotate;
+            return Invalid("pdfimages: --crop doesn't work in this version yet");
+        }
+
+        return await StoreAsync(call, into!, ct);
     }
 
     private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
@@ -250,6 +259,196 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         if (listing.Error is { } error) return error with { Output = string.Join('\n', [.. lines, error.Output]) };
         if (listing.Next is { } next) lines.Add($"listed {Pages(listing.Pages[0].Page, next - 1)}; go on with {GoOn(next, listing.Last, call.Range.Last is null)}");
         return ShellResult.Ok(string.Join('\n', lines));
+    }
+
+    /// <summary>An image to store, under the name of the first page painting it; <see cref="Pages"/> are all the pages that do.</summary>
+    private sealed record Planned(PdfPageImages Page, PdfImageInfo Image, List<int> Pages, string Name)
+    {
+        public bool Failed => Image.Failed || Image.Hash is null;
+
+        public string Ref => $"p{Page.Page} #{Image.N}";
+    }
+
+    private async Task<ShellResult> StoreAsync(Call call, VaultPath into, CancellationToken ct)
+    {
+        var listing = await ListPagesAsync(call, ct);
+        if (listing.Error is { } error) return error;
+
+        var stem = Path.GetFileNameWithoutExtension(call.Path.Name);
+        var plan = new List<Planned>();
+        var byHash = new Dictionary<string, Planned>(StringComparer.Ordinal);
+        var small = 0;
+        foreach (var page in listing.Pages)
+        {
+            foreach (var image in page.Images)
+            {
+                if (image.Small && !call.All)
+                {
+                    small++;
+                    continue;
+                }
+
+                if (!image.Failed && image.Hash is { } hash && byHash.TryGetValue(hash, out var first))
+                {
+                    if (!first.Pages.Contains(page.Page)) first.Pages.Add(page.Page);
+                    continue;
+                }
+
+                var planned = new Planned(page, image, [page.Page], $"{stem}-p{page.Page}-{image.N}");
+                plan.Add(planned);
+                if (!planned.Failed) byHash[image.Hash!] = planned;
+            }
+        }
+
+        if (TooMany(plan, listing) is { } tooMany) return tooMany;
+        if (await ExistingAsync(plan, into, ct) is { Count: > 0 } existing)
+        {
+            return ShellResult.Error($"pdfimages: these exist already: {string.Join(", ", existing)}; choose another folder, or remove them first") with { Kind = ShellErrorKind.Conflict };
+        }
+
+        var lines = new List<string>();
+        var stored = 0;
+        var ofPage = new List<string>();
+        int? goOn = listing.Next;
+        string? partly = null;
+        for (var i = 0; i < plan.Count; i++)
+        {
+            var item = plan[i];
+            var boundary = i == 0 || item.Page.Page != plan[i - 1].Page.Page;
+            if (boundary) ofPage.Clear();
+            if (i > 0 && boundary && time.GetElapsedTime(call.Started) >= Budget)
+            {
+                goOn = item.Page.Page;
+                break;
+            }
+
+            if (i > 0 && !boundary && time.GetElapsedTime(call.Started) >= Ceiling)
+            {
+                goOn = item.Page.Page;
+                if (ofPage.Count > 0)
+                {
+                    var page = item.Page.Page;
+                    partly = $"page {page} is stored only in part, as time ran out: {string.Join(", ", ofPage)}; to store page {page}, run it again into another folder, or remove these files first";
+                }
+
+                break;
+            }
+
+            if (item.Failed)
+            {
+                lines.Add($"{item.Ref} skipped: could not be decoded");
+                continue;
+            }
+
+            Picture picture;
+            try
+            {
+                picture = await RetryingAsync(() => pixels.PdfImageAsync(call.Path, call.State, item.Page.Page, item.Image.N, ct), ct);
+            }
+            catch (PixelsUnavailableException e) when (e.Problem == PixelsProblem.TooLarge)
+            {
+                lines.Add($"{item.Ref} skipped: over 15 MB even as JPEG");
+                continue;
+            }
+            catch (PixelsUnavailableException e)
+            {
+                return Stopped(Failed(e), Header(stored, into, small, call.All), lines, plan.Skip(i));
+            }
+
+            var jpeg = picture.MediaType == "image/jpeg";
+            var path = into.Child(item.Name + (jpeg ? ".jpg" : ".png"));
+            WriteResult written;
+            try
+            {
+                written = await files.WriteAsync(path.Value, picture.Data, (picture.Width, picture.Height), null, ct);
+            }
+            catch (QuotaExceededException e)
+            {
+                // As ToolResult answers a full vault: only the owner is pointed at df.
+                var full = ShellResult.Error(e.Owner ? e.Message + " See `df`." : e.Message) with { Kind = ShellErrorKind.Refused, Code = e.Owner ? Refusals.Quota : null };
+                return Stopped(full, Header(stored, into, small, call.All), lines, plan.Skip(i));
+            }
+
+            if (written.Result.IsError)
+            {
+                var refused = written.Result with { Output = $"pdfimages: {written.Result.Output}" };
+                return Stopped(refused, Header(stored, into, small, call.All), lines, plan.Skip(i));
+            }
+
+            stored++;
+            ofPage.Add(path.Value);
+            lines.Add(Line(path, item, picture, jpeg));
+        }
+
+        lines.InsertRange(0, [Header(stored, into, small, call.All)]);
+        lines.AddRange(OverLines(listing.Pages));
+        if (partly is not null) lines.Add(partly);
+        if (goOn is { } next) lines.Add($"stored {Count(stored, "image")}; go on with {GoOn(next, listing.Last, call.Range.Last is null)}");
+        return ShellResult.Ok(string.Join('\n', lines));
+    }
+
+    private static string Header(int stored, VaultPath into, int small, bool all) =>
+        $"stored {Count(stored, "image")} in {into.Value}/{(small > 0 && !all ? $" ({small} left out as smaller than 1 % of their page, --all keeps them)" : "")}";
+
+    /// <summary>
+    /// A stop part way: what was stored, which images were not, and why. With nothing to tell but the reason, the
+    /// reason alone.
+    /// </summary>
+    private static ShellResult Stopped(ShellResult why, string header, List<string> lines, IEnumerable<Planned> rest)
+    {
+        if (lines.Count == 0) return why;
+        var left = rest.Where(p => !p.Failed).Select(p => p.Ref).ToList();
+        return why with { Output = string.Join('\n', [header, .. lines, .. left.Count > 0 ? [$"not stored: {string.Join(", ", left)}"] : Array.Empty<string>(), why.Output]) };
+    }
+
+    /// <summary>"/Work/images/manual-p4-1.png  p4, p9  2400×1600  1.9 MB  at 80,300,435,290", as spec §3.1 words a stored image.</summary>
+    private static string Line(VaultPath path, Planned item, Picture picture, bool jpeg)
+    {
+        var fromW = (int)Math.Round(picture.OriginalWidth);
+        var fromH = (int)Math.Round(picture.OriginalHeight);
+        var scaled = fromW != picture.Width || fromH != picture.Height ? $" (scaled down from {fromW}×{fromH})" : "";
+        var format = jpeg ? " (JPEG: PNG over 15 MB)" : "";
+        var pages = string.Join(", ", item.Pages.Select(p => $"p{p}"));
+        return $"{path.Value}  {pages}  {picture.Width}×{picture.Height}{scaled}  {AttachmentText.Size(picture.Data.Length)}{format}  at {Box(item.Image, item.Page)}";
+    }
+
+    /// <summary>The refusal of more than <see cref="MaxImages"/> images to store, naming the pages from the first that fit; null when they fit.</summary>
+    private static ShellResult? TooMany(List<Planned> plan, Listing listing)
+    {
+        var toStore = plan.Where(p => !p.Failed).ToList();
+        if (toStore.Count <= MaxImages) return null;
+
+        var first = listing.Pages[0].Page;
+        var listed = Pages(first, listing.Pages[^1].Page);
+        var fits = toStore.Take(MaxImages + 1).Select(p => p.Page.Page).ToList();
+        // The pages before the one the 501st image is on fit whole.
+        var last = fits[^1] - 1;
+        if (last < first)
+        {
+            return Invalid($"pdfimages: {toStore.Count} images on page {first}, more than {MaxImages} in one call; store that page's pictures in regions with --crop");
+        }
+
+        return Invalid($"pdfimages: {toStore.Count} images in {listed}, more than {MaxImages} in one call; give a page range, e.g. {(last == first ? $"{first}" : $"{first}-{last}")}");
+    }
+
+    /// <summary>The targets that stand already, as a note, a file or a folder, in either extension an image may get.</summary>
+    private async Task<List<string>> ExistingAsync(List<Planned> plan, VaultPath into, CancellationToken ct)
+    {
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        var under = (await notes.ListNotesUnderAsync(into, ct)).Concat(await StoreAttachments.PathsUnderAsync(notes, into, ct) ?? []);
+        foreach (var path in under)
+        {
+            // The path itself and every folder between it and the target folder.
+            taken.Add(path.Value);
+            for (var slash = path.Value.IndexOf('/', into.Value.Length + 1); slash > 0; slash = path.Value.IndexOf('/', slash + 1)) taken.Add(path.Value[..slash]);
+        }
+
+        return
+        [
+            .. plan.Where(p => !p.Failed)
+                .SelectMany(p => new[] { ".png", ".jpg" }.Select(ext => into.Child(p.Name + ext).Value))
+                .Where(taken.Contains),
+        ];
     }
 
     /// <summary>"page 4: 1 image over 50 MP left out (look with pdf --crop)" for each page whose images pdf.js couldn't decode for their size.</summary>
