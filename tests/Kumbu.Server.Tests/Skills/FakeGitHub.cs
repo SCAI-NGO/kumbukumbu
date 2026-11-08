@@ -38,6 +38,17 @@ public sealed class FakeGitHub : HttpMessageHandler
     /// <summary>Every request answers this many bytes of <c>a</c>, without <c>Content-Length</c>.</summary>
     public long? UnsizedBody { get; set; }
 
+    /// <summary>Every archive request answers these bytes, as they are, with <c>Content-Length</c>.</summary>
+    public byte[]? Archive { get; set; }
+
+    /// <summary>Every archive request answers these bytes, as they are, without <c>Content-Length</c>.</summary>
+    public byte[]? RawArchive { get; set; }
+
+    /// <summary>Every request answers 200 with a body that never comes; <see cref="Hanging"/> completes once it's read.</summary>
+    public bool HangBody { get; set; }
+
+    public TaskCompletionSource Hanging { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var headers = request.Headers.ToDictionary(h => h.Key, h => string.Join(", ", h.Value), StringComparer.OrdinalIgnoreCase);
@@ -65,6 +76,9 @@ public sealed class FakeGitHub : HttpMessageHandler
         if (TooManyRequests) return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
         if (NotFound) return new HttpResponseMessage(HttpStatusCode.NotFound);
         if (UnsizedBody is { } size) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new UnsizedContent(size) };
+        if (HangBody) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new HangingContent(Hanging) };
+        if (uri.Host == "codeload.github.com" && Archive is { } archive) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) };
+        if (uri.Host == "codeload.github.com" && RawArchive is { } raw) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new UnsizedBytes(raw) };
 
         var parts = uri.AbsolutePath.Trim('/').Split('/');
         if (uri.Host == "api.github.com" && parts is ["repos", _, _, "commits", "HEAD"])
@@ -87,6 +101,109 @@ public sealed class FakeGitHub : HttpMessageHandler
         }
 
         return output.ToArray();
+    }
+
+    /// <summary>A gzipped tar of these entries, each named in full (no top folder added).</summary>
+    public static byte[] Tar(params (string Path, byte[] Bytes)[] files) => TarWith(files: files);
+
+    /// <summary>A gzipped tar of <paramref name="count"/> directory entries and nothing else.</summary>
+    public static byte[] TarOfDirectories(int count) => Gzip(tar =>
+    {
+        for (var i = 0; i < count; i++) tar.WriteEntry(new PaxTarEntry(TarEntryType.Directory, $"r/d{i}/"));
+    });
+
+    /// <summary>A gzipped tar of the files, plus a symbolic and a hard link if named; GNU headers (long names as
+    /// <c>././@LongLink</c> entries) or PAX ones.</summary>
+    public static byte[] TarWith(string? symlink = null, string? hardlink = null, (string Path, byte[] Bytes)[]? files = null, bool gnu = false) => Gzip(tar =>
+    {
+        TarEntry Entry(TarEntryType type, string name) => gnu ? new GnuTarEntry(type, name) : new PaxTarEntry(type, name);
+        if (symlink is not null) { var link = Entry(TarEntryType.SymbolicLink, symlink); link.LinkName = "/etc/passwd"; tar.WriteEntry(link); }
+        if (hardlink is not null) { var link = Entry(TarEntryType.HardLink, hardlink); link.LinkName = "r/ok.md"; tar.WriteEntry(link); }
+        foreach (var (path, bytes) in files ?? [])
+        {
+            var entry = Entry(TarEntryType.RegularFile, path);
+            entry.DataStream = new MemoryStream(bytes);
+            tar.WriteEntry(entry);
+        }
+    });
+
+    /// <summary>A gzipped tar of one file whose ustar header says it holds <paramref name="declared"/> bytes, followed by
+    /// only <paramref name="actual"/> and the end of the archive.</summary>
+    public static byte[] TarWithDeclaredSize(string path, long declared, byte[] actual)
+    {
+        using var plain = new MemoryStream();
+        using (var tar = new TarWriter(plain, TarEntryFormat.Ustar, leaveOpen: true))
+            tar.WriteEntry(new UstarTarEntry(TarEntryType.RegularFile, path) { DataStream = new MemoryStream(actual) });
+        var bytes = plain.ToArray();
+        Encoding.ASCII.GetBytes(Convert.ToString(declared, 8).PadLeft(11, '0') + "\0").CopyTo(bytes, 124);
+        Array.Fill(bytes, (byte)' ', 148, 8);
+        var sum = bytes.AsSpan(0, 512).ToArray().Sum(b => (int)b);
+        Encoding.ASCII.GetBytes(Convert.ToString(sum, 8).PadLeft(6, '0') + "\0 ").CopyTo(bytes, 148);
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true)) gzip.Write(bytes);
+        return output.ToArray();
+    }
+
+    private static byte[] Gzip(Action<TarWriter> write)
+    {
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true))
+        using (var tar = new TarWriter(gzip, TarEntryFormat.Pax, leaveOpen: true))
+            write(tar);
+        return output.ToArray();
+    }
+
+    /// <summary>These bytes, without a <c>Content-Length</c>.</summary>
+    private sealed class UnsizedBytes(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(bytes).AsTask();
+
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new MemoryStream(bytes, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    /// <summary>A body that never comes: a read waits until it's cancelled.</summary>
+    private sealed class HangingContent(TaskCompletionSource reading) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => Task.Delay(Timeout.Infinite);
+
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new HangingStream(reading));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class HangingStream(TaskCompletionSource reading) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            reading.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>A body whose length isn't known in advance (as a chunked answer).</summary>

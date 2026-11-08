@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Concurrent;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
+using Kumbu.Core.Attachments;
 using Kumbu.Server.Net;
 using Microsoft.Extensions.Options;
 
@@ -45,6 +48,16 @@ public sealed class GitHubException(string kind, string message) : Exception(mes
     public string Kind { get; } = kind;
 }
 
+/// <summary>A file of a repository's archive, by its path below the archive's top folder (NFC, <c>/</c>-separated).</summary>
+public sealed record ArchiveFile(string Path, byte[] Bytes);
+
+/// <summary>A repository's files at a commit, and the entries left out (links, unsafe names, twins, other kinds), named.</summary>
+public sealed record RepoArchive(string Commit, IReadOnlyList<ArchiveFile> Files, IReadOnlyList<string> Skipped)
+{
+    /// <summary>The files' bytes together: what the archive cache counts.</summary>
+    public long Bytes { get; } = Files.Sum(f => (long)f.Bytes.Length);
+}
+
 public static class GitHubServices
 {
     public const string HttpClientName = "github";
@@ -68,16 +81,25 @@ public static class GitHubServices
 }
 
 /// <summary>The server's requests to GitHub: to <see cref="ApiHost"/> and <see cref="ArchiveHost"/> only, over https, with URLs
-/// built from a checked <see cref="RepoName"/> and commit. The token goes to <see cref="ApiHost"/> only and is never logged.</summary>
+/// built from a checked <see cref="RepoName"/> and commit. The token goes to <see cref="ApiHost"/> only and is never logged.
+/// Every request, its body included, is given up after <see cref="RequestTimeout"/>. Commits and archives are cached in
+/// memory only.</summary>
 public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<KumbuOptions> options, TimeProvider time, ILogger<GitHubClient> log)
 {
     public const string ApiHost = "api.github.com", ArchiveHost = "codeload.github.com";
     public const int MaxJsonBytes = 1024 * 1024;
+    public const long MaxArchiveBytes = 25L * 1024 * 1024, MaxUnpackedBytes = 100L * 1024 * 1024, MaxCachedBytes = 200L * 1024 * 1024;
+    public const int MaxEntries = 5000, MaxCachedArchives = 4;
     public static readonly TimeSpan CommitAge = TimeSpan.FromMinutes(10);
 
+    /// <summary>For a whole request, headers and body: HttpClient's own timeout ends with the headers.</summary>
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(60);
+
     private const int MaxCachedCommits = 1000;
+    private const int ReadChunk = 81920;
 
     private readonly ConcurrentDictionary<string, CachedCommit> _commits = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ArchiveCache _archives = new();
 
     private sealed record CachedCommit(string Commit, DateTimeOffset Stored);
 
@@ -98,6 +120,118 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         return commit;
     }
 
+    /// <summary>The repository's files at <paramref name="commit"/>, from the cache if it still holds them. The archive is
+    /// read within <see cref="MaxArchiveBytes"/> compressed, <see cref="MaxUnpackedBytes"/> decompressed (headers and
+    /// padding included) and <see cref="MaxEntries"/> entries of any kind, no file over <see cref="AttachmentFormat.MaxBytes"/>.</summary>
+    public async Task<RepoArchive> ArchiveAsync(RepoName repo, string commit, CancellationToken ct)
+    {
+        var uri = ArchiveUri(repo, commit);
+        var key = $"{repo.ToString().ToLowerInvariant()}@{commit}";
+        if (_archives.Get(key) is { } cached) return cached;
+
+        using var timeout = new CancellationTokenSource(RequestTimeout, time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        RepoArchive archive;
+        try
+        {
+            using var response = await SendAsync(repo, uri, "application/x-gzip", linked.Token);
+            if (response.Content.Headers.ContentLength > MaxArchiveBytes) throw TooLarge(repo);
+            await using var compressed = new CappedStream(await response.Content.ReadAsStreamAsync(linked.Token), MaxArchiveBytes);
+            await using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
+            await using var unpacked = new CappedStream(gzip, MaxUnpackedBytes);
+            await using var tar = new TarReader(unpacked);
+            archive = await ReadArchiveAsync(repo, commit, tar, linked.Token);
+        }
+        catch (CappedStream.TooLongException)
+        {
+            throw TooLarge(repo);
+        }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            throw Unavailable(repo, e);
+        }
+        catch (Exception e) when (e is InvalidDataException or EndOfStreamException or FormatException)
+        {
+            throw Fail(repo, "bad-answer", "GitHub's archive can't be read.");
+        }
+        catch (IOException e)
+        {
+            throw Unavailable(repo, e);
+        }
+
+        _archives.Add(key, archive);
+        log.LogInformation("GitHub archive of {Repo} at {Commit} read: {Files} files, {Skipped} skipped", repo.ToString(), commit, archive.Files.Count, archive.Skipped.Count);
+        return archive;
+    }
+
+    private async Task<RepoArchive> ReadArchiveAsync(RepoName repo, string commit, TarReader tar, CancellationToken ct)
+    {
+        var files = new List<ArchiveFile>();
+        var skipped = new List<string>();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entries = 0;
+        long unpacked = 0;
+        while (await tar.GetNextEntryAsync(copyData: false, ct) is { } entry)
+        {
+            if (++entries > MaxEntries) throw TooLarge(repo);
+            if (entry.EntryType is TarEntryType.Directory or TarEntryType.GlobalExtendedAttributes) continue;
+
+            var path = ArchivePath(entry.Name, out var shown);
+            if (path is null || entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile)
+                || !paths.Add(path))
+            {
+                skipped.Add(shown);
+                continue;
+            }
+
+            // The header's length decides nothing but the refusal until the bytes are there to match it.
+            var length = entry.Length;
+            if (length < 0) throw new InvalidDataException("A negative entry length.");
+            if (length > AttachmentFormat.MaxBytes || unpacked + length > MaxUnpackedBytes) throw TooLarge(repo);
+            var bytes = new byte[length];
+            if (length > 0)
+            {
+                var data = entry.DataStream ?? throw new InvalidDataException("An entry without its data.");
+                for (var read = 0; read < bytes.Length;)
+                {
+                    var n = await data.ReadAsync(bytes.AsMemory(read, Math.Min(ReadChunk, bytes.Length - read)), ct);
+                    if (n == 0) throw new EndOfStreamException();
+                    read += n;
+                }
+            }
+
+            unpacked += length;
+            files.Add(new ArchiveFile(path, bytes));
+        }
+
+        return new RepoArchive(commit, files, skipped);
+    }
+
+    /// <summary>An entry's path below the archive's top folder, NFC; null for a name that could leave or confuse the
+    /// folder it's unpacked into (absolute, a <c>..</c>, <c>.</c> or empty segment, a NUL or a backslash) or that isn't
+    /// below a top folder. <paramref name="shown"/> is how the entry is named among the skipped.</summary>
+    internal static string? ArchivePath(string name, out string shown)
+    {
+        while (name.StartsWith("./", StringComparison.Ordinal)) name = name[2..];
+        shown = name;
+        if (name.StartsWith('/')) return null;
+        var slash = name.IndexOf('/');
+        if (slash < 0) return null;
+        var path = name[(slash + 1)..];
+        shown = path;
+        if (path.Length == 0 || path.Contains('\0') || path.Contains('\\') || path.Split('/').Any(s => s is "" or "." or "..")) return null;
+        try
+        {
+            shown = path = path.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            return null;   // not valid Unicode
+        }
+
+        return path;
+    }
+
     internal Uri ApiUri(RepoName repo, params string[] segments) =>
         new($"https://{ApiHost}/repos/{Segment(repo.Owner)}/{Segment(repo.Repo)}" + string.Concat(segments.Select(s => "/" + Segment(s))));
 
@@ -111,18 +245,24 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
     /// <summary>An API answer's body, at most <see cref="MaxJsonBytes"/>.</summary>
     private async Task<byte[]> ReadApiAsync(RepoName repo, Uri uri, string accept, CancellationToken ct)
     {
-        using var response = await SendAsync(repo, uri, accept, ct);
-        if (response.Content.Headers.ContentLength > MaxJsonBytes) throw TooLarge(repo);
+        using var timeout = new CancellationTokenSource(RequestTimeout, time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
-            await using var stream = new CappedStream(await response.Content.ReadAsStreamAsync(ct), MaxJsonBytes);
+            using var response = await SendAsync(repo, uri, accept, linked.Token);
+            if (response.Content.Headers.ContentLength > MaxJsonBytes) throw TooLarge(repo);
+            await using var stream = new CappedStream(await response.Content.ReadAsStreamAsync(linked.Token), MaxJsonBytes);
             using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer, ct);
+            await stream.CopyToAsync(buffer, linked.Token);
             return buffer.ToArray();
         }
         catch (CappedStream.TooLongException)
         {
             throw TooLarge(repo);
+        }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            throw Unavailable(repo, e);
         }
         catch (IOException e)
         {
@@ -164,15 +304,17 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
 
         var status = (int)response.StatusCode;
         if (status is >= 200 and < 300) return response;
-        response.Dispose();
-        throw status switch
+        using (response)
         {
-            >= 300 and < 400 => Fail(repo, "redirected", "GitHub answered with a redirect, which isn't followed."),
-            429 => RateLimited(repo),
-            403 when Header(response, "x-ratelimit-remaining") == "0" => RateLimited(repo),
-            404 => Fail(repo, "not-found", $"GitHub has no repository {repo}, or it isn't public."),
-            _ => Fail(repo, "unavailable", $"GitHub answered {status}."),
-        };
+            throw status switch
+            {
+                >= 300 and < 400 => Fail(repo, "redirected", "GitHub answered with a redirect, which isn't followed."),
+                429 => RateLimited(repo),
+                403 when Header(response, "x-ratelimit-remaining") == "0" => RateLimited(repo),
+                404 => Fail(repo, "not-found", $"GitHub has no repository {repo}, or it isn't public."),
+                _ => Fail(repo, "unavailable", $"GitHub answered {status}."),
+            };
+        }
     }
 
     private static string? Header(HttpResponseMessage response, string name) =>
@@ -194,6 +336,50 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
     {
         log.LogInformation("GitHub request for {Repo} refused: {Kind}", repo.ToString(), kind);
         return new GitHubException(kind, message);
+    }
+
+    /// <summary>Archives by repository and commit, least recently used first out: at most <see cref="MaxCachedArchives"/>
+    /// of them and <see cref="MaxCachedBytes"/> of files together. One larger than that alone isn't kept.</summary>
+    private sealed class ArchiveCache
+    {
+        private readonly Lock _lock = new();
+        private readonly LinkedList<(string Key, RepoArchive Archive)> _order = new();   // most recently used first
+        private readonly Dictionary<string, LinkedListNode<(string Key, RepoArchive Archive)>> _byKey = new(StringComparer.Ordinal);
+        private long _bytes;
+
+        public RepoArchive? Get(string key)
+        {
+            lock (_lock)
+            {
+                if (!_byKey.TryGetValue(key, out var node)) return null;
+                _order.Remove(node);
+                _order.AddFirst(node);
+                return node.Value.Archive;
+            }
+        }
+
+        public void Add(string key, RepoArchive archive)
+        {
+            if (archive.Bytes > MaxCachedBytes) return;
+            lock (_lock)
+            {
+                if (_byKey.Remove(key, out var old))
+                {
+                    _order.Remove(old);
+                    _bytes -= old.Value.Archive.Bytes;
+                }
+
+                _byKey[key] = _order.AddFirst((key, archive));
+                _bytes += archive.Bytes;
+                while (_order.Count > MaxCachedArchives || _bytes > MaxCachedBytes)
+                {
+                    var last = _order.Last!;
+                    _order.RemoveLast();
+                    _byKey.Remove(last.Value.Key);
+                    _bytes -= last.Value.Archive.Bytes;
+                }
+            }
+        }
     }
 
     /// <summary>Reads at most <c>limit</c> bytes of the inner stream and throws once it holds more, whatever it said its
