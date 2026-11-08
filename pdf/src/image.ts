@@ -8,7 +8,7 @@
 
 import { type Canvas, type Image, ImageData, createCanvas, loadImage } from "@napi-rs/canvas";
 import { GifReader } from "omggif";
-import { type Rendered, encode } from "./encode.js";
+import { type Rendered, encode, onWhite } from "./encode.js";
 import { MAX_IMAGE_PIXELS, PdfError } from "./pdfjs.js";
 import { type Crop, type Target, fit, inside, pixels } from "./steps.js";
 
@@ -208,17 +208,6 @@ function hasTransparency(canvas: Canvas): boolean {
   const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
   for (let alpha = 3; alpha < data.length; alpha += 4) if (data[alpha]! < 255) return true;
   return false;
-}
-
-// Clients show transparency as they like, some on black, where a black shape vanishes. On white,
-// as on paper, every client sees the same picture; the server's text says what became of it.
-function onWhite(canvas: Canvas): Canvas {
-  const flat = createCanvas(canvas.width, canvas.height);
-  const ctx = flat.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, flat.width, flat.height);
-  ctx.drawImage(canvas, 0, 0);
-  return flat;
 }
 
 // The stored size from the header (PNG, JPEG, GIF, WebP), or null. Reads lengths and sizes only.

@@ -287,3 +287,210 @@ export function gifWithFrameRect(canvasW: number, canvasH: number, frameW: numbe
     0x3b,
   ]);
 }
+
+// --- Embedded images (extract.ts) ---
+
+// An image XObject of raw pixels, Flate-compressed, as a generator writes it without filters of its own.
+function rawImage(doc: PDFDocument, width: number, height: number, data: Uint8Array, dict: Record<string, unknown>) {
+  return doc.context.register(doc.context.flateStream(data, { Type: "XObject", Subtype: "Image", Width: width, Height: height, ...dict } as never));
+}
+
+// Appends a content stream written by hand, for what pdf-lib's drawing methods cannot write (inline
+// images, image masks, repeated placements).
+function rawContent(doc: PDFDocument, page: PDFPage, content: string) {
+  page.node.addContentStream(doc.context.register(doc.context.flateStream(content)));
+}
+
+// Draws an embedded image with pdf-lib at a box in PDF user space.
+const drawAt = (page: PDFPage, image: Awaited<ReturnType<PDFDocument["embedPng"]>>, x: number, y: number, width: number, height: number) =>
+  page.drawImage(image, { x, y, width, height });
+
+// twoImagesPage(): a noise photo, then a JPEG, in PDF user space.
+export const PHOTO = { x: 72, y: 72, width: 300, height: 225, pixels: [400, 300] } as const;
+export const SQUARE = { x: 72, y: 400, width: 200, height: 200, pixels: [200, 200] } as const;
+
+export const twoImagesPage = () =>
+  single(async (doc, page) => {
+    drawAt(page, await doc.embedPng(noiseCanvas(400, 300).toBuffer("image/png")), PHOTO.x, PHOTO.y, PHOTO.width, PHOTO.height);
+    drawAt(page, await doc.embedJpg(jpegOf(200, 200, "#c04020")), SQUARE.x, SQUARE.y, SQUARE.width, SQUARE.height);
+  });
+
+function jpegOf(width: number, height: number, colour: string): Uint8Array {
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = colour;
+  ctx.fillRect(0, 0, width, height);
+  return canvas.toBuffer("image/jpeg");
+}
+
+// The same small logo at the foot of every page (1,800 pt², under 1 % of A4), and a large picture on page 2 only.
+export const logoOnEveryPage = async (pages = 3) => {
+  const doc = await PDFDocument.create();
+  const logo = await doc.embedPng(png(120, 60, "#208040"));
+  const picture = await doc.embedPng(noiseCanvas(600, 400).toBuffer("image/png"));
+  for (let n = 1; n <= pages; n++) {
+    const page = doc.addPage([A4.width, A4.height]);
+    if (n === 2) drawAt(page, picture, 100, 300, 400, 267);
+    drawAt(page, logo, 40, 20, 60, 30);
+  }
+  return doc.save();
+};
+
+// A 40 × 20 px image in quarters of CORNER_COLOURS (clockwise from the top left), drawn 160 × 80 pt
+// around the page's centre, turned counter-clockwise by `rotation` degrees in PDF user space and,
+// with `flip`, mirrored left to right first.
+export const CORNER_IMAGE = { width: 40, height: 20 } as const;
+
+export const cornerImagePage = (rotation: 0 | 90 | 180 | 270, flip = false) =>
+  single(async (doc, page) => {
+    const { width, height } = CORNER_IMAGE;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext("2d");
+    const quarters = [[0, 0], [width / 2, 0], [width / 2, height / 2], [0, height / 2]] as const;
+    quarters.forEach(([x, y], i) => {
+      ctx.fillStyle = `rgb(${CORNER_COLOURS[i]!.join(",")})`;
+      ctx.fillRect(x, y, width / 2, height / 2);
+    });
+    const image = await doc.embedPng(canvas.toBuffer("image/png"));
+    const name = page.node.newXObject("Corners", image.ref);
+    const [cos, sin] = [Math.round(Math.cos((rotation * Math.PI) / 180)), Math.round(Math.sin((rotation * Math.PI) / 180))];
+    // translate(centre) · rotate · flip · scale(160, 80) · translate(-0.5, -0.5)
+    const [sx, sy] = [flip ? -160 : 160, 80];
+    const [a, b, c, d] = [cos * sx, sin * sx, -sin * sy, cos * sy];
+    const [e, f] = [300 - 0.5 * a - 0.5 * c, 400 - 0.5 * b - 0.5 * d];
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(a, b, c, d, e, f), drawObject(name), popGraphicsState());
+  });
+
+// A 16 × 16 stencil whose left half paints (0 bits) in MASK_COLOUR, drawn 160 × 160 pt at 100,500;
+// then a 1 × 1 opaque stencil (pdf.js paints it as a solid colour, not an image).
+export const MASK_COLOUR = [255, 0, 0] as const;
+
+export const maskPage = () =>
+  single((doc, page) => {
+    const rows = new Uint8Array(16 * 2).map((_, i) => (i % 2 === 0 ? 0x00 : 0xff));
+    const mask = page.node.newXObject("Mask", rawImage(doc, 16, 16, rows, { ImageMask: true, BitsPerComponent: 1 }));
+    const dot = page.node.newXObject("Dot", rawImage(doc, 1, 1, new Uint8Array([0x00]), { ImageMask: true, BitsPerComponent: 1 }));
+    rawContent(doc, page, `q 1 0 0 rg 160 0 0 160 100 500 cm ${mask} Do Q q 0 0 1 rg 10 0 0 10 400 100 cm ${dot} Do Q`);
+  });
+
+// A PNG with an alpha channel: an opaque blue square in the middle of a transparent 64 × 64 image.
+export const transparentImagePage = () =>
+  single(async (doc, page) => {
+    const canvas = createCanvas(64, 64);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0000ff";
+    ctx.fillRect(16, 16, 32, 32);
+    drawAt(page, await doc.embedPng(canvas.toBuffer("image/png")), 100, 400, 200, 200);
+  });
+
+// An 8-bit grey gradient of width × height px drawn over the whole page.
+const greyPage = (width: number, height: number) =>
+  single((doc, page) => {
+    const data = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) data.fill((y * 7) & 0xff, y * width, (y + 1) * width);
+    const name = page.node.newXObject("Grey", rawImage(doc, width, height, data, { ColorSpace: "DeviceGray", BitsPerComponent: 8 }));
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(A4.width, 0, 0, A4.height, 0, 0), drawObject(name), popGraphicsState());
+  });
+
+/** 4000 × 3000 px, 12 MP. */
+export const bigImagePage = () => greyPage(4000, 3000);
+/** 20,000 × 50 px: 1 MP, but longer than an image may be on a side. */
+export const longImagePage = () => greyPage(20_000, 50);
+
+// The bars of CHART_BARS, paths only.
+export const vectorDrawingPage = () =>
+  single((_, page) => {
+    for (const bar of CHART_BARS) page.drawRectangle({ ...bar, color: rgb(0.2, 0.4, 0.8) });
+  });
+
+// A page 4000 × 100 pt: at 300 dpi 16,667 px wide, past the longest side an image may have.
+export const widePage = () =>
+  single((_, page) => page.drawRectangle({ x: 10, y: 10, width: 3980, height: 80, color: rgb(0.2, 0.4, 0.8) }), [4000, 100]);
+
+// 10 × 4 px, 1 bit grey (pdf.js's kind 1, rows padded to a byte): a checkerboard of 1 px squares,
+// white where x + y is even. Drawn 100 × 40 pt at 100,600.
+export const oneBitPage = () =>
+  single((doc, page) => {
+    const rows = new Uint8Array(2 * 4);
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 10; x++) if ((x + y) % 2 === 0) rows[y * 2 + (x >> 3)]! |= 0x80 >> (x & 7);
+    const name = page.node.newXObject("Bits", rawImage(doc, 10, 4, rows, { ColorSpace: "DeviceGray", BitsPerComponent: 1 }));
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(100, 0, 0, 40, 100, 600), drawObject(name), popGraphicsState());
+  });
+
+// 3 × 2 px of raw 8-bit DeviceRGB (pdf.js's kind 2): RGB_PIXELS row by row. Drawn 90 × 60 pt at 100,600.
+export const RGB_PIXELS = [
+  [255, 0, 0], [0, 255, 0], [0, 0, 255],
+  [255, 255, 0], [0, 255, 255], [255, 0, 255],
+] as const;
+
+export const rgbPage = () =>
+  single((doc, page) => {
+    const name = page.node.newXObject("Rgb", rawImage(doc, 3, 2, new Uint8Array(RGB_PIXELS.flat()), { ColorSpace: "DeviceRGB", BitsPerComponent: 8 }));
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(90, 0, 0, 60, 100, 600), drawObject(name), popGraphicsState());
+  });
+
+// One image XObject placed REPEATS times in a row at the same size (pdf.js makes the later ones one
+// paintImageXObjectRepeat), 60 pt apart from x = 50.
+export const REPEATS = 5;
+
+export const repeatedImagePage = () =>
+  single((doc, page) => {
+    const name = page.node.newXObject("Rgb", rawImage(doc, 3, 2, new Uint8Array(RGB_PIXELS.flat()), { ColorSpace: "DeviceRGB", BitsPerComponent: 8 }));
+    rawContent(doc, page, Array.from({ length: REPEATS }, (_, i) => `q 45 0 0 30 ${50 + i * 60} 500 cm ${name} Do Q`).join(" "));
+  });
+
+// One stencil (left half painting) placed MASKS times in a row, in green: at one size (pdf.js makes
+// a paintImageMaskXObjectRepeat) or each larger than the last (a paintImageMaskXObjectGroup), from
+// x = 20, 45 pt apart.
+export const MASKS = 12;
+export const MASKS_COLOUR = [0, 128, 0] as const;
+
+export const manyMasksPage = (sizes: "same" | "growing") =>
+  single((doc, page) => {
+    const rows = new Uint8Array(8).map(() => 0x0f);
+    const mask = page.node.newXObject("Mask", rawImage(doc, 8, 8, rows, { ImageMask: true, BitsPerComponent: 1 }));
+    const side = (i: number) => (sizes === "same" ? 30 : 20 + i);
+    const content = Array.from({ length: MASKS }, (_, i) => `q ${side(i)} 0 0 ${side(i)} ${20 + i * 45} 500 cm ${mask} Do Q`).join(" ");
+    rawContent(doc, page, `0 0.50196 0 rg ${content}`);
+  });
+
+// INLINES small inline images of 4 × 4 px, each of one colour (INLINE_COLOUR(i)), from x = 20, 45 pt
+// apart: pdf.js packs ten or more into one atlas (paintInlineImageXObjectGroup).
+export const INLINES = 12;
+export const INLINE_COLOUR = (i: number) => [i * 20, 255 - i * 20, (i * 50) % 256] as const;
+
+export const inlineImagesPage = () =>
+  single((doc, page) => {
+    const hex = (i: number) => Array.from({ length: 16 }, () => INLINE_COLOUR(i).map((c) => c.toString(16).padStart(2, "0")).join("")).join("");
+    const content = Array.from(
+      { length: INLINES },
+      (_, i) => `q 30 0 0 30 ${20 + i * 45} 500 cm BI /W 4 /H 4 /CS /RGB /BPC 8 /F /AHx ID ${hex(i)}> EI Q`,
+    ).join("\n");
+    rawContent(doc, page, content);
+  });
+
+// Three placements of a 2 × 2 px image: wholly left of the page, across its top right corner, and
+// inside it (in that painting order).
+export const offPageImagePage = () =>
+  single((doc, page) => {
+    const name = page.node.newXObject("Rgb", rawImage(doc, 3, 2, new Uint8Array(RGB_PIXELS.flat()), { ColorSpace: "DeviceRGB", BitsPerComponent: 8 }));
+    for (const [x, y] of [[-300, 100], [500, 700], [100, 100]] as const)
+      page.pushOperators(pushGraphicsState(), concatTransformationMatrix(200, 0, 0, 200, x, y), drawObject(name), popGraphicsState());
+  });
+
+// A JPEG image XObject whose data is not a JPEG: pdf.js keeps its paint operation but cannot decode it.
+export const brokenImagePage = () =>
+  single((doc, page) => {
+    const junk = doc.context.stream(new Uint8Array(64).fill(0x42), {
+      Type: "XObject",
+      Subtype: "Image",
+      Width: 50,
+      Height: 30,
+      ColorSpace: "DeviceRGB",
+      BitsPerComponent: 8,
+      Filter: "DCTDecode",
+    });
+    const name = page.node.newXObject("Broken", doc.context.register(junk));
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(100, 0, 0, 60, 100, 600), drawObject(name), popGraphicsState());
+  });

@@ -23,7 +23,9 @@ export class PdfError extends Error {
   }
 }
 
-export async function openPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
+// With warnings, pdf.js writes its warnings to the console (extract.ts's quietly counts and swallows
+// them); otherwise it writes nothing.
+export async function openPdf(bytes: Uint8Array, o: { warnings?: boolean } = {}): Promise<PDFDocumentProxy> {
   const task = getDocument({
     // pdf.js may take over the buffer it is given; the caller keeps its own.
     data: bytes.slice(),
@@ -33,7 +35,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
     disableFontFace: true,
     useSystemFonts: false,
     stopAtErrors: false,
-    verbosity: 0,
+    verbosity: o.warnings ? 1 : 0,
     standardFontDataUrl: asset("standard_fonts"),
     cMapUrl: asset("cmaps"),
     cMapPacked: true,
