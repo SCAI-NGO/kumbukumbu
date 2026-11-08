@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Skills;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -183,6 +184,15 @@ public sealed class EncryptedNoteStore(
         var vault = access.Vault;
         batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
+
+        // The last check of the one rule text files stand under: only strictly inside a skill's folder.
+        var skillsVault = vault.Kind == VaultKinds.Skills ? access.Vault.Name : null;
+        var texts = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+            .Concat(batch.AttachmentMoves.Select(m => m.Target)).Concat(batch.AttachmentRestores.Select(r => r.Restored));
+        if (texts.Any(a => a.Current.MediaType == AttachmentFormat.TextMediaType && !SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
+        {
+            throw new InvalidOperationException("A text file outside a skill's folder; nothing was written.");
+        }
 
         VaultPath? conflict = null;
         var written = await WriteAsync(vault, paths, async session =>
