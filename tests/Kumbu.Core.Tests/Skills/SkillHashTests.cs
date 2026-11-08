@@ -23,6 +23,10 @@ public class SkillHashTests
         Assert.NotEqual(SkillHash.Of([F("ab", "c")]), SkillHash.Of([F("a", "bc")]));
 
     [Fact]
+    public void A_file_boundary_is_not_ambiguous() =>
+        Assert.NotEqual(SkillHash.Of([F("a", "xb\0y")]), SkillHash.Of([F("a", "x"), F("b", "y")]));
+
+    [Fact]
     public void Composed_and_decomposed_paths_hash_alike() =>
         Assert.Equal(SkillHash.Of([F("café.txt", "x")]), SkillHash.Of([F("café.txt", "x")]));
 
