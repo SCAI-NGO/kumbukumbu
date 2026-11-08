@@ -1,5 +1,5 @@
 {
-  "allowed": ["ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort", "history", "diff", "trash", "df", "du", "lscp", "publish", "uname", "help"],
+  "allowed": ["ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort", "history", "diff", "trash", "df", "du", "lscp", "publish", "skills", "uname", "help"],
   "refused": ["restore", "mv", "mkdir", "rm", "mkcp", "rmcp"],
   "lines": [
     { "line": "", "stages": [] },

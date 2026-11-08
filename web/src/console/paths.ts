@@ -102,6 +102,12 @@ export const commandTable: Record<string, CommandEntry> = {
     values: [],
     find: (o) => ({ paths: o.length > 1 ? [1] : [], missing: o[0] === "ls" ? "cwd" : undefined }),
   },
+  // SkillsCommand.cs: operand 0 is the subcommand; a skill's name stays a name, so only what looks like a path is
+  // resolved, and never find's request. No default: without a path, skills ls and check cover every vault.
+  skills: {
+    values: [],
+    find: (o) => ({ paths: o.length > 1 && o[0] !== "find" && looksLikePath(o[1]) ? [1] : [] }),
+  },
   // Df.cs: without a vault, every vault of one's own; Du.cs: without a path, every vault, so the working directory goes in.
   df: { values: [], find: (o) => ({ paths: first(o) }) },
   du: { values: ["-d", "--max-depth"], find: (o) => ({ paths: first(o), missing: "cwd" }) },

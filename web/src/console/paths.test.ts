@@ -128,6 +128,15 @@ describe("resolveLine", () => {
     expect(resolveLine("publish", "/Work")).toBe("publish");
   });
 
+  it("keeps skill names as names and resolves only what looks like a path", () => {
+    expect(resolveLine("skills ls", "/Work")).toBe("skills ls");
+    expect(resolveLine("skills cat write-as-alice", "/Work")).toBe("skills cat write-as-alice");
+    expect(resolveLine("skills cat write-as-alice/SKILL.md", "/Work")).toBe("skills cat write-as-alice/SKILL.md");
+    expect(resolveLine("skills check ./_skills", "/Work")).toBe("skills check /Work/_skills");
+    expect(resolveLine("skills cat ../Skills/pdf", "/Work/notes")).toBe("skills cat /Work/Skills/pdf");
+    expect(resolveLine('skills find "../anything"', "/Work")).toBe('skills find "../anything"');
+  });
+
   it("sends a line unchanged when every path is already absolute", () => {
     expect(resolveLine('rg  -n   foo "/Work/a.md"', cwd)).toBe('rg  -n   foo "/Work/a.md"');
   });

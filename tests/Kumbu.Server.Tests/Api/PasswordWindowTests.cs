@@ -188,6 +188,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["DELETE /api/publications/{vault}/{**path}"] = "withdrawing reduces what is out: never guarded",
         ["PUT /api/unpublishable/{vault}/{**path}"] = "a mark reduces what can go out: never guarded",
         ["DELETE /api/unpublishable/{vault}/{**path}"] = "the owner's own mark, lifted in her session: it publishes nothing",
+        ["PUT /api/keys/{id}/instructions"] = "how skills reach a key's instructions: a preference about a text, no right (skills spec §3.4)",
+        ["PUT /api/connections/{id}/instructions"] = "how skills reach a connection's instructions: a preference about a text, no right (skills spec §3.4)",
+        ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
     };
 
     [Fact]

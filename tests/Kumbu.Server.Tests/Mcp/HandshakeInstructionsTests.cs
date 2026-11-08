@@ -6,11 +6,16 @@ using Kumbu.Core.Sh;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Mcp;
 
@@ -42,11 +47,13 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
         return (alice, key);
     }
 
-    private async Task<McpClient> ClientAsync(string bearer)
+    private Task<McpClient> ClientAsync(string bearer) => ClientAsync(app.PublicApi, bearer);
+
+    private static async Task<McpClient> ClientAsync(WebApplicationFactory<Program> api, string bearer)
     {
         var transport = new HttpClientTransport(
-            new HttpClientTransportOptions { Endpoint = new Uri(app.PublicApi.Server.BaseAddress, "mcp"), AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" } },
-            app.PublicApi.CreateClient(), NullLoggerFactory.Instance, ownsHttpClient: false);
+            new HttpClientTransportOptions { Endpoint = new Uri(api.Server.BaseAddress, "mcp"), AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" } },
+            api.CreateClient(), NullLoggerFactory.Instance, ownsHttpClient: false);
         return await McpClient.CreateAsync(transport, cancellationToken: Ct);
     }
 
@@ -150,6 +157,9 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
         var counter = app.PublicApi.Services.GetRequiredService<HandshakeCounter>();
         await using var client = await ClientAsync(key);
 
+        // The counter is the app's: this holds as the "app" collection runs its tests one after another, so no other
+        // test's handshake can be counted in between.
+
         var before = counter.Builds;
         await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "ls /" }, cancellationToken: Ct);
         await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "skills ls" }, cancellationToken: Ct);
@@ -185,4 +195,80 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
     [Fact]
     public void The_exception_to_data_not_instructions_is_worded() =>
         Assert.Contains("the exception is a skill whose description matches the user's task", ServerInstructions.Text);
+
+    [Fact]
+    public async Task Initialising_doesnt_move_a_vaults_last_use()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
+        await alice.CreateAsync("_skills/beete/SKILL.md", "---\nname: beete\ndescription: Plans the beds.\n---\n");
+        var bob = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        await alice.ShareWithAsync(bob, "Garten", label: "Bob");
+        var vaultId = await alice.VaultIdAsync();
+        var (key, info) = await app.PublicApi.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Claude Code", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read }, Ct);
+        var slots = app.Database.GetCollection<SlotDocument>("slots");
+        var slot = Builders<SlotDocument>.Filter.Eq(s => s.KeyId, info.Id) & Builders<SlotDocument>.Filter.Eq(s => s.Vault, vaultId);
+
+        await using (var client = await ClientAsync(key))
+        {
+            Assert.Contains("- beete (/Garten/_skills/beete, ", client.ServerInstructions);
+        }
+
+        // The last use is written beside the request: give it the time a use takes to show (below).
+        await Task.Delay(500, Ct);
+        Assert.Null((await slots.Find(slot).SingleAsync(Ct)).UsedAt);
+
+        // A read is a use, and shows.
+        var (failed, text) = await bob.ShAsync("cat /Garten/_skills/beete/SKILL.md", key);
+        Assert.False(failed, text);
+        DateTime? used = null;
+        for (var i = 0; i < 50 && used is null; i++)
+        {
+            used = (await slots.Find(slot).SingleAsync(Ct)).UsedAt;
+            if (used is null) await Task.Delay(100, Ct);
+        }
+
+        Assert.NotNull(used);
+    }
+
+    /// <summary>A host whose handshake build runs <paramref name="fault"/> first, with its time.</summary>
+    private WebApplicationFactory<Program> Faulty(FakeTimeProvider time, Func<CancellationToken, Task> fault) =>
+        app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+            s.RemoveAll<HandshakeCounter>();
+            s.AddSingleton(new HandshakeCounter { FaultBeforeBuild = fault });
+        }));
+
+    [Fact]
+    public async Task A_failing_build_leaves_the_static_text()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = Faulty(time, _ => throw new InvalidOperationException("Planted"));
+        var alice = await RestClient.NewAsync(api, vault: "Work");
+        var key = await alice.KeyAsync("work", KeyRight.Read);
+
+        await using var client = await ClientAsync(api, key);
+
+        Assert.Equal(ServerInstructions.Text, client.ServerInstructions);
+        await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "ls /" }, cancellationToken: Ct);
+    }
+
+    [Fact]
+    public async Task A_build_that_takes_too_long_leaves_the_static_text()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = Faulty(time, async ct =>
+        {
+            time.Advance(HandshakeInstructions.Timeout + TimeSpan.FromSeconds(1));
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        });
+        var alice = await RestClient.NewAsync(api, vault: "Work");
+        var key = await alice.KeyAsync("work", KeyRight.Read);
+
+        await using var client = await ClientAsync(api, key);
+
+        Assert.Equal(ServerInstructions.Text, client.ServerInstructions);
+    }
 }

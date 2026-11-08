@@ -16,6 +16,9 @@ internal sealed class HandshakeCounter
 {
     private int _builds;
 
+    /// <summary>For tests: runs before a section is built, with its bounded token; an exception there is a failed build.</summary>
+    public Func<CancellationToken, Task>? FaultBeforeBuild { get; init; }
+
     public int Builds => Volatile.Read(ref _builds);
 
     public void Built() => Interlocked.Increment(ref _builds);
@@ -30,6 +33,9 @@ internal sealed class HandshakeCounter
 internal static class HandshakeInstructions
 {
     private const string HandshakeId = "kumbu.mcp.handshake";
+
+    /// <summary>How long the section may take; past it the handshake goes with the static text.</summary>
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     /// <summary>Notes the id of an <c>initialize</c> or <c>server/discover</c> request.</summary>
     public static McpMessageHandler Incoming(McpMessageHandler next) => async (context, ct) =>
@@ -64,27 +70,47 @@ internal static class HandshakeInstructions
 
     private static async Task<string> TextAsync(IServiceProvider services, CancellationToken ct)
     {
+        // Bounded, so a slow vault can't hold up the handshake; through the app's time, so a test can pass it.
+        using var timeout = new CancellationTokenSource(Timeout, services.GetRequiredService<TimeProvider>());
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
+            var counter = services.GetRequiredService<HandshakeCounter>();
+            if (counter.FaultBeforeBuild is { } fault) await fault(bounded.Token);
             var caller = services.GetRequiredService<RequestCaller>();
             var mode = caller.Credential switch
             {
-                ApiKeyCredential key => await services.GetRequiredService<ApiKeys>().InstructionsAsync(key.KeyId, ct),
-                ConnectionCredential connection => await services.GetRequiredService<Connections>().InstructionsAsync(connection.ConnectionId, ct),
+                ApiKeyCredential key => await services.GetRequiredService<ApiKeys>().InstructionsAsync(key.KeyId, bounded.Token),
+                ConnectionCredential connection => await services.GetRequiredService<Connections>().InstructionsAsync(connection.ConnectionId, bounded.Token),
                 _ => InstructionsMode.ListAndHint,
             };
-            IReadOnlyList<Skill> skills = mode == InstructionsMode.HintOnly
-                ? []
-                : await new SkillDirectory(services.GetRequiredService<INoteStore>(), services.GetRequiredService<IWriterLabels>()).ListAsync(null, ct);
-            services.GetRequiredService<HandshakeCounter>().Built();
+            IReadOnlyList<Skill> skills = mode == InstructionsMode.HintOnly ? [] : await ListAsync(services, bounded.Token);
+            counter.Built();
             return ServerInstructions.Text + "\n\n" + SkillInstructions.Section(mode, skills);
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e) when (!ct.IsCancellationRequested)
         {
-            // The type only: a message could carry a vault's or a skill's name.
+            // The type only: a message could carry a vault's or a skill's name. The timeout lands here too.
             services.GetService<ILoggerFactory>()?.CreateLogger(typeof(HandshakeInstructions).FullName!)
                 .LogWarning("The skills section of the instructions failed ({Type}); the instructions go without it", e.GetType().Name);
             return ServerInstructions.Text;
+        }
+    }
+
+    /// <summary>The skills the caller may read. Listing them reads every vault she reaches, which is no use of any: the
+    /// owner of a shared vault would see its last use move with each connection her member's agent opens.</summary>
+    private static async Task<IReadOnlyList<Skill>> ListAsync(IServiceProvider services, CancellationToken ct)
+    {
+        var store = services.GetRequiredService<EncryptedNoteStore>();
+        var counts = store.CountsUse;
+        store.CountsUse = false;
+        try
+        {
+            return await new SkillDirectory(store, services.GetRequiredService<IWriterLabels>()).ListAsync(null, ct);
+        }
+        finally
+        {
+            store.CountsUse = counts;
         }
     }
 }
