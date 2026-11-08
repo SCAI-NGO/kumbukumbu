@@ -4,7 +4,7 @@ using Kumbu.Core.Tests.Fakes;
 
 namespace Kumbu.Core.Tests.Sh;
 
-/// <summary>A vault's archive (<c>/&lt;vault&gt;/_archive/</c>) stays out of ls, tags and backlinks unless asked with
+/// <summary>A vault's archive (<c>/&lt;vault&gt;/_archive/</c>) stays out of ls, tags, backlinks and rg unless asked with
 /// --archive or by naming a path inside it; a folder <c>_archive</c> elsewhere is an ordinary folder.</summary>
 public class ArchiveHiddenTests
 {
@@ -111,5 +111,82 @@ public class ArchiveHiddenTests
 
         Assert.False(du.IsError, du.Output);
         Assert.Contains(du.Output.Split('\n'), l => l.EndsWith("  /Work/_archive/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Rg_leaves_archived_notes_out_unless_asked()
+    {
+        const string Living = "/Work/Inbox/_archive/kept.md:1:kept #pump\n/Work/Inbox/note.md:1:see [[Overview]] and [[Gone]] #pump\n/Work/Overview.md:2:#pump";
+        Assert.Equal(Living, (await Run("rg pump /Work")).Output);
+        Assert.Equal(Living, (await Run("rg pump")).Output);
+
+        var asked = await Run("rg --archive pump /Work");
+        Assert.Equal(
+            "/Work/_archive/Inbox/old.md:1:old [[Overview]] and [[Gone]] #pump #old\n/Work/Inbox/_archive/kept.md:1:kept #pump\n/Work/Inbox/note.md:1:see [[Overview]] and [[Gone]] #pump\n/Work/Overview.md:2:#pump",
+            asked.Output);
+        Assert.Equal(asked.Output, (await Run("rg pump --archive")).Output);
+    }
+
+    [Fact]
+    public async Task Rg_inside_the_archive_searches_it()
+    {
+        const string Old = "/Work/_archive/Inbox/old.md:1:old [[Overview]] and [[Gone]] #pump #old";
+        Assert.Equal(Old, (await Run("rg pump /Work/_archive/")).Output);
+        Assert.Equal(Old, (await Run("rg pump /Work/_archive/Inbox/old.md")).Output);
+        Assert.Equal($"{Old}\n/Work/Overview.md:2:#pump", (await Run("rg pump /Work/Overview.md /Work/_archive/Inbox")).Output);
+    }
+
+    [Fact]
+    public async Task Rg_names_no_archived_note_in_its_name_hint()
+    {
+        Assert.Equal(ShellResult.Ok(""), await Run("rg -F Gone.md /Work"));
+        Assert.Contains("note name matches: /Work/_archive/Gone.md", (await Run("rg --archive -F Gone.md /Work")).Output);
+    }
+
+    [Fact]
+    public async Task Rg_files_leaves_archived_notes_out_unless_asked()
+    {
+        Assert.Equal(ShellResult.Ok("/Work/Inbox/_archive/kept.md\n/Work/Inbox/note.md\n/Work/Overview.md"), await Run("rg --files /Work"));
+        Assert.Equal(
+            ShellResult.Ok("/Work/_archive/Gone.md\n/Work/_archive/Inbox/old.md\n/Work/Inbox/_archive/kept.md\n/Work/Inbox/note.md\n/Work/Overview.md"),
+            await Run("rg --files --archive /Work"));
+        Assert.Equal(ShellResult.Ok("/Work/_archive/Gone.md\n/Work/_archive/Inbox/old.md"), await Run("rg --files /Work/_archive/"));
+        Assert.Equal(ShellResult.Ok("/Work/_archive/Gone.md"), await Run("rg --files /Work/_archive/Gone.md"));
+    }
+
+    [Fact]
+    public async Task Rg_files_with_a_tag_leaves_archived_notes_out_unless_asked()
+    {
+        Assert.Equal(ShellResult.Ok("/Work/Inbox/_archive/kept.md\n/Work/Inbox/note.md\n/Work/Overview.md"), await Run("rg --files --tag pump /Work"));
+        Assert.Equal(
+            ShellResult.Ok("/Work/_archive/Inbox/old.md\n/Work/Inbox/_archive/kept.md\n/Work/Inbox/note.md\n/Work/Overview.md"),
+            await Run("rg --files --archive --tag pump /Work"));
+        Assert.True((await Run("rg --files --tag old /Work")).IsError);
+        Assert.Equal(ShellResult.Ok("/Work/_archive/Inbox/old.md"), await Run("rg --files --tag old /Work/_archive/"));
+        Assert.Equal(ShellResult.Ok("/Work/_archive/Inbox/old.md"), await Run("rg --files --archive --tag old /Work"));
+    }
+
+    [Fact]
+    public async Task Rg_over_a_vault_holding_only_its_archive_finds_nothing()
+    {
+        var store = new InMemoryNoteStore(("/Old/_archive/a.md", "a #pump\n"));
+
+        Assert.Equal(ShellResult.Ok(""), await Run("rg pump /Old", store));
+        Assert.Equal(ShellResult.Ok(""), await Run("rg pump", store));
+        Assert.Equal(ShellResult.Ok(""), await Run("rg --files /Old", store));
+        Assert.Equal(ShellResult.Ok(""), await Run("rg --files", store));
+        Assert.Equal("/Old/_archive/a.md:1:a #pump", (await Run("rg --archive pump /Old", store)).Output);
+        Assert.Equal(ShellResult.Ok("/Old/_archive/a.md"), await Run("rg --files --archive /Old", store));
+    }
+
+    [Fact]
+    public async Task Help_rg_and_semsearch_name_archive()
+    {
+        Assert.Contains("\n  --archive ", (await Run("help rg")).Output);
+        var semsearch = (await Run("help semsearch")).Output;
+        Assert.StartsWith("semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path]", semsearch);
+        Assert.Contains("\n  --archive ", semsearch);
+        Assert.Contains("\n  semsearch [--archive] <query> [path] ", Kumbu.Core.Sh.Manual.ToolDescription);
+        Assert.Contains("\n  semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path] ", (await Run("help")).Output);
     }
 }

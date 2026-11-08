@@ -903,4 +903,40 @@ public class RgPdfTests
             (await Run("help rg")).Output);
         Assert.Contains("rg --regions also says where on the page a match lies.", (await Run("help pdf")).Output);
     }
+
+    [Fact]
+    public async Task An_archived_pdf_is_searched_only_when_asked()
+    {
+        await Paper("/V/_archive/paper.pdf");
+
+        Assert.Equal("/V/plan.md:2:needle in a note", (await Run("rg needle /V")).Output);
+        Assert.DoesNotContain("_archive", (await Run("rg needle")).Output);
+        Assert.Equal(
+            "/V/plan.md:2:needle in a note\n/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again",
+            (await Run("rg --archive needle /V")).Output);
+        Assert.Equal("/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again", (await Run("rg needle /V/_archive/")).Output);
+        Assert.Equal("/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again", (await Run("rg needle /V/_archive/paper.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task The_scan_hint_names_no_archived_pdf()
+    {
+        await Scanned("/V/_archive/scan.pdf", PageType.Image);
+
+        Assert.Equal("", (await Run("rg zzz /V")).Output);
+        Assert.Equal($"{PictureHintStart}/V/_archive/scan.pdf (1 page of scans or photos){PictureHintEnd}", (await Run("rg --archive zzz /V")).Output);
+        Assert.Equal($"{PictureHintStart}/V/_archive/scan.pdf (1 page of scans or photos){PictureHintEnd}", (await Run("rg zzz /V/_archive/")).Output);
+    }
+
+    [Fact]
+    public async Task A_vault_holding_only_archived_pdfs_finds_nothing()
+    {
+        _store.AddVault("P");
+        await Paper("/P/_archive/paper.pdf");
+
+        var result = await Run("rg needle /P");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("", result.Output);
+    }
 }

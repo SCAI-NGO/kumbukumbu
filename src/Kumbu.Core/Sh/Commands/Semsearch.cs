@@ -19,16 +19,16 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
 {
     private const int DefaultMax = 10;
 
-    private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true)];
+    private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true), new(null, "archive")];
 
     public string Name => "semsearch";
 
-    public string Usage => "semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]";
+    public string Usage => "semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path]";
 
     public string Summary => "ranked search by words and meaning; finds sections and PDF pages";
 
     public string Help => """
-        semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]
+        semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path]
           Ranked search for the sections that best match a question or a topic, in every vault or below
           a path. Combines two rankings: by meaning (embeddings: the same idea in other words, also across
           languages) and by words (BM25: exact terms, names, abbreviations). The meaning score gets a
@@ -43,6 +43,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
           --words    rank by words only        --meaning  rank by meaning only
           --tag T    only notes that carry #T (nested too, ignoring case; 'help tags'); repeat
                      for notes with all of them. The ranking is the same, over fewer notes.
+          --archive  search a vault's archive (_archive/) too: its notes and PDF pages; a path inside it always is
 
           semsearch how do agents read notes
           semsearch --tag research modelling capabilities
@@ -97,6 +98,9 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
             {
                 return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
             }
+
+            // After the check above, so that a vault holding nothing but its archive finds nothing rather than nothing there.
+            if (!ArchiveFolder.Shown(scope, options.Has("archive"))) found = [.. found.Where(n => !ArchiveFolder.Contains(n.Path))];
         }
 
         if (options.Values("tag") is { Count: > 0 } tags)
@@ -107,7 +111,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         }
 
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
-        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages) switch
+        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages, options.Has("archive")) switch
         {
             { MeaningUnavailable: true } r => (null, r.Semantic, false),
             var r => (r.Hits, r.Semantic, r.FellBackToWords),

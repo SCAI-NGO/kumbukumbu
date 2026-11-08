@@ -40,7 +40,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
         new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true), new(null, "tag", TakesValue: true),
-        new(null, "regions"),
+        new(null, "regions"), new(null, "archive"),
     ];
 
     public string Name => "rg";
@@ -88,6 +88,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
+          --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
         never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.
@@ -118,7 +119,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             return ShellResult.Error("rg: --regions says where matches lie in PDFs; it doesn't go with -l, -c, -v, --files, --tag or --version, nor right of a pipe");
         }
 
-        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, input, ct);
+        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, options.Has("archive"), input, ct);
 
         List<string> patterns = [.. options.Values("regexp")];
         var operands = options.Operands;
@@ -214,8 +215,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 below = [new Note(path, content)];
             }
 
-            foreach (var note in below) found.TryAdd(note.Path, note);
-            foreach (var pdf in pdfs) documents.TryAdd(pdf.Path, pdf.Current);
+            // After the checks above, so that a vault holding nothing but its archive has nothing to find, not nothing there.
+            var shown = ArchiveFolder.Shown(path, options.Has("archive"));
+            foreach (var note in below.Where(n => shown || !ArchiveFolder.Contains(n.Path))) found.TryAdd(note.Path, note);
+            foreach (var pdf in pdfs.Where(p => shown || !ArchiveFolder.Contains(p.Path))) documents.TryAdd(pdf.Path, pdf.Current);
         }
 
         IReadOnlyList<Note> searched = [.. found.Values];
@@ -572,7 +575,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             lineNumbers ? $"{n}{sep}{text}" : text)));
     }
 
-    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, string? input, CancellationToken ct)
+    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, bool archive, string? input, CancellationToken ct)
     {
         if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
         if (tags.Count > 0)
@@ -580,7 +583,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");
             var scope = VaultPath.Root;
             if (operands.Count == 1 && !CommandArgs.TryParsePath(Name, operands[0], out scope, out var scopeError)) return scopeError!;
-            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, archive: true, ct);
+            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, archive, ct);
             if (all is null) return readError!;
             var (carrying, tagError) = TagFilter.Narrow(all, tags, scope);
             return carrying is null
@@ -600,7 +603,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 else if (!await HasNothingToSearchAsync(path, ct)) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
             }
 
-            found.UnionWith(below.Select(p => p.Value));
+            var shown = ArchiveFolder.Shown(path, archive);
+            found.UnionWith(below.Where(p => shown || !ArchiveFolder.Contains(p)).Select(p => p.Value));
         }
 
         return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));
