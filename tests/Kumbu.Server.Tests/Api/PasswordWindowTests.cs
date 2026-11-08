@@ -194,6 +194,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/skills/find"] = Reading,
         ["POST /api/skills/copy"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
         ["POST /api/skills/move"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
+        ["GET /api/skills/zip"] = "one skill's files, which the session reads one by one anyway, as one download: no vault export (skills spec §3.12)",
         ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
     };
 

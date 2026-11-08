@@ -50,17 +50,17 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         : name.Contains('/', StringComparison.Ordinal) ? "a skill's name has no '/'"
         : NoteNames.NameProblem(VaultPath.Root.Child("x").Child(name));
 
-    private sealed record Source(VaultAccess? Access, VaultPath? Folder, string Name, IReadOnlyList<SourceFile> Files);
+    internal sealed record Source(VaultAccess? Access, VaultPath? Folder, string Name, IReadOnlyList<SourceFile> Files);
 
     /// <summary>A file relative to the skill's folder: a note's or text file's text, or an attachment's bytes.</summary>
-    private sealed record SourceFile(string Path, string? Text, byte[]? Bytes, (int W, int H)? Dimensions);
+    internal sealed record SourceFile(string Path, string? Text, byte[]? Bytes, (int W, int H)? Dimensions);
 
     private async Task<VaultPath> RunAsync(SkillCopyRequest request, bool move, CancellationToken ct)
     {
         var command = move ? "move" : "copy";
         var open = await caller.OpenVaultsAsync(ct);
         var marked = open.FirstOrDefault(v => v.IsSkillsVault)?.Name;
-        var source = await SourceAsync(request.From, open, marked, ct);
+        var source = await SourceAsync(store, request.From, open, marked, ct);
         var target = open.FirstOrDefault(v => string.Equals(v.Name, request.To, StringComparison.Ordinal))
             ?? throw ApiErrors.NotFound($"There is no vault '{request.To}'.");
         var name = request.Name ?? source.Name;
@@ -114,7 +114,8 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         return folder;
     }
 
-    private async Task<Source> SourceAsync(string from, IReadOnlyList<VaultAccess> open, string? marked, CancellationToken ct)
+    /// <summary>The skill at <paramref name="from"/> as <paramref name="store"/> reads it: its folder's name and every file, <c>SKILL.md</c> first.</summary>
+    internal static async Task<Source> SourceAsync(EncryptedNoteStore store, string from, IReadOnlyList<VaultAccess> open, string? marked, CancellationToken ct)
     {
         if (from.StartsWith(SystemPrefix, StringComparison.Ordinal))
         {

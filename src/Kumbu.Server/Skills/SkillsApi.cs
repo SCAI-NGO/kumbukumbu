@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
@@ -38,6 +39,7 @@ public static class SkillsApi
         group.MapGet("/find", FindAsync).Errors(400, 401, 403, 404, 503);
         group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(401, 403, 404, 503);
     }
 
     private static async Task<Ok<SkillCopiedView>> CopyAsync(
@@ -47,6 +49,17 @@ public static class SkillsApi
     private static async Task<Ok<SkillCopiedView>> MoveAsync(
         SkillCopyRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, Publishing.PublicationStore publishing, ILoggerFactory logs, CancellationToken ct) =>
         TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).MoveAsync(body, ct)).Value));
+
+    /// <summary>A skill she can read (its folder, or <c>system:&lt;name&gt;</c>) as a <c>.zip</c> under its folder's name.</summary>
+    private static async Task<FileContentHttpResult> ZipAsync([FromQuery] string? path, HttpContext http, RequestCaller caller, EncryptedNoteStore store, TimeProvider time, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw ApiErrors.NotFound("Give the skill's folder, as path.");
+        var open = await caller.OpenVaultsAsync(ct);
+        var source = await SkillCopier.SourceAsync(store, path, open, open.FirstOrDefault(v => v.IsSkillsVault)?.Name, ct);
+        var files = source.Files.Select(f => (f.Path, f.Bytes ?? Encoding.UTF8.GetBytes(f.Text!))).ToList();
+        http.Response.Headers.ContentDisposition = SkillZip.Disposition(source.Name);
+        return TypedResults.File(SkillZip.Of(source.Name, files, time.GetUtcNow().UtcDateTime), "application/zip");
+    }
 
     private static async Task<Ok<SkillsView>> ListAsync(
         RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections, TimeProvider time, CancellationToken ct)

@@ -256,7 +256,7 @@ var webApp = new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
-        // The reader page, s.html, is never cached (publish spec §3.12).
+        // The reader page, s.html, and the skill page, k.html, are never cached (publish spec §3.12, skills design §3.12).
         context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/assets")
             ? "public, max-age=31536000, immutable"
             : ReaderPaths.Is(context.Context.Request.Path) ? "no-store" : "no-cache";
@@ -300,11 +300,15 @@ app.MapSharingApi();
 app.MapPublicationApi();
 app.MapSkillsApi();
 app.MapReaderApi();
-// The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
-// HEAD too, which would otherwise fall through to the web app's shell.
-app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
-    ? Results.Stream(page.CreateReadStream(), "text/html")
-    : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+app.MapSkillPageApi();
+// The reader page (publish spec §3.12) and the skill page (skills design §3.12), entries of their own: the code is in
+// the fragment, which reaches no server. HEAD too, which would otherwise fall through to the web app's shell.
+foreach (var (route, file) in new[] { ("/s", "s.html"), ("/k", "k.html") })
+{
+    app.MapMethods(route, [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo(file) is { Exists: true } page
+        ? Results.Stream(page.CreateReadStream(), "text/html")
+        : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+}
 
 // WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
 // With WebDAV switched off, / advertises nothing: OPTIONS and PROPFIND there are answered as on any other page.

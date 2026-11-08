@@ -13,6 +13,7 @@ public sealed class StaticFilesTests : IDisposable
 {
     private const string Index = "<!doctype html><title>Kumbu test shell</title>";
     private const string ReaderPage = "<!doctype html><title>Kumbu test reader</title>";
+    private const string SkillPage = "<!doctype html><title>Kumbu test skill page</title>";
 
     private readonly string _webRoot = Directory.CreateTempSubdirectory("kumbu-wwwroot-").FullName;
     private readonly WebApplicationFactory<Program> _web;
@@ -22,6 +23,7 @@ public sealed class StaticFilesTests : IDisposable
         // A fixture of its own, so the tests don't depend on a pnpm build of web/.
         File.WriteAllText(Path.Combine(_webRoot, "index.html"), Index);
         File.WriteAllText(Path.Combine(_webRoot, "s.html"), ReaderPage);
+        File.WriteAllText(Path.Combine(_webRoot, "k.html"), SkillPage);
         Directory.CreateDirectory(Path.Combine(_webRoot, "assets"));
         File.WriteAllText(Path.Combine(_webRoot, "assets", "app-abc123.js"), "console.log(1);");
         File.WriteAllText(Path.Combine(_webRoot, "manifest.webmanifest"), """{"name":"Kumbu²"}""");
@@ -137,6 +139,35 @@ public sealed class StaticFilesTests : IDisposable
         Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
     }
 
+    [Theory]
+    [InlineData("/k")]
+    [InlineData("/k?x=1")]
+    [InlineData("/k.html")]
+    public async Task The_skill_page_has_the_readers_headers(string path)
+    {
+        using var response = await _web.CreateClient().GetAsync(path, Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(SkillPage, await response.Content.ReadAsStringAsync(Ct));
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(Security.ReaderPagePolicy, Assert.Single(response.Headers.GetValues("Content-Security-Policy")));
+        Assert.Equal("noindex, nofollow", string.Join(", ", response.Headers.GetValues("X-Robots-Tag")));
+        Assert.Equal("no-referrer", Assert.Single(response.Headers.GetValues("Referrer-Policy")));
+        Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+    }
+
+    [Fact]
+    public async Task A_head_of_the_skill_page_answers_as_its_get()
+    {
+        static string Headers(HttpResponseMessage r) => string.Join('\n', r.Headers.Concat(r.Content.Headers)
+            .Where(h => h.Key != "Date").OrderBy(h => h.Key, StringComparer.OrdinalIgnoreCase).Select(h => $"{h.Key}: {string.Join(" | ", h.Value)}"));
+        using var get = await _web.CreateClient().GetAsync("/k", Ct);
+        using var head = await _web.CreateClient().SendAsync(new HttpRequestMessage(HttpMethod.Head, "/k"), Ct);
+
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+        Assert.Equal(Headers(get), Headers(head));
+    }
+
     [Fact]
     public async Task A_head_of_the_reader_page_answers_as_its_get()
     {
@@ -167,6 +198,8 @@ public sealed class StaticFilesTests : IDisposable
     [InlineData("/api/session", "no-store")]
     [InlineData("/settings", "no-cache")]
     [InlineData("/sx", "no-cache")]
+    [InlineData("/kx", "no-cache")]
+    [InlineData("/api/keys", "no-store")]
     public async Task Other_paths_carry_none_of_the_reader_headers(string path, string cache)
     {
         using var response = await _web.CreateClient().GetAsync(path, Ct);
