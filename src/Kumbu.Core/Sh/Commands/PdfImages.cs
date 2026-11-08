@@ -43,12 +43,12 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
                             points as 'pdf info' gives the regions; --rotate D turns it as with pdf
           --list            only list the images: page, number, pixel size, where on the page in points; writes nothing
           --all             also the small ones (under 1 % of their page: bullets, rules, icons), left out otherwise
-          An image is stored at most 8 megapixels (a larger one is scaled down, and the output says from what), as a
-          PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
+          An image is stored at 8 megapixels at most (a larger one is scaled down, and the output says from what), as
+          a PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
           naming every page; duplicates are found within one call, so a later call stores a repeated image again.
           It stores at most 500 images in one call; for more, it stores nothing and names a page range that fits.
           pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
-          can't be read; the output names their pages, look at them with pdf --crop. A long PDF stops after about
+          can't be read; the output names their pages; look at them with pdf --crop. A long PDF stops after about
           20 seconds, the last line naming the pages to go on with. A writing command: it needs write access to
           the folder.
 
@@ -66,7 +66,8 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
 
     /// <summary>
     /// The pages listed, one request each, within half the budget: their images in page order, the first page not
-    /// listed (null when all were), and the error that stopped the listing early, if one did.
+    /// listed (null when all were), the last page of the range, cut to the page count once it is known, and the
+    /// error that stopped the listing early, if one did.
     /// </summary>
     private sealed record Listing(IReadOnlyList<PdfPageImages> Pages, int? Next, int? Last, ShellResult? Error);
 
@@ -201,7 +202,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
             catch (PixelsUnavailableException e)
             {
                 // A first page past the end: the sidecar has no count to give, page 1 has.
-                if (pages.Count == 0 && n > 1 && e.Problem == PixelsProblem.Failed && await PageCountAsync(call, ct) is { } count
+                if (pages.Count == 0 && n > 1 && e.Problem == PixelsProblem.NoSuchPage && await PageCountAsync(call, ct) is { } count
                     && !call.Range.TryClamp(count, call.Path.Value, out _, out var clampError))
                 {
                     return new(pages, n, last, Invalid($"pdfimages: {clampError}"));

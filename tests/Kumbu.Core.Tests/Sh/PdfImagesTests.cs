@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Reflection;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -61,7 +62,7 @@ public class PdfImagesTests
             Called($"list {page}");
             // As AttachmentPixels words the sidecar's no_such_page.
             if (ListFails(page) is { } e) throw e;
-            if (page > PageCount) throw new PixelsUnavailableException($"{path} has no page {page}");
+            if (page > PageCount) throw new PixelsUnavailableException($"{path} has no page {page}", PixelsProblem.NoSuchPage);
             return Task.FromResult(new PdfPageImages(page, PageCount, 595, 842, Over.GetValueOrDefault(page), Pages.GetValueOrDefault(page, [])));
         }
 
@@ -91,7 +92,18 @@ public class PdfImagesTests
     }
 
     private readonly InMemoryNoteStore _store = new(("/Work/plan.md", "a note\n"));
-    private readonly FakeTimeProvider _time = new(new DateTime(2026, 11, 8, 11, 0, 0, DateTimeKind.Utc));
+    /// <summary>A clock that moves on by a timer's time as the timer is set, so a pause through it is over at once.</summary>
+    private sealed class SteppingTime(DateTimeOffset start) : FakeTimeProvider(start)
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan) Advance(dueTime);
+            return timer;
+        }
+    }
+
+    private readonly FakeTimeProvider _time = new SteppingTime(new DateTime(2026, 11, 8, 11, 0, 0, DateTimeKind.Utc));
     private readonly FakePixels _pixels;
     private readonly AttachmentWriter _files;
     private readonly Shell _sh;
@@ -107,19 +119,6 @@ public class PdfImagesTests
     private static CancellationToken Ct => CancellationToken.None;
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, Ct);
-
-    /// <summary>Runs a line whose command waits on the clock (a busy sidecar tried again), moving the clock on until it is done.</summary>
-    private async Task<ShellResult> RunWaiting(string line)
-    {
-        var running = Run(line);
-        while (!running.IsCompleted)
-        {
-            await Task.Delay(1, Ct);
-            _time.Advance(TimeSpan.FromMilliseconds(250));
-        }
-
-        return await running;
-    }
 
     private static byte[] Pdf(int size = 2048) => [.. "%PDF-1.7"u8.ToArray(), .. new byte[size - 8]];
 
@@ -202,6 +201,21 @@ public class PdfImagesTests
 
         Assert.Equal(expected, await Run("pdfimages /Work/manual.pdf /Work/images/ --rotate 90"));
         Assert.Equal(expected, await Run("pdfimages --list /Work/manual.pdf --rotate 90"));
+        Assert.Empty(_pixels.Calls);
+    }
+
+    [Fact]
+    public async Task The_root_and_a_relative_target_are_refused()
+    {
+        await Upload();
+
+        var root = await Run("pdfimages /Work/manual.pdf /");
+        var relative = await Run("pdfimages /Work/manual.pdf images/");
+
+        Assert.Equal(ShellResult.Error("pdfimages: /: images are stored in a folder of a vault, e.g. /Work/images/") with { Kind = ShellErrorKind.Invalid }, root);
+        Assert.True(relative.IsError);
+        Assert.Equal(ShellErrorKind.Invalid, relative.Kind);
+        Assert.StartsWith("pdfimages: images/: paths must be absolute", relative.Output);
         Assert.Empty(_pixels.Calls);
     }
 
@@ -315,6 +329,18 @@ public class PdfImagesTests
     }
 
     [Fact]
+    public async Task A_first_page_above_1_that_fails_otherwise_asks_for_no_page_count()
+    {
+        await Upload();
+        _pixels.ListFails = p => p == 2 ? new PixelsUnavailableException("reading the images of page 2 of /Work/manual.pdf took too long") : null;
+
+        var result = await Run("pdfimages --list /Work/manual.pdf 2-");
+
+        Assert.Equal(ShellResult.Error("pdfimages: reading the images of page 2 of /Work/manual.pdf took too long"), result);
+        Assert.Equal(["list 2"], _pixels.Calls);
+    }
+
+    [Fact]
     public async Task A_failure_of_the_sidecar_is_quoted()
     {
         await Upload();
@@ -349,7 +375,7 @@ public class PdfImagesTests
         for (var i = 0; i < 3; i++) _pixels.Throws.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
 
         var started = _time.GetUtcNow();
-        var result = await RunWaiting("pdfimages --list /Work/manual.pdf 1");
+        var result = await Run("pdfimages --list /Work/manual.pdf 1");
 
         Assert.Equal("/Work/manual.pdf: 1 image on page 1\np1  #1  1200×400  at 72,40,451,150", result.Output);
         Assert.Equal(["list 1", "list 1", "list 1", "list 1"], _pixels.Calls);
@@ -362,7 +388,7 @@ public class PdfImagesTests
         await Upload();
         for (var i = 0; i < 4; i++) _pixels.Throws.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
 
-        var result = await RunWaiting("pdfimages --list /Work/manual.pdf 1");
+        var result = await Run("pdfimages --list /Work/manual.pdf 1");
 
         Assert.Equal(ShellResult.Error("pdfimages: PDF image extraction is busy; try again in a moment") with { Kind = ShellErrorKind.Unavailable }, result);
         Assert.Equal(4, _pixels.Calls.Count);
@@ -755,7 +781,7 @@ public class PdfImagesTests
         _pixels.Pages[3] = [];
         _pixels.ImageThrows.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
 
-        var result = await RunWaiting("pdfimages /Work/manual.pdf 1 /Work/images/");
+        var result = await Run("pdfimages /Work/manual.pdf 1 /Work/images/");
 
         Assert.False(result.IsError, result.Output);
         Assert.NotNull(await Stored("/Work/images/manual-p1-1.png"));
@@ -809,5 +835,22 @@ public class PdfImagesTests
         var time = new FakeTimeProvider();
         var caller = new FixedCaller(Writers.Dev);
         Assert.True(new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), pixels: new FakePixels(time)).HasCommand("pdfimages"));
+        var notesOnly = NotesOnly.Over(store);
+        Assert.False(new Shell(notesOnly, new NoteWriter(notesOnly, time, caller), new NoteMover(notesOnly, time, caller), pixels: new FakePixels(time)).HasCommand("pdfimages"));
+    }
+
+    /// <summary>A store of notes that keeps no attachments: the calls of <see cref="INoteStore"/> passed on, and nothing else.</summary>
+    public class NotesOnly : DispatchProxy
+    {
+        private INoteStore _store = null!;
+
+        public static INoteStore Over(INoteStore store)
+        {
+            var proxy = Create<INoteStore, NotesOnly>();
+            ((NotesOnly)(object)proxy)._store = store;
+            return proxy;
+        }
+
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Invoke(_store, args);
     }
 }

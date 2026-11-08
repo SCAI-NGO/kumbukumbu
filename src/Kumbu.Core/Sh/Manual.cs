@@ -15,7 +15,7 @@ public static class Manual
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
-          pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes (help pdfimages)
+          pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
           backlinks <path>                the notes that link to a note, as path:line:text
           tags [tag] [path]               the tags below a path with counts; with a tag, the notes that carry it

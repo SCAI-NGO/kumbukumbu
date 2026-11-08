@@ -14,10 +14,11 @@ public sealed record Picture(byte[] Data, string MediaType, int Width, int Heigh
 /// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, the sidecar away or busy
 /// (<c>Unavailable</c>), and an analysis that couldn't run for that reason (<c>AnalysisUnavailable</c>), which
 /// <c>pdf</c> tells apart from one that is merely pending. A PDF's images and regions to store tell a busy sidecar
-/// apart (<c>Busy</c>, worth a retry in a moment) and an image number past the page's (<c>NoSuchImage</c>).
+/// apart (<c>Busy</c>, worth a retry in a moment), a page number past the PDF's (<c>NoSuchPage</c>) and an image
+/// number past the page's (<c>NoSuchImage</c>).
 /// <c>Failed</c> is anything else (this file, this page).
 /// </summary>
-public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, BadFrame, AnalysisUnavailable, Busy, NoSuchImage }
+public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, BadFrame, AnalysisUnavailable, Busy, NoSuchImage, NoSuchPage }
 
 /// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
 public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Failed) : Exception(message)
@@ -28,7 +29,7 @@ public sealed class PixelsUnavailableException(string message, PixelsProblem pro
     public Sh.ShellErrorKind? Kind => Problem switch
     {
         PixelsProblem.Unavailable or PixelsProblem.AnalysisUnavailable or PixelsProblem.Busy => Sh.ShellErrorKind.Unavailable,
-        PixelsProblem.TooLarge or PixelsProblem.BadCrop or PixelsProblem.BadFrame or PixelsProblem.NoSuchImage => Sh.ShellErrorKind.Invalid,
+        PixelsProblem.TooLarge or PixelsProblem.BadCrop or PixelsProblem.BadFrame or PixelsProblem.NoSuchImage or PixelsProblem.NoSuchPage => Sh.ShellErrorKind.Invalid,
         _ => null,
     };
 }

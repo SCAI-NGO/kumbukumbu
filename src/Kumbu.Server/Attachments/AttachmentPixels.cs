@@ -175,6 +175,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
             SidecarException.Busy => PixelsProblem.Busy,
             SidecarException.Unavailable => PixelsProblem.Unavailable,
             "no_such_image" => PixelsProblem.NoSuchImage,
+            "no_such_page" => PixelsProblem.NoSuchPage,
             "bad_crop" => PixelsProblem.BadCrop,
             "too_large" when asked != Extraction.List => PixelsProblem.TooLarge,
             _ => PixelsProblem.Failed,
