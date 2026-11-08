@@ -73,21 +73,24 @@ unset share_password
 
 # "-> running `props':" opens a suite, and "12. propget...... FAIL (…)" reports a test; litmus writes each test's
 # number and name again before its result, and a warning can come in between, so a FAIL belongs to the last test
-# named. A test is suite/number.name: names repeat within a suite (props runs propget after each step) and across
-# suites (init, begin, finish), and litmus numbers its tests the same on every run.
+# named. Failures are counted per suite/name: names repeat within a suite (props runs propget after each step) and
+# across suites (init, begin, finish), and the numbers differ between litmus versions (0.13 and 0.17 number props and
+# locks one apart), while the names and how often each fails don't.
 awk '
   /^-> running `/ { suite = $3; gsub(/[`'"'"':]/, "", suite); next }
   {
     line = $0
     failed = sub(/ FAIL( .*)?$/, "", line)
     while (match(line, /[0-9]+\. [A-Za-z0-9_]+/)) {
-      test = substr(line, RSTART, RLENGTH); sub(/\. /, ".", test)
+      test = substr(line, RSTART, RLENGTH); sub(/^[0-9]+\. /, "", test)
       line = substr(line, RSTART + RLENGTH)
     }
-    if (failed) print suite "/" test
+    if (failed) count[suite "/" test]++
   }
-' "$work/litmus.out" | sort -u >"$work/failed"
-grep -o '^[^#]*' "$expected_file" | tr -d ' \t' | grep -v '^$' | sort -u >"$work/expected"
+  END { for (key in count) print key, count[key] }
+' "$work/litmus.out" | sort >"$work/failed"
+# "locks/notowner_modify 5  # reason": the test and how often it fails.
+sed 's/#.*//' "$expected_file" | awk 'NF { print $1, $2 }' | sort >"$work/expected"
 
 status=0
 for suite in $suites; do
@@ -97,19 +100,17 @@ for suite in $suites; do
   fi
 done
 
+# A failure not listed, or failing more often than listed, is a regression; listed and failing less often (or not at
+# all) is a fix, or a suite cut short by an earlier failure. Either way the list no longer says what litmus does.
 unexpected="$(comm -23 "$work/failed" "$work/expected")"
-fixed="$(comm -13 "$work/failed" "$work/expected")"
-if [[ -n "$unexpected" ]]; then
-  echo "Unexpected failures:" >&2
-  sed 's/^/  /' <<<"$unexpected" >&2
-  status=1
-fi
-if [[ -n "$fixed" ]]; then
-  echo "Expected to fail but did not (passed, or skipped after an earlier failure; take a fixed one off $expected_file):" >&2
-  sed 's/^/  /' <<<"$fixed" >&2
+missing="$(comm -13 "$work/failed" "$work/expected")"
+if [[ -n "$unexpected$missing" ]]; then
+  echo "litmus's failures (test, times) differ from $expected_file:" >&2
+  [[ -z "$unexpected" ]] || sed 's/^/  now:      /' <<<"$unexpected" >&2
+  [[ -z "$missing" ]] || sed 's/^/  expected: /' <<<"$missing" >&2
   status=1
 fi
 if [[ $status -eq 0 ]]; then
-  echo "litmus: every failure is an expected one ($(wc -l <"$work/expected") listed)" >&2
+  echo "litmus: every failure is an expected one ($(awk '{ n += $2 } END { print n }' "$work/expected") listed)" >&2
 fi
 exit $status
