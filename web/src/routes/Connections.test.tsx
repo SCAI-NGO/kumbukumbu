@@ -385,3 +385,15 @@ describe("Skills preselected for a new connection", () => {
     expect(bodies).toEqual([{ name: "Work", vaults: { Skills: "read" }, expiresInDays: 90 }]);
   });
 });
+
+describe("Skills in the instructions", () => {
+  it("sets a connection to Hint only", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, instructions: "list" }], { "PUT /api/connections/c1/instructions": async (r) => (bodies.push(await r.json()), noContent()) });
+    renderApp("/access/apps");
+    const select = await screen.findByLabelText("Skills in the instructions");
+    expect(select).toHaveValue("list");
+    await userEvent.selectOptions(select, "Hint only");
+    await waitFor(() => expect(bodies).toEqual([{ mode: "hint" }]));
+  });
+});

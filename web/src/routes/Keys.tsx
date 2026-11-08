@@ -8,6 +8,7 @@ import type { components } from "../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { timeText } from "../components/Sheet";
 import { date, expiryText, isExpired } from "./dates";
+import InstructionsMode from "./InstructionsMode";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
 import RevokeDialog from "./RevokeDialog";
@@ -94,6 +95,7 @@ function KeyItem({ apiKey, vaults, onRevoke }: { apiKey: ApiKey; vaults: VaultVi
         {revoked && ` · Revoked ${date(apiKey.revokedAt!)}`}
         {expiryText(apiKey)}
       </p>
+      {apiKey.kind !== "device" && !revoked && !expired && <InstructionsMode kind="keys" id={apiKey.id} mode={apiKey.instructions} />}
       {/* An expired key opens nothing already; revoking it would change nothing. */}
       {!revoked && !expired && (
         <button type="button" onClick={onRevoke} aria-label={`Revoke ${apiKey.name}`} className={`${secondaryButtonClass} self-start`}>

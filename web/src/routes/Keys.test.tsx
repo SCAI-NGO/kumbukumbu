@@ -548,3 +548,26 @@ describe("Skills preselected for a new key", () => {
     expect(within(group).getByLabelText("None")).toBeChecked();
   });
 });
+
+describe("Skills in the instructions", () => {
+  it("sets a key to Hint only", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "GET /api/keys": () => json(200, [{ ...listed, kind: "agent", instructions: "list" }]),
+      "PUT /api/keys/k1/instructions": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/access/keys");
+    const select = await screen.findByLabelText("Skills in the instructions");
+    expect(select).toHaveValue("list");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["List and hint", "Hint only"]);
+    await userEvent.selectOptions(select, "Hint only");
+    await waitFor(() => expect(bodies).toEqual([{ mode: "hint" }]));
+  });
+
+  it("shows no instructions setting for a device key", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, id: "k5", name: "Work – Obsidian Laptop", kind: "device" }]) });
+    renderApp("/access/keys");
+    await screen.findByText("Work – Obsidian Laptop");
+    expect(screen.queryByLabelText("Skills in the instructions")).toBeNull();
+  });
+});

@@ -10,6 +10,7 @@ import { timeText } from "../components/Sheet";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
+import InstructionsMode from "./InstructionsMode";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
 import { date } from "./dates";
@@ -147,6 +148,7 @@ function ConnectionItem({ connection: c, vaults, onChange, onRevoke }: { connect
         Created {date(c.createdAt)} · {c.lastUsedAt ? `Last used ${timeText(c.lastUsedAt)}` : "Never used"} · {expiry}
       </p>
       <p className="text-sm text-text">{statusText(c)}</p>
+      {!over && <InstructionsMode kind="connections" id={c.id} mode={c.instructions} />}
       {c.state === "needs_reconnect" && <p className="text-sm text-muted">Use Reconnect in the app.</p>}
       {!over && (
         <div className="flex flex-wrap gap-2">
