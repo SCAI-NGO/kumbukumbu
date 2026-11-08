@@ -72,7 +72,7 @@ public static class SkillsApi
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/add", AddAsync).Errors(400, 401, 403, 404, 409, 429, 503, 507);
         group.MapPost("/updates/check", CheckUpdatesAsync).Errors(401, 403, 429, 503);
-        group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(401, 403, 404, 503);
+        group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(400, 401, 403, 404, 503);
         MapSharing(group);
     }
 
@@ -121,15 +121,38 @@ public static class SkillsApi
         TypedResults.Ok((await new SkillUpdates(store, github, publishing, limits, caller, options.Value.Skills.Marketplaces.Enabled).CheckAsync(ct))
             .Select(s => new SkillUpdateView(s.Folder.Value, s.State, s.Source, s.Commit)).ToArray());
 
-    /// <summary>A skill she can read (its folder, or <c>system:&lt;name&gt;</c>) as a <c>.zip</c> under its folder's name.</summary>
-    private static async Task<FileContentHttpResult> ZipAsync([FromQuery] string? path, HttpContext http, RequestCaller caller, EncryptedNoteStore store, TimeProvider time, CancellationToken ct)
+    /// <summary>
+    /// A skill she can read (its folder, or <c>system:&lt;name&gt;</c>) as a <c>.zip</c> under its folder's name. A vault's
+    /// skill is taken out as the files ZIP takes files out (<see cref="ExportApi"/>): it needs a ticket while she asks for
+    /// the password for downloads or the password window is closed, a member's download is an event for the owner, and
+    /// each is logged with ids and counts. Within a skill's limits, checked before its content is read
+    /// (<see cref="SkillCopier.SourceAsync"/>). A system skill is the server's own and needs none of this.
+    /// </summary>
+    private static async Task<FileContentHttpResult> ZipAsync(
+        [FromQuery] string? path, [FromQuery] string? ticket, EncryptedNoteStore store, UserCatalog users, [AsParameters] ExportApi.Export export)
     {
+        var (caller, http, ct) = (export.Caller, export.Http, export.Ct);
         if (string.IsNullOrWhiteSpace(path)) throw ApiErrors.NotFound("Give the skill's folder, as path.");
         var open = await caller.OpenVaultsAsync(ct);
+        var system = path.StartsWith(SkillCopier.SystemPrefix, StringComparison.Ordinal);
+        // Not marked PasswordWindowMetadata: the browser's download can't answer a 401 with the password dialog, so a
+        // closed window asks for the ticket instead, as the preference does.
+        var withPassword = !system && (await users.AsksPasswordForDownloadsAsync(caller.User!.Id, ct) || !caller.PasswordWindowOpen);
+        if (withPassword) export.RequireTicket(ticket);
         var source = await SkillCopier.SourceAsync(store, path, open, open.FirstOrDefault(v => v.IsSkillsVault)?.Name, ct);
         var files = source.Files.Select(f => (f.Path, f.Bytes ?? Encoding.UTF8.GetBytes(f.Text!))).ToList();
+        var zip = SkillZip.Of(source.Name, files, export.Time.GetUtcNow().UtcDateTime);
+        if (source.Folder?.Vault is { } vault)
+        {
+            await export.RecordMemberExportsAsync([vault]);
+            export.Log.LogInformation(
+                "User {UserId} downloaded the skill of {Files} files ({Bytes} bytes) of vault {VaultId} as a ZIP, {Password}",
+                caller.User!.Id, files.Count, files.Sum(f => (long)f.Item2.Length), await export.VaultIdsAsync([vault]),
+                withPassword ? "with the password" : "without the password (turned off)");
+        }
+
         http.Response.Headers.ContentDisposition = SkillZip.Disposition(source.Name);
-        return TypedResults.File(SkillZip.Of(source.Name, files, time.GetUtcNow().UtcDateTime), "application/zip");
+        return TypedResults.File(zip, "application/zip");
     }
 
     private static async Task<Ok<SkillsView>> ListAsync(

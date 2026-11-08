@@ -209,7 +209,9 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         return attachments;
     }
 
-    /// <summary>The skill at <paramref name="from"/> as <paramref name="store"/> reads it: its folder's name and every file, <c>SKILL.md</c> first.</summary>
+    /// <summary>The skill at <paramref name="from"/> as <paramref name="store"/> reads it: its folder's name and every file,
+    /// <c>SKILL.md</c> first. One over <see cref="MarketplaceIndex.MaxSkillFiles"/> files or <see cref="MarketplaceIndex.MaxSkillBytes"/>
+    /// is refused, 400, before its files' content is read.</summary>
     internal static async Task<Source> SourceAsync(EncryptedNoteStore store, string from, IReadOnlyList<VaultAccess> open, string? marked, CancellationToken ct)
     {
         if (from.StartsWith(SystemPrefix, StringComparison.Ordinal))
@@ -224,10 +226,27 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
             throw ApiErrors.NotFound($"There is no skill at {from}.");
         }
 
+        // A skill's limits, as a share has them, before any content is read: the count from the paths, the files' size
+        // from their records; the notes, small and at most this many, are measured once read, before the files are.
         var prefix = folder.Value.Length + 1;
+        var notePaths = await store.ListNotesUnderAsync(folder, ct);
+        var attachments = await StoreAttachments.UnderAsync(store, folder, ct);
+        if (notePaths.Count + attachments.Count > MarketplaceIndex.MaxSkillFiles)
+        {
+            throw ApiErrors.BadRequest($"{folder.Value} has {notePaths.Count + attachments.Count} files; a skill has at most {MarketplaceIndex.MaxSkillFiles} files.");
+        }
+
+        var size = attachments.Sum(a => a.Current.Size);
+        if (size > MarketplaceIndex.MaxSkillBytes) throw TooLarge(folder);
         var files = new List<SourceFile>();
-        foreach (var note in await store.ReadNotesUnderAsync(folder, ct)) files.Add(new SourceFile(note.Path.Value[prefix..], note.Content, null, null));
-        foreach (var attachment in await StoreAttachments.UnderAsync(store, folder, ct))
+        foreach (var note in await store.ReadNotesUnderAsync(folder, ct))
+        {
+            size += Encoding.UTF8.GetByteCount(note.Content);
+            files.Add(new SourceFile(note.Path.Value[prefix..], note.Content, null, null));
+        }
+
+        if (size > MarketplaceIndex.MaxSkillBytes) throw TooLarge(folder);
+        foreach (var attachment in attachments)
         {
             var bytes = await StoreAttachments.ReadBytesAsync(store, attachment.Path, attachment.Current, ct)
                 ?? throw new ContentMissingException($"The content of {attachment.Path.Value} is missing.");
@@ -238,6 +257,9 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         if (files.Count == 0) throw ApiErrors.NotFound($"There is no skill at {from}.");
         return new Source(access, folder, folder.Name, [.. Ordered(files)]);
     }
+
+    private static ApiException TooLarge(VaultPath folder) =>
+        ApiErrors.BadRequest($"{folder.Value} is larger than a skill may be: a skill has at most {MarketplaceIndex.MaxSkillBytes / (1024 * 1024)} MB.");
 
     /// <summary><c>SKILL.md</c> first, so a copy that stops short has its manifest, then by path.</summary>
     private static IEnumerable<SourceFile> Ordered(IEnumerable<SourceFile> files) =>

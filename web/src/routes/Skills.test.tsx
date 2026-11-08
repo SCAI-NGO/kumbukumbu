@@ -26,8 +26,18 @@ function api(withoutSkills: string[] = [], overrides: Record<string, (r: Request
   });
 }
 
+/** The links the page clicks to download, by their address; nothing is fetched. */
+function clicks() {
+  const links: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    links.push(this.getAttribute("href") ?? "");
+  });
+  return links;
+}
+
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   useSession.getState().reset();
 });
@@ -79,15 +89,66 @@ describe("Skills", () => {
     expect(await screen.findByLabelText("Name")).toBeInTheDocument();
   });
 
-  it("offers each skill as a .zip", async () => {
+  it("offers a system skill as a plain .zip link", async () => {
     api();
     renderApp("/skills/installed");
     await screen.findByText("builtin");
-    const zipOf = (name: string) => within(screen.getByText(name).closest("li")!).getByRole("link", { name: "Download .zip" });
-    expect(zipOf("work-x")).toHaveAttribute("href", "/api/skills/zip?path=%2FWork%2F_skills%2Fx");
-    expect(zipOf("spaced")).toHaveAttribute("href", "/api/skills/zip?path=%2FMy%20Vault%2F_skills%2Fspaced");
-    expect(zipOf("builtin")).toHaveAttribute("href", "/api/skills/zip?path=system%3Abuiltin");
-    expect(zipOf("mine")).toHaveAttribute("download");
+    const link = within(screen.getByText("builtin").closest("li")!).getByRole("link", { name: "Download .zip" });
+    expect(link).toHaveAttribute("href", "/api/skills/zip?path=system%3Abuiltin");
+    expect(link).toHaveAttribute("download");
+  });
+
+  it("asks for the password for a vault skill's .zip by default", async () => {
+    const ticket = vi.fn(async (r: Request) => {
+      expect(await r.json()).toEqual({ password: "secret" });
+      return json(200, { ticket: "t1" });
+    });
+    api([], {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true }),
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
+      "POST /api/export/ticket": ticket,
+    });
+    const links = clicks();
+    renderApp("/skills/installed");
+    const card = (await screen.findByText("spaced")).closest("li")!;
+    await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Download spaced?" });
+    expect(links).toEqual([]);
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Download" }));
+
+    await waitFor(() => expect(links).toEqual(["/api/skills/zip?path=%2FMy%20Vault%2F_skills%2Fspaced&ticket=t1"]));
+    expect(ticket).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for the password for a vault skill's .zip when the window is closed, though the setting is off", async () => {
+    api([], {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: false }),
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }),
+    });
+    const links = clicks();
+    renderApp("/skills/installed");
+    const card = (await screen.findByText("work-x")).closest("li")!;
+    await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Download work-x?" });
+    expect(dialog).toHaveTextContent("It's a while since you last gave your password on this device");
+    expect(links).toEqual([]);
+  });
+
+  it("downloads a vault skill's .zip without asking when the setting is off and the window open", async () => {
+    const ticket = vi.fn(() => json(200, { ticket: "t1" }));
+    api([], {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true }),
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }),
+      "POST /api/export/ticket": ticket,
+    });
+    const links = clicks();
+    renderApp("/skills/installed");
+    const card = (await screen.findByText("work-x")).closest("li")!;
+    await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
+    await waitFor(() => expect(links).toEqual(["/api/skills/zip?path=%2FWork%2F_skills%2Fx"]));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(ticket).not.toHaveBeenCalled();
   });
 
   it("offers no Move for a system skill", async () => {

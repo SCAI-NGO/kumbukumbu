@@ -9,7 +9,8 @@ import { checkSkillUpdates, shareSkill, useSkills, type SkillView } from "../api
 import { FormError, secondaryButtonClass } from "../components/form";
 import ReviewDialog from "./ReviewDialog";
 import { ConfirmShareAnew, SkillLinkReveal } from "./Shared";
-import TargetDialog, { sourceOf } from "./TargetDialog";
+import TargetDialog from "./TargetDialog";
+import ZipButton from "./ZipButton";
 
 /** The groups in the order shown: System, Skills, then the other vaults as they come. */
 function groups(skills: SkillView[]) {
@@ -134,10 +135,7 @@ export default function Installed() {
                       Move to…
                     </button>
                   )}
-                  {/* A plain link: the browser downloads it with the session cookie, under the name the server gives. */}
-                  <a href={`/api/skills/zip?path=${encodeURIComponent(sourceOf(s))}`} download className={`${secondaryButtonClass} inline-flex items-center`}>
-                    Download .zip
-                  </a>
+                  <ZipButton skill={s} />
                   {!s.originEdited && s.update === "available" && s.path != null && s.canWrite && (
                     <button type="button" onClick={() => setReviewing(s)} className={secondaryButtonClass}>
                       Review

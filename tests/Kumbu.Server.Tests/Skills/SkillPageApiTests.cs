@@ -243,12 +243,15 @@ public sealed class SkillPageApiTests(KumbuAppFactory app)
     public async Task Own_skill_zip_for_the_session()
     {
         var (alice, _) = await SharedAsync();
+        // The password for downloads off: the ticket is SkillZipApiTests' matter.
+        using (var off = await alice.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password = RestClient.Password })) Assert.Equal(HttpStatusCode.OK, off.StatusCode);
         using var zip = await alice.GetAsync("/api/skills/zip?path=" + Uri.EscapeDataString("/Skills/write-as-alice"));
         await AssertEntriesAsync(zip);
 
         using var none = await alice.GetAsync("/api/skills/zip?path=" + Uri.EscapeDataString("/Skills/nothing-here"));
         Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
         var bob = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        using (var off = await bob.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password = RestClient.Password })) Assert.Equal(HttpStatusCode.OK, off.StatusCode);
         using var bobs = await bob.GetAsync("/api/skills/zip?path=" + Uri.EscapeDataString("/Skills/write-as-alice"));
         Assert.Equal(HttpStatusCode.NotFound, bobs.StatusCode);
     }
