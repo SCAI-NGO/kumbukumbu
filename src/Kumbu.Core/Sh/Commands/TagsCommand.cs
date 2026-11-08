@@ -63,7 +63,7 @@ public sealed class TagsCommand(INoteReader notes) : ICommand
         }
 
         if (TagFilter.Parse(asked[0]) is not { } tag) return ShellResult.Error($"tags: {TagFilter.NotATag(asked[0])}");
-        var (carrying, error) = TagFilter.Narrow(found, [tag], scope, archived, t => $"tags --archive {t}{at} lists them");
+        var (carrying, error) = TagFilter.Narrow(found, [tag], scope, (archived, $"tags --archive {tag}{at} lists them"));
         if (carrying is null) return ShellResult.Error($"tags: {error}");
 
         var output = new List<string>();

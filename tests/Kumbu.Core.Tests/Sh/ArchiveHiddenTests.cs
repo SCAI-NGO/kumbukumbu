@@ -20,6 +20,9 @@ public class ArchiveHiddenTests
         return store;
     }
 
+    private static Kumbu.Core.Paths.VaultPath Path(string path) =>
+        Kumbu.Core.Paths.VaultPath.TryParse(path, out var parsed) ? parsed : throw new ArgumentException(path);
+
     private static Task<ShellResult> Run(string line, InMemoryNoteStore? store = null) =>
         TestShell.Of(store ?? Store()).RunAsync(line, CancellationToken.None);
 
@@ -127,8 +130,9 @@ public class ArchiveHiddenTests
     {
         Assert.Equal(ShellResult.Error("tags: only archived notes below /Work carry #old; tags --archive old /Work lists them"), await Run("tags old /Work"));
         Assert.Equal(ShellResult.Error("tags: only archived notes carry #old; tags --archive old lists them"), await Run("tags old"));
-        Assert.Equal(ShellResult.Error("rg: only archived notes below /Work carry #old; with --archive, rg searches them"), await Run("rg --tag old pump /Work"));
-        Assert.Equal(ShellResult.Error("rg: only archived notes below /Work carry #old; with --archive, rg lists them"), await Run("rg --files --tag old /Work"));
+        Assert.Equal(ShellResult.Error("rg: only archived notes below /Work carry #old; rg --archive -i --tag old pump /Work searches them"), await Run("rg --tag old -i pump /Work"));
+        Assert.Equal(ShellResult.Error("rg: only archived notes below /Work carry #old; rg --files --archive --tag old /Work lists them"), await Run("rg --files --tag old /Work"));
+        Assert.Equal(ShellResult.Error("rg: only archived notes carry #old; rg --files --archive --tag old lists them"), await Run("rg --files --tag old"));
         Assert.Equal(ShellResult.Error("tags: no note below /Work carries #nothing; 'tags /Work' lists the tags"), await Run("tags nothing /Work"));
         Assert.False((await Run("rg --tag old --archive pump /Work")).IsError);
     }
@@ -136,10 +140,79 @@ public class ArchiveHiddenTests
     [Fact]
     public async Task Rg_says_when_only_archived_notes_match()
     {
-        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches: rg --archive searches it"), await Run("rg -F '#old' /Work"));
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -F '#old' /Work searches it)"), await Run("rg -F '#old' /Work"));
         Assert.Equal(ShellResult.Ok(""), await Run("rg -F '#old' /Work | head"));
         Assert.Equal(ShellResult.Ok(""), await Run("rg nowhere /Work"));
-        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches: rg --archive searches it"), await Run("rg --tag pump -F '#old' /Work"));
+        Assert.Equal(
+            ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -F --tag pump '#old' /Work searches it)"),
+            await Run("rg --tag pump -F '#old' /Work"));
+        Assert.Equal(
+            ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -i -e nothing -e '#OLD' /Work/Overview.md /Work searches it)"),
+            await Run("rg -i -e nothing -e '#OLD' /Work/Overview.md /Work"));
+    }
+
+    [Fact]
+    public async Task Rg_l_and_c_say_when_only_archived_notes_match()
+    {
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -l -F '#old' /Work searches it)"), await Run("rg -l -F '#old' /Work"));
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -c -i '#OLD' searches it)"), await Run("rg -c -i '#OLD'"));
+        Assert.Equal("/Work/_archive/Inbox/old.md", (await Run("rg --archive -l -F '#old' /Work")).Output);
+    }
+
+    [Fact]
+    public async Task Rg_counts_archived_matches_only_up_to_past_what_it_names()
+    {
+        InMemoryNoteStore Archived(int count) => new([.. Enumerable.Range(1, count).Select(i => ($"/V/_archive/n{i}.md", "pump\n"))]);
+
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 5 archived notes match (rg --archive pump /V searches them)"), await Run("rg pump /V", Archived(5)));
+        Assert.Equal(ShellResult.Ok("no match outside the archive; more than 5 archived notes match (rg --archive pump /V searches them)"), await Run("rg pump /V", Archived(6)));
+    }
+
+    [Fact]
+    public void The_archived_hint_stops_counting_past_what_it_names()
+    {
+        var notes = Enumerable.Range(1, 9).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
+        var read = 0;
+
+        var hint = Kumbu.Core.Sh.Commands.Rg.ArchivedHint(notes, _ => { read++; return true; }, "rg --archive pump", CancellationToken.None);
+
+        Assert.Equal("no match outside the archive; more than 5 archived notes match (rg --archive pump searches them)", hint);
+        Assert.Equal(6, read);
+    }
+
+    [Fact]
+    public void The_archived_hint_gives_up_on_a_search_that_takes_too_long()
+    {
+        var notes = Enumerable.Range(1, 3).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
+        var read = 0;
+
+        var hint = Kumbu.Core.Sh.Commands.Rg.ArchivedHint(
+            notes, _ => ++read == 1 ? true : throw new System.Text.RegularExpressions.RegexMatchTimeoutException("pump", "pump", TimeSpan.FromSeconds(2)), "rg --archive pump", CancellationToken.None);
+
+        Assert.Null(hint);
+        Assert.Equal(2, read);
+    }
+
+    [Fact]
+    public void The_archived_hint_stops_when_cancelled()
+    {
+        var notes = Enumerable.Range(1, 3).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var read = 0;
+
+        Assert.Throws<OperationCanceledException>(() => Kumbu.Core.Sh.Commands.Rg.ArchivedHint(notes, _ => { read++; return true; }, "rg --archive pump", cancelled.Token));
+        Assert.Equal(0, read);
+    }
+
+    [Fact]
+    public async Task Rg_names_archived_and_named_matches_in_one_voice()
+    {
+        var store = new InMemoryNoteStore(("/Work/plan-old.md", "nothing here\n"), ("/Work/_archive/x.md", "see plan-old\n"));
+
+        Assert.Equal(
+            ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive -F plan-old /Work searches it)\n1 note name matches: /Work/plan-old.md (rg --files | rg -F plan-old lists them)"),
+            await Run("rg -F plan-old /Work", store));
     }
 
     [Fact]
@@ -178,7 +251,15 @@ public class ArchiveHiddenTests
     public async Task Rg_names_no_archived_note_in_its_name_hint()
     {
         Assert.Equal(ShellResult.Ok(""), await Run("rg -F Gone.md /Work"));
-        Assert.Contains("note name matches: /Work/_archive/Gone.md", (await Run("rg --archive -F Gone.md /Work")).Output);
+        Assert.Equal(
+            ShellResult.Ok("no match in the text; 1 note name matches: /Work/_archive/Gone.md (rg --files --archive | rg -F Gone.md lists them)"),
+            await Run("rg --archive -F Gone.md /Work"));
+        Assert.Equal(
+            ShellResult.Ok("no match in the text; 1 note name matches: /Work/_archive/Gone.md (rg --files --archive | rg -i gone.md lists them)"),
+            await Run("rg -i gone.md /Work/_archive/"));
+        Assert.Equal(
+            ShellResult.Ok("no match in the text; 1 note name matches: /Work/Overview.md (rg --files | rg -i overview.md lists them)"),
+            await Run("rg -i overview.md /Work"));
     }
 
     [Fact]
@@ -209,9 +290,8 @@ public class ArchiveHiddenTests
     {
         var store = new InMemoryNoteStore(("/Old/_archive/a.md", "a #pump\n"));
 
-        const string Hint = "no match outside the archive; 1 archived note matches: rg --archive searches it";
-        Assert.Equal(ShellResult.Ok(Hint), await Run("rg pump /Old", store));
-        Assert.Equal(ShellResult.Ok(Hint), await Run("rg pump", store));
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive pump /Old searches it)"), await Run("rg pump /Old", store));
+        Assert.Equal(ShellResult.Ok("no match outside the archive; 1 archived note matches (rg --archive pump searches it)"), await Run("rg pump", store));
         Assert.Equal(ShellResult.Ok(""), await Run("rg nowhere /Old", store));
         Assert.Equal(ShellResult.Ok(""), await Run("rg --files /Old", store));
         Assert.Equal(ShellResult.Ok(""), await Run("rg --files", store));
@@ -227,7 +307,10 @@ public class ArchiveHiddenTests
         Assert.StartsWith("semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path]", semsearch);
         Assert.Contains("\n  --archive ", semsearch);
         Assert.Contains("--archive   take in the notes in a vault's archive (_archive/) too; a path inside it always does", (await Run("help tags")).Output);
-        Assert.Contains("\n  semsearch [--archive] <query> [path] ", Kumbu.Core.Sh.Manual.ToolDescription);
+        // The column of the commands' summaries stays where it is; an option that doesn't fit goes into the summary.
+        var manual = Kumbu.Core.Sh.Manual.ToolDescription.Split('\n');
+        Assert.Contains(manual, l => l.StartsWith("  semsearch <query> [path]        ", StringComparison.Ordinal) && l.Contains("--archive", StringComparison.Ordinal));
+        Assert.All(manual.Where(l => l.StartsWith("  ", StringComparison.Ordinal) && l.Length > 36 && l[2] != ' '), l => Assert.True(l[33] == ' ' && l[34] != ' ', l));
         Assert.Contains("\n  semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path] ", (await Run("help")).Output);
     }
 }

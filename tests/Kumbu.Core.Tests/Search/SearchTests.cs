@@ -101,15 +101,29 @@ public class SearchTests
             Assert.Contains("/Demo/_archive/old.md#Old", (await Run($"semsearch {mode}rules /Demo/_archive/", index, store)).Output);
             Assert.Contains("/Demo/_archive/old.md#Old", (await Run($"semsearch {mode}rules /Demo/_archive/old.md", index, store)).Output);
 
+            // Nothing found while an archived note holds the words: the answer says how to search the archive.
             var empty = await Run($"semsearch {mode}rules /Gone", index, store);
             Assert.False(empty.IsError, empty.Output);
-            Assert.StartsWith("(nothing found for 'rules' below /Gone)", empty.Output);
+            Assert.StartsWith($"(nothing found for 'rules' below /Gone outside the archive; semsearch --archive {mode}rules /Gone searches it)\n", empty.Output);
+            Assert.StartsWith("(nothing found for 'zebras' below /Gone)\n", (await Run($"semsearch {mode}zebras /Gone", index, store)).Output);
         }
 
-        var tagged = new InMemoryNoteStore(("/Demo/gate.md", "rules\n"), ("/Demo/_archive/old.md", "#old rules\n"));
+        Assert.StartsWith(
+            "(nothing found for 'old rules' outside the archive; semsearch --archive -n 3 --meaning old rules searches it)\n",
+            (await Run("semsearch -n 3 --meaning old rules", Cosines(), store)).Output);
+        Assert.StartsWith(
+            "(nothing found for 'rules of' below /Gone too outside the archive; semsearch --archive --words rules of '/Gone too' searches it)\n",
+            (await Run("semsearch --words rules of \"/Gone too\"", index, new InMemoryNoteStore(("/Gone too/_archive/a.md", "rules of old\n")))).Output);
+
+        var tagged = new InMemoryNoteStore(("/Demo/gate.md", "rules\n"), ("/Demo/_archive/old.md", "#old rules\n"), ("/Demo/_archive/new.md", "#new rules\n"), ("/Demo/now.md", "#new\n"));
         Assert.Equal(
-            ShellResult.Error("semsearch: only archived notes below /Demo carry #old; with --archive, semsearch searches them"),
+            ShellResult.Error("semsearch: only archived notes below /Demo carry #old; semsearch --archive --words --tag old rules /Demo searches them"),
             await Run("semsearch --words --tag old rules /Demo", index, tagged));
+        // Archived notes without the tag don't count for the hint.
+        Assert.StartsWith("(nothing found for 'old' below /Demo)\n", (await Run("semsearch --words --tag new old /Demo", index, tagged)).Output);
+        Assert.StartsWith(
+            "(nothing found for 'rules' below /Demo outside the archive; semsearch --archive --words --tag new rules /Demo searches it)\n",
+            (await Run("semsearch --words --tag new rules /Demo", index, tagged)).Output);
     }
 
     [Fact]

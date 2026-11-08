@@ -110,9 +110,10 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
 
         if (options.Values("tag") is { Count: > 0 } tags)
         {
-            var (carrying, tagError) = TagFilter.Narrow(found, tags, scope, archived, _ => "with --archive, semsearch searches them");
+            var (carrying, tagError) = TagFilter.Narrow(found, tags, scope, (archived, $"{Archived(options, operands, scope)} searches them"));
             if (carrying is null) return ShellResult.Error($"semsearch: {tagError}");
             found = carrying;
+            archived = [.. archived.Where(n => tags.All(t => TagFilter.Parse(t) is { } tag && TagFilter.Carries(n, tag)))];
         }
 
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
@@ -124,7 +125,15 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         if (listed is null) return ShellResult.Error($"semsearch: {semantic!.Reason ?? "search by meaning isn't available"}; without --meaning, it ranks by words");
 
         var lines = new List<string>();
-        if (listed.Count == 0) lines.Add($"(nothing found for '{query}'{(scope.IsRoot ? "" : " below " + scope.Value)})");
+        if (listed.Count == 0)
+        {
+            // Nothing found would pass for nothing there while archived notes hold the very words; those are at hand.
+            var below = scope.IsRoot ? "" : " below " + scope.Value;
+            lines.Add(SectionSearch.Exact(archived, query, 1).Count > 0
+                ? $"(nothing found for '{query}'{below} outside the archive; {Archived(options, operands, scope)} searches it)"
+                : $"(nothing found for '{query}'{below})");
+        }
+
         for (var i = 0; i < listed.Count; i++)
         {
             var (c, score) = listed[i];
@@ -164,6 +173,16 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         return SectionSearch.Shorten(string.Join(' ', only.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)));
     }
 
+    /// <summary>This search as typed again with --archive.</summary>
+    private static string Archived(Options options, IReadOnlyList<string> query, VaultPath scope)
+    {
+        var max = options.Value("max") is { } n ? $" -n {n}" : "";
+        var mode = options.Has("words") ? " --words" : options.Has("meaning") ? " --meaning" : "";
+        var tags = string.Concat(options.Values("tag").Select(t => $" --tag {Rg.Quote(t)}"));
+        var words = string.Join(' ', query.Select(Rg.Quote));
+        return $"semsearch --archive{max}{mode}{tags} {words}{(scope.IsRoot ? "" : " " + Rg.Quote(scope.Value))}";
+    }
+
     private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool notIndexed, bool any, bool anyPage = false)
     {
         var read = !any ? "" : anyPage ? "; cat \"path#Section\" reads a section, pdf path N a page" : "; cat \"path#Section\" reads one";
@@ -178,6 +197,8 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
                 : $"(ranked by {by}, and by words only in {partial}{read})";
         }
 
+        // The index counts the pending notes below the scope without knowing which ones the search left out, so the
+        // count may take in archived notes; telling them apart would mean asking the index for their paths.
         if (semantic.Pending > 0)
         {
             var one = semantic.Pending == 1;

@@ -12,7 +12,7 @@ public static class Manual
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
-          semsearch [--archive] <query> [path] ranked search by words and meaning; finds the best sections and PDF pages
+          semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages (--archive: also archived notes)
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
