@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Crypto;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
@@ -70,6 +71,9 @@ public sealed record ApiKeyInfo(
 {
     /// <summary>The ids of the vaults the key may publish on ("May publish"), all among <see cref="Vaults"/>.</summary>
     public IReadOnlySet<string> Publish { get; init; } = new HashSet<string>();
+
+    /// <summary>How skills reach the instructions this key is shown (<see cref="ApiKeys.SetInstructionsAsync"/>).</summary>
+    public InstructionsMode Instructions { get; init; } = InstructionsMode.ListAndHint;
 }
 
 /// <summary>A key that was presented and checked: whose it is, the name its writes carry, and whether a device holds it.</summary>
@@ -237,6 +241,42 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
         return result;
     }
+
+    /// <summary>
+    /// Sets how skills reach the instructions of one of the user's keys. The mode is a plain field of the document, not
+    /// of the sealed meta: a preference about a text, no right, so it can't change what the key opens. False if the user
+    /// has no such key that isn't revoked; an <see cref="ArgumentException"/> for a device key, which has no instructions.
+    /// </summary>
+    public async Task<bool> SetInstructionsAsync(User user, byte[] userKey, string keyId, InstructionsMode mode, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var doc = await Keys.Find(k => k.Id == keyId && k.User == user.Id && k.RevokedAt == null).FirstOrDefaultAsync(ct);
+        if (doc is null) return false;
+        try
+        {
+            if (JsonSerializer.Deserialize<ApiKeyMeta>(VaultCrypto.Open(MetaKey(userKey, user.Id), doc.Meta, MetaContext(doc.Id)))!.Kind == DeviceKind)
+                throw new ArgumentException("A device key has no instructions to set.");
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            return false;
+        }
+
+        var update = mode == InstructionsMode.HintOnly
+            ? Builders<ApiKeyDocument>.Update.Set(k => k.Instructions, "hint")
+            : Builders<ApiKeyDocument>.Update.Unset(k => k.Instructions);
+        return (await Keys.UpdateOneAsync(k => k.Id == keyId && k.User == user.Id && k.RevokedAt == null, update, cancellationToken: ct)).MatchedCount > 0;
+    }
+
+    /// <summary>The mode of a key by its id: the default, list and hint, for one that has none set or isn't there.</summary>
+    public async Task<InstructionsMode> InstructionsAsync(string keyId, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var doc = await Keys.Find(k => k.Id == keyId).Project(k => k.Instructions).FirstOrDefaultAsync(ct);
+        return ModeOf(doc);
+    }
+
+    internal static InstructionsMode ModeOf(string? stored) => stored == "hint" ? InstructionsMode.HintOnly : InstructionsMode.ListAndHint;
 
     /// <summary>Revokes one of the user's keys: marked revoked and its slots deleted, in one transaction, so it
     /// opens nothing from then on, also for a vault still in memory. False if the user has no such key that isn't revoked.</summary>
@@ -438,6 +478,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         {
             // Only among the vaults listed; a meta sealed before publishing existed has none: it may not.
             Publish = meta.Publish is { } publish ? publish.Where(vaults.ContainsKey).ToHashSet(StringComparer.Ordinal) : new HashSet<string>(),
+            Instructions = ModeOf(doc.Instructions),
         };
     }
 
@@ -615,6 +656,11 @@ public sealed class ApiKeyDocument
     /// <summary>From then on the key is refused, as if revoked. Bound into the seal of <see cref="Writer"/>.</summary>
     [BsonElement("expiresAt"), BsonIgnoreIfNull]
     public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>In the clear, as it is no right: <c>hint</c> for hint only; absent for the default, list and hint
+    /// (<see cref="ApiKeys.SetInstructionsAsync"/>).</summary>
+    [BsonElement("instructions"), BsonIgnoreIfNull]
+    public string? Instructions { get; set; }
 }
 
 public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key or connection named '{name}'.");

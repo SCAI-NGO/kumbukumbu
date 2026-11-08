@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.Json.Serialization;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
@@ -75,7 +76,10 @@ public sealed record ReencryptRequest(string Password);
 /// it may publish on ("May publish"), all among <c>vaults</c>.</summary>
 public sealed record ApiKeyView(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt, string Kind, string[] Publish);
+    DateTime? ExpiresAt, string Kind, string[] Publish, string Instructions = "list");
+
+/// <summary><c>mode</c>: <c>list</c> (the skills listed in the instructions, with a hint) or <c>hint</c> (the hint only).</summary>
+public sealed record InstructionsRequest(string Mode);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
 /// out or null, the key doesn't expire. <c>publish</c>: the names of the vaults it may publish on, among <c>vaults</c>
@@ -205,6 +209,8 @@ public static class AccountApi
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
         account.MapPost("/keys", CreateKeyAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
+        // No password window: a preference about the text of the instructions, no right.
+        account.MapPut("/keys/{id}/instructions", SetKeyInstructionsAsync).Errors(400, 401, 403, 404);
 
         // Made and revoked while WebDAV is switched off too: the shares wait for it to be on again.
         account.MapGet("/dav-shares", ListDavSharesAsync).Errors(401, 403, 503);
@@ -455,6 +461,18 @@ public static class AccountApi
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 
+    internal static InstructionsMode ParseInstructions(string? mode) => mode switch
+    {
+        "list" => InstructionsMode.ListAndHint,
+        "hint" => InstructionsMode.HintOnly,
+        _ => throw ApiErrors.BadRequest("'mode' is \"list\" or \"hint\"."),
+    };
+
+    internal static string InstructionsText(InstructionsMode mode) => mode == InstructionsMode.HintOnly ? "hint" : "list";
+
+    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
+        await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
+
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
 
@@ -671,7 +689,8 @@ public static class AccountApi
         info.RevokedAt,
         info.ExpiresAt,
         info.Kind == ApiKeyKind.Device ? "device" : "agent",
-        PublishNames(info.Publish, names));
+        PublishNames(info.Publish, names),
+        InstructionsText(info.Instructions));
 
     /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
     private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(

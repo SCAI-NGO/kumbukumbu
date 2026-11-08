@@ -116,6 +116,8 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
 {
     private IReadOnlyList<VaultAccess>? _opened;
 
+    public string ConnectionId => connectionId;
+
     public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
         _opened ??= await catalog.OpenForConnectionAsync(connectionId, tokenId, token, ct);
 
