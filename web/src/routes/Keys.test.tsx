@@ -540,8 +540,11 @@ describe("Skills preselected for a new key", () => {
     const group = await within(dialog).findByRole("group", { name: "Skills" });
     await waitFor(() => expect(within(group).getByLabelText("Read")).toBeChecked());
     await userEvent.click(within(group).getByLabelText("None"));
+    const before = reads;
     await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
-    expect(reads).toBeGreaterThan(1);
+    expect(reads).toBeGreaterThan(before);
+    // Let the new list reach the dialog and its effects run.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(within(group).getByLabelText("None")).toBeChecked();
   });
 });
