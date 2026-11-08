@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -27,6 +28,7 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null, Wri
           and file size ('cat /Work/shot.png' → shot.png: image (PNG), 1440×3120, 412 KB); for a PDF
           its pages and their types (paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB).
           'help img' and 'help pdf' say how to look at them.
+          A text file in a skill's folder prints as it is.
           A whole note too long for one call (about 8000 tokens) prints its outline instead; read it in
           parts with cat "<path>#Section", head -n 40 <path> or rg -n. In a pipeline, cat passes the
           whole note on (cat <path> | tail -n 50).
@@ -80,6 +82,13 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null, Wri
             }
 
             state = entry.State;
+        }
+
+        if (state.MediaType == AttachmentFormat.TextMediaType)
+        {
+            return await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is { } bytes
+                ? ShellResult.Ok(Encoding.UTF8.GetString(bytes))
+                : ShellResult.Error($"cat: {path.Value}: the file's content is missing");
         }
 
         // No version block: a text tool can't write an attachment, so there is nothing to pass it to.

@@ -19,4 +19,16 @@ public static class StoreAttachments
     /// attachments can't be resolved.</summary>
     public static async Task<IReadOnlyList<VaultPath>?> PathsUnderAsync(INoteReader notes, VaultPath folder, CancellationToken ct) =>
         notes is IAttachmentStore store ? [.. (await store.ListAttachmentsUnderAsync(folder, ct)).Select(a => a.Path)] : null;
+
+    /// <summary>The bytes of an attachment's state; null if the reader keeps none or the blob is gone.</summary>
+    public static async Task<byte[]?> ReadBytesAsync(INoteReader notes, VaultPath path, AttachmentState state, CancellationToken ct)
+    {
+        if (notes is not IAttachmentStore store || await store.OpenBlobAsync(path.Segments[0], state.BlobId, ct) is not { } stream) return null;
+        await using (stream)
+        {
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy, ct);
+            return copy.ToArray();
+        }
+    }
 }

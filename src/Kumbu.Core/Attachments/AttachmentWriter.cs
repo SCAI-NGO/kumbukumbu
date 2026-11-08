@@ -3,6 +3,7 @@ using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
 
 namespace Kumbu.Core.Attachments;
 
@@ -63,6 +64,11 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (AttachmentFormat.ForPath(path) is not { } format)
         {
             return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: {AttachmentFormat.UnsupportedMessage}");
+        }
+
+        if (format.Kind == AttachmentKind.Text && !SkillPaths.IsInSkillFolder(path, await notes.SkillsVaultAsync(ct)))
+        {
+            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: text files are kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)");
         }
 
         if (bytes.Length > AttachmentFormat.MaxBytes)
