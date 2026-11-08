@@ -1,0 +1,270 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
+using Kumbu.Core.Attachments;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+
+namespace Kumbu.Core.Sh.Commands;
+
+/// <summary><c>pdfimages</c>: a PDF's embedded images, or a rendered region of a page, stored as image attachments; or the images only listed.</summary>
+public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, AttachmentWriter files, TimeProvider time) : ICommand
+{
+    private const string Forms = "pdfimages <pdf> [pages] <folder>/ | <pdf> <page> --crop x,y,w,h <file.png> | --list <pdf> [pages]";
+
+    // A busy sidecar is its queue at work: asked again this often, this far apart, before its answer stands.
+    private const int BusyRetries = 3;
+    private static readonly TimeSpan BusyPause = TimeSpan.FromSeconds(1);
+
+    private static readonly Option[] Spec = [new(null, "list"), new(null, "all"), new(null, "crop", TakesValue: true), new(null, "rotate", TakesValue: true)];
+
+    private static readonly string[] RegionExtensions = [".png", ".jpg", ".jpeg"];
+
+    /// <summary>The time a call lists and writes in: listing stops at half of it, writing at the first page boundary past it.</summary>
+    internal TimeSpan Budget { get; init; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>The time after which writing stops even within a page.</summary>
+    internal TimeSpan Ceiling { get; init; } = TimeSpan.FromSeconds(50);
+
+    public string Name => "pdfimages";
+
+    public string Usage => "pdfimages <pdf> [pages] <dir>/";
+
+    public string Summary => "store a PDF's pictures as images, to place in notes";
+
+    public string Help => """
+        pdfimages <pdf> [pages] <folder>/
+        pdfimages <pdf> <page> --crop x,y,w,h <file.png>
+        pdfimages --list <pdf> [pages]
+          Store the pictures of a PDF as image attachments, to place in notes. pages is N, N-M or N- (to the end),
+          all pages if omitted.
+          <folder>/         the images the pages paint, each as <pdf name>-p<page>-<n>.png, n counting the images
+                            of its page from 1 in painting order; the folder is made if it is missing
+          --crop x,y,w,h    one region of one page, rendered anew at 300 dpi, into a .png, .jpg or .jpeg file; in
+                            points as 'pdf info' gives the regions; --rotate D turns it as with pdf
+          --list            only list the images: page, number, pixel size, where on the page in points; writes nothing
+          --all             also the small ones (under 1 % of their page: bullets, rules, icons), left out otherwise
+          An image is stored at most 8 megapixels (a larger one is scaled down, and the output says from what), as a
+          PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
+          naming every page; duplicates are found within one call, so a later call stores a repeated image again.
+          pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
+          can't be read; the output names their pages, look at them with pdf --crop. A long PDF stops after about
+          20 seconds, the last line naming the pages to go on with. A writing command: it needs write access to
+          the folder.
+
+          pdfimages --list "/Work/Pump manual.pdf" 1-10
+          pdfimages "/Work/Pump manual.pdf" 1-10 "/Work/Pump manual/images/"
+          pdfimages "/Work/Pump manual.pdf" 12 --crop 60,120,410,260 "/Work/Pump manual/images/wiring diagram.png"
+        """;
+
+    public bool ReadsInput => false;
+
+    private sealed record Call(VaultPath Path, AttachmentState State, PageRange Range, bool All, long Started);
+
+    /// <summary>
+    /// The pages listed, one request each, within half the budget: their images in page order, the first page not
+    /// listed (null when all were), and the error that stopped the listing early, if one did.
+    /// </summary>
+    private sealed record Listing(IReadOnlyList<PdfPageImages> Pages, int? Next, int? Last, ShellResult? Error);
+
+    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
+    {
+        var started = time.GetTimestamp();
+        if (!Options.TryParse(Name, args, Spec, out var parsed, out var optionError)) return optionError with { Kind = ShellErrorKind.Invalid };
+        var list = parsed.Has("list");
+        var all = parsed.Has("all");
+        var cropText = parsed.Value("crop");
+        var operands = parsed.Operands;
+
+        if (parsed.Value("rotate") is not null && cropText is null)
+        {
+            return Invalid("pdfimages: --rotate turns a region stored with --crop; embedded images are stored as the page paints them");
+        }
+
+        if (list && cropText is not null) return UsageError("--list writes nothing and --crop stores a region; give one of them");
+        if (all && cropText is not null) return UsageError("--all is for embedded images; --crop stores the region as it is");
+        if (operands.Count == 0 || (!list && cropText is null && operands.Count == 1)) return UsageError("missing operand");
+        if (operands.Count > (list ? 2 : 3)) return UsageError("too many arguments");
+        if (cropText is not null && operands.Count < 3) return UsageError("--crop takes one page and a file to store it in");
+
+        string? target = null;
+        if (!list)
+        {
+            target = operands[^1];
+            if (cropText is null && !target.EndsWith('/')) return UsageError($"the folder to store into ends in '/': {target}/");
+            if (cropText is not null && target.EndsWith('/')) return UsageError($"--crop stores one file, named .png, .jpg or .jpeg, not a folder: {target}");
+            if (cropText is not null && !RegionExtensions.Contains(Path.GetExtension(target).ToLowerInvariant()))
+            {
+                return UsageError($"--crop stores one file, named .png, .jpg or .jpeg, not {target}");
+            }
+        }
+
+        var range = PageRange.All;
+        var pagesText = list ? operands.ElementAtOrDefault(1) : operands.Count == 3 ? operands[1] : null;
+        if (pagesText is not null)
+        {
+            if (!PageRange.TryParse(pagesText, out range, out var rangeError)) return Invalid($"pdfimages: {rangeError}");
+            if (cropText is not null && !range.IsSingle) return UsageError($"--crop takes one page, not {pagesText}");
+        }
+
+        Crop? crop = null;
+        if (cropText is not null)
+        {
+            if (!Crop.TryParse(cropText, out var c, out var cropError)) return Invalid($"pdfimages: {cropError}");
+            crop = c;
+        }
+
+        var rotate = 0;
+        if (parsed.Value("rotate") is { } turn && !Rotation.TryParse(turn, out rotate))
+        {
+            return Invalid($"pdfimages: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '{turn}' (leave it out for no turn)");
+        }
+
+        VaultPath? into = null;
+        if (target is not null)
+        {
+            if (!CommandArgs.TryParsePath(Name, target, out var targetPath, out var targetError)) return targetError! with { Kind = ShellErrorKind.Invalid };
+            if (targetPath.IsRoot) return Invalid("pdfimages: /: images are stored in a folder of a vault, e.g. /Work/images/");
+            into = targetPath;
+        }
+
+        var (opened, error) = await OpenAsync(operands[0], ct);
+        if (opened is null) return error!;
+        var call = new Call(opened.Value.Path, opened.Value.State, range, all, started);
+
+        if (list) return await ListAsync(call, ct);
+        _ = (into, crop, rotate, files);
+        return Invalid("pdfimages: only --list works in this version");
+    }
+
+    private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
+
+    private static ShellResult UsageError(string why) => Invalid($"pdfimages: {why}\nusage: {Forms}");
+
+    private static ShellResult Failed(PixelsUnavailableException e) => ShellResult.Error($"pdfimages: {e.Message}") with { Kind = e.Kind };
+
+    /// <summary>The PDF at <paramref name="pathText"/>, or the error for a path that isn't one.</summary>
+    private async Task<((VaultPath Path, AttachmentState State)? Opened, ShellResult? Error)> OpenAsync(string pathText, CancellationToken ct)
+    {
+        if (!CommandArgs.TryParsePath(Name, pathText, out var path, out var pathError)) return (null, pathError! with { Kind = ShellErrorKind.Invalid });
+        if (await StoreAttachments.GetAsync(notes, path, ct) is not { } attachment)
+        {
+            var read = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
+            if (!read.IsError) return (null, Invalid($"pdfimages: {path.Value} is a note, not a PDF"));
+            return (null, read with { Kind = read.Output.Contains(": No such file or directory", StringComparison.Ordinal) ? ShellErrorKind.NotFound : ShellErrorKind.Invalid });
+        }
+
+        if (!AttachmentText.IsPdf(attachment.Current)) return (null, Invalid($"pdfimages: {path.Value} is not a PDF"));
+        return ((path, attachment.Current), null);
+    }
+
+    /// <summary>A call to the sidecar, asked again while it answers busy, up to <see cref="BusyRetries"/> times.</summary>
+    private async Task<T> RetryingAsync<T>(Func<Task<T>> ask, CancellationToken ct)
+    {
+        for (var retries = 0; ; retries++)
+        {
+            try
+            {
+                return await ask();
+            }
+            catch (PixelsUnavailableException e) when (e.Problem == PixelsProblem.Busy && retries < BusyRetries)
+            {
+                await Task.Delay(BusyPause, time, ct);
+            }
+        }
+    }
+
+    private Task<PdfPageImages> ListPageAsync(Call call, int page, CancellationToken ct) =>
+        RetryingAsync(() => pixels.PdfImagesAsync(call.Path, call.State, page, ct), ct);
+
+    /// <summary>Lists the pages of the call one by one until the range or half the budget is spent.</summary>
+    private async Task<Listing> ListPagesAsync(Call call, CancellationToken ct)
+    {
+        var pages = new List<PdfPageImages>();
+        var last = call.Range.Last;
+        for (var n = call.Range.First; last is null || n <= last; n++)
+        {
+            if (pages.Count > 0 && time.GetElapsedTime(call.Started) >= Budget / 2) return new(pages, n, last, null);
+            PdfPageImages page;
+            try
+            {
+                page = await ListPageAsync(call, n, ct);
+            }
+            catch (PixelsUnavailableException e)
+            {
+                // A first page past the end: the sidecar has no count to give, page 1 has.
+                if (pages.Count == 0 && n > 1 && e.Problem == PixelsProblem.Failed && await PageCountAsync(call, ct) is { } count
+                    && !call.Range.TryClamp(count, call.Path.Value, out _, out var clampError))
+                {
+                    return new(pages, n, last, Invalid($"pdfimages: {clampError}"));
+                }
+
+                return new(pages, n, last, Failed(e));
+            }
+
+            if (pages.Count == 0) last = Math.Min(last ?? page.PageCount, page.PageCount);
+            pages.Add(page);
+        }
+
+        return new(pages, null, last, null);
+    }
+
+    private async Task<int?> PageCountAsync(Call call, CancellationToken ct)
+    {
+        try
+        {
+            return (await ListPageAsync(call, 1, ct)).PageCount;
+        }
+        catch (PixelsUnavailableException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<ShellResult> ListAsync(Call call, CancellationToken ct)
+    {
+        var listing = await ListPagesAsync(call, ct);
+        var lines = new List<string>();
+        if (listing.Pages.Count > 0)
+        {
+            var images = listing.Pages.SelectMany(p => p.Images.Select(i => (Page: p, Image: i))).ToList();
+            var small = images.Count(i => i.Image.Small);
+            var left = small == 0 ? "" : call.All ? $" ({small} small)" : $" ({small} small, --all lists them)";
+            lines.Add($"{call.Path.Value}: {Count(images.Count, "image")} on {Pages(listing.Pages[0].Page, listing.Pages[^1].Page)}{left}");
+
+            var seen = new Dictionary<string, (int Page, int N)>(StringComparer.Ordinal);
+            foreach (var (page, image) in images.Where(i => call.All || !i.Image.Small))
+            {
+                var marks = new List<string>();
+                if (image.Small) marks.Add("[small]");
+                if (image.Failed || image.Hash is null) marks.Add("[could not be decoded]");
+                else if (seen.TryGetValue(image.Hash, out var first)) marks.Add($"[same as p{first.Page} #{first.N}]");
+                else seen[image.Hash] = (page.Page, image.N);
+
+                var size = image.Width > 0 && image.Height > 0 ? $"  {image.Width}×{image.Height}" : "";
+                lines.Add($"p{page.Page}  #{image.N}{size}  at {Box(image, page)}{(marks.Count > 0 ? "  " + string.Join(' ', marks) : "")}");
+            }
+
+            lines.AddRange(OverLines(listing.Pages));
+        }
+
+        if (listing.Error is { } error) return error with { Output = string.Join('\n', [.. lines, error.Output]) };
+        if (listing.Next is { } next) lines.Add($"listed {Pages(listing.Pages[0].Page, next - 1)}; go on with {GoOn(next, listing.Last, call.Range.Last is null)}");
+        return ShellResult.Ok(string.Join('\n', lines));
+    }
+
+    /// <summary>"page 4: 1 image over 50 MP left out (look with pdf --crop)" for each page whose images pdf.js couldn't decode for their size.</summary>
+    private static IEnumerable<string> OverLines(IEnumerable<PdfPageImages> pages) =>
+        pages.Where(p => p.Over > 0).Select(p => $"page {p.Page}: {Count(p.Over, "image")} over 50 MP left out (look with pdf --crop)");
+
+    private static string Count(int count, string noun) => count switch { 0 => $"no {noun}s", 1 => $"1 {noun}", _ => $"{count} {noun}s" };
+
+    private static string Pages(int first, int last) => first == last ? $"page {first}" : $"pages {first}-{last}";
+
+    /// <summary>The pages still to do: to the end where the call asked for that, else to its last page.</summary>
+    private static string GoOn(int next, int? last, bool open) => open || last is null ? $"pages {next}-" : Pages(next, last.Value);
+
+    /// <summary>An image's box as whole points, ready for <c>--crop</c>.</summary>
+    private static string Box(PdfImageInfo image, PdfPageImages page) =>
+        Crop.Enclosing(image.X, image.Y, image.W, image.H, page.Width, page.Height)?.ToString()
+        ?? string.Join(',', new[] { image.X, image.Y, image.W, image.H }.Select(v => Math.Round(v, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture)));
+}

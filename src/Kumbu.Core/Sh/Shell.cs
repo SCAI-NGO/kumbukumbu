@@ -48,6 +48,7 @@ public sealed class Shell
             .. ReadingCommands(notes, _now, pixels, marks: marks),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
+            .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
             new History(notes, () => writer.Now, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
             new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
             new Df(notes, figures ?? NoStorageFigures.Instance), new Du(notes),

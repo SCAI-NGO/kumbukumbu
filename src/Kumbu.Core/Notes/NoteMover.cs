@@ -13,6 +13,9 @@ namespace Kumbu.Core.Notes;
 /// </summary>
 public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
+    /// <summary>The clock moves are made by, for the commands that build on them.</summary>
+    internal TimeProvider Time => time;
+
     public Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct) =>
         MoveAsync(source, target, rewriteLinks, card: false, replacing: null, ct);
 
