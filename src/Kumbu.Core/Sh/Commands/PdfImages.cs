@@ -39,8 +39,13 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
           all pages if omitted.
           <folder>/         the images the pages paint, each as <pdf name>-p<page>-<n>.png, n counting the images
                             of its page from 1 in painting order; the folder is made if it is missing
-          --crop x,y,w,h    one region of one page, rendered anew at 300 dpi, into a .png, .jpg or .jpeg file; in
-                            points as 'pdf info' gives the regions; --rotate D turns it as with pdf
+          --crop x,y,w,h    one region of one page, rendered anew at 300 dpi (within 8 megapixels), into a .png,
+                            .jpg or .jpeg file: a PNG unless the target is .jpg or .jpeg. x,y,w,h in points, as 'pdf
+                            info' gives the regions. Only drawings need it (charts, diagrams, schematics): the images
+                            of a page come whole and sharper from the folder form
+          --rotate D        with --crop: turn the page clockwise by 90, 180 or 270 degrees first, as with pdf;
+                            x,y,w,h counts in the turned page, from its top left (see 'help pdf' for turning a
+                            region from 'pdf info')
           --list            only list the images: page, number, pixel size, where on the page in points; writes nothing
           --all             also the small ones (under 1 % of their page: bullets, rules, icons), left out otherwise
           An image is stored at 8 megapixels at most (a larger one is scaled down, and the output says from what), as
@@ -137,11 +142,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         var call = new Call(opened.Value.Path, opened.Value.State, range, all, started);
 
         if (list) return await ListAsync(call, ct);
-        if (crop is not null)
-        {
-            _ = rotate;
-            return Invalid("pdfimages: --crop doesn't work in this version yet");
-        }
+        if (crop is not null) return await StoreRegionAsync(call, crop, rotate, into!, ct);
 
         return await StoreAsync(call, into!, ct);
     }
@@ -365,16 +366,10 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
             }
             catch (QuotaExceededException e)
             {
-                // As ToolResult answers a full vault: only the owner is pointed at df.
-                var full = ShellResult.Error(e.Owner ? e.Message + " See `df`." : e.Message) with { Kind = ShellErrorKind.Refused, Code = e.Owner ? Refusals.Quota : null };
-                return Stopped(full, Header(stored, into, small, call.All), lines, plan.Skip(i));
+                return Stopped(Full(e), Header(stored, into, small, call.All), lines, plan.Skip(i));
             }
 
-            if (written.Result.IsError)
-            {
-                var refused = written.Result with { Output = $"pdfimages: {written.Result.Output}" };
-                return Stopped(refused, Header(stored, into, small, call.All), lines, plan.Skip(i));
-            }
+            if (written.Result.IsError) return Stopped(WriterRefused(written), Header(stored, into, small, call.All), lines, plan.Skip(i));
 
             stored++;
             ofPage.Add(path.Value);
@@ -387,6 +382,57 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         if (goOn is { } next) lines.Add($"stored {Count(stored, "image")}; go on with {GoOn(next, listing.Last, call.Range.Last is null)}");
         return ShellResult.Ok(string.Join('\n', lines));
     }
+
+    /// <summary>One region of one page, rendered and stored at <paramref name="target"/>, which must not stand yet.</summary>
+    private async Task<ShellResult> StoreRegionAsync(Call call, Crop crop, int rotate, VaultPath target, CancellationToken ct)
+    {
+        if (await StoreAttachments.GetAsync(notes, target, ct) is not null
+            || (await notes.ListNotesUnderAsync(target, ct)).Count > 0
+            || (await StoreAttachments.PathsUnderAsync(notes, target, ct))?.Count > 0)
+        {
+            return ShellResult.Error($"pdfimages: {target.Value} exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict };
+        }
+
+        var page = call.Range.First;
+        var jpeg = Path.GetExtension(target.Name).ToLowerInvariant() is ".jpg" or ".jpeg";
+        Picture picture;
+        try
+        {
+            picture = await RetryingAsync(() => pixels.PdfRegionAsync(call.Path, call.State, page, crop, rotate, jpeg, ct), ct);
+        }
+        catch (PixelsUnavailableException e)
+        {
+            return Failed(e);
+        }
+
+        WriteResult written;
+        try
+        {
+            written = await files.WriteAsync(target.Value, picture.Data, (picture.Width, picture.Height), null, ct);
+        }
+        catch (QuotaExceededException e)
+        {
+            return Full(e);
+        }
+
+        if (written.Result.IsError) return WriterRefused(written);
+
+        // The sidecar renders at 300 dpi, its sides floored, unless that passes 8 megapixels or 16,384 px on a side.
+        var fullW = Math.Max(1, (int)Math.Floor(crop.Width * StoredDpi / 72 + 1e-6));
+        var fullH = Math.Max(1, (int)Math.Floor(crop.Height * StoredDpi / 72 + 1e-6));
+        var scaled = picture.Width < fullW || picture.Height < fullH ? $" (scaled down from {fullW}×{fullH})" : "";
+        var turned = rotate == 0 ? "" : $" of the page turned {rotate}°";
+        return ShellResult.Ok($"stored {target.Value}  p{page}  {picture.Width}×{picture.Height}{scaled}  {AttachmentText.Size(picture.Data.Length)}  at {crop}{turned}");
+    }
+
+    private const int StoredDpi = 300;
+
+    /// <summary>A full vault, as ToolResult answers it: only the owner is pointed at df.</summary>
+    private static ShellResult Full(QuotaExceededException e) =>
+        ShellResult.Error(e.Owner ? e.Message + " See `df`." : e.Message) with { Kind = ShellErrorKind.Refused, Code = e.Owner ? Refusals.Quota : null };
+
+    /// <summary>The writer's refusal (its text starts "upload:"), quoted with its own kind.</summary>
+    private static ShellResult WriterRefused(WriteResult written) => written.Result with { Output = $"pdfimages: {written.Result.Output}" };
 
     private static string Header(int stored, VaultPath into, int small, bool all) =>
         $"stored {Count(stored, "image")} in {into.Value}/{(small > 0 && !all ? $" ({small} left out as smaller than 1 % of their page, --all keeps them)" : "")}";

@@ -10,7 +10,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Sh;
 
-/// <summary><c>pdfimages</c>: its arguments, <c>--list</c>, a PDF's images page by page, and storing them.</summary>
+/// <summary><c>pdfimages</c>: its arguments, <c>--list</c>, a PDF's images page by page, storing them, and a region with <c>--crop</c>.</summary>
 public class PdfImagesTests
 {
     private const string UsageLine = "usage: pdfimages <pdf> [pages] <folder>/ | <pdf> <page> --crop x,y,w,h <file.png> | --list <pdf> [pages]";
@@ -802,6 +802,165 @@ public class PdfImagesTests
             result.Output);
     }
 
+    private const string Diagram = "/Work/Pump manual/images/wiring diagram";
+
+    private async Task PumpManual()
+    {
+        await Upload("/Work/Pump manual.pdf");
+        _pixels.Region = Png(421_888, 1958, 1583, 595, 842);
+    }
+
+    [Fact]
+    public async Task Crop_stores_a_rendered_region_with_its_line()
+    {
+        await PumpManual();
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+
+        Assert.Equal(ShellResult.Ok($"stored {Diagram}.png  p12  1958×1583  412 KB  at 60,120,470,380"), result);
+        Assert.Equal(["region 12 60,120,470,380 0 png"], _pixels.Calls);
+        var stored = await Stored(Diagram + ".png");
+        Assert.NotNull(stored);
+        Assert.Equal(("image/png", 1958, 1583, 421_888L), (stored.Current.MediaType, stored.Current.Width, stored.Current.Height, stored.Current.Size));
+        Assert.Equal(_pixels.Region!.Data, await StoreAttachments.ReadBytesAsync(_store, stored.Path, stored.Current, Ct));
+    }
+
+    [Theory]
+    [InlineData(".jpg")]
+    [InlineData(".jpeg")]
+    [InlineData(".JPG")]
+    public async Task Crop_into_a_jpg_asks_for_a_jpeg(string extension)
+    {
+        await PumpManual();
+        _pixels.Region = Jpeg(300_000, 1958, 1583) with { OriginalWidth = 595, OriginalHeight = 842 };
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}{extension}\"");
+
+        Assert.Equal($"stored {Diagram}{extension}  p12  1958×1583  293 KB  at 60,120,470,380", result.Output);
+        Assert.Equal(["region 12 60,120,470,380 0 jpeg"], _pixels.Calls);
+        Assert.Equal("image/jpeg", (await Stored(Diagram + extension))!.Current.MediaType);
+    }
+
+    [Fact]
+    public async Task Crop_into_another_format_asks_for_nothing()
+    {
+        await PumpManual();
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.gif\"");
+
+        Assert.Equal(Usage($"--crop stores one file, named .png, .jpg or .jpeg, not {Diagram}.gif"), result);
+        Assert.Empty(_pixels.Calls);
+    }
+
+    [Fact]
+    public async Task Crop_turned_asks_for_the_turn_and_says_so()
+    {
+        await PumpManual();
+        _pixels.Region = Png(421_888, 1583, 1958, 595, 842);
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 120,60,380,470 --rotate -90 \"{Diagram}.png\"");
+
+        Assert.Equal($"stored {Diagram}.png  p12  1583×1958  412 KB  at 120,60,380,470 of the page turned 270°", result.Output);
+        Assert.Equal(["region 12 120,60,380,470 270 png"], _pixels.Calls);
+    }
+
+    [Fact]
+    public async Task Crop_scaled_down_says_from_what()
+    {
+        await PumpManual();
+        _pixels.Region = Png(5_000_000, 3384, 2391, 842, 595);
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 1 --crop 0,0,842,595 --rotate 90 \"{Diagram}.png\"");
+
+        Assert.Equal($"stored {Diagram}.png  p1  3384×2391 (scaled down from 3508×2479)  4.8 MB  at 0,0,842,595 of the page turned 90°", result.Output);
+    }
+
+    [Fact]
+    public async Task Crop_over_an_existing_target_refuses_and_writes_nothing()
+    {
+        await PumpManual();
+        var before = Png(1000, 10, 10);
+        Assert.False((await _files.WriteAsync(Diagram + ".png", before.Data, (10, 10), null, Ct)).Result.IsError);
+        await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync($"{Diagram}.jpg/notes.md", "a note\n", null, Ct);
+
+        var file = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+        var folder = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.jpg\"");
+
+        Assert.Equal(ShellResult.Error($"pdfimages: {Diagram}.png exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict }, file);
+        Assert.Equal(ShellResult.Error($"pdfimages: {Diagram}.jpg exists already; choose another name, or remove it first") with { Kind = ShellErrorKind.Conflict }, folder);
+        Assert.Empty(_pixels.Calls);
+        var stored = (await Stored(Diagram + ".png"))!;
+        Assert.Equal(before.Data, await StoreAttachments.ReadBytesAsync(_store, stored.Path, stored.Current, Ct));
+        Assert.Null(await Stored(Diagram + ".jpg"));
+    }
+
+    [Fact]
+    public async Task Crop_too_large_as_png_names_jpg()
+    {
+        await PumpManual();
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("the region is over 15 MB as PNG; name the target .jpg", PixelsProblem.TooLarge));
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+
+        Assert.Equal(ShellResult.Error("pdfimages: the region is over 15 MB as PNG; name the target .jpg") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Null(await Stored(Diagram + ".png"));
+    }
+
+    [Fact]
+    public async Task Crop_outside_the_page_or_past_the_end_is_named()
+    {
+        await PumpManual();
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("the crop 0,0,900,900 lies outside page 2", PixelsProblem.BadCrop));
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("/Work/Pump manual.pdf has no page 40", PixelsProblem.NoSuchPage));
+
+        var outside = await Run($"pdfimages \"/Work/Pump manual.pdf\" 2 --crop 0,0,900,900 \"{Diagram}.png\"");
+        var past = await Run($"pdfimages \"/Work/Pump manual.pdf\" 40 --crop 0,0,100,100 \"{Diagram}.png\"");
+
+        Assert.Equal(ShellResult.Error("pdfimages: the crop 0,0,900,900 lies outside page 2") with { Kind = ShellErrorKind.Invalid }, outside);
+        Assert.Equal(ShellResult.Error("pdfimages: /Work/Pump manual.pdf has no page 40") with { Kind = ShellErrorKind.Invalid }, past);
+        Assert.Null(await Stored(Diagram + ".png"));
+    }
+
+    [Fact]
+    public async Task Crop_asks_again_while_the_sidecar_is_busy()
+    {
+        await PumpManual();
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
+        _pixels.Throws.Enqueue(new PixelsUnavailableException("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy));
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(3, _pixels.Calls.Count);
+        Assert.NotNull(await Stored(Diagram + ".png"));
+    }
+
+    [Fact]
+    public async Task Crop_into_a_full_vault_gives_the_sentence()
+    {
+        await PumpManual();
+        _store.BlobFails = _ => new QuotaExceededException(owner: true);
+
+        var result = await Run($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"");
+
+        Assert.Equal(ShellResult.Error("This vault is out of space. See `df`.") with { Kind = ShellErrorKind.Refused, Code = Refusals.Quota }, result);
+    }
+
+    [Fact]
+    public async Task Crop_refused_by_the_writer_is_quoted()
+    {
+        await PumpManual();
+        var reader = new FixedCaller(Writers.Dev, CanWriteVault: _ => false);
+        var sh = new Shell(_store, new NoteWriter(_store, _time, reader), new NoteMover(_store, _time, reader), pixels: _pixels);
+        var refused = (await new AttachmentWriter(_store, _store, _time, reader).WriteAsync(Diagram + ".png", _pixels.Region!.Data, (1958, 1583), null, Ct)).Result;
+
+        var result = await sh.RunAsync($"pdfimages \"/Work/Pump manual.pdf\" 12 --crop 60,120,470,380 \"{Diagram}.png\"", Ct);
+
+        Assert.StartsWith("upload: ", refused.Output);
+        Assert.Equal(refused with { Output = "pdfimages: " + refused.Output }, result);
+        Assert.Null(await Stored(Diagram + ".png"));
+    }
+
     [Fact]
     public async Task Help_lists_pdfimages_after_pdf()
     {
@@ -813,6 +972,9 @@ public class PdfImagesTests
         Assert.StartsWith("pdfimages <pdf> [pages] <folder>/\npdfimages <pdf> <page> --crop x,y,w,h <file.png>\npdfimages --list <pdf> [pages]\n", own.Output);
         Assert.Contains("duplicates are found within one call", own.Output);
         Assert.Contains("at most 500 images in one call", own.Output);
+        Assert.Contains("300 dpi", own.Output);
+        Assert.Contains("Only drawings need it", own.Output);
+        Assert.Contains("x,y,w,h counts in the turned page", own.Output);
         Assert.Contains("\n  pdfimages <pdf> [pages] <dir>/  ", Manual.ToolDescription);
     }
 
