@@ -505,8 +505,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
 
+        // A file of a skill's place stays out of a note's copy, as an unpublishable one does: a skill is shared as a whole.
         bool MayCopy(VaultPath p) =>
-            !unusable.Contains(p) && attachments.ContainsKey(p) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image && !Covered(record.Unpublishable, p.Value);
+            !unusable.Contains(p) && attachments.ContainsKey(p) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image && !Covered(record.Unpublishable, p.Value)
+            && !InSkillPlace(access.Vault, p);
 
         while (true)
         {

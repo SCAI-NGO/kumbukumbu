@@ -97,4 +97,85 @@ public sealed class SkillFolderPublishTests(KumbuAppFactory app)
         var record = (await store.ReadAsync(null, vault, Ct)).Record;
         Assert.Equal((PublishingKinds.Withdrawn, WithdrawalReasons.Removed), (record.Log[^1].Kind, record.Log[^1].Reason));
     }
+
+    /// <summary>The note <c>x.md</c> in the vault Skills, made through the API.</summary>
+    private async Task<RestClient> AliceWithSkillsNoteAsync()
+    {
+        var alice = await AliceAsync();
+        using var made = await alice.SendAsync(HttpMethod.Put, "/api/notes/Skills/x/SKILL.md", new { content = "---\nname: x\ndescription: Does x.\n---\n\nSteps.\n" });
+        Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        return alice;
+    }
+
+    [Fact]
+    public async Task A_note_in_the_vault_Skills_isnt_published_by_the_web_app()
+    {
+        var alice = await AliceWithSkillsNoteAsync();
+        using var published = await alice.SendAsync(HttpMethod.Post, "/api/publications/Skills/x/SKILL.md", new { });
+        Assert.Equal(HttpStatusCode.Forbidden, published.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_note_in_the_vault_Skills_isnt_published_by_sh()
+    {
+        var alice = await AliceWithSkillsNoteAsync();
+        var vault = (await app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Skills");
+        // The service takes "May publish" for any vault; the API refuses it for Skills, so the key is made directly.
+        var (key, _) = await app.PublicApi.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct, publish: new HashSet<string> { vault.Id });
+        var result = await ScopedShAsync("publish add /Skills/x/SKILL.md", key);
+        Assert.True(result.IsError, result.Output);
+        Assert.Equal(Refusals.Unpublishable, result.Code);
+        Assert.Contains("is in a skill's place", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>A publication of <c>/Work/plan.md</c>, moved in the record (as the upgrade finds them) to the note
+    /// <c>/Work/_skills/x/old.md</c>, which is made.</summary>
+    private async Task<(RestClient Alice, string Code)> OldPublicationAsync()
+    {
+        var alice = await AliceAsync();
+        await alice.CreateAsync("_skills/x/old.md", "# Old\n\nOld.\n");
+        using var published = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/plan.md", new { });
+        Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        var code = ShareCode.Parse((await RestClient.JsonAsync(published))["link"]!.GetValue<string>().Split('#')[1])!;
+        var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
+        var store = app.PublicApi.Services.GetRequiredService<PublicationStore>();
+        var vault = (await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Name == "Work").Vault;
+        var (doc, record) = await store.ReadAsync(null, vault, Ct);
+        using var session = await catalog.StartSessionAsync(Ct);
+        await store.WriteAsync(session, vault, doc, record with { Publications = [.. record.Publications.Select(p => p with { Note = "/Work/_skills/x/old.md" })] }, Ct);
+        return (alice, code);
+    }
+
+    [Fact]
+    public async Task An_old_publication_in__skills_cant_be_updated()
+    {
+        var (alice, _) = await OldPublicationAsync();
+        using var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/_skills/x/old.md", new { password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.Forbidden, updated.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_old_publication_in__skills_can_still_be_withdrawn()
+    {
+        var (alice, code) = await OldPublicationAsync();
+        var store = app.PublicApi.Services.GetRequiredService<PublicationStore>();
+        Assert.NotNull(await store.OpenCopyAsync(code, Ct));
+        using var withdrawn = await alice.SendAsync(HttpMethod.Delete, "/api/publications/Work/_skills/x/old.md");
+        Assert.Equal(HttpStatusCode.NoContent, withdrawn.StatusCode);
+        Assert.Null(await store.OpenCopyAsync(code, Ct));
+    }
+
+    [Fact]
+    public async Task A_published_note_doesnt_take_an_image_from__skills()
+    {
+        var alice = await AliceAsync();
+        await alice.CreateFileAsync("_skills/x/diagram.jpg", Kumbu.Server.Tests.Attachments.ImageMetadataTests.JpegWithGps(1));
+        await alice.CreateAsync("embeds.md", "# Embeds\n\n![[diagram.jpg]]\n");
+        using var published = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/embeds.md", new { });
+        Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        var code = ShareCode.Parse((await RestClient.JsonAsync(published))["link"]!.GetValue<string>().Split('#')[1])!;
+        var opened = await app.PublicApi.Services.GetRequiredService<PublicationStore>().OpenCopyAsync(code, Ct);
+        Assert.Empty(opened!.Value.Copy.Files);
+    }
 }
