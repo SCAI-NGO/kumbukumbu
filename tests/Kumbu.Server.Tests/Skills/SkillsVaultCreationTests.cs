@@ -61,6 +61,46 @@ public sealed class SkillsVaultCreationTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Calls_at_once_for_one_user_create_once_and_none_fails()
+    {
+        var log = new CapturedLog();
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var (user, key, readAt) = await SignedInAsync(api);
+        var skills = api.Services.GetRequiredService<SkillsVaults>();
+        var calls = 0;
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        skills.BeforeCreate = async token =>
+        {
+            // The first to get here gives the others a moment to come in beside it, as they would without the per-user gate.
+            if (Interlocked.Increment(ref calls) > 1) second.TrySetResult();
+            else await second.Task.WaitAsync(TimeSpan.FromSeconds(1), token).ContinueWith(_ => { }, TaskScheduler.Default);
+        };
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => Task.Run(() => skills.EnsureAsync(user, key, readAt, Ct), Ct)));
+
+        Assert.All(results, Assert.True);
+        Assert.Equal(1, calls);
+        Assert.Equal(1, (await api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.Id, key, Ct)).Count(a => a.Vault.Kind == VaultKinds.Skills));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("Could not create the vault Skills"));
+    }
+
+    [Fact]
+    public async Task Another_process_that_wins_the_name_counts_as_done()
+    {
+        var log = new CapturedLog();
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var (user, key, readAt) = await SignedInAsync(api);
+        var skills = api.Services.GetRequiredService<SkillsVaults>();
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        // Between this process's look and its create, another one creates the vault: the create meets the taken name.
+        skills.BeforeCreate = async token => await catalog.CreateForUserAsync(SkillsVaults.Name, user.Id, key, token, readAt, kind: VaultKinds.Skills);
+
+        Assert.True(await skills.EnsureAsync(user, key, readAt, Ct));
+        Assert.Equal(1, (await catalog.OpenForUserAsync(user.Id, key, Ct)).Count(a => a.Vault.Kind == VaultKinds.Skills));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("Could not create the vault Skills"));
+    }
+
+    [Fact]
     public async Task Join_creates_Welcome_and_Skills()
     {
         var adminName = "u" + Guid.NewGuid().ToString("N")[..12];
@@ -115,6 +155,15 @@ public sealed class SkillsVaultCreationTests(KumbuAppFactory app)
         var key = await alice.KeyAsync("Claude Code", KeyRight.Write);
         Assert.Equal("Work/", (await alice.ShAsync("ls /", key)).Text);
         Assert.True((await alice.ShAsync("ls /Skills", key)).IsError);
+    }
+
+    /// <summary>A new user and her user key, signed in through the catalog only, so nothing has made her vault Skills yet.</summary>
+    private static async Task<(User User, byte[] Key, DateTime ReadAt)> SignedInAsync(WebApplicationFactory<Program> api)
+    {
+        var users = api.Services.GetRequiredService<UserCatalog>();
+        var username = "u" + Guid.NewGuid().ToString("N")[..12];
+        await users.CreateAsync(username, RestClient.Password, Roles.User, Ct);
+        return (await users.TrySignInAsync(username, RestClient.Password, Ct))!.Value;
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? session = null)
