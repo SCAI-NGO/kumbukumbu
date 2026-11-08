@@ -35,6 +35,9 @@ public static class MarketplaceIndex
     public const int MaxDepth = 6;
     public const string MarketplaceJson = ".claude-plugin/marketplace.json";
 
+    /// <summary>How long a plugin's name or source may be as shown; a description keeps the manifest rule's length.</summary>
+    public const int MaxText = 200;
+
     /// <summary>How deeply <c>marketplace.json</c> may nest; its shape needs four levels.</summary>
     private const int MaxJsonDepth = 16;
 
@@ -144,7 +147,7 @@ public static class MarketplaceIndex
         try
         {
             var bytes = json.AsMemory();
-            if (bytes.Span.StartsWith("﻿"u8)) bytes = bytes[3..];
+            if (bytes.Span.StartsWith(Encoding.UTF8.Preamble)) bytes = bytes[Encoding.UTF8.Preamble.Length..];
             using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("plugins", out var list) || list.ValueKind != JsonValueKind.Array) return null;
@@ -152,7 +155,7 @@ public static class MarketplaceIndex
             var plugins = new List<Plugin>();
             foreach (var item in list.EnumerateArray())
             {
-                if (item.ValueKind != JsonValueKind.Object || String(item, "name") is not { } name) continue;
+                if (item.ValueKind != JsonValueKind.Object || StringOf(item, "name") is not { } name) continue;
                 string? source = null, root = null;
                 var local = false;
                 if (item.TryGetProperty("source", out var given))
@@ -165,25 +168,25 @@ public static class MarketplaceIndex
                     }
                     else if (given.ValueKind == JsonValueKind.Object)
                     {
-                        source = String(given, "repo") ?? String(given, "url");
+                        source = StringOf(given, "repo") ?? StringOf(given, "url");
                     }
                 }
 
                 IReadOnlyList<string>? skills = item.TryGetProperty("skills", out var entries) && entries.ValueKind == JsonValueKind.Array
                     ? [.. entries.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)]
                     : null;
-                plugins.Add(new Plugin(name, source, local, root, skills));
+                plugins.Add(new Plugin(Clean(name, MaxText), source is null ? null : Clean(source, MaxText), local, root, skills));
             }
 
             return plugins;
         }
-        catch (JsonException)
+        catch (Exception e) when (e is JsonException or InvalidOperationException)
         {
-            return null;
+            return null;   // InvalidOperationException: a string escape that isn't valid UTF-16, such as a lone surrogate
         }
     }
 
-    private static string? String(JsonElement element, string property) =>
+    private static string? StringOf(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static MarketplaceSkill Skill(Tree tree, string folder, string? plugin)
@@ -191,26 +194,43 @@ public static class MarketplaceIndex
         var name = folder.Split('/')[^1];
         var files = Collect(tree, folder);
         var manifest = files.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Bytes;
-        string description = "";
-        string? reason;
-        IReadOnlyList<string> warnings;
-        if (manifest is null)
-        {
-            reason = "its " + BadManifest;
-            warnings = [BadManifest];
-        }
-        else
-        {
-            var read = SkillManifest.Read(name, Encoding.UTF8.GetString(manifest));
-            description = read.Description ?? "";
-            warnings = read.Problems;
-            var bytes = files.Files.Sum(f => (long)f.Bytes.Length);
-            reason = files.Files.Count > MaxSkillFiles ? $"it has {files.Files.Count} files; a skill has at most {MaxSkillFiles}"
-                : bytes > MaxSkillBytes ? $"it has {(bytes / (1024.0 * 1024)).ToString("F1", CultureInfo.InvariantCulture)} MB; a skill has at most 10 MB"
-                : null;
-        }
+        var read = manifest is null ? null : SkillManifest.Read(name, Encoding.UTF8.GetString(manifest));
+        var description = Clean(read?.Description ?? "", SkillManifest.MaxDescription);
+        var warnings = read is null ? [BadManifest] : read.Problems.Select(w => Clean(w, SkillManifest.MaxDescription)).ToList();
+        var bytes = files.Files.Sum(f => (long)f.Bytes.Length);
+        var reason = FolderNameProblem(name) is { } problem ? $"its folder's name can't be kept: {problem}"
+            : read is null ? "its " + BadManifest
+            : files.Files.Count > MaxSkillFiles ? $"it has {files.Files.Count} files; a skill has at most {MaxSkillFiles}"
+            : bytes > MaxSkillBytes ? $"it has {(bytes / (1024.0 * 1024)).ToString("F1", CultureInfo.InvariantCulture)} MB; a skill has at most 10 MB"
+            : null;
 
         return new MarketplaceSkill(folder, name, description, plugin, reason is null, reason, SkillPageApi.HasScripts(files.Files.Select(f => f.Path)), warnings);
+    }
+
+    /// <summary>Why the skill's folder can't be made under its own name: what <see cref="SkillCopier.NameProblem"/> says, or a
+    /// control or format character (bidi and zero-width marks), which would let a name pass for another.</summary>
+    private static string? FolderNameProblem(string name) =>
+        SkillCopier.NameProblem(name)
+        ?? (name.EnumerateRunes().Any(r => Rune.GetUnicodeCategory(r) is UnicodeCategory.Control or UnicodeCategory.Format)
+            ? $"'{Clean(name, MaxText)}' contains a control or format character" : null);
+
+    /// <summary>Untrusted text as it may be shown: line breaks as spaces, controls (Cc) and format characters (Cf) dropped,
+    /// cut with an ellipsis at <paramref name="max"/> characters.</summary>
+    private static string Clean(string text, int max)
+    {
+        var clean = new StringBuilder(Math.Min(text.Length, max + 1));
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (clean.Length > max) break;
+            if (rune.Value is '\n' or '\r' or '\t' or 0x85 or 0x2028 or 0x2029) clean.Append(' ');
+            else if (Rune.GetUnicodeCategory(rune) is not (UnicodeCategory.Control or UnicodeCategory.Format)) clean.Append(rune.ToString());
+        }
+
+        var result = clean.ToString().Trim();
+        if (result.Length <= max) return result;
+        var cut = max - 1;
+        if (char.IsHighSurrogate(result[cut - 1])) cut--;
+        return result[..cut] + "…";
     }
 
     /// <summary>The files below <paramref name="folder"/>: the ones Kumbu can store there and the rest, in the archive's order.</summary>
@@ -265,6 +285,8 @@ public static class MarketplaceIndex
     /// an earlier one has no bytes: it's skipped wherever it lies.</summary>
     private sealed class Tree
     {
+        private static bool IsManifest(string path) => path == SkillPaths.Manifest || path.EndsWith("/" + SkillPaths.Manifest, StringComparison.Ordinal);
+
         public List<(string Path, byte[]? Bytes)> Entries { get; } = [];
         public Dictionary<string, byte[]> Kept { get; } = new(StringComparer.Ordinal);
         public IReadOnlyList<string> Skipped { get; private init; } = [];
@@ -272,18 +294,28 @@ public static class MarketplaceIndex
         public static Tree Of(RepoArchive archive)
         {
             var tree = new Tree { Skipped = archive.Skipped };
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var file in archive.Files)
-            {
-                var path = Nfc(file.Path);
-                if (path is null || !seen.Add(path))
-                {
-                    tree.Entries.Add((path ?? file.Path, null));
-                    continue;
-                }
+            var paths = archive.Files.Select(f => Nfc(f.Path)).ToList();
 
-                tree.Entries.Add((path, file.Bytes));
-                tree.Kept[path] = file.Bytes;
+            // Among case twins the first is kept, unless a later one is named exactly SKILL.md and it isn't: a
+            // skill.md before it doesn't hide the skill.
+            var kept = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < paths.Count; i++)
+            {
+                if (paths[i] is not { } path) continue;
+                if (!kept.TryGetValue(path, out var first) || (IsManifest(path) && !IsManifest(paths[first]!))) kept[path] = i;
+            }
+
+            for (var i = 0; i < paths.Count; i++)
+            {
+                if (paths[i] is { } path && kept[path] == i)
+                {
+                    tree.Entries.Add((path, archive.Files[i].Bytes));
+                    tree.Kept[path] = archive.Files[i].Bytes;
+                }
+                else
+                {
+                    tree.Entries.Add((paths[i] ?? archive.Files[i].Path, null));
+                }
             }
 
             return tree;

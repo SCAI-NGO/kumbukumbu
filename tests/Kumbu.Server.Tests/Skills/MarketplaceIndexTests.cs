@@ -118,6 +118,10 @@ public sealed class MarketplaceIndexTests
         """{ "plugins": [{ "name": "x", "source": "./" }], }""",
         new string('[', 10_000) + new string(']', 10_000),
         """{ "plugins": [""" + new string('[', 100) + new string(']', 100) + "] }",
+        """{ "plugins": [{ "name": "a\ud800", "source": "./" }] }""",
+        """{ "plugins": [{ "name": "a", "source": "./\udc00" }] }""",
+        """{ "plugins": [{ "name": "a", "source": { "repo": "\ud800x" } }] }""",
+        """{ "plugins": [{ "name": "a", "source": "./", "skills": ["skills/\ud800"] }] }""",
     ];
 
     [Theory, MemberData(nameof(Unparsable))]
@@ -228,7 +232,6 @@ public sealed class MarketplaceIndexTests
         Assert.NotNull(files);
         Assert.Equal(["SKILL.md", "notes/résumé.md", "á.txt"], files.Files.Select(f => f.Path));
         Assert.Equal(["á.txt", ".gitignore", ".github/ci.yml", "./x.txt", "a\\b.txt", "a//b.txt"], files.Skipped);
-        Assert.Equal(files.Files.Select(f => f.Path), MarketplaceIndex.FilesOf(archive, "skills/café")!.Files.Select(f => f.Path));
     }
 
     [Fact]
@@ -271,6 +274,57 @@ public sealed class MarketplaceIndexTests
         Assert.Equal("its SKILL.md isn't UTF-8 text of at most 1 MiB", skill.Reason);
         Assert.Equal("", skill.Description);
         Assert.NotEmpty(skill.Warnings);
+    }
+
+    [Fact]
+    public void A_skill_whose_folder_name_Kumbu_cant_keep_isnt_installable()
+    {
+        var listing = MarketplaceIndex.Of(Archive(Skill("skills/con"), Skill("skills/what?"), Skill("skills/a‮b"), Skill("skills/ok ")));
+
+        Assert.Equal(4, listing.Skills.Count);
+        Assert.All(listing.Skills, s =>
+        {
+            Assert.False(s.Installable);
+            Assert.StartsWith("its folder's name can't be kept: ", s.Reason);
+        });
+    }
+
+    [Fact]
+    public void A_case_twin_of_SKILL_md_doesnt_hide_it()
+    {
+        var archive = Archive(Text("skills/pdf/skill.md", "# not the manifest\n"), Skill("skills/pdf"), Text("skills/pdf/a.txt"), Text("skills/pdf/A.txt"));
+
+        var skill = Assert.Single(MarketplaceIndex.Of(archive).Skills);
+        Assert.True(skill.Installable);
+        Assert.Equal("Does a thing.", skill.Description);
+        var files = MarketplaceIndex.FilesOf(archive, "skills/pdf");
+        Assert.NotNull(files);
+        Assert.Equal(["SKILL.md", "a.txt"], files.Files.Select(f => f.Path));
+        Assert.Equal(["skill.md", "A.txt"], files.Skipped);
+    }
+
+    [Fact]
+    public void Names_sources_descriptions_and_warnings_are_cleaned_and_bounded()
+    {
+        var longName = new string('n', 300);
+        var listing = MarketplaceIndex.Of(Archive(
+            Json($$"""
+                   { "plugins": [
+                     { "name": "evil‮name\u0007", "source": "./" },
+                     { "name": "{{longName}}", "source": { "repo": "bob​-example/x\n" } }
+                   ] }
+                   """),
+            ("skills/pdf/SKILL.md", Encoding.UTF8.GetBytes("---\nname: \"pd‮f\"\ndescription: \"Fills\\nforms​‮.\"\n---\n"))));
+
+        Assert.Equal("evilname", listing.Plugins[0].Name);
+        Assert.Equal(MarketplaceIndex.MaxText, listing.Plugins[1].Name.Length);
+        Assert.EndsWith("…", listing.Plugins[1].Name);
+        Assert.Equal("bob-example/x", listing.Plugins[1].Source);
+        var skill = Assert.Single(listing.Skills);
+        Assert.Equal("evilname", skill.Plugin);
+        Assert.Equal("Fills forms.", skill.Description);
+        Assert.NotEmpty(skill.Warnings);
+        Assert.All(skill.Warnings, w => Assert.DoesNotContain('‮', w));
     }
 
     [Fact]
