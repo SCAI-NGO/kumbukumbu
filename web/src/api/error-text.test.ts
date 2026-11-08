@@ -38,6 +38,9 @@ describe("errorText", () => {
     try {
       rememberStorage("u1", { used: 2 * GB, limit: 2 * GB, archive: 0 });
       expect(errorText(refusal)).toBe("Your storage is full (2 GB). Empty the trash or ask your admin for more.");
+      // An archive holding a tenth of her storage is named too.
+      rememberStorage("u1", { used: 2 * GB, limit: 2 * GB, archive: 0.2 * GB });
+      expect(errorText(refusal)).toBe("Your storage is full (2 GB). Empty the trash or the archive, or ask your admin for more.");
       // A member is told the sentence alone, with no number.
       expect(errorText(new HttpError(507, "This vault is out of space."))).toBe("This vault is out of space.");
       // Another user signed in since: her figure isn't this one's.

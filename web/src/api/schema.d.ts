@@ -4083,6 +4083,7 @@ export interface paths {
                     path?: string;
                     n?: number | string;
                     tag?: string[];
+                    archive?: boolean;
                 };
                 header?: never;
                 path?: never;

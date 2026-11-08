@@ -814,10 +814,11 @@ public static class NoteApi
     /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
     /// <c>path</c> narrows the search to a vault, folder or note; <c>tag</c> (repeatable) to the notes that carry every
     /// one of those tags, nested ones included, as <c>semsearch --tag</c> (404 for a tag no note there carries);
-    /// <c>n</c> results, 1 to 50, default 10.
+    /// <c>n</c> results, 1 to 50, default 10. The archive's notes are left out unless <c>archive</c> is true or the
+    /// <c>path</c> lies inside an archive, as in <c>semsearch</c>.
     /// </summary>
     private static async Task<Ok<SearchView>> SearchAsync(
-        string? q, string? mode, string? path, int? n, string[]? tag, INoteStore store, ISearchIndex index, CancellationToken ct)
+        string? q, string? mode, string? path, int? n, string[]? tag, bool? archive, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
         if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
@@ -833,6 +834,8 @@ public static class NoteApi
 
         var (scope, notes) = await ReadScopeAsync(path, store, ct);
         if (tag is { Length: > 0 }) notes = TagApi.Narrow(notes, tag, scope);
+        var withArchive = archive ?? false;
+        if (!ArchiveFolder.Shown(scope, withArchive)) notes = [.. notes.Where(note => !ArchiveFolder.Contains(note.Path))];
 
         if (exact)
         {
@@ -842,7 +845,7 @@ public static class NoteApi
                 null));
         }
 
-        var ranked = await SectionSearch.RankAsync(notes, scope, query, searchMode, max, index, ct);
+        var ranked = await SectionSearch.RankAsync(notes, scope, query, searchMode, max, index, ct, archive: withArchive);
         var reason = ranked.Semantic?.Reason ?? "search by meaning isn't available";
         var notice = ranked switch
         {

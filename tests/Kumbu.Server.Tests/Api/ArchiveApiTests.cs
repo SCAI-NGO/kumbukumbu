@@ -7,6 +7,7 @@ using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Publishing;
+using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,7 +18,8 @@ namespace Kumbu.Server.Tests.Api;
 
 /// <summary>
 /// The vault's archive in the web app's API (ingest spec §3.2): the tree leaves it out and sums it up, its own listing
-/// shows it item by item, a folder goes to the trash with <c>rm</c>'s rules, and the account's storage names its bytes.
+/// shows it item by item, a folder goes to the trash with <c>rm</c>'s rules, the search finds it only when asked, and the
+/// account's storage names its bytes.
 /// The server's time zone is Berlin, so a stamp's time is an hour ahead of UTC in November.
 /// </summary>
 [Collection("app")]
@@ -246,6 +248,31 @@ public sealed class ArchiveApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.Forbidden, trashed.StatusCode);
         Assert.Equal(Refusals.Published, (await RestClient.JsonAsync(trashed))["code"]!.GetValue<string>());
         Assert.Empty(await TrashedAsync(user));
+    }
+
+    [Theory]
+    [InlineData("exact")]
+    [InlineData("hybrid")]
+    public async Task The_search_leaves_the_archive_out_unless_asked_or_searched_in(string mode)
+    {
+        var user = await RestClient.NewAsync(Api, "Work");
+        await user.CreateAsync("Inbox/plan.md", "# Plan\n\nThe pump needs a new seal.\n");
+        await user.CreateAsync("_archive/Inbox/old plan 2026-11-08 213005.md", "# Old plan\n\nThe pump had an old seal.\n");
+        await Api.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        async Task<string[]> FoundAsync(string query)
+        {
+            using var search = await user.GetAsync($"/api/search?q=seal&mode={mode}{query}");
+            Assert.Equal(HttpStatusCode.OK, search.StatusCode);
+            return [.. (await RestClient.JsonAsync(search))["results"]!.AsArray().Select(r => r!["path"]!.GetValue<string>()).Distinct().Order(StringComparer.Ordinal)];
+        }
+
+        const string Archived = "/Work/_archive/Inbox/old plan 2026-11-08 213005.md";
+        Assert.Equal(["/Work/Inbox/plan.md"], await FoundAsync(""));
+        Assert.Equal(["/Work/Inbox/plan.md"], await FoundAsync("&archive=false&path=/Work"));
+        Assert.Equal(["/Work/Inbox/plan.md", Archived], await FoundAsync("&archive=true"));
+        Assert.Equal([Archived], await FoundAsync("&path=/Work/_archive/"));
+        Assert.Equal([Archived], await FoundAsync("&path=/Work/_archive/Inbox/"));
     }
 
     [Fact]
