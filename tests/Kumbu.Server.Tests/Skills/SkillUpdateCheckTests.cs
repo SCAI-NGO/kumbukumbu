@@ -9,6 +9,7 @@ using Kumbu.Server.Publishing;
 using Kumbu.Server.Skills;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -47,7 +48,7 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         return fake;
     }
 
-    private WebApplicationFactory<Program> Api() => app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+    private WebApplicationFactory<Program> Api(bool marketplaces = true) => app.PublicApi.WithWebHostBuilder(b => (marketplaces ? b : b.UseSetting("Kumbu:Skills:Marketplaces:Enabled", "false")).ConfigureServices(s =>
     {
         s.AddHttpClient(GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _github);
         s.RemoveAll<TimeProvider>();
@@ -394,5 +395,49 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         _time.Advance(GitHubClient.CommitAge);
         using var check = await alice.SendAsync(HttpMethod.Post, "/api/skills/updates/check");
         Assert.Equal(HttpStatusCode.TooManyRequests, check.StatusCode);
+    }
+
+    [Fact]
+    public async Task With_marketplaces_off_a_GitHub_copy_is_never_fetched()
+    {
+        await using var on = Api();
+        var installed = await InstalledAsync(on);
+        await SeedUpdateAsync(on, installed, "/Work/_skills/pdf");
+        await using var off = Api(marketplaces: false);
+        var alice = installed.On(off);
+        _github.Commit = Newer;
+        _github.Requests.Clear();
+
+        var states = await CheckAsync(alice);
+        using var review = await alice.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString("/Work/_skills/pdf"));
+        var reviewType = (await RestClient.JsonAsync(review))["type"]?.GetValue<string>();
+        using var take = await alice.SendAsync(HttpMethod.Post, "/api/skills/updates/take", new { path = "/Work/_skills/pdf", hash = "sha256:" + new string('0', 64) });
+        var takeType = (await RestClient.JsonAsync(take))["type"]?.GetValue<string>();
+
+        Assert.DoesNotContain(states, s => s!["path"]!.GetValue<string>() == "/Work/_skills/pdf");
+        Assert.Equal(["/Work/_skills/pdf"], (await RecordAsync(alice, "Work")).Updates);
+        Assert.Equal(HttpStatusCode.NotFound, review.StatusCode);
+        Assert.Equal(MarketplaceApi.Off, reviewType);
+        Assert.Equal(HttpStatusCode.NotFound, take.StatusCode);
+        Assert.Equal(MarketplaceApi.Off, takeType);
+        Assert.Empty(_github.Requests);
+    }
+
+    [Fact]
+    public async Task With_marketplaces_off_a_link_copy_is_still_checked_reviewed_and_taken()
+    {
+        await using var off = Api(marketplaces: false);
+        var (alice, dave, id) = await LinkCopyAsync(off);
+        await UpdateLinkAsync(alice, id);
+        const string folder = "/Writing/_skills/write-as-alice";
+
+        Assert.Equal("available", StateOf(await CheckAsync(dave), folder)["state"]!.GetValue<string>());
+        using var review = await dave.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(folder));
+        Assert.Equal(HttpStatusCode.OK, review.StatusCode);
+        var hash = (await RestClient.JsonAsync(review))["hash"]!.GetValue<string>();
+        using var take = await dave.SendAsync(HttpMethod.Post, "/api/skills/updates/take", new { path = folder, hash });
+        Assert.Equal(HttpStatusCode.OK, take.StatusCode);
+        Assert.Equal("current", StateOf(await CheckAsync(dave), folder)["state"]!.GetValue<string>());
+        Assert.Empty(_github.Requests);
     }
 }

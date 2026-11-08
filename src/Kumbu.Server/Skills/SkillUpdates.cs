@@ -22,7 +22,8 @@ public sealed record SkillUpdateState(VaultPath Folder, string State, string? So
 /// as at install (<see cref="SkillHash"/>). The folders found <see cref="Available"/> are kept in the vault's record, so
 /// <c>skills ls</c> and the list tell of them without fetching. The share code reaches no log and no answer.
 /// </summary>
-internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller)
+internal sealed class SkillUpdates(
+    EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller, bool marketplaces)
 {
     public const string Current = "current", Available = "available", Gone = "gone", Skipped = "skipped", OriginEdited = "origin-edited";
 
@@ -68,8 +69,8 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
         }
     }
 
-    /// <summary>The copy's state; null when its source couldn't be asked for now (GitHub unavailable), which leaves what the
-    /// last check found.</summary>
+    /// <summary>The copy's state; null when its source couldn't be asked for now (GitHub unavailable, marketplaces switched
+    /// off), which leaves what the last check found.</summary>
     private async Task<SkillUpdateState?> StateAsync(PublishingRecord record, SkillOrigin origin, VaultPath folder, CancellationToken ct)
     {
         if (IsOriginEdited(folder, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct), origin))
@@ -89,6 +90,8 @@ internal sealed class SkillUpdates(EncryptedNoteStore store, MarketplaceFetcher 
             return new SkillUpdateState(folder, hash is null ? Gone : StateOf(hash), origin.Source, null);
         }
 
+        // With marketplaces switched off the server fetches nothing (skills spec §3.9): a GitHub copy keeps what the last check found.
+        if (!marketplaces && origin.Source.StartsWith(GitHubPrefix, StringComparison.Ordinal)) return null;
         if (GitHubSource(origin.Source) is not var (repo, path, commit)) return new SkillUpdateState(folder, Gone, origin.Source, null);
         try
         {

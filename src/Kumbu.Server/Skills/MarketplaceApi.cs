@@ -48,6 +48,9 @@ public static class MarketplaceApi
     /// <summary>The <see cref="ApiError.Type"/> of every route while marketplaces are switched off.</summary>
     public const string Off = "marketplaces-off";
 
+    /// <summary>The answer of every route that would ask GitHub while marketplaces are switched off.</summary>
+    internal static ApiException SwitchedOff() => new(StatusCodes.Status404NotFound, "Marketplaces are switched off on this server.", type: Off);
+
     /// <summary>The <see cref="ApiError.Type"/> of a user over her own limit of requests that ask GitHub.</summary>
     public const string Busy = "github-busy";
 
@@ -158,7 +161,7 @@ public static class MarketplaceApi
 
     private static void RequireOn(IOptions<KumbuOptions> options)
     {
-        if (!options.Value.Skills.Marketplaces.Enabled) throw new ApiException(StatusCodes.Status404NotFound, "Marketplaces are switched off on this server.", type: Off);
+        if (!options.Value.Skills.Marketplaces.Enabled) throw SwitchedOff();
     }
 
     private static void RequireFetch(RequestCaller caller, AccountLimits limits)

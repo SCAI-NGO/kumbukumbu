@@ -31,7 +31,7 @@ internal sealed record SkillFileChange(string Path, string Change, IReadOnlyList
 /// in <c>SKILL.md</c> and sealed. The share code of a link copy is only read from the record: it reaches no answer and no log.
 /// </summary>
 internal sealed partial class SkillUpdateTaker(
-    EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller)
+    EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller, bool marketplaces)
 {
     /// <summary>The <see cref="ApiError.Type"/> of a Take whose source changed since it was reviewed.</summary>
     public const string MovedOn = "moved-on";
@@ -158,7 +158,8 @@ internal sealed partial class SkillUpdateTaker(
     }
 
     /// <summary>The source as it is now: a link's publication opened with the sealed code, or the GitHub skill at the commit
-    /// the default branch points to now, which counts against her GitHub limit.</summary>
+    /// the default branch points to now, which counts against her GitHub limit; with marketplaces switched off, a GitHub
+    /// copy answers as the marketplace routes do and nothing is fetched (skills spec §3.9).</summary>
     private async Task<SkillUpstream> UpstreamAsync(Copy copy, CancellationToken ct)
     {
         if (copy.Origin.Source.StartsWith("link:", StringComparison.Ordinal))
@@ -174,6 +175,7 @@ internal sealed partial class SkillUpdateTaker(
             return Upstream(copy, copy.Origin.Source, null, null, null, files);
         }
 
+        if (!marketplaces) throw MarketplaceApi.SwitchedOff();
         if (SkillUpdates.GitHubSource(copy.Origin.Source) is not var (repo, path, _)) throw SourceGone(copy);
         if (limits.GitHubFetch(caller.User!.Id) is { } retryAfter)
             throw new ApiException(StatusCodes.Status429TooManyRequests, "Too many requests to GitHub; try again in a minute.", retryAfter, type: MarketplaceApi.Busy);
