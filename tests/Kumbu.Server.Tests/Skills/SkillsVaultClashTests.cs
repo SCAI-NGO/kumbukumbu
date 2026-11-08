@@ -193,8 +193,9 @@ public sealed class SkillsVaultClashTests(KumbuAppFactory app)
         var (username, user, _, _) = await BeforeUpgradeAsync("Skills");
         await SignInAsync(username);
         var raw = await app.Database.GetCollection<BsonDocument>("users").Find(new BsonDocument("_id", user.Id)).SingleAsync(Ct);
-        Assert.True(raw.Contains("skillsNotice"));
         Assert.DoesNotContain("renamed", raw.ToJson(), StringComparison.OrdinalIgnoreCase);
+        // The JSON shows bytes as base64: the notice's own bytes too.
+        Assert.DoesNotContain("renamed", System.Text.Encoding.UTF8.GetString(raw["skillsNotice"].AsByteArray), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Alice's Work shared with Bob, who named it Skills before the upgrade, so he has no vault Skills yet.</summary>
