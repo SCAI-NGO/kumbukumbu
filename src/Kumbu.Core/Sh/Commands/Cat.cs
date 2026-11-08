@@ -86,9 +86,9 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null, Wri
 
         if (state.MediaType == AttachmentFormat.TextMediaType)
         {
-            return await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is { } bytes
-                ? ShellResult.Ok(Encoding.UTF8.GetString(bytes))
-                : ShellResult.Error($"cat: {path.Value}: the file's content is missing");
+            if (await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is not { } bytes) return ShellResult.Error($"cat: {path.Value}: the file's content is missing");
+            // The current version only: an earlier version's writer is history's to show.
+            return ShellResult.Ok(Encoding.UTF8.GetString(bytes)) with { Notice = version is null && marks is not null ? await marks.NoticeAsync([path], ct) : null };
         }
 
         // No version block: a text tool can't write an attachment, so there is nothing to pass it to.
@@ -115,6 +115,8 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null, Wri
         if (result.IsError || result.Output.Length <= OutputLimit.MaxChars) return result;
         var (pathText, fragment) = SectionAddress.Split(arg);
         if (fragment is not null || !VaultPath.TryParse(pathText, out var path)) return result;
+        // A script's '#' comments are not headings; the output limit cuts a long text file as it does any output.
+        if (AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text) return result;
 
         var tokens = (result.Output.Length + OutputLimit.CharsPerToken - 1) / OutputLimit.CharsPerToken;
         var quoted = SectionLookup.Quote(path);

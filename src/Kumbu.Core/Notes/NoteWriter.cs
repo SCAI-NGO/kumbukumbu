@@ -90,9 +90,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
         // A text file in a skill is an attachment of the text kind, written as given.
-        if (AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text && ForAttachments() is { } files)
+        if (AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text)
         {
-            return (await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct)).Result;
+            if (ForAttachments() is not { } files) return ShellResult.Error($"{tool}: {path.Name}: this server keeps no text files") with { Kind = ShellErrorKind.Invalid };
+            var written = (await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct)).Result;
+            // The attachment writer speaks as "upload"; this call was a write.
+            return written.IsError && written.Output.StartsWith("upload:", StringComparison.Ordinal)
+                ? written with { Output = tool + written.Output["upload".Length..] }
+                : written;
         }
 
         if (NotText(tool, path) is { } attachment) return attachment;

@@ -99,6 +99,45 @@ public sealed class TextAttachmentTests
     public async Task Invalid_utf8_is_refused()
     {
         var (_, _, files, _) = Make();
-        Assert.Contains("isn't UTF-8 text", (await files.WriteAsync("/Skills/pdf/a.py", new byte[] { 0xC3, 0x28 }, null, null, Ct)).Result.Output);
+        var result = (await files.WriteAsync("/Skills/pdf/a.py", new byte[] { 0xC3, 0x28 }, null, null, Ct)).Result;
+        Assert.True(result.IsError);
+        Assert.Equal(ShellErrorKind.Invalid, result.Kind);
+        Assert.Contains("isn't UTF-8 text", result.Output);
+    }
+
+    [Fact]
+    public async Task Write_errors_name_write_not_upload()
+    {
+        var (_, writer, _, _) = Make(canWrite: v => v != "Work");
+        var refused = await writer.WriteAsync("/Work/_skills/x/a.py", "x", null, Ct);
+        Assert.StartsWith("write:", refused.Output);
+
+        await writer.WriteAsync("/Skills/pdf/run.py", "1\n", null, Ct);
+        var exists = await writer.WriteAsync("/Skills/pdf/run.py", "2\n", null, Ct);
+        Assert.True(exists.IsError);
+        Assert.StartsWith("write:", exists.Output);
+        Assert.DoesNotContain("upload", exists.Output);
+    }
+
+    [Fact]
+    public async Task A_long_text_file_is_cut_by_the_output_limit_never_outlined()
+    {
+        var (_, writer, _, shell) = Make();
+        await writer.WriteAsync("/Skills/pdf/run.py", string.Concat(Enumerable.Repeat("# a comment that looks like a heading\n", 2000)), null, Ct);
+        var output = (await shell.RunAsync("cat /Skills/pdf/run.py", Ct)).Output;
+        Assert.StartsWith("# a comment that looks like a heading\n# a comment", output);
+        Assert.DoesNotContain("note too long", output);
+        Assert.Contains("[truncated", output);
+    }
+
+    [Fact]
+    public async Task Cat_marks_a_text_file_another_user_wrote_last()
+    {
+        var store = SharedVaults.SharedGarten(asMember: true);
+        store.AddVault("Garten");
+        var other = new NoteWriter(store, Time, new FixedCaller(Writers.Dev));
+        await other.WriteAsync("/Garten/_skills/x/run.py", "print(1)\n", null, Ct);
+        var result = await SharedVaults.AsBob(store).RunAsync("cat /Garten/_skills/x/run.py", Ct);
+        Assert.Equal("[/Garten/_skills/x/run.py: last written by another user]\nprint(1)\n", result.Output);
     }
 }
