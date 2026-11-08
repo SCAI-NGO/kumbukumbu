@@ -534,3 +534,32 @@ describe("empty folders", () => {
     expect(within(sheet).getByRole("button", { name: "Upload" })).toBeEnabled();
   });
 });
+
+describe("a folder's contents", () => {
+  it("go straight into the place uploaded into when chosen, and can be switched back", async () => {
+    const { puts, sent } = uploadApi([]);
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await userEvent.upload(within(sheet).getByLabelText("Choose a folder"), folderFiles(["Vault/a.md", "Vault/notes/b.md", "Vault/Drafts/.vaultkeep"]));
+    const contents = await within(sheet).findByRole("checkbox", { name: "Only what's inside Vault, not the folder itself" });
+    expect(contents).not.toBeChecked();
+
+    await userEvent.click(contents);
+    expect(await within(sheet).findByRole("checkbox", { name: "Only what's inside Vault, not the folder itself" })).toBeChecked();
+    expect(within(sheet).getByText("2 Markdown files to upload, 0 files skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+
+    expect(await within(sheet).findByText("2 notes uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(sent.map((s) => s.paths)).toEqual([["a.md", "notes/b.md"]]);
+    expect(puts).toEqual([{ url: "/api/files/Work/Drafts/.vaultkeep", version: null, body: "" }]);
+  });
+
+  it("isn't offered for loose files", async () => {
+    uploadApi([]);
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await userEvent.upload(within(sheet).getByLabelText("Choose files"), [new File(["# a"], "a.md"), new File(["# b"], "b.md")]);
+    expect(await within(sheet).findByText("2 Markdown files to upload, 0 files skipped")).toBeInTheDocument();
+    expect(within(sheet).queryByRole("checkbox", { name: /Only what's inside/ })).not.toBeInTheDocument();
+  });
+});
