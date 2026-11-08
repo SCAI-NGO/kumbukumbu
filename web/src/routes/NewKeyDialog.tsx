@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { ownerLabel, useVaults, type VaultView } from "../api/notes";
@@ -151,6 +151,29 @@ export function ExpiryPicker({ value, onChange, children }: { value: number; onC
   );
 }
 
+/**
+ * A new key or connection starts with Read on the vault Skills, recognised by its `kind`, never by its name. Once the
+ * list is in and as long as the user hasn't touched a right; she may lower it to None or raise it. Returns the state
+ * and the setter for her own changes.
+ */
+export function useChosenRights(vaults: UseQueryResult<VaultView[]>): readonly [Record<string, Right>, (next: Record<string, Right>) => void] {
+  const [chosen, setChosen] = useState<Record<string, Right>>({});
+  const touched = useRef(false);
+  const list = vaults.data;
+  useEffect(() => {
+    if (touched.current || !list) return;
+    const skills = list.find((v) => v.kind === "skills");
+    if (skills) setChosen({ [skills.name]: "read" });
+  }, [list]);
+  return [
+    chosen,
+    (next: Record<string, Right>) => {
+      touched.current = true;
+      setChosen(next);
+    },
+  ];
+}
+
 /** Asks for a key's name and its right per vault; the server says what a name may be. */
 export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; onCreated(created: Created): void }) {
   const id = useId();
@@ -158,7 +181,7 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
   const dialog = useDialog<HTMLFormElement>(onClose);
   const vaults = useVaults();
   const [name, setName] = useState("");
-  const [chosen, setChosen] = useState<Record<string, Right>>({});
+  const [chosen, setChosen] = useChosenRights(vaults);
   const [publish, setPublish] = useState<string[]>([]);
   // A key that expires by itself is the safer default: a forgotten one stops working on its own.
   const [expiresInDays, setExpiresInDays] = useState(90);

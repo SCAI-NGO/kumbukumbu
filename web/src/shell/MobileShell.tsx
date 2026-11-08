@@ -26,6 +26,7 @@ import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
+import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
@@ -261,6 +262,7 @@ export default function MobileShell() {
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />
+      <SkillsNotice />
       <InstallHint />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
       <div className="flex min-h-0 flex-1">

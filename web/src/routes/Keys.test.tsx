@@ -479,3 +479,66 @@ describe("keys and vaults shared with the user", () => {
     expect(group).toHaveTextContent("write, acts as read while you can only read Gartenarbeit");
   });
 });
+
+describe("Skills preselected for a new key", () => {
+  const skillsVaults = [{ name: "Skills", notes: 0, kind: "skills" }, { name: "Work", notes: 3 }];
+  const bodies: unknown[] = [];
+  const withVaults = (list: unknown[]) =>
+    api({
+      "GET /api/vaults": () => json(200, list),
+      "POST /api/keys": async (r) => (bodies.push(await r.json()), json(201, { key: secret, apiKey: { ...listed, id: "k2", name: "Claude", vaults: { Skills: "read" } } })),
+    });
+  const checked = (dialog: HTMLElement, vault: string) =>
+    within(dialog)
+      .getAllByRole("radio")
+      .filter((r) => (r as HTMLInputElement).checked && within(within(dialog).getByRole("group", { name: vault })).queryAllByRole("radio").includes(r))
+      .map((r) => (r as HTMLInputElement).value);
+
+  it("preselects Skills with Read in a new key", async () => {
+    bodies.length = 0;
+    withVaults(skillsVaults);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("Read")).toBeChecked());
+    expect(checked(dialog, "Work")).toEqual(["none"]);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    await screen.findByText(secret);
+    expect(bodies).toEqual([{ name: "Claude", vaults: { Skills: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("preselects by the mark, not the name", async () => {
+    withVaults([{ name: "Skills", notes: 1 }, { name: "Tools", notes: 0, kind: "skills" }]);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Tools" })).getByLabelText("Read")).toBeChecked());
+    expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("None")).toBeChecked();
+  });
+
+  it("leaves Skills out when set to None", async () => {
+    bodies.length = 0;
+    withVaults(skillsVaults);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("Read")).toBeChecked());
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("None"));
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    await screen.findByText(secret);
+    expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("keeps the user's choice when the list arrives late", async () => {
+    // The list is read again after the user chose (a refresh, a pending vault): her choice is not set back.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    withVaults(skillsVaults);
+    renderApp("/access/keys", queryClient);
+    const dialog = await openNewKey();
+    const group = await within(dialog).findByRole("group", { name: "Skills" });
+    await waitFor(() => expect(within(group).getByLabelText("Read")).toBeChecked());
+    await userEvent.click(within(group).getByLabelText("None"));
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    expect(within(group).getByLabelText("None")).toBeChecked();
+  });
+});
