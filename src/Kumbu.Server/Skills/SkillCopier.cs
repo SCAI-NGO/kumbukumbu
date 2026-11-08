@@ -165,7 +165,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
 
     /// <summary>An image's width and height as its bytes say, never as anyone else told; null for another file, and for
     /// a header that doesn't read: the writer then stores the image without them.</summary>
-    private static (int W, int H)? Dimensions(VaultPath path, byte[] bytes) =>
+    internal static (int W, int H)? Dimensions(VaultPath path, byte[] bytes) =>
         AttachmentFormat.ForPath(path) is { Kind: AttachmentKind.Image } ? ImageHeader.Read(bytes, out _) : null;
 
     /// <summary>The target folder is hers to write and holds nothing yet.</summary>
@@ -243,7 +243,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
     private static IEnumerable<SourceFile> Ordered(IEnumerable<SourceFile> files) =>
         files.OrderBy(f => f.Path != SkillPaths.Manifest).ThenBy(f => f.Path, TextOrder.Default);
 
-    private static VaultPath Inside(VaultPath folder, string relative) => relative.Split('/').Aggregate(folder, (path, segment) => path.Child(segment));
+    internal static VaultPath Inside(VaultPath folder, string relative) => relative.Split('/').Aggregate(folder, (path, segment) => path.Child(segment));
 
     private void RequireWritable(string vault)
     {
@@ -252,7 +252,7 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         throw new ApiException(StatusCodes.Status403Forbidden, char.ToUpperInvariant(sentence[0]) + sentence[1..] + ".", code: caller.ReadOnlyCode(vault) ?? Refusals.ReadOnly);
     }
 
-    private static ApiException Failed(ShellResult result) => result.Kind switch
+    internal static ApiException Failed(ShellResult result) => result.Kind switch
     {
         ShellErrorKind.Refused => NoteApi.Refused(result),
         ShellErrorKind.Conflict => new ApiException(StatusCodes.Status409Conflict, result.Output),

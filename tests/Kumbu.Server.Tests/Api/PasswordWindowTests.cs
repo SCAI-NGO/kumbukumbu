@@ -207,6 +207,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/skills/marketplaces/{owner}/{repo}"] = "reading a public repository's listing: nothing of hers goes out, nothing is granted (skills spec §3.9)",
         ["GET /api/skills/marketplaces/{owner}/{repo}/skill"] = "reading a public repository's skill: nothing of hers goes out, nothing is granted (skills spec §3.9)",
         ["POST /api/skills/updates/check"] = "asking her copies' sources whether they changed: it changes no content and grants nothing (skills spec §3.10)",
+        ["GET /api/skills/updates/review"] = "diffing her copy against its sealed source's new version: nothing of hers goes out, nothing is granted (skills spec §3.10)",
+        ["POST /api/skills/updates/take"] = "a content write from her copy's own sealed source into a vault she already writes to: it grants and exports nothing (skills spec §3.10)",
+        ["POST /api/skills/updates/skip"] = "remembering a version she doesn't want: it changes no content and grants nothing (skills spec §3.10)",
         ["POST /api/skills/install"] = "a content write from a public repository into a vault the caller already writes to: it grants and exports nothing (skills spec §3.9)",
     };
 

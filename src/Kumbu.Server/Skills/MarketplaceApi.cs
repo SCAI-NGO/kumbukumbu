@@ -184,7 +184,7 @@ public static class MarketplaceApi
     private static ApiException NoSkillsVault() => new(StatusCodes.Status409Conflict, "You have no vault Skills yet; sign in again to have it made.");
 
     /// <summary>GitHub's refusals as answers: <c>not-found</c> 404, the rate limit 429, the rest 502, each with its type.</summary>
-    private static async Task<T> GitHubAsync<T>(Func<Task<T>> fetch)
+    internal static async Task<T> GitHubAsync<T>(Func<Task<T>> fetch)
     {
         try
         {
