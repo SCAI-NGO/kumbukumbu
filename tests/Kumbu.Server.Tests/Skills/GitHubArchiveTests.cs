@@ -15,6 +15,9 @@ public sealed class GitHubArchiveTests
     private const string Sha = "0123456789abcdef0123456789abcdef01234567";
     private static readonly RepoName Repo = RepoName.Parse("alice-example/skills")!;
 
+    /// <summary>Real time, so that a request that is never given up fails its test rather than hanging it.</summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private static (GitHubClient Client, FakeGitHub Fake, FakeTimeProvider Time, CapturedLog Log) Make(string? token = null)
     {
         var fake = new FakeGitHub { Commit = Sha };
@@ -160,7 +163,7 @@ public sealed class GitHubArchiveTests
         var fetch = client.ArchiveAsync(Repo, Sha, Ct);
         await fake.Hanging.Task.WaitAsync(Ct);
         time.Advance(GitHubClient.RequestTimeout + TimeSpan.FromSeconds(1));
-        Assert.Equal("unavailable", (await Assert.ThrowsAsync<GitHubException>(() => fetch)).Kind);
+        Assert.Equal("unavailable", (await Assert.ThrowsAsync<GitHubException>(() => fetch.WaitAsync(Bound, Ct))).Kind);
     }
 
     [Fact]
@@ -171,7 +174,7 @@ public sealed class GitHubArchiveTests
         var resolve = client.ResolveCommitAsync(Repo, Ct);
         await fake.Hanging.Task.WaitAsync(Ct);
         time.Advance(GitHubClient.RequestTimeout + TimeSpan.FromSeconds(1));
-        Assert.Equal("unavailable", (await Assert.ThrowsAsync<GitHubException>(() => resolve)).Kind);
+        Assert.Equal("unavailable", (await Assert.ThrowsAsync<GitHubException>(() => resolve.WaitAsync(Bound, Ct))).Kind);
     }
 
     [Fact]
@@ -183,7 +186,7 @@ public sealed class GitHubArchiveTests
         var fetch = client.ArchiveAsync(Repo, Sha, cancel.Token);
         await fake.Hanging.Task.WaitAsync(Ct);
         await cancel.CancelAsync();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fetch);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fetch.WaitAsync(Bound, Ct));
     }
 
     [Fact]
