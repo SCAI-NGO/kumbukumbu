@@ -10,7 +10,7 @@ import type { PageBoxes } from "./boxes.js";
 import type { PageImages, StoredImage } from "./extract.js";
 import type { RenderedImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
-import { Pool, type Reservation } from "./pool.js";
+import { Gate, Pool, type Reservation } from "./pool.js";
 import type { RenderedPage } from "./render.js";
 import type { Crop, Target } from "./steps.js";
 
@@ -261,8 +261,10 @@ function error(res: ServerResponse, status: number, code: string, message: strin
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const pool = new Pool({ workers: 2, queue: 16 });
-  const extract = new Pool({ workers: 1, queue: EXTRACT_QUEUE });
+  // Two jobs at a time across both pools: the container's memory is budgeted for two (compose.yaml).
+  const gate = new Gate(2);
+  const pool = new Pool({ workers: 2, queue: 16, gate });
+  const extract = new Pool({ workers: 1, queue: EXTRACT_QUEUE, gate });
   const server = createSidecar(pool, {}, extract);
   const port = Number(process.env["PORT"] ?? 8090);
   server.listen(port, "0.0.0.0", () => console.log(`PDF sidecar listening on port ${port}`));
