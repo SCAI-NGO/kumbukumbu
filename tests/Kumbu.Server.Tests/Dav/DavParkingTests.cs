@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Api;
 using Kumbu.Server.Dav;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
@@ -535,8 +536,8 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
     public async Task A_30_MB_parked_put_goes_through_kestrel()
     {
         var dav = await DavClient.NewAsync(Api);
-        await using var real = app.PublicApi.WithWebHostBuilder(_ => { });
-        real.UseKestrel(0);
+        await using var real = app.PublicApi.WithWebHostBuilder(b => b.UseUrls("http://127.0.0.1:0"));
+        real.UseKestrel();
         real.StartServer();
         var address = real.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
         using var client = new HttpClient { BaseAddress = new Uri(address) };
