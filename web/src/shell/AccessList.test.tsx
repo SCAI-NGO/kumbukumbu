@@ -241,13 +241,14 @@ describe("AccessList", () => {
     expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/session/confirm", "/api/vaults/Gartenarbeit/rekey"]);
   });
 
-  it("lists a member's keys and apps with their last use on this vault, and maintain in the warning colour", async () => {
+  it("lists a member's keys, apps and WebDAV shares with their last use on this vault, and maintain in the warning colour", async () => {
     members = [
       member({
         role: "maintain",
         credentials: [
           { name: "Claude", kind: "connection", lastUsedAt: "2026-10-31T08:15:00Z" },
           { name: "Laptop", kind: "key", lastUsedAt: null },
+          { name: "Work PC (dav)", kind: "share", lastUsedAt: null },
         ],
       }),
     ];
@@ -258,6 +259,7 @@ describe("AccessList", () => {
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
       expect.stringMatching(/^Claude · App · last used here 31 Oct 2026/),
       "Laptop · API key · not used here yet",
+      "Work PC (dav) · WebDAV share · not used here yet",
     ]);
     expect(within(item).getByLabelText("Role")).toHaveClass("text-warning");
     expect(within(item).getByText("Can change the vault's structure: the board's columns, checkpoints.")).toHaveClass("text-warning");
