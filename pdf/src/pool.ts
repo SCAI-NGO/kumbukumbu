@@ -13,7 +13,10 @@ export type Job =
   | { kind: "analyse"; bytes: Uint8Array; maxPages: number }
   | { kind: "page"; bytes: Uint8Array; page: number; target: Target; crop?: Crop; rotate: number }
   | { kind: "image"; bytes: Uint8Array; target: Target; crop?: Crop; rotate: number; frame?: number }
-  | { kind: "boxes"; bytes: Uint8Array; pages: number[] };
+  | { kind: "boxes"; bytes: Uint8Array; pages: number[] }
+  | { kind: "list"; bytes: Uint8Array; page: number }
+  | { kind: "extract"; bytes: Uint8Array; page: number; n: number }
+  | { kind: "region"; bytes: Uint8Array; page: number; crop: Crop; rotate: number; format: "png" | "jpeg" };
 
 // What a worker posts: its page count as soon as it knows it, then one answer.
 export type WorkerMessage =

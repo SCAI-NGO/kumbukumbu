@@ -7,6 +7,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { pathToFileURL } from "node:url";
 import type { Analysis } from "./analyse.js";
 import type { PageBoxes } from "./boxes.js";
+import type { PageImages, StoredImage } from "./extract.js";
 import type { RenderedImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import { Pool, type Reservation } from "./pool.js";
@@ -21,6 +22,10 @@ export const RENDER_MS = 10_000;
 // measure the page (about 0.3 s each), and an ordinary scanned book must not time out for good.
 export const ANALYSIS_MS = 30_000;
 export const analysisLimit = (pages: number) => Math.min(20 * 60_000, ANALYSIS_MS + 500 * pages);
+// Extraction decodes a page's images at full size, so it runs in a pool of one worker with a short
+// queue: the server's time-out covers a job waiting behind the queue.
+export const EXTRACT_MS = 30_000;
+export const EXTRACT_QUEUE = 2;
 
 const STATUS: Record<string, number> = {
   bad_request: 400,
@@ -29,6 +34,7 @@ const STATUS: Record<string, number> = {
   too_large: 413,
   no_such_page: 422,
   no_such_frame: 422,
+  no_such_image: 422,
   bad_crop: 422,
   encrypted: 422,
   busy: 503,
@@ -39,10 +45,11 @@ class TooLarge extends Error {}
 
 const bad = (message: string) => new PdfError(message, "bad_request");
 
-export type Limits = { renderMs: number; analysisMs: number };
+export type Limits = { renderMs: number; analysisMs: number; extractMs: number };
 
-export function createSidecar(pool: Pool, limits: Partial<Limits> = {}): Server {
-  const ms: Limits = { renderMs: RENDER_MS, analysisMs: ANALYSIS_MS, ...limits };
+/** extract runs the /images routes; by default the same pool as the rest. */
+export function createSidecar(pool: Pool, limits: Partial<Limits> = {}, extract: Pool = pool): Server {
+  const ms: Limits = { renderMs: RENDER_MS, analysisMs: ANALYSIS_MS, extractMs: EXTRACT_MS, ...limits };
   const server = createServer((req, res) => {
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
@@ -52,7 +59,7 @@ export function createSidecar(pool: Pool, limits: Partial<Limits> = {}): Server 
     if (!route) return error(res, 404, "not_found", "There is no such route.");
     if (route === "/healthz") return json(res, 200, { status: "ok" });
 
-    handle(route, req, pool, ms).then(
+    handle(route, req, EXTRACTION.has(route) ? extract : pool, ms).then(
       (send) => send(res),
       (e: unknown) => {
         // Answered before the body is in (busy, too large, bad parameters): the rest is not wanted.
@@ -69,7 +76,7 @@ export function createSidecar(pool: Pool, limits: Partial<Limits> = {}): Server 
   });
   // Every connection can carry a job or wait for one, plus a margin for health checks; a 16 MiB
   // body over the compose network takes well under a minute.
-  server.maxConnections = pool.capacity + 16;
+  server.maxConnections = pool.capacity + (extract === pool ? 0 : extract.capacity) + 16;
   server.headersTimeout = 20_000;
   server.requestTimeout = 60_000;
   return server;
@@ -117,7 +124,32 @@ const ROUTES: Record<string, Route> = {
       return (res) => json(res, 200, b);
     };
   },
+  "/images/list": (q, ms) => {
+    const page = integer(q, "page", 1, Number.MAX_SAFE_INTEGER);
+    return async (body, slot) => {
+      const list = await slot.run<PageImages>({ kind: "list", bytes: body, page }, ms.extractMs);
+      return (res) => json(res, 200, list);
+    };
+  },
+  "/images/image": (q, ms) => {
+    const [page, n] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), integer(q, "n", 1, Number.MAX_SAFE_INTEGER)];
+    return async (body, slot) => {
+      const r = await slot.run<StoredImage>({ kind: "extract", bytes: body, page, n }, ms.extractMs);
+      return (res) => image(res, { ...r, rotate: 0 }, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight });
+    };
+  },
+  "/images/region": (q, ms) => {
+    const [page, c, rotate, format] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), crop(q), turn(q), q.get("format")];
+    if (!c) throw bad("crop is required.");
+    if (format !== "png" && format !== "jpeg") throw bad("format must be png or jpeg.");
+    return async (body, slot) => {
+      const r = await slot.run<RenderedPage>({ kind: "region", bytes: body, page, crop: c, rotate, format }, ms.extractMs);
+      return (res) => image(res, r, { "X-Kumbu-Page-Width": r.pageWidth, "X-Kumbu-Page-Height": r.pageHeight });
+    };
+  },
 };
+
+const EXTRACTION = new Set(["/images/list", "/images/image", "/images/region"]);
 
 // The place in the pool is taken before the body is read, so a full pool answers busy at once and
 // bodies in memory never outnumber the jobs the pool holds.
@@ -230,10 +262,11 @@ function error(res: ServerResponse, status: number, code: string, message: strin
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const pool = new Pool({ workers: 2, queue: 16 });
-  const server = createSidecar(pool);
+  const extract = new Pool({ workers: 1, queue: EXTRACT_QUEUE });
+  const server = createSidecar(pool, {}, extract);
   const port = Number(process.env["PORT"] ?? 8090);
   server.listen(port, "0.0.0.0", () => console.log(`PDF sidecar listening on port ${port}`));
-  const stop = () => server.close(() => void pool.close().then(() => process.exit(0)));
+  const stop = () => server.close(() => void Promise.all([pool.close(), extract.close()]).then(() => process.exit(0)));
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
 }
