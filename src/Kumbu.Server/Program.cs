@@ -113,6 +113,7 @@ builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
 builder.Services.AddGitHubClient();
+builder.Services.AddSingleton<MarketplaceFetcher>();
 builder.Services.AddSingleton<OAuthClients>();
 builder.Services.AddSingleton<AuthorizationRequests>();
 builder.Services.AddSingleton<OAuthTokens>();
@@ -300,6 +301,7 @@ app.MapExportApi();
 app.MapSharingApi();
 app.MapPublicationApi();
 app.MapSkillsApi();
+app.MapMarketplaceApi();
 app.MapReaderApi();
 app.MapSkillPageApi();
 // The reader page (publish spec §3.12) and the skill page (skills design §3.12), entries of their own: the code is in

@@ -124,8 +124,32 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         }
 
         if (!received.Any(f => f.Path == SkillPaths.Manifest)) throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        await ReceiveAsync(target, folder, received, "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), code, ct);
+        return folder;
+    }
+
+    /// <summary>
+    /// Install from a marketplace (skills spec §3.9): <paramref name="files"/>, the ones of the skill that Kumbu stores, into
+    /// the skill location of <paramref name="vault"/> under <paramref name="name"/>, the listing's folder name unless the
+    /// caller chose another. <c>kumbu-hash</c> covers these files as received; <c>kumbu-source</c> is
+    /// <paramref name="source"/>, which names the commit; the sealed origin goes into the target vault's record (Decisions 33, 34).
+    /// </summary>
+    public async Task<VaultPath> InstallAsync(string vault, string name, IReadOnlyList<(string Path, byte[] Bytes)> files, string source, CancellationToken ct)
+    {
+        var target = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => string.Equals(v.Name, vault, StringComparison.Ordinal))
+            ?? throw ApiErrors.NotFound($"There is no vault '{vault}'.");
+        var folder = TargetOf(target, name);
+        await RequireFreeAsync(target, folder, "copy", ct);
+        if (!files.Any(f => f.Path == SkillPaths.Manifest)) throw ApiErrors.BadRequest($"The skill has no {SkillPaths.Manifest} Kumbu can store.");
+        await ReceiveAsync(target, folder, files, source, null, ct);
+        return folder;
+    }
+
+    /// <summary>The files received, into <paramref name="folder"/>: <c>SKILL.md</c> with its origin, the rest as they came;
+    /// then the sealed origin, and the code of a link copy, in the target vault's record.</summary>
+    private async Task ReceiveAsync(VaultAccess target, VaultPath folder, IReadOnlyList<(string Path, byte[] Bytes)> received, string origin, string? code, CancellationToken ct)
+    {
         var hash = SkillHash.Of(received.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes)));
-        var origin = "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code));
         var files = received.Select(f =>
             f.Path == SkillPaths.Manifest ? new SourceFile(f.Path, SkillManifest.WithOrigin(Encoding.UTF8.GetString(f.Bytes), origin, hash), null, null)
             : Inside(folder, f.Path).IsNote ? new SourceFile(f.Path, Encoding.UTF8.GetString(f.Bytes), null, null)
@@ -134,10 +158,9 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         var stored = target.ToVault(folder).Value;
         await WriteAsync(folder, [.. Ordered(files)], () => publishing.ChangeAsync(target, r => r with
         {
-            SkillCodes = [.. r.SkillCodes.Where(c => !Under(c.Path, stored)), new SkillCode(stored, code)],
+            SkillCodes = code is null ? [.. r.SkillCodes.Where(c => !Under(c.Path, stored))] : [.. r.SkillCodes.Where(c => !Under(c.Path, stored)), new SkillCode(stored, code)],
             Origins = [.. r.Origins.Where(o => !Under(o.Path, stored)), new SkillOrigin(stored, origin, hash)],
         }, ct), ct);
-        return folder;
     }
 
     /// <summary>An image's width and height as its bytes say, never as anyone else told; null for another file, and for

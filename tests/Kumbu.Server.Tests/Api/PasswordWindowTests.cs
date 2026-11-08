@@ -201,6 +201,12 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/skills/shared"] = Reading,
         ["DELETE /api/skills/shared/{id}"] = "withdrawing a skill's link reduces what is out: never guarded, as a note's",
         ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
+        ["GET /api/skills/marketplaces"] = Reading,
+        ["POST /api/skills/marketplaces"] = "a repository's name on her own list: it asks GitHub nothing and grants nothing (skills spec §3.9)",
+        ["DELETE /api/skills/marketplaces/{owner}/{repo}"] = "a repository's name off her own list reduces what she browses: it grants nothing",
+        ["GET /api/skills/marketplaces/{owner}/{repo}"] = "reading a public repository's listing: nothing of hers goes out, nothing is granted (skills spec §3.9)",
+        ["GET /api/skills/marketplaces/{owner}/{repo}/skill"] = "reading a public repository's skill: nothing of hers goes out, nothing is granted (skills spec §3.9)",
+        ["POST /api/skills/install"] = "a content write from a public repository into a vault the caller already writes to: it grants and exports nothing (skills spec §3.9)",
     };
 
     [Fact]

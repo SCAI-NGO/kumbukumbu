@@ -8,13 +8,14 @@ namespace Kumbu.Server.Publishing;
 /// <c>publishing</c> (<see cref="UnlockedVault.SealPublishing"/>): its publications with their keys, the unpublishable
 /// marks and a log of the newest <see cref="Publications.LogLimit"/> changes; for the skills of the vault, the share codes
 /// of link copies, the sealed origins of copies, the folders the last check found an update for, the updates skipped
-/// and the skill folders whose link was withdrawn since they were last shared (Decisions 13, 15, 22, 33). Paths as the vault stores them, under its own name. A
+/// and the skill folders whose link was withdrawn since they were last shared (Decisions 13, 15, 22, 33); in the vault Skills'
+/// record alone, its owner's marketplaces (skills spec §3.9). Paths as the vault stores them, under its own name. A
 /// record written before a field existed reads it as empty.
 /// </summary>
 internal sealed record PublishingRecord(
     IReadOnlyList<PublicationEntry> Publications, IReadOnlyList<string> Unpublishable, IReadOnlyList<PublishingLogEntry> Log,
     IReadOnlyList<SkillCode>? SkillCodes = null, IReadOnlyList<SkillOrigin>? Origins = null, IReadOnlyList<SkippedUpdate>? Skipped = null,
-    IReadOnlyList<string>? Updates = null, IReadOnlyList<string>? Withdrawn = null)
+    IReadOnlyList<string>? Updates = null, IReadOnlyList<string>? Withdrawn = null, IReadOnlyList<MarketplaceEntry>? Marketplaces = null)
 {
     public static readonly PublishingRecord Empty = new([], [], []);
 
@@ -30,8 +31,11 @@ internal sealed record PublishingRecord(
     /// warns that copies made from the old link lose their updates (Decision 15).</summary>
     public IReadOnlyList<string> Withdrawn { get; init; } = Withdrawn ?? [];
 
+    /// <summary>The marketplaces the vault's owner added, kept in the vault Skills' record only.</summary>
+    public IReadOnlyList<MarketplaceEntry> Marketplaces { get; init; } = Marketplaces ?? [];
+
     public override string ToString() =>
-        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count}, Skipped = {Skipped.Count}, Updates = {Updates.Count}, Withdrawn = {Withdrawn.Count} }}";
+        $"PublishingRecord {{ Publications = {Publications.Count}, Unpublishable = {Unpublishable.Count}, Log = {Log.Count}, SkillCodes = {SkillCodes.Count}, Origins = {Origins.Count}, Skipped = {Skipped.Count}, Updates = {Updates.Count}, Withdrawn = {Withdrawn.Count}, Marketplaces = {Marketplaces.Count} }}";
 }
 
 /// <summary>The share code a link copy came from, by the copy's folder: kept only here, sealed (Global Constraints). Not
@@ -44,6 +48,9 @@ internal sealed record SkillCode(string Path, string Code)
 /// <summary>Where a copy of a skill came from, by its folder: its <c>kumbu-source</c> and <c>kumbu-hash</c> as written
 /// when it came in, which the frontmatter's are checked against (Decision 33).</summary>
 internal sealed record SkillOrigin(string Path, string Source, string Hash);
+
+/// <summary>A marketplace on the Skills screen: its repository as <c>owner/repo</c>, and when it was added.</summary>
+internal sealed record MarketplaceEntry(string Repo, DateTime AddedAt);
 
 /// <summary>An update of the skill at <see cref="Path"/> its owner chose to skip, by the <c>kumbu-hash</c> it would have brought.</summary>
 internal sealed record SkippedUpdate(string Path, string Hash);
