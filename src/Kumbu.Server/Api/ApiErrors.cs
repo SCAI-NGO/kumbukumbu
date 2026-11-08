@@ -48,6 +48,11 @@ public static class ApiErrors
     public static ApiException TooMany(TimeSpan retryAfter, string message = "Too many attempts; try again in a minute.") =>
         new(StatusCodes.Status429TooManyRequests, message, retryAfter);
 
+    /// <summary>The refusal of <see cref="AccountLimits.PasswordCheck"/>: successful checks count too, so someone who
+    /// deletes several vaults in a row needs to know why the next one waits.</summary>
+    public static ApiException TooManyPasswordChecks(TimeSpan retryAfter) =>
+        TooMany(retryAfter, $"Your password has been checked {AccountLimits.SignInsPerUsername} times in the last minute; try again in a minute.");
+
     /// <summary>
     /// The endpoint filter of every <c>/api</c> group: the refusals the account and vault services throw become
     /// statuses. Only these: anything else is a fault and stays a 500, without its message.

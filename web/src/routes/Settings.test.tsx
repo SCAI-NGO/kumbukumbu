@@ -332,7 +332,7 @@ describe("Settings", () => {
     let release: () => void = () => {};
     const access = new Promise<void>((resolve) => (release = resolve));
     api({
-      "GET /api/vaults/Diary/access": async () => (await access, json(200, { apiKeys: ["laptop", "phone"], connections: ["claude"], shares: ["Work PC"] })),
+      "GET /api/vaults/Diary/access": async () => (await access, json(200, { apiKeys: ["laptop", "phone"], connections: ["claude"], shares: ["Work PC"], members: [] })),
       "POST /api/vaults/Diary/rekey": async (r) => (bodies.push(await r.json()), json(200, { revokedApiKeys: 2, disconnectedApps: 1, revokedShares: 1 })),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -366,7 +366,7 @@ describe("Settings", () => {
 
   it("re-encrypting a vault counts a WebDAV share as something that loses access", async () => {
     api({
-      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: ["Work PC"] }),
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: ["Work PC"], members: [] }),
       "POST /api/vaults/Diary/rekey": () => json(200, { revokedApiKeys: 0, disconnectedApps: 0, revokedShares: 1 }),
     });
     renderApp("/settings");
@@ -383,9 +383,27 @@ describe("Settings", () => {
     expect(within(vaultsSection).getByRole("status")).toHaveTextContent(/^Diary is re-encrypted\. 1 WebDAV share was revoked\.$/);
   });
 
+  it("names the members' keys and apps that lose the vault too", async () => {
+    const member = (label: string, credentials: { name: string; kind: string }[]) => ({
+      id: label, label, role: "write", status: "active", confirm: false, acceptedAt: null, redeemedAt: null, expiresAt: null,
+      credentials: credentials.map((c) => ({ ...c, lastUsedAt: null })),
+    });
+    api({
+      "GET /api/vaults/Diary/access": () =>
+        json(200, { apiKeys: [], connections: [], shares: [], members: [member("Bob", []), member("Carol", [{ name: "Carols Agent", kind: "key" }, { name: "claude", kind: "connection" }])] }),
+    });
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    const list = await within(dialog).findByRole("list", { name: "Members' keys and apps" });
+    expect(within(list).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["Carol: Carols Agent, claude"]);
+    expect(within(dialog).queryByText(/^No API key/)).not.toBeInTheDocument();
+  });
+
   it("says when a vault is busy being re-encrypted", async () => {
     api({
-      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [] }),
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
       "POST /api/vaults/Diary/rekey": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
     });
     renderApp("/settings");

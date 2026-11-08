@@ -509,7 +509,9 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
     },
   });
   const lists = access.data;
-  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0 && lists.shares.length === 0;
+  // Members' keys and apps lose the vault too; the owner sees their names under Access already.
+  const membersWith = lists?.members.filter((m) => m.credentials.length > 0) ?? [];
+  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0 && lists.shares.length === 0 && membersWith.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -535,6 +537,9 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
         {lists && lists.apiKeys.length > 0 && <AccessList title="API keys" names={lists.apiKeys} />}
         {lists && lists.connections.length > 0 && <AccessList title="Connected apps" names={lists.connections} />}
         {lists && lists.shares.length > 0 && <AccessList title="WebDAV shares" names={lists.shares} />}
+        {membersWith.length > 0 && (
+          <AccessList title="Members' keys and apps" names={membersWith.map((m) => `${m.label}: ${m.credentials.map((c) => c.name).join(", ")}`)} />
+        )}
         {lists && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
         {rekey.isPending && <p className="text-muted">Re-encrypting; this can take a while for a large vault.</p>}
         {rekey.isError && <FormError>{errorText(rekey.error)}</FormError>}

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, call } from "../api/client";
+import { followRename } from "../api/sharing";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -587,6 +589,28 @@ describe("the shell", () => {
     expect(screen.queryByRole("dialog", { name: "Vaults" })).not.toBeInTheDocument();
     expect(drawer()).toBeInTheDocument();
     expect(switcher).toHaveFocus();
+  });
+
+  it("stays in Write mode when the open note's vault is renamed in another tab", async () => {
+    // The vault list read again after the rename hangs: until it is in, the new name isn't in the list.
+    let reads = 0;
+    signedInApi({
+      "GET /api/vaults": () =>
+        ++reads === 1 ? json(200, [{ name: "Home", notes: 1, embeddings: "internal" }, { name: "Work", notes: 6, embeddings: "internal" }]) : new Promise<Response>(() => {}),
+      "GET /api/vaults/Büro/tree": () => json(200, { damaged: 0, root: { ...workTree.root, name: "Büro", path: "/Büro" } }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
+    const write = await screen.findByRole("button", { name: "Write" });
+    await waitFor(() => expect(write).toBeEnabled());
+    await userEvent.click(write);
+    await screen.findByRole("textbox", { name: "Markdown source" });
+
+    act(() => followRename(queryClient, router.navigate, "Work", "Büro"));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/B%C3%BCro/inbox.md"));
+    expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("textbox", { name: "Markdown source" })).toBeInTheDocument();
   });
 });
 

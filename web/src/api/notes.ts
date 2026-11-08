@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
+import { isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
@@ -132,11 +133,15 @@ export const useVaults = () =>
 export const useEmbeddingProviders = () =>
   useQuery({ queryKey: ["embeddings"], queryFn: () => call(api.GET("/api/embeddings")), staleTime: 60_000 });
 
+/** Asked again every few seconds while the vault is being re-encrypted: its "try again in a moment" comes true by itself. */
+const whileBusy = (query: { state: { error: unknown } }) => (isVaultBusy(query.state.error) ? 3000 : false);
+
 export const useTree = (vault: string | null) =>
   useQuery({
     queryKey: ["tree", vault],
     queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
     enabled: vault !== null,
+    refetchInterval: whileBusy,
   });
 
 /** The folder at `path` (`/Work/projects`) in a vault's tree, if it is there. */
@@ -204,6 +209,7 @@ export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMoun
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount,
+    refetchInterval: whileBusy,
   });
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
