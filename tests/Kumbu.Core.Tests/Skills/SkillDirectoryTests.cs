@@ -250,6 +250,19 @@ public class SkillDirectoryTests
     }
 
     [Fact]
+    public async Task The_archive_of_the_vault_Skills_is_no_skill()
+    {
+        Put("/Skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Not a skill.\n---\n");
+        Put("/Skills/_archive/old-skill 2026-11-08 213005/SKILL.md", "---\nname: old-skill\ndescription: Old.\n---\n");
+        _store.AddAttachment("/Skills/_archive/manual 2026-11-08 213005.pdf");
+        // Only the vault Skills has its archive in a skill's place.
+        Put("/Work/_skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Kept.\n---\n");
+
+        Assert.Equal(["create-skill", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["write-as-alice"], (await dir.ListAsync("Skills", Ct)).Select(s => s.Name));
+    }
+
+    [Fact]
     public async Task An_unmarked_vault_named_Skills_holds_no_skills()
     {
         _store.SkillsVault = null;

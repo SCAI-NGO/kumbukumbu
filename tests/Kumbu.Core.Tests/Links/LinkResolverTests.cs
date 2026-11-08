@@ -84,4 +84,37 @@ public class LinkResolverTests
         var resolver = new LinkResolver("W", [P("/W/inbox.md")], [P("/W/Drafts/.vaultkeep"), P("/W/Drafts/shot.png")]);
         Assert.Equal(LinkKind.NotFound, resolver.Resolve(P("/W/Drafts/n.md"), target).Kind);
     }
+
+    private static readonly LinkResolver Archived = new("W",
+    [
+        P("/W/inbox.md"), P("/W/Projects/Overview.md"), P("/W/_archive/Projects/Overview.md"),
+        P("/W/a/Plans/Budget.md"), P("/W/_archive/Plans/Budget.md"), P("/W/_archive/Old.md"),
+        P("/W/_archive/a/Gone.md"), P("/W/_archive/b/Gone.md"), P("/W/a/Twice.md"), P("/W/b/Twice.md"), P("/W/_archive/Twice.md"),
+        P("/W/Inbox/_archive/Deep.md"), P("/W/Notes/Deep.md"),
+    ]);
+
+    // An archived note never makes a living link ambiguous; only when every candidate is archived does a link lead there.
+    [Theory]
+    [InlineData("/W/inbox.md", "Overview", "/W/Projects/Overview.md")]
+    [InlineData("/W/inbox.md", "Projects/Overview", "/W/Projects/Overview.md")]
+    [InlineData("/W/inbox.md", "Plans/Budget", "/W/a/Plans/Budget.md")]
+    [InlineData("/W/inbox.md", "Budget", "/W/a/Plans/Budget.md")]
+    [InlineData("/W/inbox.md", "Old", "/W/_archive/Old.md")]
+    [InlineData("/W/inbox.md", "Gone", "ambiguous: /W/_archive/a/Gone.md, /W/_archive/b/Gone.md")]
+    [InlineData("/W/inbox.md", "Twice", "ambiguous: /W/a/Twice.md, /W/b/Twice.md")]
+    // An exact link leads into the archive as anywhere else.
+    [InlineData("/W/inbox.md", "/_archive/Projects/Overview", "/W/_archive/Projects/Overview.md")]
+    [InlineData("/W/_archive/Projects/x.md", "./Overview", "/W/_archive/Projects/Overview.md")]
+    // A folder _archive further down is an ordinary one.
+    [InlineData("/W/inbox.md", "Deep", "ambiguous: /W/Inbox/_archive/Deep.md, /W/Notes/Deep.md")]
+    public void Links_prefer_what_is_outside_the_archive(string source, string target, string expected)
+    {
+        var r = Archived.Resolve(P(source), target);
+        Assert.Equal(expected, r.Kind switch
+        {
+            LinkKind.Note => r.Target!.Value,
+            LinkKind.Ambiguous => "ambiguous: " + string.Join(", ", r.Candidates.Select(c => c.Value).Order()),
+            _ => r.Kind.ToString(),
+        });
+    }
 }
