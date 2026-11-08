@@ -53,17 +53,8 @@ public sealed class DavHolds(TimeProvider time)
     }
 
     /// <summary>The version of the note the share removed at <paramref name="path"/> below the vault within
-    /// <see cref="DavRules.HoldWindow"/>, or null if it removed none there that recently.</summary>
-    public string? RecentRemoval(string shareId, string vaultId, string path)
-    {
-        lock (_gate)
-        {
-            Expire();
-            return _removals.TryGetValue((shareId, vaultId, path), out var removal) ? removal.Version : null;
-        }
-    }
-
-    /// <summary><see cref="RecentRemoval"/>, and the record gone with it: a removal brings its note back once.</summary>
+    /// <see cref="DavRules.HoldWindow"/>, or null if it removed none there that recently; the record goes with it, so a
+    /// removal brings its note back once.</summary>
     public string? TakeRemoval(string shareId, string vaultId, string path)
     {
         lock (_gate)

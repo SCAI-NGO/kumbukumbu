@@ -196,13 +196,13 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
         var holds = Api.Services.GetRequiredService<DavHolds>();
 
         using (var delete = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/Ideas/plan.md")) Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
-        Assert.Equal(version, holds.RecentRemoval(dav.Id, vault, "Ideas/plan.md"));
-        Assert.Null(holds.RecentRemoval("ZZZZ", vault, "Ideas/plan.md"));
-        Assert.Null(holds.RecentRemoval(dav.Id, vault, "Ideas/other.md"));
+        Assert.Equal(version, holds.TakeRemoval(dav.Id, vault, "Ideas/plan.md"));
+        Assert.Null(holds.TakeRemoval("ZZZZ", vault, "Ideas/plan.md"));
+        Assert.Null(holds.TakeRemoval(dav.Id, vault, "Ideas/other.md"));
 
         // A folder's removal records each note in it.
         using (var folder = await dav.SendAsync(HttpMethod.Delete, "/dav/Work/Ideas/")) Assert.Equal(HttpStatusCode.NoContent, folder.StatusCode);
-        Assert.NotNull(holds.RecentRemoval(dav.Id, vault, "Ideas/other.md"));
+        Assert.NotNull(holds.TakeRemoval(dav.Id, vault, "Ideas/other.md"));
     }
 
     [Fact]
