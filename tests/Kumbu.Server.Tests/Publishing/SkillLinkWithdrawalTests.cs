@@ -4,8 +4,10 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Publishing;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Dav;
+using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -90,6 +92,17 @@ public sealed class SkillLinkWithdrawalTests(KumbuAppFactory app)
         var device = await app.PublicApi.Services.GetRequiredService<ApiKeys>().CreateAsync(alice.User, alice.UserKey, DateTime.UtcNow, "Skills – Obsidian Laptop",
             new Dictionary<string, KeyRight> { [await SkillsIdAsync(alice)] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
         using var delete = await alice.SendAsync(HttpMethod.Delete, "/api/notes/Skills/x/SKILL.md", bearer: device.Key);
+        Assert.True(delete.IsSuccessStatusCode, delete.StatusCode.ToString());
+        Assert.False(await OpensAsync(code));
+    }
+
+    [Fact]
+    public async Task A_members_removal_withdraws_the_link()
+    {
+        var (alice, code) = await SharedAsync("Work", "/Work/_skills/x");
+        var bob = await RestClient.NewAsync(app.PublicApi, vault: "Private");
+        await alice.ShareWithAsync(bob, "alice-work", MemberRole.Write);
+        using var delete = await bob.SendAsync(HttpMethod.Delete, "/api/notes/alice-work/_skills/x/SKILL.md");
         Assert.True(delete.IsSuccessStatusCode, delete.StatusCode.ToString());
         Assert.False(await OpensAsync(code));
     }
