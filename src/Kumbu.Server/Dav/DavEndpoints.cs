@@ -23,17 +23,29 @@ public static class DavEndpoints
         // The pattern matches /dav itself too, so the web app never answers there.
         app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
         // Any other method, after the ones above (a higher order loses when both match).
-        app.Map(DavPaths.Prefix + "/{**path}", (HttpContext http) =>
-        {
-            http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
-            http.Response.Headers.Allow = DavHeaders.DavMethods;
-        }).WithOrder(1).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
+        app.Map(DavPaths.Prefix + "/{**path}", NotAllowed).WithOrder(1).WithMetadata(FileContentMetadata.Instance).ExcludeFromDescription();
         return app;
+    }
+
+    /// <summary>A method WebDAV doesn't have: 405 with the ones it does. Nothing is read or opened.</summary>
+    private static void NotAllowed(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+        http.Response.Headers.Allow = DavHeaders.DavMethods;
     }
 
     private static async Task DispatchAsync(HttpContext http)
     {
         var (request, response) = (http.Request, http.Response);
+        // Routing matches a method case-insensitively, but a method is case-sensitive (RFC 9110 §9.1) and the dispatch
+        // below compares ordinally: "options" or "propfind" is an unknown method, answered as one before anything needs a
+        // caller. CallerMiddleware let it here only with a share's credentials, or as OPTIONS in any case, which needs none.
+        if (!DavMethod.All.Contains(request.Method, StringComparer.Ordinal))
+        {
+            NotAllowed(http);
+            return;
+        }
+
         if (request.Method == DavMethod.Options)
         {
             DavHeaders.Options(response, DavHeaders.DavMethods);

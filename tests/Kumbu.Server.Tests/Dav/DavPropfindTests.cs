@@ -401,6 +401,34 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         DavAssert.PrivateWithoutCookie(answered);
     }
 
+    /// <summary>A method is case-sensitive (RFC 9110 §9.1): <c>options</c> or <c>propfind</c> is none of WebDAV's, a 405
+    /// with the methods it has, as any unknown one, never a 500 (security review finding 10). A lower-case method other
+    /// than <c>options</c> still needs the share's credentials first.</summary>
+    [Fact]
+    public async Task A_lower_case_method_is_an_unknown_one()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "# Plan");
+        await using var withoutMetrics = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Metrics:Enabled", "false"));
+
+        foreach (var api in new[] { Api, withoutMetrics })
+        {
+            foreach (var (method, authorization) in new[] { ("options", null), ("options", dav.Authorization), ("propfind", dav.Authorization), ("delete", dav.Authorization), ("Get", dav.Authorization) })
+            {
+                using var response = await DavClient.SendAsync(api, new HttpMethod(method), "/dav/Work/plan.md", authorization);
+                Assert.True(response.StatusCode == HttpStatusCode.MethodNotAllowed, $"{method}: {(int)response.StatusCode}");
+                if (api == withoutMetrics) Assert.Equal("OPTIONS, PROPFIND, PROPPATCH, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK", DavAssert.Header(response, "Allow"));
+            }
+
+        }
+
+        // With the metrics on, they refuse it before anything else; without them, credentials come first.
+        using var anonymous = await DavClient.SendAsync(withoutMetrics, new HttpMethod("propfind"), "/dav/Work/plan.md", null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        Assert.NotNull(await dav.Owner.ReadAsync("plan.md"));
+    }
+
     private WebApplicationFactory<Program> Kestrel()
     {
         var factory = Api.WithWebHostBuilder(b => b.UseUrls("http://127.0.0.1:0"));
