@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,7 +50,7 @@ const report = {
 /** Work's tree without anything at the items' original paths; `taken` adds one there. */
 const freeTree = () => folder("/Work", [folder("/Work/Projects")], [note("/Work/inbox.md")]);
 
-function api({ canWrite = true, tree = freeTree(), move = () => json(200, { message: "moved", path: null, version: null }) }: { canWrite?: boolean; tree?: TreeFolder; move?: () => Response } = {}) {
+function api({ canWrite = true, tree = freeTree(), move = () => json(200, { message: "moved", path: null, version: null }) }: { canWrite?: boolean; tree?: TreeFolder; move?: () => Response | Promise<Response> } = {}) {
   const moves: unknown[] = [];
   const trashed: unknown[] = [];
   const fetch = fakeApi({
@@ -117,10 +117,10 @@ describe("ArchiveSheet", () => {
     renderSheet();
     const items = within(await list()).getAllByRole("listitem");
     expect(items.map((i) => i.querySelector(".font-medium")?.textContent)).toEqual(["Manual/", "plan", "report.pdf"]);
-    expect(items[0]).toHaveTextContent("2 files · 3.0 MB");
+    expect(items[0]).toHaveTextContent("2 files · 3 MB");
     expect(items[0]).toHaveTextContent(/Archived \d+ Nov 2026/);
     expect(items[2]).toHaveTextContent("Work / Projects");
-    expect(items[2]).toHaveTextContent("2.0 KB");
+    expect(items[2]).toHaveTextContent("2 KB");
   });
 
   it("restores an item to its original path and asks the tree, the archive and the storage again", async () => {
@@ -128,7 +128,7 @@ describe("ArchiveSheet", () => {
     const { invalidated } = renderSheet();
     await userEvent.click(within(await list()).getByRole("button", { name: "Restore report.pdf" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Restored report.pdf to Work / Projects.");
-    expect(moves).toEqual([{ from: report.path, to: "/Work/Projects/report.pdf", keepLinks: false }]);
+    expect(moves).toEqual([{ from: report.path, to: "/Work/Projects/report.pdf", keepLinks: false, exact: true }]);
     // The tree was asked before the move, to check the name.
     expect(requests(fetch, "GET", "/api/vaults/Work/tree").length).toBeGreaterThan(0);
     const keys = invalidated.mock.calls.map(([f]) => JSON.stringify(f?.queryKey));
@@ -140,7 +140,7 @@ describe("ArchiveSheet", () => {
     renderSheet();
     await userEvent.click(within(await list()).getByRole("button", { name: "Restore Manual/" }));
     await screen.findByRole("status");
-    expect(moves).toEqual([{ from: `${manual.path}/`, to: "/Work/Manual/", keepLinks: false }]);
+    expect(moves).toEqual([{ from: `${manual.path}/`, to: "/Work/Manual/", keepLinks: false, exact: true }]);
   });
 
   it.each([
@@ -156,6 +156,32 @@ describe("ArchiveSheet", () => {
     expect(moves).toEqual([]);
   });
 
+  it("gives the focus back to Restore when the dialog closes", async () => {
+    api({ tree: folder("/Work", [], [note("/Work/plan.md")]) });
+    renderSheet();
+    const restore = within(await list()).getByRole("button", { name: "Restore plan" });
+    await userEvent.click(restore);
+    const dialog = await screen.findByRole("dialog", { name: "Restore as…" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Restore as…" })).not.toBeInTheDocument();
+    expect(restore).toHaveFocus();
+  });
+
+  it("keeps Restore focusable while it works, and a second click sends nothing", async () => {
+    let answer: (r: Response) => void = () => {};
+    const { moves } = api({ move: () => new Promise<Response>((resolve) => (answer = resolve)) });
+    renderSheet();
+    const restore = within(await list()).getByRole("button", { name: "Restore plan" });
+    await userEvent.click(restore);
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(restore).not.toBeDisabled();
+    expect(restore).toHaveFocus();
+    await userEvent.click(restore);
+    expect(moves).toHaveLength(1);
+    await act(async () => answer(json(200, { message: "moved", path: null, version: null })));
+    expect(await screen.findByRole("status")).toHaveTextContent("Restored plan to Work.");
+  });
+
   it("restores under the name given in the dialog", async () => {
     const { moves } = api({ tree: folder("/Work", [], [note("/Work/plan.md")]) });
     renderSheet();
@@ -165,8 +191,9 @@ describe("ArchiveSheet", () => {
     await userEvent.clear(field);
     await userEvent.type(field, "plan old");
     await userEvent.click(within(dialog).getByRole("button", { name: "Restore" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Restored plan old.md to Work.");
-    expect(moves).toEqual([{ from: plan.path, to: "/Work/plan old.md", keepLinks: false }]);
+    // Named as the row names a restored note: by its title.
+    expect(await screen.findByRole("status")).toHaveTextContent("Restored plan old to Work.");
+    expect(moves).toEqual([{ from: plan.path, to: "/Work/plan old.md", keepLinks: false, exact: true }]);
     expect(screen.queryByRole("dialog", { name: "Restore as…" })).not.toBeInTheDocument();
   });
 
@@ -179,18 +206,59 @@ describe("ArchiveSheet", () => {
     expect(moves).toHaveLength(1);
   });
 
-  it("deletes a folder with the folder trash, a note and a file with their own", async () => {
-    const { fetch, trashed } = api();
-    const { invalidated } = renderSheet();
+  it("asks before deleting a folder, naming its files, and deletes it with the folder trash", async () => {
+    const { trashed } = api();
+    const { queryClient, invalidated } = renderSheet();
+    queryClient.setQueryData(["note", `${manual.path}/Overview.md`], { content: "# Manual" });
+    queryClient.setQueryData(["history", `${manual.path}/Overview.md`], []);
+    queryClient.setQueryData(["note", "/Work/inbox.md"], { content: "Inbox" });
     await userEvent.click(within(await list()).getByRole("button", { name: "Delete Manual/" }));
+    const dialog = await screen.findByRole("dialog", { name: "Move Manual/ and its 2 files to the trash?" });
+    expect(trashed).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Moved Manual/ to the trash.");
     expect(trashed).toEqual([{ path: `${manual.path}/` }]);
+    expect(screen.queryByRole("dialog", { name: /to the trash\?$/ })).not.toBeInTheDocument();
+    // What was cached of the files inside goes; another note's stays.
+    expect(queryClient.getQueryData(["note", `${manual.path}/Overview.md`])).toBeUndefined();
+    expect(queryClient.getQueryData(["history", `${manual.path}/Overview.md`])).toBeUndefined();
+    expect(queryClient.getQueryData(["note", "/Work/inbox.md"])).toBeDefined();
+    const keys = invalidated.mock.calls.map(([f]) => JSON.stringify(f?.queryKey));
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        JSON.stringify(["tree", "Work"]),
+        JSON.stringify(["archive", "Work"]),
+        JSON.stringify(["account", "storage"]),
+        JSON.stringify(["activity"]),
+        JSON.stringify(["history"]),
+      ]),
+    );
+  });
+
+  it("asks before deleting a note or a file, and deletes each with its own", async () => {
+    const { fetch } = api();
+    renderSheet();
     await userEvent.click(within(await list()).getByRole("button", { name: "Delete plan" }));
+    let dialog = await screen.findByRole("dialog", { name: "Delete plan?" });
+    expect(dialog).toHaveTextContent("It goes to the vault's trash.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(requests(fetch, "DELETE", `/api/notes/Work/_archive/plan 2026-11-07 101500.md`)).toHaveLength(1));
     await userEvent.click(within(await list()).getByRole("button", { name: "Delete report.pdf" }));
+    dialog = await screen.findByRole("dialog", { name: "Delete report.pdf?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(requests(fetch, "DELETE", `/api/files/Work/_archive/Projects/report 2026-11-01 090000.pdf`)).toHaveLength(1));
-    const keys = invalidated.mock.calls.map(([f]) => JSON.stringify(f?.queryKey));
-    expect(keys).toEqual(expect.arrayContaining([JSON.stringify(["tree", "Work"]), JSON.stringify(["archive", "Work"]), JSON.stringify(["account", "storage"])]));
+  });
+
+  it("deletes nothing when the question is cancelled, and gives the focus back", async () => {
+    const { trashed } = api();
+    renderSheet();
+    const remove = within(await list()).getByRole("button", { name: "Delete Manual/" });
+    await userEvent.click(remove);
+    const dialog = await screen.findByRole("dialog", { name: "Move Manual/ and its 2 files to the trash?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: /to the trash\?$/ })).not.toBeInTheDocument();
+    expect(trashed).toEqual([]);
+    expect(remove).toHaveFocus();
   });
 
   it("shows a reader the items without restoring or deleting", async () => {

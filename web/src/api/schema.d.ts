@@ -11925,6 +11925,8 @@ export interface components {
             to: string;
             /** @default false */
             keepLinks: boolean;
+            /** @default false */
+            exact: boolean;
         };
         NoteVersionView: {
             path: string;

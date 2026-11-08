@@ -9,11 +9,11 @@ import { errorText } from "../api/error-text";
 import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
+import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
-import { sizeText } from "../components/Sheet";
 import { LeaveDialog } from "../components/shownOnce";
 import { topDialog, useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
@@ -257,7 +257,7 @@ function ArchiveEntry({ files, bytes, onOpen }: { files: number; bytes: number; 
     <button type="button" data-tree-row onClick={onOpen} className={`${rowClass} mt-1 w-full pl-[22px] text-muted`}>
       <Archive size={18} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />
       <span className="min-w-0 flex-1 truncate">
-        Archive · {files === 1 ? "1 file" : `${files} files`} · {sizeText(bytes)}
+        Archive · {files === 1 ? "1 file" : `${files} files`} · {storageText(bytes)}
       </span>
     </button>
   );

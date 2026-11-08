@@ -48,7 +48,7 @@ describe("the archive's entry in the tree", () => {
   it("shows what the archive holds, dimmed below the tree, and opens the archive", async () => {
     api({ files: 23, bytes: 412 * 1024 * 1024 });
     await openDrawer();
-    const entry = within(drawer()).getByRole("button", { name: "Archive · 23 files · 412.0 MB" });
+    const entry = within(drawer()).getByRole("button", { name: "Archive · 23 files · 412 MB" });
     expect(entry).toHaveClass("text-muted");
     // Below the tree's own rows.
     const rows = within(drawer()).getAllByRole("button").filter((b) => b.hasAttribute("data-tree-row"));

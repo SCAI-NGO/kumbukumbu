@@ -108,7 +108,7 @@ describe("Rename or move", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
 
     expect(await within(dialog).findByRole("status")).toHaveTextContent("Rewrote 2 links in /Work/archive/old.md.");
-    expect(moves).toEqual([{ from: "/Work/inbox.md", to: "/Work/archive/todo.md", keepLinks: false }]);
+    expect(moves).toEqual([{ from: "/Work/inbox.md", to: "/Work/archive/todo.md", keepLinks: false, exact: false }]);
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/archive/todo.md"));
     expect(useEditor.getState().recentPaths[0]).toBe("/Work/archive/todo.md");
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
@@ -131,7 +131,7 @@ describe("Rename or move", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
 
     expect(await within(dialog).findByRole("status")).toHaveTextContent("No links needed rewriting.");
-    expect(moves).toEqual([{ from: "/Work/projects/", to: "/Work/archive/projects", keepLinks: false }]);
+    expect(moves).toEqual([{ from: "/Work/projects/", to: "/Work/archive/projects", keepLinks: false, exact: false }]);
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/archive/projects/deep/plan.md"));
     expect(useEditor.getState().expandedFolders["/Work/archive/projects/deep"]).toBe(true);
   });
@@ -149,7 +149,7 @@ describe("Rename or move", () => {
     await userEvent.type(name, "Archive");
     await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
     expect(await within(dialog).findByRole("status")).toHaveTextContent("No links needed rewriting.");
-    expect(moves).toEqual([{ from: "/Work/archive/", to: "/Work/Archive", keepLinks: false }]);
+    expect(moves).toEqual([{ from: "/Work/archive/", to: "/Work/Archive", keepLinks: false, exact: false }]);
   });
 
   it("offers no move for the vault's root, and one for every note in the tree", async () => {

@@ -34,13 +34,21 @@ export const useArchivedFiles = (folder: string, enabled: boolean) =>
     enabled,
   });
 
-/** What changes with an item restored or deleted: the vault's tree and archive, and the account's storage. */
-function archiveChanged(queryClient: QueryClient, vault: string) {
-  for (const key of [["tree", vault], ["archive", vault], ["account", "storage"], ["vaults"], ["trash", vault], ["links"], ["backlinks"]])
+/**
+ * What changes with an item restored or deleted: the vault's tree and archive, the account's storage, and what the
+ * app holds of the files in it (by path, so a folder's files too), which are elsewhere now.
+ */
+function archiveChanged(queryClient: QueryClient, vault: string, item: ArchiveItem) {
+  const inItem = (k: unknown) => typeof k === "string" && (k === item.path || k.startsWith(`${item.path}/`));
+  for (const key of ["note", "version", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => inItem(q.queryKey[1]) });
+  for (const key of [["tree", vault], ["archive", vault], ["account", "storage"], ["vaults"], ["trash", vault], ["links"], ["backlinks"], ["activity"], ["history"]])
     void queryClient.invalidateQueries({ queryKey: key });
 }
 
-/** Whether a note, attachment or folder is at `path` in the tree (as the server's paths compare: without case). */
+/**
+ * Whether a note, attachment or folder is at `path` in the tree, ignoring case, as Move does (a case-insensitive file
+ * system, Obsidian's, would see one name).
+ */
 export function takenIn(tree: TreeView, path: string) {
   const there = findFolder(tree.root, folderOf(path));
   const same = (p: string) => p.toLowerCase() === path.toLowerCase();
@@ -53,7 +61,8 @@ export type RestoreResult = { moved: string } | { taken: string; message?: strin
 /**
  * Puts an archived item back at `to` (its original path, or another name the user chose), through `/api/move` as any
  * move: a folder moves with everything in it, and links that the move would break are rewritten. The target is
- * checked first in the vault's tree, asked anew: `mv` onto a folder would put the item inside it, not in its place.
+ * checked first in the vault's tree, asked anew, and the move is exact: a folder that appeared there meanwhile is the
+ * server's 409, where `mv` would put the item inside it.
  */
 export function useRestoreArchived(vault: string) {
   const queryClient = useQueryClient();
@@ -66,7 +75,7 @@ export function useRestoreArchived(vault: string) {
       });
       if (takenIn(tree, to)) return { taken: to };
       try {
-        await call(api.POST("/api/move", { body: item.folder ? { from: `${item.path}/`, to: `${to}/`, keepLinks: false } : { from: item.path, to, keepLinks: false } }));
+        await call(api.POST("/api/move", { body: item.folder ? { from: `${item.path}/`, to: `${to}/`, keepLinks: false, exact: true } : { from: item.path, to, keepLinks: false, exact: true } }));
       } catch (e) {
         if (e instanceof HttpError && e.status === 409) return { taken: to, message: e.message };
         throw e;
@@ -74,10 +83,7 @@ export function useRestoreArchived(vault: string) {
       return { moved: to };
     },
     onSuccess: (result, { item }) => {
-      if (!("moved" in result)) return;
-      const inItem = (k: unknown) => typeof k === "string" && (k === item.path || k.startsWith(`${item.path}/`));
-      for (const key of ["note", "version", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => inItem(q.queryKey[1]) });
-      archiveChanged(queryClient, vault);
+      if ("moved" in result) archiveChanged(queryClient, vault, item);
     },
   });
 }
@@ -92,10 +98,6 @@ export function useDeleteArchived(vault: string) {
       if (isAttachment(item.path)) return call(api.DELETE("/api/files/{vault}/{path}", { params }));
       return call(api.DELETE("/api/notes/{vault}/{path}", { params }));
     },
-    onSuccess: (_, item) => {
-      queryClient.removeQueries({ queryKey: ["note", item.path] });
-      queryClient.removeQueries({ queryKey: ["version", item.path] });
-      archiveChanged(queryClient, vault);
-    },
+    onSuccess: (_, item) => archiveChanged(queryClient, vault, item),
   });
 }

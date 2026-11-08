@@ -4,10 +4,11 @@ import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useArchive, useArchivedFiles, useDeleteArchived, useRestoreArchived, type ArchiveItem } from "../api/archive";
 import { errorText } from "../api/error-text";
+import { storageText } from "../api/storage";
 import { crumbOf, fileKindOf, folderOf, isAttachment, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
-import { Sheet, sizeText, timeText } from "../components/Sheet";
+import { Sheet, timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 
@@ -19,6 +20,8 @@ const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const shownName = (item: ArchiveItem) => (item.folder ? `${nameOf(item.originalPath)}/` : titleOf(item.originalPath));
 const kindOf = (item: ArchiveItem): FileKind => (item.folder ? "folder" : fileKindOf(item.path));
 const filesText = (n: number) => (n === 1 ? "1 file" : `${n} files`);
+/** "Restored Manual/ to Work.": named at `to` as the row names an item, a folder as the folder, a note by its title. */
+const restoredText = (item: ArchiveItem, to: string) => `Restored ${item.folder ? `${nameOf(to)}/` : titleOf(to)} to ${crumbOf(to)}.`;
 
 /**
  * The vault's archive (`_archive/`, which the tree leaves out): what `archive` put away, newest first, each with
@@ -30,6 +33,7 @@ export default function ArchiveSheet({ vault, onClose }: { vault: string; onClos
   const navigate = useNavigate();
   const [done, setDone] = useState<string | null>(null);
   const [restoringAs, setRestoringAs] = useState<{ item: ArchiveItem; message?: string } | null>(null);
+  const [deleting, setDeleting] = useState<ArchiveItem | null>(null);
   const open = (path: string) => {
     onClose();
     useEditor.getState().setOverlay("none");
@@ -62,6 +66,7 @@ export default function ArchiveSheet({ vault, onClose }: { vault: string; onClos
               onOpen={open}
               onDone={setDone}
               onTaken={(message) => setRestoringAs({ item, message })}
+              onDelete={() => setDeleting(item)}
             />
           ))}
         </ul>
@@ -73,9 +78,20 @@ export default function ArchiveSheet({ vault, onClose }: { vault: string; onClos
           message={restoringAs.message}
           onRestored={(to) => {
             setRestoringAs(null);
-            setDone(`Restored ${nameOf(to)} to ${crumbOf(to)}.`);
+            setDone(restoredText(restoringAs.item, to));
           }}
           onClose={() => setRestoringAs(null)}
+        />
+      )}
+      {deleting && (
+        <DeleteArchivedDialog
+          vault={vault}
+          item={deleting}
+          onDeleted={() => {
+            setDeleting(null);
+            setDone(`Moved ${shownName(deleting)} to the trash.`);
+          }}
+          onClose={() => setDeleting(null)}
         />
       )}
     </Sheet>
@@ -89,6 +105,7 @@ function ArchiveRow({
   onOpen,
   onDone,
   onTaken,
+  onDelete,
 }: {
   vault: string;
   item: ArchiveItem;
@@ -96,15 +113,14 @@ function ArchiveRow({
   onOpen(path: string): void;
   onDone(sentence: string): void;
   onTaken(message?: string): void;
+  onDelete(): void;
 }) {
   const restore = useRestoreArchived(vault);
-  const remove = useDeleteArchived(vault);
   const [expanded, setExpanded] = useState(false);
   const files = useArchivedFiles(item.path, item.folder && expanded);
   const kind = kindOf(item);
   const Icon = fileKindIcon[kind];
   const name = shownName(item);
-  const busy = restore.isPending || remove.isPending;
   const id = useId();
   return (
     <li data-file-kind={kind} className="flex flex-col gap-1 rounded-[12px] border border-line bg-surface-2 px-3.5 py-2">
@@ -118,7 +134,7 @@ function ArchiveRow({
       <p className="text-sm text-muted">
         {item.archivedAt ? `Archived ${timeText(item.archivedAt)} · ` : ""}
         {item.folder ? `${filesText(Number(item.files))} · ` : ""}
-        {sizeText(Number(item.bytes))}
+        {storageText(Number(item.bytes))}
       </p>
       <div className="flex flex-wrap gap-2">
         {item.folder ? (
@@ -133,27 +149,23 @@ function ArchiveRow({
         )}
         {canWrite && (
           <>
+            {/* Not disabled while it works, which would drop the focus that the Restore as… dialog gives back: a click then is ignored. */}
             <button
               type="button"
               aria-label={`Restore ${name}`}
-              disabled={busy}
-              onClick={() =>
+              aria-disabled={restore.isPending}
+              onClick={() => {
+                if (restore.isPending) return;
                 restore.mutate(
                   { item, to: item.originalPath },
-                  { onSuccess: (result) => ("moved" in result ? onDone(`Restored ${name} to ${crumbOf(item.originalPath)}.`) : onTaken(result.message)) },
-                )
-              }
+                  { onSuccess: (result) => ("moved" in result ? onDone(restoredText(item, result.moved)) : onTaken(result.message)) },
+                );
+              }}
               className={smallButton}
             >
               Restore
             </button>
-            <button
-              type="button"
-              aria-label={`Delete ${name}`}
-              disabled={busy}
-              onClick={() => remove.mutate(item, { onSuccess: () => onDone(`Moved ${name} to the trash.`) })}
-              className={smallButton}
-            >
+            <button type="button" aria-label={`Delete ${name}`} onClick={onDelete} className={smallButton}>
               Delete
             </button>
           </>
@@ -165,7 +177,7 @@ function ArchiveRow({
           {files.isError && <FormError>{errorText(files.error)}</FormError>}
           {files.data && files.data.length === 0 && <p className="text-sm text-muted">It holds no files.</p>}
           {files.data && files.data.length > 0 && (
-            <ul aria-label={`Files in ${name}`} className="flex flex-col">
+            <ul aria-label={`Files in ${name}`} className="flex flex-col gap-1">
               {files.data.map((path) => {
                 const FileIcon = fileKindIcon[fileKindOf(path)];
                 // Its place inside the archived folder: "Manual / images".
@@ -188,8 +200,43 @@ function ArchiveRow({
         </div>
       )}
       {restore.isError && <FormError>{errorText(restore.error)}</FormError>}
-      {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
     </li>
+  );
+}
+
+/**
+ * Asks before an archived item goes to the vault's trash, as a note's or a file's deletion does; a folder names how
+ * many files go with it.
+ */
+function DeleteArchivedDialog({ vault, item, onDeleted, onClose }: { vault: string; item: ArchiveItem; onDeleted(): void; onClose(): void }) {
+  const id = useId();
+  const dialog = useDialog<HTMLDivElement>(onClose);
+  const remove = useDeleteArchived(vault);
+  const name = shownName(item);
+  return (
+    <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 p-3 sm:items-center">
+      <div
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        className="k-sheet flex w-full max-w-md flex-col gap-3 rounded-[16px] border border-line bg-surface p-[18px] pb-[max(18px,env(safe-area-inset-bottom))]"
+      >
+        <h2 id={`${id}-title`} className="text-[20px] font-bold break-words text-text">
+          {item.folder ? `Move ${name} and its ${filesText(Number(item.files))} to the trash?` : `Delete ${name}?`}
+        </h2>
+        <p className="text-text-body">{item.folder ? "They go to the vault's trash, out of the archive." : "It goes to the vault's trash."}</p>
+        {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
+        <div className="mt-1 flex gap-2.5">
+          <button type="button" data-autofocus onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+            Cancel
+          </button>
+          <button type="button" disabled={remove.isPending} onClick={() => remove.mutate(item, { onSuccess: onDeleted })} className={`${primaryButtonClass} flex-1`}>
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

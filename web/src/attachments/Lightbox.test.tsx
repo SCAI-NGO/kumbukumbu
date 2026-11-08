@@ -186,7 +186,7 @@ describe("Lightbox", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/view/W/shots/bug.png"));
     const move = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
-    expect(await move.clone().json()).toEqual({ from: "/W/shots/b.png", to: "/W/shots/bug.png", keepLinks: false });
+    expect(await move.clone().json()).toEqual({ from: "/W/shots/b.png", to: "/W/shots/bug.png", keepLinks: false, exact: false });
     expect(await within(dialog).findByRole("heading", { name: "Image moved" })).toBeInTheDocument();
   });
 
