@@ -186,6 +186,30 @@ public sealed class StorageQuota
         return Effective(stored);
     }
 
+    /// <summary>Whether a limit applies to <paramref name="userId"/>, without counting her storage (the session view,
+    /// for the shell's notice). Without a default, and while no user document carries an override, it asks MongoDB nothing
+    /// about her: only whether an override exists, as the write path does, at most every <see cref="RecountAfter"/>.</summary>
+    public async Task<bool> LimitedAsync(string userId, CancellationToken ct)
+    {
+        if (Default is null)
+        {
+            Task? check;
+            lock (_lock)
+            {
+                MayLimit();
+                check = _overrides is null ? _overridesCheck : null;
+            }
+
+            if (check is not null) await check.WaitAsync(ct);
+            lock (_lock)
+            {
+                if (_overrides != true) return false;
+            }
+        }
+
+        return await LimitAsync(userId, ct) is not null;
+    }
+
     /// <summary>An admin set an override (or one was read): from now on the cache looks owners up.</summary>
     internal void OverrideSeen()
     {

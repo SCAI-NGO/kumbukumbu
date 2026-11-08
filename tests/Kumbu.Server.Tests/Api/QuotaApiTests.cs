@@ -747,6 +747,8 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.False(await LimitedAsync());
         await OverrideAsync(user, OneMb);
+        // As an admin's change of the limit tells the cache; one written past it shows within RecountAfter.
+        Quota(api).OverrideSeen();
         Assert.True(await LimitedAsync());
         await OverrideAsync(user, StorageQuota.Unlimited);
         Assert.False(await LimitedAsync());

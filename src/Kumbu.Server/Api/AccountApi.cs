@@ -245,7 +245,7 @@ public static class AccountApi
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new SessionView(
-            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitAsync(user.Id, ct) is not null));
+            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct)));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -308,7 +308,7 @@ public static class AccountApi
     private static async Task<Ok<SessionView>> Session(RequestCaller caller, StorageQuota quota, IOptions<KumbuOptions> options, CancellationToken ct) =>
         TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitAsync(caller.User.Id, ct) is not null));
+            await quota.LimitedAsync(caller.User.Id, ct)));
 
     /// <summary>
     /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No
