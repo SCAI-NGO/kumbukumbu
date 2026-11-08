@@ -672,6 +672,39 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_slot_not_found_answers_not_found_and_takes_nothing_along()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+        var pairings = Api.Services.GetRequiredService<Pairings>();
+        var code = pairings.Create(alice.User, (byte[])alice.UserKey.Clone(), DateTime.UtcNow, Sessions.SubjectOf(alice.Session)!, id, "Gartenarbeit", null);
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        var hub = Api.Services.GetRequiredService<Kumbu.Server.Sync.SyncHub>();
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (!hub.Held.Any(h => h.VaultId == id))
+        {
+            Assert.True(waiting.Elapsed < TimeSpan.FromSeconds(10), "The hub doesn't hold the tab.");
+            await Task.Delay(20, Ct);
+        }
+
+        // Exactly ArgumentException: her slot wasn't found, a refusal, after which nothing was renamed.
+        Catalog.MetaFaultAt = point => point == "inside-rename" ? throw new ArgumentException("You have no such vault.", "vault") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
+
+            Assert.Equal(HttpStatusCode.NotFound, renamed.StatusCode);
+        }
+        finally
+        {
+            Catalog.MetaFaultAt = null;
+        }
+
+        Assert.True(pairings.IsOpen(code.Code));
+        Assert.DoesNotContain(await SyncSockets.DrainAsync(tab, TimeSpan.FromSeconds(1.5)), m => m.Contains("\"renamed\"", StringComparison.Ordinal) || m.Contains("\"changed\"", StringComparison.Ordinal));
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
     public async Task A_bug_inside_the_rename_is_not_answered_as_not_found()
     {
         var (alice, id, vaultKey, _) = await AliceAsync();

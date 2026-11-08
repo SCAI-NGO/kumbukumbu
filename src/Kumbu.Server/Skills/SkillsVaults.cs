@@ -93,8 +93,10 @@ public sealed class SkillsVaults(VaultCatalog catalog, Pairings pairings, SyncHu
         }
     }
 
-    /// <summary>Renames the vault or alias that holds the name, if any, and keeps the notice. False when it is left for
-    /// next time: the vault is being re-keyed.</summary>
+    /// <summary>Renames the vault or alias that holds the name, if any, with its notice. The notice is kept first, so a
+    /// rename that lands but whose answer is lost (the next attempt meets no clash) still leaves it; a refused rename
+    /// puts back what was there before (an earlier attempt's notice, or none). False when it is left for next time: the
+    /// vault is being re-keyed.</summary>
     private async Task<bool> MakeRoomAsync(User user, byte[] userKey, IReadOnlyList<VaultAccess> vaults, CancellationToken ct)
     {
         var normal = VaultCatalog.NormaliseVaultName(Name);
@@ -102,28 +104,40 @@ public sealed class SkillsVaults(VaultCatalog catalog, Pairings pairings, SyncHu
         var taken = vaults.Select(a => VaultCatalog.NormaliseVaultName(a.Name)).ToHashSet(StringComparer.Ordinal);
         var newName = RenamedName(n => taken.Contains(VaultCatalog.NormaliseVaultName(n)));
         var alias = clash.Membership is not null;
+        var before = await Users.Find(u => u.Id == user.Id).Project(u => u.SkillsNotice).FirstOrDefaultAsync(ct);
+        var notice = JsonSerializer.SerializeToUtf8Bytes(new SkillsRename(newName, alias));
+        await SetNoticeAsync(user.Id, VaultCrypto.Seal(NoticeKey(user.Id, userKey), notice, NoticeContext(user.Id)), ct);
         try
         {
             if (alias)
             {
-                newName = await catalog.RenameAliasAsync(user.Id, userKey, clash.Membership!.Id, newName, ct);
-                hub.AliasRenamed(user.Id, clash.Membership.Id, newName);
+                var stored = await catalog.RenameAliasAsync(user.Id, userKey, clash.Membership!.Id, newName, ct);
+                hub.AliasRenamed(user.Id, clash.Membership.Id, stored);
             }
             else
             {
                 await NoteApi.RenameOwnedVaultAsync(catalog, pairings, hub, user, userKey, clash, newName, ct);
             }
         }
-        catch (VaultBusyException)
+        // A refusal, after which nothing was renamed (exactly ArgumentException: her slot or membership not found).
+        // Anything else may have landed: the notice stays.
+        catch (Exception e) when (e is VaultBusyException or VaultNameTakenException or VaultDeletedException || e.GetType() == typeof(ArgumentException))
         {
+            // Not cancellable: the bounded token may be what ran out.
+            await SetNoticeAsync(user.Id, before, CancellationToken.None);
+            if (e is not VaultBusyException) throw;
             log.LogInformation("The vault Skills for user {UserId} waits: the vault holding its name is being re-encrypted", user.Id);
             return false;
         }
 
-        var notice = JsonSerializer.SerializeToUtf8Bytes(new SkillsRename(newName, alias));
-        await Users.UpdateOneAsync(u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.SkillsNotice, VaultCrypto.Seal(NoticeKey(user.Id, userKey), notice, NoticeContext(user.Id))), cancellationToken: ct);
         return true;
     }
+
+    private Task SetNoticeAsync(string userId, byte[]? sealedNotice, CancellationToken ct) =>
+        Users.UpdateOneAsync(
+            u => u.Id == userId,
+            sealedNotice is null ? Builders<UserDocument>.Update.Unset(u => u.SkillsNotice) : Builders<UserDocument>.Update.Set(u => u.SkillsNotice, sealedNotice),
+            cancellationToken: ct);
 
     /// <summary>"Skills (renamed)", else the first of "Skills (renamed 2)", "Skills (renamed 3)", … not
     /// <paramref name="taken"/>.</summary>
@@ -136,24 +150,31 @@ public sealed class SkillsVaults(VaultCatalog catalog, Pairings pairings, SyncHu
         }
     }
 
-    /// <summary>Which vault or alias made room for the vault Skills, until she dismisses it; null when none did, or when
-    /// it no longer opens (her user key changed since).</summary>
+    /// <summary>Which vault or alias made room for the vault Skills, until she dismisses it; null when none did, when it
+    /// no longer opens (her user key changed since), or when it can't be read: best effort, as making the vault is, so
+    /// that it never fails the sign-in or the session it is shown in. A failure is logged by its type alone.</summary>
     public async Task<SkillsRename?> NoticeAsync(User user, byte[] userKey, CancellationToken ct)
     {
-        var sealedNotice = await Users.Find(u => u.Id == user.Id).Project(u => u.SkillsNotice).FirstOrDefaultAsync(ct);
-        if (sealedNotice is null) return null;
         try
         {
-            return JsonSerializer.Deserialize<SkillsRename>(VaultCrypto.Open(NoticeKey(user.Id, userKey), sealedNotice, NoticeContext(user.Id)));
+            var sealedNotice = await Users.Find(u => u.Id == user.Id).Project(u => u.SkillsNotice).FirstOrDefaultAsync(ct);
+            if (sealedNotice is null) return null;
+            var notice = JsonSerializer.Deserialize<SkillsRename>(VaultCrypto.Open(NoticeKey(user.Id, userKey), sealedNotice, NoticeContext(user.Id)));
+            return notice?.NewName is null ? null : notice;
         }
         catch (CryptographicException)
         {
+            // Sealed under her user key before it was rotated: nothing to tell any more.
+            return null;
+        }
+        catch (Exception e)
+        {
+            log.LogWarning("Could not read the notice of the vault Skills for user {UserId}: {Reason}", user.Id, e.GetType().Name);
             return null;
         }
     }
 
-    public Task DismissNoticeAsync(string userId, CancellationToken ct) =>
-        Users.UpdateOneAsync(u => u.Id == userId, Builders<UserDocument>.Update.Unset(u => u.SkillsNotice), cancellationToken: ct);
+    public Task DismissNoticeAsync(string userId, CancellationToken ct) => SetNoticeAsync(userId, null, ct);
 
     private static byte[] NoticeKey(string userId, byte[] userKey) => VaultCrypto.Derive(userKey, NoticeLabel, Encoding.UTF8.GetBytes(userId));
 

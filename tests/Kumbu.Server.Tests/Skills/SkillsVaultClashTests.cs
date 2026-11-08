@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Text;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Skills;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -66,6 +71,21 @@ public sealed class SkillsVaultClashTests(KumbuAppFactory app)
         Assert.True((await alice.ShAsync("ls /Skills", apiKey)).IsError);
     }
 
+    [Fact]
+    public async Task The_sockets_on_the_renamed_vault_are_told()
+    {
+        var (username, user, key, apiKey) = await BeforeUpgradeAsync("Skills");
+        var vaultId = (await app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.Id, key, Ct)).Single().Id;
+        var anyone = await RestClient.NewAsync(app.PublicApi);
+        using var socket = await SyncSockets.OpenAsync(app.PublicApi, anyone, apiKey);
+        await HeldAsync(h => h.Subject.User == user.Id && h.VaultId == vaultId && h.Name == "Skills");
+
+        await SignInAsync(username);
+
+        var renamed = new JsonObject { ["type"] = "renamed", ["vault"] = "Skills (renamed)", ["from"] = "Skills" }.ToJsonString();
+        Assert.Contains(renamed, await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(1.5)));
+    }
+
     [Theory, InlineData("SKILLS"), InlineData("skills"), InlineData(" Skills "), InlineData("SkIlLs")]
     public async Task A_vault_named_SKILLS_in_any_spelling_is_a_clash(string name)
     {
@@ -97,6 +117,19 @@ public sealed class SkillsVaultClashTests(KumbuAppFactory app)
         Assert.Contains(bobs, a => a.Name == "Skills (renamed)" && a.Membership?.Id == membership);
         Assert.Contains(bobs, a => a.Name == "Skills" && a.Vault.Kind == VaultKinds.Skills);
         Assert.Contains(await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct), a => a.Name == "Work");
+    }
+
+    [Fact]
+    public async Task The_sockets_on_the_renamed_alias_name_it_so()
+    {
+        var (alice, bob, _) = await AliasNamedSkillsAsync();
+        var work = await alice.VaultIdAsync();
+        using var socket = await SyncSockets.OpenAsync(app.PublicApi, bob);
+        await HeldAsync(h => h.Subject.User == bob.User.Id && h.VaultId == work && h.Name == "Skills");
+
+        await SignInAsync(bob.Username);
+
+        Assert.Equal("Skills (renamed)", Assert.Single(Hub.Held, h => h.Subject.User == bob.User.Id && h.VaultId == work).Name);
     }
 
     [Fact]
@@ -188,6 +221,93 @@ public sealed class SkillsVaultClashTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_rename_whose_answer_is_lost_after_it_landed_still_leaves_the_notice()
+    {
+        var (username, user, key, _) = await BeforeUpgradeAsync("Skills");
+        var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
+        catalog.MetaFaultAt = point => point == "after-rename-commit" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            Assert.Equal("Skills (renamed)", (await SignInAsync(username))["skillsNotice"]!["renamed"]!.GetValue<string>());
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal(["Skills (renamed)"], (await catalog.OpenForUserAsync(user.Id, key, Ct)).Select(a => a.Name));
+        Assert.Null(await SkillsAtAsync(user.Id));
+        // The next attempt meets no clash: it creates the vault Skills, and the notice stays.
+        var view = await SignInAsync(username);
+        Assert.Equal("Skills (renamed)", view["skillsNotice"]!["renamed"]!.GetValue<string>());
+        Assert.False(view["skillsNotice"]!["alias"]!.GetValue<bool>());
+        Assert.Contains(await catalog.OpenForUserAsync(user.Id, key, Ct), a => a.Name == "Skills" && a.Vault.Kind == VaultKinds.Skills);
+    }
+
+    [Fact]
+    public async Task A_refused_retry_keeps_the_notice_of_the_attempt_before()
+    {
+        var (username, user, key, _) = await BeforeUpgradeAsync("Skills");
+        var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
+        var old = (await catalog.OpenForUserAsync(user.Id, key, Ct)).Single().Id;
+        // First attempt: the rename's outcome isn't known (here it didn't land), so its notice stays.
+        catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            Assert.Equal("Skills (renamed)", (await SignInAsync(username))["skillsNotice"]!["renamed"]!.GetValue<string>());
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal(["Skills"], (await catalog.OpenForUserAsync(user.Id, key, Ct)).Select(a => a.Name));
+
+        // Second attempt: refused while the vault is re-keyed; what the first left is kept, not dropped.
+        var vaults = app.Database.GetCollection<VaultDocument>("vaults");
+        await vaults.UpdateOneAsync(v => v.Id == old, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, DateTime.UtcNow), cancellationToken: Ct);
+        var rekeying = app.PublicApi.Services.GetRequiredService<Rekeying>();
+        rekeying.ResumeFault = () => throw new InvalidOperationException("left to the test");
+        try
+        {
+            Assert.Equal("Skills (renamed)", (await SignInAsync(username))["skillsNotice"]!["renamed"]!.GetValue<string>());
+        }
+        finally
+        {
+            rekeying.ResumeFault = null;
+        }
+
+        await vaults.UpdateOneAsync(v => v.Id == old, Builders<VaultDocument>.Update.Unset(v => v.RekeyStartedAt), cancellationToken: Ct);
+        Assert.Equal("Skills (renamed)", (await SignInAsync(username))["skillsNotice"]!["renamed"]!.GetValue<string>());
+        Assert.Equal(["Skills", "Skills (renamed)"], (await catalog.OpenForUserAsync(user.Id, key, Ct)).Select(a => a.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_notice_that_doesnt_open_is_no_notice()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        // Sealed under another key, as after a rotation of her user key.
+        var sealedElsewhere = VaultCrypto.Seal(VaultCrypto.Derive(VaultCrypto.NewKey(), "kumbu/v1/skills-notice", Encoding.UTF8.GetBytes(alice.User.Id)),
+            "{\"NewName\":\"Skills (renamed)\",\"Alias\":false}"u8, $"skills-notice:{alice.User.Id}");
+        await SetNoticeAsync(alice.User.Id, sealedElsewhere);
+        await NoNoticeAsync(alice);
+    }
+
+    [Fact]
+    public async Task A_notice_that_cant_be_read_is_no_notice_and_fails_nothing()
+    {
+        var log = new CapturedLog();
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var alice = await RestClient.NewAsync(api, vault: "Work");
+        // It opens, but isn't a notice.
+        var notJson = VaultCrypto.Seal(VaultCrypto.Derive(alice.UserKey, "kumbu/v1/skills-notice", Encoding.UTF8.GetBytes(alice.User.Id)), "Skills (renamed"u8, $"skills-notice:{alice.User.Id}");
+        await SetNoticeAsync(alice.User.Id, notJson);
+        await NoNoticeAsync(alice);
+        Assert.Contains(log.Lines, l => l.Contains($"Could not read the notice of the vault Skills for user {alice.User.Id}: JsonException"));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("renamed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Nothing_names_the_old_vault_in_the_clear()
     {
         var (username, user, _, _) = await BeforeUpgradeAsync("Skills");
@@ -196,6 +316,33 @@ public sealed class SkillsVaultClashTests(KumbuAppFactory app)
         Assert.DoesNotContain("renamed", raw.ToJson(), StringComparison.OrdinalIgnoreCase);
         // The JSON shows bytes as base64: the notice's own bytes too.
         Assert.DoesNotContain("renamed", System.Text.Encoding.UTF8.GetString(raw["skillsNotice"].AsByteArray), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private SyncHub Hub => app.PublicApi.Services.GetRequiredService<SyncHub>();
+
+    private async Task HeldAsync(Func<(Subject Subject, string VaultId, string Name, AccessLevel Level), bool> which)
+    {
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (!Hub.Held.Any(which))
+        {
+            Assert.True(waiting.Elapsed < TimeSpan.FromSeconds(10), "The hub doesn't hold the connection.");
+            await Task.Delay(20, Ct);
+        }
+    }
+
+    private Task SetNoticeAsync(string userId, byte[] notice) =>
+        app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == userId, Builders<UserDocument>.Update.Set(u => u.SkillsNotice, notice), cancellationToken: Ct);
+
+    /// <summary>The session and a new sign-in both answer, neither with a notice.</summary>
+    private async Task NoNoticeAsync(RestClient user)
+    {
+        using (var session = await user.GetAsync("/api/session"))
+        {
+            Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+            Assert.Null((await RestClient.JsonAsync(session))["skillsNotice"]);
+        }
+
+        Assert.Null((await SignInAsync(user.Username))["skillsNotice"]);
     }
 
     /// <summary>Alice's Work shared with Bob, who named it Skills before the upgrade, so he has no vault Skills yet.</summary>
