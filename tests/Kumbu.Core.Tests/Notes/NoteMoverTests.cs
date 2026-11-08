@@ -38,6 +38,27 @@ public class NoteMoverTests
     private Task<ShellResult> Move(string from, string to) => _mover.MoveAsync(P(from), P(to), rewriteLinks: true, Ct);
 
     [Fact]
+    public async Task An_exact_move_refuses_a_folder_at_the_target_instead_of_moving_into_it()
+    {
+        var file = await _mover.MoveAsync(P("/W/Screens/shot.png"), P("/W/Trip/img"), rewriteLinks: true, "archive", exact: true, Ct);
+        var folder = await _mover.MoveFolderAsync(P("/W/Screens"), P("/W/Trip"), rewriteLinks: true, "archive", exact: true, Ct);
+
+        Assert.Equal(ShellResult.Error("archive: nothing was moved: /W/Trip/img/ appeared meanwhile; try again"), file);
+        Assert.Equal(ShellResult.Error("archive: nothing was moved: /W/Trip/ appeared meanwhile; try again"), folder);
+        Assert.NotNull(await _store.GetAttachmentAsync(P("/W/Screens/shot.png"), Ct));
+        Assert.NotNull(await Content("/W/Screens/notes.md"));
+        Assert.Equal(0, _store.Commits);
+    }
+
+    [Fact]
+    public async Task A_move_on_behalf_of_another_command_speaks_as_it()
+    {
+        var result = await _mover.MoveAsync(P("/W/missing.png"), P("/W/x.png"), rewriteLinks: true, "archive", exact: true, Ct);
+
+        Assert.Equal(ShellResult.Error("archive: /W/missing.png: No such file or directory"), result);
+    }
+
+    [Fact]
     public async Task Moving_an_attachment_rewrites_wiki_and_markdown_links()
     {
         var before = (await _store.GetAttachmentAsync(P("/W/Screens/shot.png"), Ct))!;

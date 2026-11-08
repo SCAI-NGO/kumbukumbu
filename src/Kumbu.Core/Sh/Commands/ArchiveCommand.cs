@@ -32,8 +32,9 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
           Refused for what is already in the archive, for a vault, and for skills: anything in the
           vault Skills or in a /<vault>/_skills/ folder. To remove something, use rm.
           To restore, mv it back (mv never overwrites).
-          ls, rg, semsearch, tags and backlinks leave the archive out unless asked;
-          hiding the archive is about attention, not access: whoever may read the vault may read it.
+          ls, rg, semsearch, tags and backlinks leave the archive out unless given --archive or a path
+          inside the archive; hiding the archive is about attention, not access: whoever may read the
+          vault may read it.
 
           archive /Work/Inbox/report.pdf
           archive "/Work/Meeting Notes.md"
@@ -65,6 +66,7 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
             return ShellResult.Error($"archive: {shown} is in {location.Value}/, where skills live; skills and their files can't be archived{RmHint}");
         }
 
+        if (await notes.IsDamagedAsync(source, ct)) return ShellResult.Error(Damage.Message(Name, source));
         var isFile = await ExistsAsync(source, ct);
         if (folder ? !await IsFolderAsync(source, ct) : !isFile)
         {
@@ -74,7 +76,7 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
             }
 
             if (folder && isFile) return ShellResult.Error($"archive: {shown}: Not a directory (to archive the file, leave out the '/')");
-            return ShellResult.Error($"archive: {shown}: No such file or directory");
+            return ShellResult.Error($"archive: {shown}: No such file or directory{(folder ? "" : await Moves.HintAsync(notes, source, ct))}");
         }
 
         var directory = ArchiveFolder.Of(source.Segments[0]);
@@ -87,13 +89,10 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
             target = directory.Child($"{stem} {stamp}-{n}{extension}");
         }
 
-        var result = folder
-            ? await mover.MoveFolderAsync(source, target, rewriteLinks: true, ct)
-            : await mover.MoveAsync(source, target, rewriteLinks: true, ct);
-        // The mover speaks as mv; its refusals are archive's here.
-        return result.IsError && result.Output.StartsWith("mv: ", StringComparison.Ordinal)
-            ? result with { Output = "archive: " + result.Output["mv: ".Length..] }
-            : result;
+        // Exactly to the stamped name: a folder appearing there after the check above is a conflict, not a place to move into.
+        return folder
+            ? await mover.MoveFolderAsync(source, target, rewriteLinks: true, Name, exact: true, ct)
+            : await mover.MoveAsync(source, target, rewriteLinks: true, Name, exact: true, ct);
     }
 
     /// <summary>The name without and with the extension the stamp goes before: a note's <c>.md</c>, an attachment's

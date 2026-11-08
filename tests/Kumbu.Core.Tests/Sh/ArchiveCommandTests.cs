@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -89,15 +90,92 @@ public class ArchiveCommandTests
     [Fact]
     public async Task A_second_archive_in_the_same_second_gets_a_suffix_after_the_time()
     {
-        _store.AddAttachment("/Work/Other/report.pdf");
         Assert.False((await Run("archive /Work/Inbox/report.pdf")).IsError);
         _store.AddAttachment("/Work/Inbox/report.pdf");
         Assert.False((await Run("archive /Work/Inbox/report.pdf")).IsError);
         _store.AddAttachment("/Work/Inbox/report.pdf");
         Assert.False((await Run("archive /Work/Inbox/report.pdf")).IsError);
 
+        Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/_archive/Inbox/report 2026-11-08 213005.pdf"), Ct));
         Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/_archive/Inbox/report 2026-11-08 213005-2.pdf"), Ct));
         Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/_archive/Inbox/report 2026-11-08 213005-3.pdf"), Ct));
+    }
+
+    [Fact]
+    public async Task An_upper_case_extension_keeps_its_spelling()
+    {
+        _store.AddAttachment("/Work/Inbox/photo.JPG");
+
+        Assert.False((await Run("archive /Work/Inbox/photo.JPG")).IsError);
+        Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/_archive/Inbox/photo 2026-11-08 213005.JPG"), Ct));
+    }
+
+    [Fact]
+    public async Task A_note_already_at_the_stamped_name_counts_as_a_clash()
+    {
+        await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync("/Work/_archive/Overview 2026-11-08 213005.md", "earlier\n", null, Ct);
+
+        var result = await Run("archive /Work/Overview.md");
+
+        Assert.StartsWith("moved /Work/Overview.md to /Work/_archive/Overview 2026-11-08 213005-2.md", result.Output);
+        Assert.Equal("earlier\n", await _store.ReadAsync(P("/Work/_archive/Overview 2026-11-08 213005.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Rewritten_links_are_marked_as_archives()
+    {
+        Assert.False((await Run("archive /Work/Inbox/report.pdf")).IsError);
+
+        var history = (await Run("history /Work/Overview.md")).Output;
+        Assert.Contains("dev (archive)", history);
+        Assert.DoesNotContain("(mv)", history);
+    }
+
+    [Fact]
+    public async Task A_folders_marker_is_not_there_as_everywhere_in_the_shell()
+    {
+        _store.AddAttachment("/Work/Empty/.vaultkeep");
+
+        var result = await Run("archive /Work/Empty/.vaultkeep");
+
+        Assert.Equal(ShellResult.Error("archive: /Work/Empty/.vaultkeep: No such file or directory"), result);
+        Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/Empty/.vaultkeep"), Ct));
+    }
+
+    [Fact]
+    public async Task A_damaged_note_says_so()
+    {
+        _store.Damaged.Add(P("/Work/Inbox/broken.md"));
+
+        Assert.Equal(ShellResult.Error(Damage.Message("archive", P("/Work/Inbox/broken.md"))), await Run("archive /Work/Inbox/broken.md"));
+    }
+
+    [Fact]
+    public async Task A_moved_note_says_where_it_went()
+    {
+        Assert.False((await Run("mv /Work/Overview.md /Work/Start.md")).IsError);
+
+        var result = await Run("archive /Work/Overview.md");
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("archive: /Work/Overview.md: No such file or directory; it was moved to /Work/Start.md on ", result.Output);
+    }
+
+    [Theory]
+    [InlineData("/Work/Board/Board.md")]
+    [InlineData("/Work/Board/card.md")]
+    public async Task A_writer_may_not_archive_the_board_or_a_card_it_links(string path)
+    {
+        var owner = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        await owner.WriteAsync("/Work/Board/Board.md", BoardTemplate.Text() + "See [[card]].\n", null, Ct);
+        await owner.WriteAsync("/Work/Board/card.md", "a card\n", null, Ct);
+
+        var result = await Run($"archive {path}", new FixedCaller("writer", LevelOf: _ => AccessLevel.Write));
+
+        Assert.True(result.IsError, result.Output);
+        Assert.Equal(Refusals.Structural, result.Code);
+        Assert.StartsWith("archive: Only those who may maintain *Work* can", result.Output);
+        Assert.NotNull(await _store.ReadAsync(P(path), Ct));
     }
 
     [Fact]
@@ -132,6 +210,9 @@ public class ArchiveCommandTests
     [InlineData("archive /Work/Inbox/missing.md", "archive: /Work/Inbox/missing.md: No such file or directory")]
     [InlineData("archive /Work/Inbox/Manual", "archive: /Work/Inbox/Manual: Is a directory (to archive the folder, write /Work/Inbox/Manual/)")]
     [InlineData("archive /Work/Inbox/missing/", "archive: /Work/Inbox/missing/: No such file or directory")]
+    [InlineData("archive /Work/Overview.md/", "archive: /Work/Overview.md/: Not a directory (to archive the file, leave out the '/')")]
+    [InlineData("archive /Work/Overview.md#Source", "archive: archives whole notes, not sections")]
+    [InlineData("archive -f /Work/Overview.md", "archive: invalid option -- 'f'")]
     [InlineData("archive", "archive: missing operand (archive <path>)")]
     [InlineData("archive /Work/", "archive: /Work/ is a vault; a vault can't be archived, only what is in it")]
     [InlineData("archive /", "archive: / is not in a vault; a vault can't be archived, only what is in it")]
@@ -169,7 +250,8 @@ public class ArchiveCommandTests
 
         Assert.StartsWith("archive <path>", help);
         Assert.Contains("server's time zone", help);
-        Assert.Contains("mv", help);
+        Assert.Contains("unless given --archive or a path", help);
+        Assert.Contains("To restore, mv it back (mv never overwrites).", help);
         Assert.Contains("hiding the archive is about attention, not access", help);
     }
 }
