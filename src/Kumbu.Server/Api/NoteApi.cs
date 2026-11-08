@@ -86,8 +86,32 @@ public sealed record RenameVaultRequest(string Name);
 public sealed record DeleteVaultRequest(string Password, string Confirm);
 
 /// <summary>A vault's notes and attachments as folders and files, each level folders first, then files, both in text order (as <c>ls</c>).
-/// <c>damaged</c>: stored notes of the vault that don't open (their paths are what doesn't open, so they aren't in the tree).</summary>
-public sealed record TreeView(TreeFolder Root, int Damaged);
+/// <c>damaged</c>: stored notes of the vault that don't open (their paths are what doesn't open, so they aren't in the tree).
+/// The vault's archive (<c>/Work/_archive/</c>) is not in the tree; <c>archive</c> sums it up, absent while it holds no
+/// file but a <c>.vaultkeep</c>.</summary>
+public sealed record TreeView(
+    TreeFolder Root, int Damaged, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ArchiveSummary? Archive = null);
+
+/// <summary>What a vault's archive holds: <c>files</c>, notes and attachments without folder markers, and their
+/// <c>bytes</c> as <c>du</c> counts them (a note's UTF-8).</summary>
+public sealed record ArchiveSummary(int Files, long Bytes);
+
+/// <summary>A vault's archive, item by item (<c>GET /api/vaults/{vault}/archive</c>): those whose name carries the stamp
+/// <c>archive</c> gave, newest first, then any other file in it, by <c>archivedAt</c>, newest first. <c>canWrite</c>: the
+/// caller may restore and delete them.</summary>
+public sealed record ArchiveView(IReadOnlyList<ArchiveItem> Items, bool CanWrite);
+
+/// <summary>A note, attachment or folder in the archive. <c>path</c> where it is (a folder's without the trailing
+/// <c>/</c>), <c>name</c> its last segment, <c>originalPath</c> where it was: the same folders below the vault instead of
+/// below the archive, the stamp taken off. <c>archivedAt</c>: from the stamp (the server's local time, in UTC here), or
+/// for a file without one its last write; null for a stamp naming a time the server's time zone skips. A stamped folder
+/// is one item, whatever it holds (stamped names inside it included); <c>files</c> counts its notes and attachments
+/// without folder markers, <c>bytes</c> as <c>du</c> does. <c>kind</c>: <c>folder</c>, or as in the tree.</summary>
+public sealed record ArchiveItem(string Path, string Name, string OriginalPath, DateTime? ArchivedAt, bool Folder, int Files, long Bytes, string Kind);
+
+/// <summary>A folder to put in the trash with everything below it: its path from the root of the vault tree, ending in
+/// <c>/</c> (<c>/Work/_archive/Manual 2026-11-08 213005/</c>).</summary>
+public sealed record TrashFolderRequest(string Path);
 
 /// <summary><c>path</c> is the folder's path from the root of the vault tree, e.g. <c>/Work/projects</c>; <c>notes</c>
 /// holds its files, notes and attachments together.</summary>
@@ -196,6 +220,7 @@ public static class NoteApi
         api.MapGet("/vaults/{vault}/access", AccessAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/rekey", RekeyVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/vaults/{vault}/archive", ArchiveAsync).Errors(400, 401, 404, 503);
         api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapPut("/vaults/{vault}/name", RenameVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
@@ -204,6 +229,7 @@ public static class NoteApi
         api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503, 507);
         api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/folders/trash", TrashFolderAsync).Errors(400, 401, 403, 404, 409, 503);
 
         api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
         api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
@@ -416,8 +442,70 @@ public static class NoteApi
         await RequireVaultAsync(store, root, ct);
         var notes = await store.ReadNotesUnderAsync(root, ct);
         var attachments = await StoreAttachments.UnderAsync(store, root, ct);
-        return TypedResults.Ok(new TreeView(TreeOf(root, notes, attachments), await store.CountDamagedAsync(root, ct)));
+        // Here, not in TreeOf: a checkpoint's tree shows the archive as it was.
+        var archived = Archived(notes, attachments).ToList();
+        var files = archived.Count(f => !FolderMarker.Is(f.Path));
+        var summary = files == 0 ? null : new ArchiveSummary(files, archived.Sum(f => f.Bytes));
+        var tree = TreeOf(root, notes.Where(n => !ArchiveFolder.Contains(n.Path)), attachments.Where(a => !ArchiveFolder.Contains(a.Path)));
+        return TypedResults.Ok(new TreeView(tree, await store.CountDamagedAsync(root, ct), summary));
     }
+
+    /// <summary>The notes and attachments in an archive, each with its size as <c>du</c> counts it, its kind, and an
+    /// attachment's last write (a note's takes reading it).</summary>
+    internal static IEnumerable<ArchivedFile> Archived(IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments) =>
+        notes.Where(n => ArchiveFolder.Contains(n.Path))
+            .Select(n => new ArchivedFile(n.Path, Encoding.UTF8.GetByteCount(n.Content), null, "note"))
+            .Concat(attachments.Where(a => ArchiveFolder.Contains(a.Path))
+                .Select(a => new ArchivedFile(a.Path, a.Current.Size, a.LastWriteAt, AttachmentFormat.KindOf(a.Path.Value))));
+
+    internal sealed record ArchivedFile(VaultPath Path, long Bytes, DateTime? WrittenAt, string Kind);
+
+    /// <summary>The vault's archive item by item (see <see cref="ArchiveView"/>), for whoever may read the vault.</summary>
+    private static async Task<Ok<ArchiveView>> ArchiveAsync(string vault, INoteStore store, RequestCaller caller, TimeProvider time, CancellationToken ct)
+    {
+        var root = ApiPaths.Parse(vault, null, note: false);
+        await RequireVaultAsync(store, root, ct);
+        var archive = ArchiveFolder.Of(root.Segments[0]);
+        var stamped = new Dictionary<VaultPath, List<ArchivedFile>>();
+        var loose = new List<ArchiveItem>();
+        foreach (var file in Archived(await store.ReadNotesUnderAsync(archive, ct), await StoreAttachments.UnderAsync(store, archive, ct)))
+        {
+            // The outermost stamped name wins: what a stamped folder holds is part of it, stamped or not.
+            var at = Enumerable.Range(2, file.Path.Segments.Count - 2).FirstOrDefault(i => ArchiveFolder.TryParseStamp(file.Path.Segments[i], out _, out _));
+            if (at == 0)
+            {
+                if (FolderMarker.Is(file.Path)) continue;
+                var written = file.WrittenAt ?? (await store.GetAsync(file.Path, ct))?.LastWriteAt;
+                loose.Add(new ArchiveItem(file.Path.Value, file.Path.Name, Original(file.Path, file.Path.Name), written, false, 1, file.Bytes, file.Kind));
+                continue;
+            }
+
+            var item = file.Path.Segments.Take(at + 1).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
+            if (!stamped.TryGetValue(item, out var held)) stamped[item] = held = [];
+            held.Add(file);
+        }
+
+        var items = stamped
+            .Select(s =>
+            {
+                ArchiveFolder.TryParseStamp(s.Key.Name, out var original, out var local);
+                var at = Utc(local, time.LocalTimeZone);
+                return s.Value is [{ } file] && file.Path == s.Key
+                    ? new ArchiveItem(s.Key.Value, s.Key.Name, Original(s.Key, original), at, false, 1, file.Bytes, file.Kind)
+                    : new ArchiveItem(s.Key.Value, s.Key.Name, Original(s.Key, original), at, true, s.Value.Count(f => !FolderMarker.Is(f.Path)), s.Value.Sum(f => f.Bytes), "folder");
+            })
+            .OrderByDescending(i => i.ArchivedAt).ThenBy(i => i.Path, TextOrder.Default)
+            .Concat(loose.OrderByDescending(i => i.ArchivedAt).ThenBy(i => i.Path, TextOrder.Default))
+            .ToList();
+        return TypedResults.Ok(new ArchiveView(items, caller.CanWrite(root.Segments[0])));
+    }
+
+    /// <summary>Where an archived path was: its folders below the archive, below the vault instead, named <paramref name="name"/>.</summary>
+    private static string Original(VaultPath archived, string name) =>
+        archived.Segments.Skip(2).SkipLast(1).Aggregate(VaultPath.Root.Child(archived.Segments[0]), (p, s) => p.Child(s)).Child(name).Value;
+
+    /// <summary>A stamp's local time in UTC; null for one the zone skips (no stamp the server gave).</summary>
+    private static DateTime? Utc(DateTime local, TimeZoneInfo zone) => zone.IsInvalidTime(local) ? null : TimeZoneInfo.ConvertTimeToUtc(local, zone);
 
     /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
     internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments) =>
@@ -578,6 +666,33 @@ public static class NoteApi
         if (result.Code is not null) throw Refused(result);
         if (result.IsError) throw new ApiException(StatusCodes.Status409Conflict, result.Output);
         return TypedResults.Ok(new MovedView(result.Output, result.Version?.Path, result.Version?.Token));
+    }
+
+    /// <summary>A folder with every note, file and folder marker below it to the trash, in one batch (as WebDAV's
+    /// <c>DELETE</c>), with <c>rm</c>'s rules: the caller's right to write, and to maintain if a structural file lies below.
+    /// A published note in it the caller may not withdraw refuses the whole batch (403), and nothing goes.</summary>
+    private static async Task<NoContent> TrashFolderAsync(TrashFolderRequest body, INoteStore store, TreeWriter trees, CancellationToken ct)
+    {
+        if (!body.Path.EndsWith('/') || !VaultPath.TryParse(body.Path, out var folder) || folder.Segments.Count < 2)
+        {
+            throw ApiErrors.BadRequest("'path' is the path of a folder in a vault, ending in '/', e.g. /Work/_archive/Manual 2026-11-08 213005/.");
+        }
+
+        if (body.Path.Contains('\\')) throw ApiErrors.BadRequest("Paths separate folders with '/', not '\\'.");
+        // As in URL paths: a path names one place exactly, never one reached by stepping up.
+        if (body.Path.Split('/').Any(seg => seg is "." or "..")) throw ApiErrors.BadRequest("Paths may not contain '.' or '..' segments.");
+        await RequireVaultAsync(store, folder, ct);
+        // The trailing '/' says "the folder": a file of that name is not one.
+        if (await store.GetAsync(folder, ct) is not null || await StoreAttachments.GetAsync(store, folder, ct) is not null)
+        {
+            throw ApiErrors.BadRequest($"{folder.Value} is a file, not a folder.");
+        }
+
+        var removed = (await trees.RemoveAsync(folder, ct)).Result;
+        if (removed.Code is not null) throw Refused(removed);
+        if (removed.Kind == ShellErrorKind.NotFound) throw ApiErrors.NotFound($"There is no folder at {folder.Value}.");
+        if (removed.IsError) throw new ApiException(StatusCodes.Status409Conflict, removed.Output);
+        return TypedResults.NoContent();
     }
 
     /// <summary>The links of a note; an attachment holds none (its <c>backlinks</c> are the notes that lead to it).</summary>

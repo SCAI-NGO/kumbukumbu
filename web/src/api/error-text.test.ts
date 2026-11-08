@@ -36,7 +36,7 @@ describe("errorText", () => {
     expect(errorText(refusal)).toBe("Your storage is full. Empty the trash or ask your admin for more.");
     useSession.getState().signedIn({ user: { id: "u1", username: "ada", display: "Ada", role: "user" }, previousSignInAt: null });
     try {
-      rememberStorage("u1", { used: 2 * GB, limit: 2 * GB });
+      rememberStorage("u1", { used: 2 * GB, limit: 2 * GB, archive: 0 });
       expect(errorText(refusal)).toBe("Your storage is full (2 GB). Empty the trash or ask your admin for more.");
       // A member is told the sentence alone, with no number.
       expect(errorText(new HttpError(507, "This vault is out of space."))).toBe("This vault is out of space.");

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.Json.Serialization;
+using Kumbu.Core.Attachments;
+using Kumbu.Core.Notes;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
 using Kumbu.Server.Sync;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
@@ -121,8 +124,10 @@ public sealed record AdminUserView(
 /// that adds data).</summary>
 public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null, System.Text.Json.JsonElement? Quota = null);
 
-/// <summary>What the session's own vaults take in the database, in bytes, and the limit that applies to them (null: none).</summary>
-public sealed record AccountStorageView(long Used, long? Limit);
+/// <summary>What the session's own vaults take in the database, in bytes, and the limit that applies to them (null: none).
+/// <c>archive</c>: what the archives of her own vaults hold, in bytes as <c>du</c> counts them (a part of what <c>used</c>
+/// counts, which holds their history, embeddings and the rest besides).</summary>
+public sealed record AccountStorageView(long Used, long? Limit, long Archive = 0);
 
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.
 /// <c>sharedVaults</c>: what becomes of her vaults shared with others (collab design §7.3): <c>give-members-7-days</c>
@@ -505,12 +510,24 @@ public static class AccountApi
     /// session says a limit applies, <see cref="SessionView"/>): the
     /// limit as it is now, one document read, and the usage as <c>df</c> has it, counted at most once per
     /// <see cref="StorageQuota.ShownFor"/>, since a count reads every document of her vaults. Settings shows the usage
-    /// without a limit too, so it is counted then as well.</summary>
-    private static async Task<Ok<AccountStorageView>> StorageAsync(RequestCaller caller, StorageQuota quota, CancellationToken ct)
+    /// without a limit too, so it is counted then as well. The archives of her own vaults are counted as rarely, never
+    /// one shared with her: it counts against its owner.</summary>
+    private static async Task<Ok<AccountStorageView>> StorageAsync(RequestCaller caller, StorageQuota quota, EncryptedNoteStore store, CancellationToken ct)
     {
         var limit = await quota.LimitAsync(caller.User!.Id, ct);
         var figure = await quota.RecentFigureAsync(caller.User.Id, ct);
-        return TypedResults.Ok(new AccountStorageView(figure.Used, limit));
+        var archive = await quota.RecentArchiveAsync(caller.User.Id, async ct =>
+        {
+            long bytes = 0;
+            foreach (var vault in (await store.UnlockedVaultsAsync(ct)).Where(v => v.IsOwner && !v.Vault.Pending))
+            {
+                var root = ArchiveFolder.Of(vault.Name);
+                bytes += NoteApi.Archived(await store.ReadNotesUnderAsync(root, ct), await StoreAttachments.UnderAsync(store, root, ct)).Sum(f => f.Bytes);
+            }
+
+            return bytes;
+        }, ct);
+        return TypedResults.Ok(new AccountStorageView(figure.Used, limit, archive));
     }
 
     /// <summary>An override as the request gives it: <c>"default"</c> (null), <c>"unlimited"</c>, or whole bytes.</summary>
