@@ -371,4 +371,81 @@ public sealed class KumbuOptionsValidatorTests
         var provider = Assert.Single(options.Embeddings.Providers);
         Assert.Equal(("tensorx", "qwen/qwen3-embedding-8b", 1024, "EU, zero data retention", 32), (provider.Key, provider.Value.Model, provider.Value.Dimensions, provider.Value.Description, provider.Value.MaxBatch));
     }
+
+    private static string TokenFile(string content)
+    {
+        var path = Path.Combine(Directory.CreateTempSubdirectory("kumbu-skills-").FullName, "token");
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    private static IReadOnlyList<string> SkillsFailures(SkillsOptions skills)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Skills = skills;
+        return Validate(options).Failures?.ToList() ?? [];
+    }
+
+    [Fact]
+    public void Marketplaces_are_on_by_default()
+    {
+        var options = new KumbuOptions();
+
+        Assert.True(options.Skills.Marketplaces.Enabled);
+        Assert.Null(options.Skills.ReadGitHubToken());
+        Assert.Empty(SkillsFailures(new SkillsOptions()));
+    }
+
+    [Fact]
+    public void Token_and_token_file_together_keep_the_server_from_starting()
+    {
+        var failures = SkillsFailures(new SkillsOptions { GitHubToken = "ghp_secret0000", GitHubTokenFile = TokenFile("ghp_secret0000") });
+
+        Assert.Equal(["Kumbu:Skills: set only one of GitHubToken and GitHubTokenFile"], failures);
+    }
+
+    [Fact]
+    public void An_unreadable_token_file_names_its_path()
+    {
+        var failures = SkillsFailures(new SkillsOptions { GitHubTokenFile = "/nonexistent/github-token" });
+
+        Assert.Equal(["Kumbu:Skills:GitHubTokenFile /nonexistent/github-token can't be read"], failures);
+    }
+
+    [Fact]
+    public void An_empty_token_file_is_refused()
+    {
+        var path = TokenFile("\n");
+
+        Assert.Equal([$"Kumbu:Skills:GitHubTokenFile {path} is empty"], SkillsFailures(new SkillsOptions { GitHubTokenFile = path }));
+    }
+
+    [Fact]
+    public void Empty_values_from_compose_count_as_unset()
+    {
+        var skills = new SkillsOptions { GitHubToken = "", GitHubTokenFile = "" };
+
+        Assert.Empty(SkillsFailures(skills));
+        Assert.Null(skills.ReadGitHubToken());
+        Assert.Empty(SkillsFailures(new SkillsOptions { GitHubToken = "", GitHubTokenFile = TokenFile("ghp_secret0000") }));
+        Assert.Empty(SkillsFailures(new SkillsOptions { GitHubToken = "ghp_secret0000", GitHubTokenFile = "" }));
+    }
+
+    [Fact]
+    public void ReadGitHubToken_reads_the_file_trimmed()
+    {
+        Assert.Equal("ghp_secret0000", new SkillsOptions { GitHubTokenFile = TokenFile("  ghp_secret0000 \r\n") }.ReadGitHubToken());
+        Assert.Equal("ghp_direct", new SkillsOptions { GitHubToken = "ghp_direct" }.ReadGitHubToken());
+    }
+
+    [Fact]
+    public void No_failure_names_the_token()
+    {
+        var all = SkillsFailures(new SkillsOptions { GitHubToken = "ghp_secret0000", GitHubTokenFile = TokenFile("ghp_secret0000") })
+            .Concat(SkillsFailures(new SkillsOptions { GitHubTokenFile = TokenFile("ghp_secret0000") }))
+            .Concat(SkillsFailures(new SkillsOptions { GitHubTokenFile = "/nonexistent/github-token" }))
+            .ToList();
+
+        Assert.DoesNotContain(all, f => f.Contains("ghp_secret0000"));
+    }
 }

@@ -101,6 +101,11 @@ services:
       Kumbu__Dav__Enabled: ${KUMBU_DAV_ENABLED:-true}
       # The storage each user's own vaults may take unless an admin set their own, e.g. 2GB; empty or 0: no limit.
       Kumbu__Quota__Default: ${KUMBU_QUOTA_DEFAULT:-}
+      # Skill marketplaces on GitHub. Off, the Marketplaces tab is hidden and nothing is fetched; installed copies stay.
+      Kumbu__Skills__Marketplaces__Enabled: ${KUMBU_SKILLS_MARKETPLACES:-true}
+      # Optional GitHub token, for more than 60 requests an hour (sent to api.github.com only). Kumbu__Skills__GitHubTokenFile
+      # in its place reads it from a file (a Docker secret, see the README).
+      Kumbu__Skills__GitHubToken: ${KUMBU_GITHUB_TOKEN:-}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
       # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.
