@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useVaults } from "../api/notes";
 import { errorText } from "../api/error-text";
 import { usePublishEnabled } from "../api/publications";
-import { shareSkill, useSkills, type SkillView } from "../api/skills";
+import { checkSkillUpdates, shareSkill, useSkills, type SkillView } from "../api/skills";
 import { FormError, secondaryButtonClass } from "../components/form";
+import ReviewDialog from "./ReviewDialog";
 import { ConfirmShareAnew, SkillLinkReveal } from "./Shared";
 import TargetDialog, { sourceOf } from "./TargetDialog";
 
@@ -24,7 +25,6 @@ function origin(s: SkillView): string[] {
     ...(s.lastEditor ? [`last changed by ${s.lastEditor}`] : []),
     ...(s.byOther ? ["another user"] : []),
     ...(s.source ? [`from ${s.source}`] : []),
-    ...(s.originEdited ? ["origin edited"] : []),
     ...(s.shared ? ["shared by link"] : []),
   ];
 }
@@ -50,6 +50,24 @@ export default function Installed() {
     onSettled: () => setAsking(null),
   });
 
+  // What the last check found for each copy; the list itself tells of an update or an edited origin, only "gone" is the check's alone.
+  const [gone, setGone] = useState<Set<string>>(new Set());
+  const [reviewing, setReviewing] = useState<SkillView | null>(null);
+  const check = useMutation({
+    mutationFn: checkSkillUpdates,
+    onSuccess: (states) => {
+      setGone(new Set(states.filter((u) => u.state === "gone").map((u) => u.path)));
+      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    },
+  });
+  // Asked once when the tab opens (never in the background).
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    check.mutate();
+  }, [check]);
+
   if (revealed) return <SkillLinkReveal name={revealed.name} link={revealed.link} onDone={() => setRevealed(null)} />;
   if (skills.isPending) return <p className="text-text-body">Loading…</p>;
   if (skills.isError) return <FormError>{errorText(skills.error)}</FormError>;
@@ -72,6 +90,13 @@ export default function Installed() {
           .
         </p>
       )}
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" disabled={check.isPending} onClick={() => check.mutate()} className={secondaryButtonClass}>
+          Check for updates
+        </button>
+        {check.isPending && <span className="text-sm text-muted">Checking…</span>}
+      </div>
+      {check.isError && <FormError>{errorText(check.error)}</FormError>}
       {list.length === 0 && <p className="text-text-body">No skills yet.</p>}
       {list.map((g, i) => (
         <section key={g.location} aria-labelledby={`${id}-group-${i}`} className="flex min-w-0 flex-col gap-3">
@@ -84,6 +109,13 @@ export default function Installed() {
                 <h3 className="font-bold break-words text-text">{s.name}</h3>
                 <p className="break-words whitespace-pre-wrap text-text-body">{s.description}</p>
                 <p className="font-mono text-xs break-words text-muted">{origin(s).join(" · ")}</p>
+                {s.originEdited ? (
+                  <p className="text-sm text-text">Origin edited: no updates</p>
+                ) : s.update === "available" ? (
+                  <p className="text-sm font-medium text-text">Update available</p>
+                ) : (
+                  s.path != null && gone.has(s.path) && <p className="text-sm text-text">Source gone</p>
+                )}
                 {s.warnings.length > 0 && (
                   <ul className="flex flex-col gap-1 text-sm text-text">
                     {s.warnings.map((w) => (
@@ -106,6 +138,11 @@ export default function Installed() {
                   <a href={`/api/skills/zip?path=${encodeURIComponent(sourceOf(s))}`} download className={`${secondaryButtonClass} inline-flex items-center`}>
                     Download .zip
                   </a>
+                  {!s.originEdited && s.update === "available" && s.path != null && s.canWrite && (
+                    <button type="button" onClick={() => setReviewing(s)} className={secondaryButtonClass}>
+                      Review
+                    </button>
+                  )}
                   {mayShare(s) && (
                     <button type="button" disabled={share.isPending} onClick={() => onShare(s)} className={secondaryButtonClass}>
                       Share
@@ -119,6 +156,7 @@ export default function Installed() {
         </section>
       ))}
       {asking && <ConfirmShareAnew busy={share.isPending} onCancel={() => setAsking(null)} onShare={() => share.mutate(asking)} />}
+      {reviewing?.path && <ReviewDialog path={reviewing.path} name={reviewing.name} onClose={() => setReviewing(null)} onDone={() => setReviewing(null)} />}
       {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data} onClose={() => setActing(null)} />}
     </>
   );

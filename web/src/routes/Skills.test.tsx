@@ -21,6 +21,7 @@ function api(withoutSkills: string[] = [], overrides: Record<string, (r: Request
         ],
         withoutSkills,
       }),
+    "POST /api/skills/updates/check": () => json(200, []),
     ...overrides,
   });
 }
@@ -109,5 +110,39 @@ describe("Skills", () => {
     expect(tab("Try")).toHaveAttribute("href", "/skills/try");
     await userEvent.click(tab("Try"));
     await waitFor(() => expect(router.state.location.pathname).toBe("/skills/try"));
+  });
+
+  it("checks for updates when the tab opens and on the button", async () => {
+    let checks = 0;
+    api([], { "POST /api/skills/updates/check": () => (checks++, json(200, [])) });
+    renderApp("/skills/installed");
+    await screen.findByText("builtin");
+    await waitFor(() => expect(checks).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => expect(checks).toBe(2));
+  });
+
+  it("shows update available, source gone and origin edited", async () => {
+    api([], {
+      "GET /api/skills": () =>
+        json(200, {
+          skills: [
+            skill({ name: "fresh", location: "Skills", path: "/Skills/fresh", update: "available", canWrite: true }),
+            skill({ name: "lost", location: "Skills", path: "/Skills/lost" }),
+            skill({ name: "tweaked", location: "Skills", path: "/Skills/tweaked", originEdited: true }),
+            skill({ name: "plain", location: "Skills", path: "/Skills/plain" }),
+          ],
+          withoutSkills: [],
+        }),
+      "POST /api/skills/updates/check": () => json(200, [{ path: "/Skills/lost", state: "gone" }, { path: "/Skills/plain", state: "current" }]),
+    });
+    renderApp("/skills/installed");
+    const card = async (n: string) => (await screen.findByText(n)).closest("li")!;
+    expect(within(await card("fresh")).getByText("Update available")).toBeInTheDocument();
+    expect(within(await card("fresh")).getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(await within(await card("lost")).findByText("Source gone")).toBeInTheDocument();
+    expect(within(await card("tweaked")).getByText("Origin edited: no updates")).toBeInTheDocument();
+    expect(within(await card("tweaked")).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(within(await card("plain")).queryByText(/update|gone/i)).not.toBeInTheDocument();
   });
 });

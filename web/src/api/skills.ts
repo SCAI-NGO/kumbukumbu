@@ -83,3 +83,25 @@ export const useMarketplaceSkill = (repo: string, commit: string, path: string) 
 /** The skill at `path` of `repo` as of the `commit` she was shown, into the vault `vault`; `name` when the folder's name is taken there. */
 export const installSkill = (repo: string, commit: string, path: string, vault: string, name?: string) =>
   call(api.POST("/api/skills/install", { body: { repo, commit, path, vault, ...(name ? { name } : {}) } }));
+
+export type SkillUpdateView = components["schemas"]["SkillUpdateView"];
+export type SkillReviewView = components["schemas"]["SkillReviewView"];
+
+/** Asks each source of her copies whether there is a newer version. Only on her opening the screen or pressing the button. */
+export const checkSkillUpdates = () => call(api.POST("/api/skills/updates/check"));
+
+/** Her copy at `path` against the version it would take: the repository, folder and commit, a hash to name, every file. Asked afresh each time. */
+export const useSkillReview = (path: string) =>
+  useQuery({
+    queryKey: ["skills", "review", path],
+    queryFn: () => call(api.GET("/api/skills/updates/review", { params: { query: { path } } })),
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  });
+
+/** The version the review named (`hash`) into her copy. */
+export const takeSkillUpdate = (path: string, hash: string) => call(api.POST("/api/skills/updates/take", { body: { path, hash } }));
+
+/** That version as one she doesn't want: the next check no longer offers it. */
+export const skipSkillUpdate = (path: string, hash: string) => call(api.POST("/api/skills/updates/skip", { body: { path, hash } }));
