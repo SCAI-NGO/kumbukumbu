@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { collectFromDrop, collectFromInput } from "./collectFiles";
+import { collectFromDrop, collectFromInput, contentsOf, soleFolder } from "./collectFiles";
 
 type FakeEntry = FileSystemFileEntry | FileSystemDirectoryEntry;
 
@@ -60,5 +60,23 @@ describe("collectFromInput", () => {
   it("names picked in NFD (macOS, iOS) come in NFC, as the server stores paths", () => {
     const nfd = new File(["x"], "Bespre\u0301chung.png");
     expect(collectFromInput([nfd])[0].path).toBe("Bespr\u00e9chung.png");
+  });
+});
+
+describe("soleFolder and contentsOf", () => {
+  const pick = (...paths: string[]) => paths.map((path) => ({ path, file: new File(["x"], path.split("/").at(-1)!) }));
+
+  it("finds the one folder a pick lies in and takes its name off", () => {
+    const picked = pick("Vault/a.md", "Vault/notes/b.md", "Vault/Drafts/.vaultkeep");
+    expect(soleFolder(picked)).toBe("Vault");
+    expect(contentsOf(picked, "Vault").map((p) => p.path)).toEqual(["a.md", "notes/b.md", "Drafts/.vaultkeep"]);
+  });
+
+  it("finds none in loose files, two folders, or a folder and a file beside it", () => {
+    expect(soleFolder(pick("a.md", "b.md"))).toBeNull();
+    expect(soleFolder(pick("One/a.md", "Two/b.md"))).toBeNull();
+    expect(soleFolder(pick("Vault/a.md", "loose.md"))).toBeNull();
+    expect(soleFolder(pick("Vaultish.md", "Vault/a.md"))).toBeNull();
+    expect(soleFolder([])).toBeNull();
   });
 });

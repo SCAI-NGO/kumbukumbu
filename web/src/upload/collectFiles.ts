@@ -48,3 +48,12 @@ export function collectFromDrop(items: DataTransferItemList): Promise<Picked[]> 
 
 /** The files of `<input type="file">`: with `webkitdirectory`, each path within the picked folder (its name first). */
 export const collectFromInput = (files: ArrayLike<File>): Picked[] => Array.from(files, (file) => ({ path: (file.webkitRelativePath || file.name).normalize("NFC"), file }));
+
+/** The folder every file of a pick lies in, as when one folder is chosen or dropped alone; null otherwise. */
+export function soleFolder(picked: Picked[]): string | null {
+  const first = picked[0]?.path.split("/")[0];
+  return first !== undefined && picked.every((p) => p.path.startsWith(`${first}/`)) ? first : null;
+}
+
+/** The pick with its sole folder's name taken off every path: what is inside goes straight into the place uploaded into. */
+export const contentsOf = (picked: Picked[], folder: string): Picked[] => picked.map((p) => ({ ...p, path: p.path.slice(folder.length + 1) }));
