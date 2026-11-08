@@ -532,13 +532,16 @@ describe("Skills preselected for a new key", () => {
   it("keeps the user's choice when the list arrives late", async () => {
     // The list is read again after the user chose (a refresh, a pending vault): her choice is not set back.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    withVaults(skillsVaults);
+    let reads = 0;
+    // A changed list, as a new vault or note count makes it: unchanged data would keep its identity and not re-run anything.
+    api({ "GET /api/vaults": () => json(200, [{ ...skillsVaults[0], notes: ++reads }, skillsVaults[1]]) });
     renderApp("/access/keys", queryClient);
     const dialog = await openNewKey();
     const group = await within(dialog).findByRole("group", { name: "Skills" });
     await waitFor(() => expect(within(group).getByLabelText("Read")).toBeChecked());
     await userEvent.click(within(group).getByLabelText("None"));
     await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    expect(reads).toBeGreaterThan(1);
     expect(within(group).getByLabelText("None")).toBeChecked();
   });
 });
