@@ -255,21 +255,26 @@ internal sealed partial class DavWrites(
         }
 
         var stored = await tree.FindStoredAsync(source.Path, ct) is not null;
-        var parked = await ParkedAsync(destination.Path, to, ct);
+        // An empty placeholder parked at the destination itself holds its place for the store, as for a PUT: what comes
+        // there is the store's, and the placeholder goes once it is written.
+        var parked = await ParkedAsync(destination.Path, to, ct, itself: false);
         var replaced = existing is not null;
-        if (!move && (stored || !parked))
+        if (stored && !parked)
         {
-            if (stored && !parked) await CopyStoredAsync(source.Path, destination.Path, deep, replaced, ct);
-            else if (stored) await CopyIntoParkingAsync(source.Path, to, deep, replaced, ct);
-            else await CopyOutOfParkingAsync(source.Path, destination, to, move: false, ct);
+            // What the store has there, which a placeholder isn't: the store replaces only that.
+            var storedOver = await tree.FindStoredAsync(destination.Path, ct) is not null;
+            if (move) await MoveStoredAsync(source.Path, destination.Path, storedOver, ct);
+            else await CopyStoredAsync(source.Path, destination.Path, deep, storedOver, ct);
+            if (replaced && !storedOver) parking.Remove(caller.ShareId, to.VaultId, to.Path);
+            Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
             return;
         }
 
         if (stored || !parked)
         {
-            if (stored && !parked) await MoveStoredAsync(source.Path, destination.Path, replaced, ct);
-            else if (stored) await HoldAsync(source.Path, to, replaced, ct);
-            else await CopyOutOfParkingAsync(source.Path, destination, to, move: true, ct);
+            if (stored && move) await HoldAsync(source.Path, to, replaced, ct);
+            else if (stored) await CopyIntoParkingAsync(source.Path, to, deep, replaced, ct);
+            else await CopyOutOfParkingAsync(source.Path, destination, to, move, ct);
             return;
         }
 
@@ -284,14 +289,24 @@ internal sealed partial class DavWrites(
     /// A <c>COPY</c> within the store: <see cref="TreeWriter.CopyAsync"/>, which writes the source's content at the
     /// destination and rewrites no link, a folder with everything below it unless <paramref name="deep"/> is false. What is
     /// at the destination goes to the trash in the same batch, after every check of the copy passed, so that a refused copy
-    /// never costs the target.
+    /// never costs the target. Only what was there when the request looked (<paramref name="replaced"/>) is replaced: a
+    /// file that arrived since is the writer's conflict, and the request's precondition, that the destination was free,
+    /// no longer holds (412); the file stays.
     /// </summary>
     private async Task CopyStoredAsync(VaultPath from, VaultPath to, bool deep, bool replaced, CancellationToken ct)
     {
-        var copied = await trees.CopyAsync(from, to, deep, overwrite: true, ct);
-        if (copied.Result.IsError) throw Refusal(copied.Result);
+        var copied = await trees.CopyAsync(from, to, deep, overwrite: replaced, ct);
+        if (copied.Result.IsError)
+        {
+            if (!replaced && copied.Result.Kind == ShellErrorKind.Conflict && await tree.FindStoredAsync(to, ct) is not null)
+            {
+                throw new DavException(StatusCodes.Status412PreconditionFailed, "Something arrived at the destination while it was copied.");
+            }
+
+            throw Refusal(copied.Result);
+        }
+
         if (copied.Result.Version is { } version) Response.Headers.ETag = $"\"{version.Token}\"";
-        Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
     }
 
     /// <summary>A <c>MOVE</c> of a name the share holds a note under (and nothing else is under): the hold ends, and the
@@ -315,7 +330,6 @@ internal sealed partial class DavWrites(
             : await mover.MoveAsync(from, to, rewriteLinks: true, ct);
         if (moved.IsError) throw Refusal(moved);
         if (moved.Version is { } version) Response.Headers.ETag = $"\"{version.Token}\"";
-        Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
     }
 
     /// <summary>

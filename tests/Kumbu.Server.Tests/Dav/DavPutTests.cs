@@ -312,6 +312,27 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("two", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());
     }
 
+    /// <summary>A note that arrives at a free destination between a <c>COPY</c>'s look and its write is not trashed to
+    /// make room: the destination the request found free isn't any more (412), and the note stays.</summary>
+    [Fact]
+    public async Task A_copy_that_loses_its_free_destination_is_412_and_trashes_nothing()
+    {
+        var dav = (await DavClient.NewAsync(Api)).On(Raced);
+        var owner = dav.Owner.On(Raced);
+        await owner.CreateAsync("plan.md", "mine");
+        _race.Next = () => owner.CreateAsync("copy.md", "theirs");
+
+        using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/plan.md", headers: Headers(("Destination", "https://localhost/dav/Work/copy.md")));
+
+        Assert.Null(_race.Next);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, copy.StatusCode);
+        Assert.Equal("theirs", (await owner.ReadAsync("copy.md"))["content"]!.GetValue<string>());
+        var store = new Kumbu.Server.Vaults.EncryptedNoteStore(
+            Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>(), new Kumbu.Server.Vaults.UserCredential(owner.User.Id, owner.UserKey));
+        Assert.True(VaultPath.TryParse("/Work", out var vault));
+        Assert.Empty(await store.ListTrashAsync(vault, Ct));
+    }
+
     [Fact]
     public async Task A_lost_race_of_an_attachment_is_retried_once_and_stored()
     {

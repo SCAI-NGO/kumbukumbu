@@ -492,4 +492,26 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
         using (var backup = await dav.PropfindAsync("/dav/Work/.backup/", depth: "0")) Assert.Equal(HttpStatusCode.NotFound, backup.StatusCode);
         using (var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.keep")) Assert.Equal([1, 2, 3], await get.Content.ReadAsByteArrayAsync(Ct));
     }
+
+    /// <summary>A name that holds only an empty placeholder is no parked name: a stored file copied onto it is copied in
+    /// the store, not into the share's memory.</summary>
+    [Fact]
+    public async Task A_copy_onto_a_placeholder_copies_the_file_in_the_store()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var png = FileApiTests.Png(2, 2);
+        await dav.Owner.CreateFileAsync("shot.png", png);
+        using (var empty = await dav.SendAsync(HttpMethod.Put, "/dav/Work/copy.png", Bytes([]))) Assert.Equal(HttpStatusCode.Created, empty.StatusCode);
+
+        using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/shot.png", headers: To("copy.png"));
+
+        Assert.Equal(HttpStatusCode.NoContent, copy.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, await FileStatusAsync(dav.Owner, "shot.png"));
+        using (var file = await dav.Owner.GetAsync(dav.Owner.Url("copy.png", "files"))) Assert.Equal(png, await file.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Empty(await Store(dav.Owner).ListTrashAsync(P("/Work"), Ct));
+
+        // The placeholder went with the write: the copy removed from the store leaves nothing at its name.
+        using (var removed = await dav.Owner.SendAsync(HttpMethod.Delete, dav.Owner.Url("copy.png", "files"))) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        Assert.DoesNotContain("/dav/Work/copy.png", DavAssert.Hrefs(await DavAssert.MultistatusAsync(await dav.PropfindAsync("/dav/Work/"))));
+    }
 }

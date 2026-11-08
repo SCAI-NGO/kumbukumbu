@@ -610,6 +610,33 @@ public sealed class DavMoveTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(trashed.Changeset?.Id, record.Changeset?.Id);
     }
 
+    /// <summary>A name that holds only an empty placeholder (a content PUT that failed after it) is no parked name: a
+    /// stored file moved onto it is moved in the store, not held, and the minute passing trashes nothing.</summary>
+    [Fact]
+    public async Task A_move_onto_a_placeholder_moves_the_file_in_the_store()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var png = FileApiTests.Png(2, 2);
+        await dav.Owner.CreateFileAsync("shot.png", png);
+        using (var empty = await dav.SendAsync(HttpMethod.Put, "/dav/Work/new.png", Bytes([]))) Assert.Equal(HttpStatusCode.Created, empty.StatusCode);
+
+        using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/shot.png", headers: To("new.png"));
+
+        Assert.Equal(HttpStatusCode.NoContent, move.StatusCode);
+        var store = Store(dav.Owner);
+        Assert.NotNull(await store.FindMoveAsync(P("/Work/shot.png"), Ct));
+        using (var file = await dav.Owner.GetAsync(dav.Owner.Url("new.png", "files"))) Assert.Equal(png, await file.Content.ReadAsByteArrayAsync(Ct));
+        _time.Advance(TimeSpan.FromSeconds(61));
+        await NextRequestAsync(dav);
+        Assert.Empty(await store.ListTrashAsync(P("/Work"), Ct));
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/new.png");
+        Assert.Equal(png, await get.Content.ReadAsByteArrayAsync(Ct));
+
+        // The placeholder went with the write: the file removed from the store leaves nothing at its name.
+        using (var removed = await dav.Owner.SendAsync(HttpMethod.Delete, dav.Owner.Url("new.png", "files"))) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        Assert.DoesNotContain("/dav/Work/new.png", await ListingAsync(dav));
+    }
+
     /// <summary>Every check of the move runs before the target goes: a refused move costs nothing.</summary>
     [Fact]
     public async Task A_refused_move_with_overwrite_t_keeps_the_target()
