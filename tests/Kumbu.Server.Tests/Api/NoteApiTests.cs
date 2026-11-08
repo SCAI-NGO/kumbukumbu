@@ -300,6 +300,30 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Conflict, exists.StatusCode);
     }
 
+    /// <summary><c>exact</c> moves to the path itself: a folder there (one that appeared after the web app looked) is a
+    /// 409, never a folder to move into.</summary>
+    [Fact]
+    public async Task An_exact_move_never_moves_into_a_folder_at_the_target()
+    {
+        var user = await UserAsync();
+        await user.CreateAsync("_archive/Manual 2026-11-08 213005/Overview.md", "# Manual\n");
+        await user.CreateAsync("_archive/plan 2026-11-08 213005.md", "# Plan\n");
+        await user.CreateAsync("Manual/notes.md", "notes\n");
+        await user.CreateAsync("plan.md/notes.md", "notes\n");
+
+        using var folder = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/_archive/Manual 2026-11-08 213005/", to = "/Arbeit/Manual/", exact = true });
+        using var note = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/_archive/plan 2026-11-08 213005.md", to = "/Arbeit/plan.md", exact = true });
+
+        Assert.Equal(HttpStatusCode.Conflict, folder.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, note.StatusCode);
+        Assert.Equal("# Manual\n", (await user.ReadAsync("_archive/Manual 2026-11-08 213005/Overview.md"))["content"]!.GetValue<string>());
+        Assert.Equal("# Plan\n", (await user.ReadAsync("_archive/plan 2026-11-08 213005.md"))["content"]!.GetValue<string>());
+
+        using var free = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/_archive/Manual 2026-11-08 213005/", to = "/Arbeit/Pump manual/", exact = true });
+        Assert.Equal(HttpStatusCode.OK, free.StatusCode);
+        Assert.Equal("# Manual\n", (await user.ReadAsync("Pump manual/Overview.md"))["content"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task Links_backlinks_and_history_come_as_rows()
     {

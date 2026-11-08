@@ -155,8 +155,9 @@ public sealed record ConflictView(string Error, CurrentNoteView Current);
 
 /// <summary>Paths from the root of the vault tree, of a note, an attachment or a folder. A <c>from</c> ending in
 /// <c>/</c> moves the folder with every note and attachment below it; a <c>to</c> ending in <c>/</c> (or naming an existing folder) moves into it. Links that the move would
-/// break are rewritten, unless <c>keepLinks</c>.</summary>
-public sealed record MoveRequest(string From, string To, bool KeepLinks = false);
+/// break are rewritten, unless <c>keepLinks</c>. With <c>exact</c>, to exactly <c>to</c>, never into a folder there: a
+/// folder found there is a 409 (the web app's restore from the archive, which checked the place was free).</summary>
+public sealed record MoveRequest(string From, string To, bool KeepLinks = false, bool Exact = false);
 
 /// <summary><c>path</c> and <c>version</c> of the moved note or attachment; null for a folder move.</summary>
 public sealed record MovedView(string Message, string? Path, string? Version);
@@ -229,7 +230,7 @@ public static class NoteApi
         api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503, 507);
         api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("/folders/trash", TrashFolderAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/folders/trash", TrashFolderAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
 
         api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
         api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
@@ -659,8 +660,8 @@ public static class NoteApi
         if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
 
         var result = folder
-            ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, ct)
-            : await mover.MoveAsync(source, target, !body.KeepLinks, ct);
+            ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, "mv", body.Exact, ct)
+            : await mover.MoveAsync(source, target, !body.KeepLinks, "mv", body.Exact, ct);
         // The source exists and the request is well-formed, so what's left is the vault's state in the way: a
         // target that exists, a folder into itself, a note where a folder is needed, a change meanwhile.
         // A refusal the move found on its way (its target, a path in a folder) is the caller's, not the vault's.
@@ -669,9 +670,10 @@ public static class NoteApi
         return TypedResults.Ok(new MovedView(result.Output, result.Version?.Path, result.Version?.Token));
     }
 
-    /// <summary>A folder with every note, file and folder marker below it to the trash, in one batch (as WebDAV's
-    /// <c>DELETE</c>), with <c>rm</c>'s rules: the caller's right to write, and to maintain if a structural file lies below.
-    /// A published note in it the caller may not withdraw refuses the whole batch (403), and nothing goes.</summary>
+    /// <summary>A folder in a vault's archive with every note, file and folder marker below it to the trash, in one batch
+    /// (as WebDAV's <c>DELETE</c>), with <c>rm</c>'s rules: the caller's right to write, and to maintain if a structural
+    /// file lies below. A published note in it the caller may not withdraw refuses the whole batch (403), and nothing
+    /// goes. For the web app's archive only, so a session's: elsewhere a folder goes as <c>rm -r</c> or WebDAV take it.</summary>
     private static async Task<NoContent> TrashFolderAsync(TrashFolderRequest body, INoteStore store, TreeWriter trees, CancellationToken ct)
     {
         if (!body.Path.EndsWith('/') || !VaultPath.TryParse(body.Path, out var folder) || folder.Segments.Count < 2)
@@ -682,6 +684,11 @@ public static class NoteApi
         if (body.Path.Contains('\\')) throw ApiErrors.BadRequest("Paths separate folders with '/', not '\\'.");
         // As in URL paths: a path names one place exactly, never one reached by stepping up.
         if (body.Path.Split('/').Any(seg => seg is "." or "..")) throw ApiErrors.BadRequest("Paths may not contain '.' or '..' segments.");
+        if (!ArchiveFolder.Contains(folder) || folder.Segments.Count <= 2)
+        {
+            throw ApiErrors.BadRequest($"Only a folder in a vault's archive goes to the trash this way, e.g. /{folder.Vault}/_archive/Manual 2026-11-08 213005/.");
+        }
+
         await RequireVaultAsync(store, folder, ct);
         // The trailing '/' says "the folder": a file of that name is not one.
         if (await store.GetAsync(folder, ct) is not null || await StoreAttachments.GetAsync(store, folder, ct) is not null)

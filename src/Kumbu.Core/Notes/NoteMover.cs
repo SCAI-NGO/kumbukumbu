@@ -22,7 +22,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// <summary>A move on behalf of <paramref name="command"/>, a command building on mv (archive), which its refusals
     /// and its history mark name. <paramref name="exact"/>: to exactly <paramref name="target"/>, never into a folder
     /// there; a folder found there is refused as a conflict.</summary>
-    internal Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, string command, bool exact, CancellationToken ct) =>
+    public Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, string command, bool exact, CancellationToken ct) =>
         MoveAsync(source, target, rewriteLinks, card: false, replacing: null, command, exact, ct);
 
     /// <summary>A card's move by the board (to its archive): a card operation, so it needs <c>write</c> only, even where
@@ -87,7 +87,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
     /// <summary>A folder's move on behalf of <paramref name="command"/>, exactly to <paramref name="target"/> if
     /// <paramref name="exact"/>, as <see cref="MoveAsync(VaultPath, VaultPath, bool, string, bool, CancellationToken)"/>.</summary>
-    internal Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, string command, bool exact, CancellationToken ct) =>
+    public Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, string command, bool exact, CancellationToken ct) =>
         MoveFolderAsync(source, target, rewriteLinks, replacing: null, command, exact, ct);
 
     private async Task<ShellResult> MoveFolderAsync(

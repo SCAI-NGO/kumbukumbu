@@ -8,6 +8,8 @@ using Kumbu.Core.Publishing;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,7 +20,7 @@ namespace Kumbu.Server.Tests.Api;
 
 /// <summary>
 /// The vault's archive in the web app's API (ingest spec §3.2): the tree leaves it out and sums it up, its own listing
-/// shows it item by item, a folder goes to the trash with <c>rm</c>'s rules, the search finds it only when asked, and the
+/// shows it item by item, a folder in it goes to the trash with <c>rm</c>'s rules (in a session only), the search finds it only when asked, and the
 /// account's storage names its bytes.
 /// The server's time zone is Berlin, so a stamp's time is an hour ahead of UTC in November.
 /// </summary>
@@ -159,10 +161,32 @@ public sealed class ArchiveApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.False(archive["canWrite"]!.GetValue<bool>());
         Assert.Single(archive["items"]!.AsArray());
 
-        using var trashed = await TrashFolderAsync(user, "/Work/_archive/Manual 2026-11-09 080000/", reader);
+        var bob = await RestClient.NewAsync(Api, "Garten");
+        await user.ShareWithAsync(bob, "Work", MemberRole.Read);
+        using var trashed = await TrashFolderAsync(bob, "/Work/_archive/Manual 2026-11-09 080000/");
         Assert.Equal(HttpStatusCode.Forbidden, trashed.StatusCode);
         Assert.Equal("read-only", (await RestClient.JsonAsync(trashed))["code"]!.GetValue<string>());
         Assert.Single((await ArchiveAsync(user))["items"]!.AsArray());
+    }
+
+    /// <summary>The web app's archive is its only caller: a key, even one that may maintain, and the dev token are told it
+    /// needs a session, and the folder stays.</summary>
+    [Fact]
+    public async Task Folder_trash_is_for_a_session_only()
+    {
+        var user = await RestClient.NewAsync(Api, "Work");
+        await user.CreateAsync("_archive/Manual 2026-11-09 080000/Overview.md", "# Manual\n");
+        var maintainer = await user.KeyAsync("maintainer", KeyRight.Maintain);
+
+        foreach (var bearer in new[] { maintainer, KumbuAppFactory.Token })
+        {
+            using var refused = await TrashFolderAsync(user, "/Work/_archive/Manual 2026-11-09 080000/", bearer);
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            Assert.Equal("This needs a signed-in session: API keys, connected apps and the dev token can't do it.", await RestClient.ErrorAsync(refused));
+        }
+
+        Assert.Single((await ArchiveAsync(user))["items"]!.AsArray());
+        Assert.Empty(await TrashedAsync(user));
     }
 
     [Fact]
@@ -192,47 +216,51 @@ public sealed class ArchiveApiTests(KumbuAppFactory app) : IAsyncDisposable
     [InlineData("/Work/_archive/../Inbox/")]
     [InlineData("/Work/_archive/./")]
     [InlineData("/Work/_archive\\Inbox/")]
-    public async Task Folder_trash_takes_only_a_folder_path(string path)
+    [InlineData("/Work/Inbox/")]
+    [InlineData("/Work/_archive/")]
+    [InlineData("/Work/_Archive/Inbox/")]
+    public async Task Folder_trash_takes_only_a_folder_path_in_the_archive(string path)
     {
         var user = await RestClient.NewAsync(Api, "Work");
         await user.CreateAsync("_archive/kept.md", "kept\n");
         await user.CreateAsync("Inbox/plan.md", "plan\n");
+        await user.CreateAsync("_Archive/Inbox/plan.md", "plan\n");
 
         using var trashed = await TrashFolderAsync(user, path);
         Assert.Equal(HttpStatusCode.BadRequest, trashed.StatusCode);
         Assert.Empty(await TrashedAsync(user));
+        using var inbox = await user.GetAsync("/api/notes/Work/Inbox/plan.md");
+        Assert.Equal(HttpStatusCode.OK, inbox.StatusCode);
     }
 
     [Fact]
     public async Task Folder_trash_in_a_vault_the_caller_has_not_is_a_404()
     {
         var user = await RestClient.NewAsync(Api, "Work");
-        using var trashed = await TrashFolderAsync(user, "/Private/_archive/");
+        using var trashed = await TrashFolderAsync(user, "/Private/_archive/Manual 2026-11-09 080000/");
         Assert.Equal(HttpStatusCode.NotFound, trashed.StatusCode);
     }
 
-    /// <summary><c>rm</c>'s structural rule: a folder holding the board's definition takes maintain.</summary>
+    /// <summary>A member who may write trashes an archived folder: <c>rm</c>'s structural rule guards the board's
+    /// definition where it is, and an archived board (a copy put away) is no structure of the vault's.</summary>
     [Fact]
-    public async Task A_writer_may_not_trash_a_folder_with_the_board_in_it()
+    public async Task A_writing_member_may_trash_an_archived_board()
     {
-        var user = await RestClient.NewAsync(Api, "Work");
-        await user.CreateAsync("Board/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n---\n# Roadmap\n");
-        await user.CreateAsync("Board/Task.md", "---\ncolumn: Ideas\nrank: a1\n---\nTask.\n");
-        var writer = await user.KeyAsync("writer", KeyRight.Write);
+        var alice = await RestClient.NewAsync(Api, "Work");
+        await alice.CreateAsync("_archive/Board 2026-11-09 080000/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n---\n# Roadmap\n");
+        await alice.CreateAsync("_archive/Board 2026-11-09 080000/Task.md", "---\ncolumn: Ideas\nrank: a1\n---\nTask.\n");
+        var bob = await RestClient.NewAsync(Api, "Garten");
+        await alice.ShareWithAsync(bob, "Work", MemberRole.Write);
 
-        using var trashed = await TrashFolderAsync(user, "/Work/Board/", writer);
-        Assert.Equal(HttpStatusCode.Forbidden, trashed.StatusCode);
-        Assert.Equal("structural", (await RestClient.JsonAsync(trashed))["code"]!.GetValue<string>());
-        Assert.Empty(await TrashedAsync(user));
-
-        var maintainer = await user.KeyAsync("maintainer", KeyRight.Maintain);
-        using var allowed = await TrashFolderAsync(user, "/Work/Board/", maintainer);
-        Assert.Equal(HttpStatusCode.NoContent, allowed.StatusCode);
+        using var trashed = await TrashFolderAsync(bob, "/Work/_archive/Board 2026-11-09 080000/");
+        Assert.Equal(HttpStatusCode.NoContent, trashed.StatusCode);
+        Assert.Equal(["/Work/_archive/Board 2026-11-09 080000/Board.md", "/Work/_archive/Board 2026-11-09 080000/Task.md"], await TrashedAsync(alice));
     }
 
-    /// <summary>A published note the caller may not withdraw keeps the whole folder where it is (publish spec §3.7).</summary>
+    /// <summary>A published note the caller may not withdraw keeps the whole folder where it is (publish spec §3.7): a
+    /// member's, as only the owner withdraws what she published.</summary>
     [Fact]
-    public async Task A_folder_with_a_published_note_stays_for_a_key_without_publishing()
+    public async Task A_folder_with_a_published_note_stays_for_a_member()
     {
         var user = await RestClient.NewAsync(Api, "Work");
         await user.CreateAsync("_archive/Routing 2026-11-08 213005/Questions.md", "# Questions on routing\n");
@@ -242,9 +270,10 @@ public sealed class ArchiveApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.True(VaultPath.TryParse("/Work/_archive/Routing 2026-11-08 213005/Questions.md", out var questions));
         await Api.Services.GetRequiredService<Publications>().PublishAsync(
             access, notes, questions, user.User.Id, user.Username, WriterRef.ForOwner(WriterRef.Session, null), KumbuAppFactory.PublicUrl, Ct);
-        var writer = await user.KeyAsync("writer", KeyRight.Write);
+        var bob = await RestClient.NewAsync(Api, "Garten");
+        await user.ShareWithAsync(bob, "Work", MemberRole.Maintain);
 
-        using var trashed = await TrashFolderAsync(user, "/Work/_archive/Routing 2026-11-08 213005/", writer);
+        using var trashed = await TrashFolderAsync(bob, "/Work/_archive/Routing 2026-11-08 213005/");
         Assert.Equal(HttpStatusCode.Forbidden, trashed.StatusCode);
         Assert.Equal(Refusals.Published, (await RestClient.JsonAsync(trashed))["code"]!.GetValue<string>());
         Assert.Empty(await TrashedAsync(user));
