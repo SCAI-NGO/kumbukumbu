@@ -320,6 +320,43 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         Assert.StartsWith("HTTP/1.1 207", fine, StringComparison.Ordinal);
     }
 
+    /// <summary>A request target never carries a fragment (RFC 9112 §3.2), and Kestrel keeps a raw <c>#</c> in the path:
+    /// cut at it, <c>DELETE /dav/Work/frag/#ment</c> would trash the folder (security review finding 2). Refused, as a
+    /// <c>Destination</c> with one is, and the folder stays.</summary>
+    [Fact]
+    public async Task A_raw_hash_in_the_target_or_the_destination_is_refused()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("frag/ment.md", "# Ment");
+        await dav.Owner.CreateAsync("plan.md", "# Plan");
+        await using var kestrel = Kestrel();
+        var origin = new Uri(kestrel.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First()).Authority;
+
+        foreach (var (line, destination) in new (string, string?)[]
+        {
+            ("DELETE /dav/Work/frag/#ment HTTP/1.1", null),
+            ("DELETE /dav/Work/frag#ment HTTP/1.1", null),
+            ("MOVE /dav/Work/frag/#ment HTTP/1.1", "/dav/Work/moved"),
+            ("COPY /dav/Work/frag/#ment HTTP/1.1", "/dav/Work/copied"),
+            ("MOVE /dav/Work/plan.md HTTP/1.1", "/dav/Work/frag/#x"),
+            ("MOVE /dav/Work/plan.md HTTP/1.1", $"https://{origin}/dav/Work/frag/#x"),
+            ("COPY /dav/Work/plan.md HTTP/1.1", "/dav/Work/frag#x"),
+        })
+        {
+            var response = await RawAsync(kestrel, line, dav.Authorization, Headers(destination));
+            Assert.True(response.StartsWith("HTTP/1.1 400", StringComparison.Ordinal), $"{line} {destination}: {response.Split("\r\n")[0]}");
+        }
+
+        Assert.NotNull(await dav.Owner.ReadAsync("frag/ment.md"));
+        Assert.NotNull(await dav.Owner.ReadAsync("plan.md"));
+        // The same requests without the fragment go through.
+        Assert.StartsWith("HTTP/1.1 201", await RawAsync(kestrel, "MOVE /dav/Work/plan.md HTTP/1.1", dav.Authorization, Headers("/dav/Work/frag/x.md")), StringComparison.Ordinal);
+        Assert.StartsWith("HTTP/1.1 204", await RawAsync(kestrel, "DELETE /dav/Work/frag/ment.md HTTP/1.1", dav.Authorization, ""), StringComparison.Ordinal);
+
+        static string Headers(string? destination) =>
+            destination is null ? "" : $"Destination: {destination}\r\nOverwrite: T\r\nDepth: infinity\r\n";
+    }
+
     [Fact]
     public async Task Dav_without_slash_redirects_or_answers_as_dav_slash()
     {
@@ -373,7 +410,7 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
     }
 
     /// <summary>A request over a socket, so that its target arrives as written: HttpClient resolves dot segments.</summary>
-    private static async Task<string> RawAsync(WebApplicationFactory<Program> factory, string requestLine, string authorization)
+    private static async Task<string> RawAsync(WebApplicationFactory<Program> factory, string requestLine, string authorization, string? headers = null)
     {
         var address = new Uri(factory.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First());
         using var tcp = new TcpClient();
@@ -381,7 +418,7 @@ public sealed class DavPropfindTests(KumbuAppFactory app)
         await using var stream = tcp.GetStream();
         await stream.WriteAsync(Encoding.ASCII.GetBytes(
             $"{requestLine}\r\nHost: {address.Authority}\r\nAuthorization: {authorization}\r\nX-Forwarded-Proto: https\r\nX-Forwarded-For: {DavClient.NewIp()}\r\n"
-            + "Depth: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), Ct);
+            + $"{headers ?? "Depth: 0\r\n"}Content-Length: 0\r\nConnection: close\r\n\r\n"), Ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
         return await reader.ReadToEndAsync(Ct);
     }

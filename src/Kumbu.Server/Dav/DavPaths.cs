@@ -28,6 +28,11 @@ public static class DavPaths
 
     private const string Refused = "A path may not contain empty, '.' or '..' segments, backslashes or encoded slashes.";
 
+    /// <summary>A request target never carries a fragment (RFC 9112 §3.2), and a <c>Destination</c> names a resource, not
+    /// a part of one. Kestrel keeps a raw <c>#</c> in the path; cut at it, <c>DELETE …/Projects/#1 ideas.md</c> would act
+    /// on the folder. A name holding one is sent as <c>%23</c>.</summary>
+    internal const string Fragment = "A WebDAV URL has no fragment: a '#' in a name is sent as %23.";
+
     /// <summary>The target of <paramref name="request"/>; throws a 400 <see cref="DavException"/> for a path that isn't
     /// one.</summary>
     public static DavTarget Parse(HttpRequest request)
@@ -76,11 +81,12 @@ public static class DavPaths
     }
 
     /// <summary>The path of a request target in origin or absolute form, without its query; null for any other (none,
-    /// <c>*</c>), and then the decoded path is read instead.</summary>
+    /// <c>*</c>), and then the decoded path is read instead. A target with a <c>#</c> is a 400 (<see cref="Fragment"/>).</summary>
     private static string? RawPath(string? target)
     {
         if (string.IsNullOrEmpty(target)) return null;
-        var path = target.Split('?', '#')[0];
+        var path = target.Split('?')[0];
+        if (path.Contains('#')) throw new DavException(StatusCodes.Status400BadRequest, Fragment);
         if (path.StartsWith('/')) return path;
         var scheme = path.IndexOf("://", StringComparison.Ordinal);
         var slash = scheme < 0 ? -1 : path.IndexOf('/', scheme + 3);

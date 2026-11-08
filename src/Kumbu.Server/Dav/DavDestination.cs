@@ -10,8 +10,11 @@ namespace Kumbu.Server.Dav;
 /// </summary>
 public static class DavDestination
 {
+    /// <summary>The header's target, or null for none. A fragment is no destination's either: a 400
+    /// <see cref="DavException"/>, never a cut at it (<see cref="DavPaths.Fragment"/>).</summary>
     public static DavTarget? Parse(HttpRequest request, string header)
     {
+        if (header.Contains('#')) throw new DavException(StatusCodes.Status400BadRequest, DavPaths.Fragment);
         string path;
         if (header.StartsWith('/'))
         {
@@ -30,7 +33,7 @@ public static class DavDestination
 
         try
         {
-            return DavPaths.Parse(path.Split('?', '#')[0]);
+            return DavPaths.Parse(path.Split('?')[0]);
         }
         catch (DavException)
         {

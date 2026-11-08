@@ -49,6 +49,14 @@ public sealed class DavDestinationTests
     [InlineData("not a url")]
     public void Any_other_destination_is_none(string header) => Assert.Null(DavDestination.Parse(Request(), header));
 
+    /// <summary>A fragment is refused (400), never cut at: <c>…/Projects/#x</c> is not <c>…/Projects/</c>.</summary>
+    [Theory]
+    [InlineData("https://kumbu.example.org/dav/Work/Projects/#x")]
+    [InlineData("/dav/Work/Projects#x")]
+    [InlineData("/dav/Work/b.md?x=#y")]
+    public void A_destination_with_a_fragment_is_a_400(string header) =>
+        Assert.Equal(StatusCodes.Status400BadRequest, Assert.Throws<DavException>(() => DavDestination.Parse(Request(), header)).Status);
+
     [Fact]
     public void The_port_is_the_requests()
     {
