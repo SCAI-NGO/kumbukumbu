@@ -57,6 +57,16 @@ public sealed class AddSkillTests(KumbuAppFactory app)
         return (alice, ShareCode.Parse(link[(link.IndexOf('#') + 1)..])!);
     }
 
+    /// <summary>No part of the code, in either spelling, without the text or the code in the message should it fail.</summary>
+    private static void AssertNoCode(string text, string code)
+    {
+        var plain = text.Replace("-", "", StringComparison.Ordinal);
+        for (var i = 0; i + 8 <= code.Length; i++)
+        {
+            Assert.False(plain.Contains(code.Substring(i, 8), StringComparison.OrdinalIgnoreCase), "a part of the code is in the text");
+        }
+    }
+
     private static Task<HttpResponseMessage> AddAsync(RestClient user, object body, string? bearer = null) => user.SendAsync(HttpMethod.Post, "/api/skills/add", body, bearer);
 
     private static async Task<VaultAccess> AccessAsync(RestClient user, string name) =>
@@ -82,16 +92,14 @@ public sealed class AddSkillTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, added.StatusCode);
         var answer = await added.Content.ReadAsStringAsync(Ct);
         Assert.Contains("/Writing/_skills/write-as-alice", answer);
-        Assert.DoesNotContain(code, answer);
-        Assert.DoesNotContain(ShareCode.Format(code), answer);
+        AssertNoCode(answer, code);
         var content = await NoteAsync(dave, "/Writing/_skills/write-as-alice/SKILL.md");
         var manifest = SkillManifest.Read("write-as-alice", content);
-        Assert.Equal("link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), manifest.Source);
+        Assert.True(manifest.Source == "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), "kumbu-source isn't the link's lookup id");
         Assert.Equal(
             SkillHash.Of([("SKILL.md", Encoding.UTF8.GetBytes(Manifest)), ("examples/post.md", "# Post\n"u8.ToArray())]),
             manifest.Hash);
-        Assert.DoesNotContain(code, content);
-        Assert.DoesNotContain(ShareCode.Format(code), content);
+        AssertNoCode(content, code);
         Assert.Equal("# Post\n", await NoteAsync(dave, "/Writing/_skills/write-as-alice/examples/post.md"));
     }
 
@@ -116,10 +124,10 @@ public sealed class AddSkillTests(KumbuAppFactory app)
         var raw = await app.Database.GetCollection<SealedDocument>(PublicationStore.RecordCollection).Find(d => d.Vault == vault.Id).SingleAsync(Ct);
         Assert.Equal(-1, raw.Blob.AsSpan().IndexOf(Encoding.UTF8.GetBytes(code)));
         var record = await RecordAsync(dave, "Writing");
-        Assert.Equal(code, record.SkillCodes.Single(c => c.Path == "/Writing/_skills/write-as-alice").Code);
+        Assert.True(record.SkillCodes.Single(c => c.Path == "/Writing/_skills/write-as-alice").Code == code, "the sealed code isn't the link's");
         var origin = Assert.Single(record.Origins);
         Assert.Equal("/Writing/_skills/write-as-alice", origin.Path);
-        Assert.Equal("link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), origin.Source);
+        Assert.True(origin.Source == "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), "the sealed origin isn't the link's lookup id");
         Assert.Equal(SkillManifest.Read("write-as-alice", await NoteAsync(dave, "/Writing/_skills/write-as-alice/SKILL.md")).Hash, origin.Hash);
     }
 
@@ -135,7 +143,7 @@ public sealed class AddSkillTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
             var body = await RestClient.JsonAsync(taken);
             Assert.Equal(SkillCopier.NameTaken, body["type"]!.GetValue<string>());
-            Assert.DoesNotContain(code, body.ToJsonString());
+            AssertNoCode(body.ToJsonString(), code);
         }
 
         Assert.Contains("description: Mine.", await NoteAsync(dave, "/Writing/_skills/write-as-alice/SKILL.md"));
@@ -160,7 +168,7 @@ public sealed class AddSkillTests(KumbuAppFactory app)
         using var response = await AddAsync(dave, new { code, vault = "Writing", name });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.DoesNotContain(code, await response.Content.ReadAsStringAsync(Ct));
+        AssertNoCode(await response.Content.ReadAsStringAsync(Ct), code);
         Assert.Empty(await FilesAsync(dave, "/Writing"));
         Assert.Empty((await RecordAsync(dave, "Writing")).SkillCodes);
     }
