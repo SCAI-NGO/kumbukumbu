@@ -129,9 +129,9 @@ describe("SkillPage", () => {
 
   it("downloads the zip with the copy id", async () => {
     const { create, revoke } = blobUrls();
-    const clicks: { href: string; download: string }[] = [];
+    const clicks: { href: string; download: string; attached: boolean }[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      clicks.push({ href: this.href, download: this.download });
+      clicks.push({ href: this.href, download: this.download, attached: this.isConnected });
     });
     const fetch = stubFetch({
       "GET /api/k": () => json(200, skill("Body")),
@@ -146,8 +146,46 @@ describe("SkillPage", () => {
     expect(new Headers(zip[1]?.headers).get("X-Kumbu-Copy")).toBe(copyId);
     expect(zip[1]?.credentials).toBe("same-origin");
     expect(create).toHaveBeenCalledTimes(1);
-    expect(clicks[0]).toEqual({ href: "blob:http://localhost/0", download: "write-as-alice.zip" });
+    // In the document when clicked (Firefox ignores a detached link's click), and gone again after.
+    expect(clicks[0]).toEqual({ href: "blob:http://localhost/0", download: "write-as-alice.zip", attached: true });
+    expect(document.querySelector("a[download]")).toBeNull();
     await waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:http://localhost/0"), { timeout: 2000 });
+  });
+
+  it("revokes the zip's URL when the page goes", async () => {
+    const { revoke } = blobUrls();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    stubFetch({
+      "GET /api/k": () => json(200, skill("Body")),
+      "GET /api/k/zip": () => new Response(new Blob(["PK"]), { status: 200 }),
+    });
+    const { unmount } = render(<SkillPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Download as .zip" }));
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(revoke).not.toHaveBeenCalled();
+
+    vi.useFakeTimers();
+    try {
+      unmount();
+      expect(revoke).toHaveBeenCalledWith("blob:http://localhost/0");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says when the zip can't be saved", async () => {
+    blobUrls().create.mockImplementation(() => {
+      throw new Error("no blob URLs here");
+    });
+    stubFetch({
+      "GET /api/k": () => json(200, skill("Body")),
+      "GET /api/k/zip": () => new Response(new Blob(["PK"]), { status: 200 }),
+    });
+    render(<SkillPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Download as .zip" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The .zip couldn't be downloaded; open the link again and retry.");
+    expect(screen.getByRole("button", { name: "Download as .zip" })).toBeEnabled();
   });
 
   it("says when the zip can't be downloaded", async () => {
@@ -190,6 +228,8 @@ describe("SkillPage", () => {
     expect(await screen.findByRole("heading", { name: "write-as-alice" })).toBeInTheDocument();
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("[onerror]")).toBeNull();
+    // Skipped, not shown as text either.
+    expect(container.textContent).not.toMatch(/onerror|<img|<a /);
     expect(screen.queryByRole("link", { name: "raw" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "x" })).not.toBeInTheDocument();
     const site = screen.getByRole("link", { name: "site" });

@@ -74,31 +74,52 @@ const components: Components = {
 function Download({ skill }: { skill: SharedSkill }) {
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
-  const download = () => {
+  // The last download's URL and its revoke timer: the page going revokes it at once.
+  const saved = useRef<{ url: string; timer: ReturnType<typeof setTimeout> }>(undefined);
+  useEffect(
+    () => () => {
+      if (!saved.current) return;
+      clearTimeout(saved.current.timer);
+      URL.revokeObjectURL(saved.current.url);
+    },
+    [],
+  );
+  const download = async () => {
     setPending(true);
     setFailed(false);
-    zip(skill.copy).then(
-      (blob) => {
-        setPending(false);
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${skill.name}.zip`;
+    try {
+      const url = URL.createObjectURL(await zip(skill.copy));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${skill.name}.zip`;
+      // In the document: Firefox ignores a click on a link outside it.
+      document.body.append(link);
+      try {
         link.click();
-        // Not in the same tick: Safari can lose the download when the URL goes before it started.
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      },
-      () => {
-        setPending(false);
-        setFailed(true);
-      },
-    );
+      } finally {
+        link.remove();
+      }
+      if (saved.current) {
+        clearTimeout(saved.current.timer);
+        URL.revokeObjectURL(saved.current.url);
+      }
+      // Not in the same tick: Safari can lose the download when the URL goes before it started.
+      const timer = setTimeout(() => {
+        URL.revokeObjectURL(url);
+        if (saved.current?.url === url) saved.current = undefined;
+      }, 1000);
+      saved.current = { url, timer };
+    } catch {
+      setFailed(true);
+    } finally {
+      setPending(false);
+    }
   };
   return (
     <div className="flex flex-col gap-1.5">
       <button
         type="button"
-        onClick={download}
+        onClick={() => void download()}
         disabled={pending}
         className="min-h-11 self-start rounded-[8px] bg-accent px-4 font-medium text-on-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
       >
@@ -165,7 +186,8 @@ function Skill({ skill, code }: { skill: SharedSkill; code: string | undefined }
 
 export default function SkillPage() {
   const [state, setState] = useState<State>({ kind: "loading" });
-  // Only while this page holds it: a reload opens the skill by its cookie, and the code is no longer known.
+  // Only while this page holds it, and kept nowhere else: a reload opens the skill by its cookie alone, so the code,
+  // and with it "Add to my skills", is gone then. Storing it would leave the code in this origin's storage.
   const [code, setCode] = useState<string>();
   const started = useRef(false);
 
