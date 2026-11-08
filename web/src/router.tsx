@@ -124,6 +124,8 @@ export const routes: RouteObject[] = [
           { path: "/access", element: <Navigate to="/access/keys" replace /> },
           // The page's address before it had tabs, in bookmarks and older links.
           { path: "/keys", element: <Navigate to="/access/keys" replace /> },
+          { path: "/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
+          { path: "/skills", element: <Navigate to="/skills/installed" replace /> },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },

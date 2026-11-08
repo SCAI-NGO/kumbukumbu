@@ -328,6 +328,10 @@ function AccountRow() {
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
+      <Link to="/skills/installed" onClick={close} className={link}>
+        <Sparkles size={16} aria-hidden className="text-muted" />
+        Skills
+      </Link>
       <Link to="/access/keys" onClick={close} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
         Access
