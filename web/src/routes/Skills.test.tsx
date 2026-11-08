@@ -16,6 +16,7 @@ function api(withoutSkills: string[] = [], overrides: Record<string, (r: Request
         skills: [
           skill({ name: "work-x", location: "Work", path: "/Work/_skills/x", canWrite: true, lastEditor: "Ada" }),
           skill({ name: "mine", location: "Skills", path: "/Skills/mine", canWrite: true, warnings: ["No description"] }),
+          skill({ name: "spaced", location: "My Vault", path: "/My Vault/_skills/spaced" }),
           skill({ name: "builtin", location: "system", canWrite: true }),
         ],
         withoutSkills,
@@ -35,7 +36,8 @@ describe("Skills", () => {
     api();
     renderApp("/skills/installed");
     await screen.findByText("builtin");
-    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["System", "Skills", "Work"]);
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["System", "Skills", "Work", "My Vault"]);
+    for (const section of screen.getAllByRole("region")) expect(section.getAttribute("aria-labelledby")).not.toMatch(/\s/);
     expect(screen.getByText("No description")).toBeInTheDocument();
     expect(screen.getByText(/last changed by Ada/)).toBeInTheDocument();
   });

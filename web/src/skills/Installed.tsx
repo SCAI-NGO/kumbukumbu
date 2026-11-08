@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useVaults } from "../api/notes";
 import { errorText } from "../api/error-text";
@@ -27,6 +27,7 @@ function origin(s: SkillView): string[] {
 
 /** The skills she sees, grouped by where they are; the text of a skill is never shown here, and a description only as plain text. */
 export default function Installed() {
+  const id = useId();
   const skills = useSkills();
   const vaults = useVaults();
   const [acting, setActing] = useState<{ skill: SkillView; mode: "copy" | "move" } | null>(null);
@@ -48,9 +49,9 @@ export default function Installed() {
         </p>
       )}
       {list.length === 0 && <p className="text-text-body">No skills yet.</p>}
-      {list.map((g) => (
-        <section key={g.location} aria-labelledby={`skills-group-${g.location}`} className="flex min-w-0 flex-col gap-3">
-          <h2 id={`skills-group-${g.location}`} className="text-[22px] font-bold break-words text-text">
+      {list.map((g, i) => (
+        <section key={g.location} aria-labelledby={`${id}-group-${i}`} className="flex min-w-0 flex-col gap-3">
+          <h2 id={`${id}-group-${i}`} className="text-[22px] font-bold break-words text-text">
             {g.label}
           </h2>
           <ul className="flex flex-col gap-3">
