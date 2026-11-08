@@ -82,9 +82,12 @@ describe("text files of skill folders", () => {
   it("fileKindOf names such a file text when it is given the vault, and a note otherwise", () => {
     expect(fileKindOf("/Work/_skills/x/run.py", "Work")).toBe("text");
     expect(fileKindOf("/Skills/pdf/scripts/run.py", "Skills")).toBe("text");
-    expect(fileKindOf("/Work/_skills/x/run.py")).toBe("note");
+    expect(fileKindOf("/Work/_skills/x/run.py")).toBe("text");
+    expect(fileKindOf("/Work/_skills/x/run.py", "Elsewhere")).toBe("note");
     expect(fileKindOf("/Work/run.py", "Work")).toBe("note");
     expect(fileKindOf("/Work/_skills/x/shot.png", "Work")).toBe("image");
-    expect(isAttachment("/Work/_skills/x/run.py")).toBe(false);
+    expect(isAttachment("/Work/_skills/x/run.py")).toBe(true);
+    expect(isAttachment("/Work/run.py")).toBe(false);
+    expect(isAttachment("/Skills/pdf/scripts/run.py")).toBe(true);
   });
 });

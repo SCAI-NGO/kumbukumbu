@@ -62,7 +62,7 @@ export interface GalleryFile {
 /** Every image and PDF in the folder and below it. */
 function filesOf(folder: TreeFolder): GalleryFile[] {
   const here = folder.notes
-    .filter((n) => fileKindOf(n.path) !== "note")
+    .filter((n) => ["image", "pdf"].includes(fileKindOf(n.path)))
     .map((n) => ({ path: n.path, name: n.name, size: Number(n.size), version: n.version ?? undefined, writtenAt: n.writtenAt ?? undefined }));
   return [...here, ...folder.folders.flatMap(filesOf)];
 }

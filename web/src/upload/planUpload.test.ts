@@ -64,6 +64,7 @@ describe("planUpload", () => {
     const types = ACCEPT.split(",");
     expect(types).toEqual(expect.arrayContaining(".pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp".split(",")));
     expect(types).toEqual(expect.arrayContaining([".md", ".markdown"]));
+    expect(types).toEqual(expect.arrayContaining([".py", ".sh", ".json", ".svg", ".html"]));
     expect(types.filter((t) => t.endsWith("/*"))).toEqual([]);
   });
 

@@ -58,17 +58,17 @@ export function isSkillTextFile(vault: string, path: string): boolean {
   return below && (textExtensions.some((e) => name.endsWith(e)) || textNames.some((n) => n.toLowerCase() === name));
 }
 
-/** `vault` (with the full `path`, the vault first) lets a skill folder's text file be told from a note. */
-export function fileKindOf(path: string, vault?: string): FileKind {
+/** `path` from the root of the tree, the vault first; `vault` defaults to its first segment. A skill folder's text file is told from a note by it. */
+export function fileKindOf(path: string, vault = path.split("/")[1]): FileKind {
   if (isMarker(path)) return "folder";
-  if (vault !== undefined && path.startsWith(`/${vault}/`) && isSkillTextFile(vault, path.slice(vault.length + 2))) return "text";
+  if (vault && path.startsWith(`/${vault}/`) && isSkillTextFile(vault, path.slice(vault.length + 2))) return "text";
   const dot = path.lastIndexOf(".");
   return (dot > path.lastIndexOf("/") && attachmentKinds[path.slice(dot).toLowerCase()]) || "note";
 }
 
 export const isAttachment = (path: string) => {
   const kind = fileKindOf(path);
-  return kind === "image" || kind === "pdf";
+  return kind === "image" || kind === "pdf" || kind === "text";
 };
 
 /** The API's URL of an attachment's bytes (`/api/files/{vault}/{path}`), at `version` if given. */

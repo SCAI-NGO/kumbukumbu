@@ -10,10 +10,10 @@ export const MAX_NOTE_BYTES = 1_048_576;
 export const MAX_ATTACHMENT_BYTES = 15_728_640;
 
 /**
- * What the file picker offers: notes and the five formats by extension and media type. Concrete types, never
+ * What the file picker offers: notes, the five formats and the text files of skill folders by extension and media type. Concrete types, never
  * `image/*`: iOS Safari then converts a HEIC photo to JPEG as it is picked.
  */
-export const ACCEPT = ".md,.markdown,text/markdown,.pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp";
+export const ACCEPT = ".md,.markdown,text/markdown,.py,.sh,.js,.mjs,.ts,.json,.yaml,.yml,.toml,.txt,.csv,.xml,.html,.css,.svg,.pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp";
 
 export interface Skipped {
   path: string;

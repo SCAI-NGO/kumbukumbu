@@ -187,7 +187,7 @@ function AttachmentChip({ path }: { path: string }) {
     <Link
       to={checkpointLink ? checkpointLink(path) : viewUrl(path)}
       state={{ paths: attachments } satisfies LightboxState}
-      aria-label={`Open the ${kind === "pdf" ? "PDF" : "image"} ${name}`}
+      aria-label={`Open the ${kind === "pdf" ? "PDF" : kind === "text" ? "file" : "image"} ${name}`}
       className={`${chip} text-accent-text focus-visible:outline-2 focus-visible:outline-accent`}
     >
       {content}

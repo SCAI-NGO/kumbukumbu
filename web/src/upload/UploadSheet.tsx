@@ -399,8 +399,8 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
         {view.kind === "pick" && (
           <>
             <p className="text-text-body">
-              Markdown files (.md, .markdown) become notes; PDFs and images (.pdf, .png, .jpg, .jpeg, .gif, .webp) up to 15 MB are kept as they are; other files are
-              skipped. A folder comes in with its own name. You can paste an image too.
+              Markdown files (.md, .markdown) become notes; PDFs and images (.pdf, .png, .jpg, .jpeg, .gif, .webp) up to 15 MB are kept as they are; inside a skill folder
+              (_skills/…) so are scripts and data files (.py, .sh, .json, …); other files are skipped. A folder comes in with its own name. You can paste an image too.
             </p>
             {view.error && (
               <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">

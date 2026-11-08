@@ -82,7 +82,7 @@ export default function MoveDialog({ subject, onClose, onMoved }: { subject: Mov
     );
   };
 
-  const what = isNote ? "note" : !isFile ? "folder" : fileKindOf(subject.path) === "pdf" ? "PDF" : "image";
+  const what = isNote ? "note" : !isFile ? "folder" : ({ pdf: "PDF", text: "file" } as Record<string, string>)[fileKindOf(subject.path)] ?? "image";
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 p-3 sm:items-center">
       <form
