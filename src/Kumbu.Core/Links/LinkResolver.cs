@@ -129,7 +129,7 @@ public sealed class LinkResolver
 
         // For a living note, what lies in the vault's archive counts only when nothing else matches: an archived copy
         // never makes its link ambiguous. An archived note keeps leading to its archived siblings.
-        if (!ArchiveFolder.Contains(source) && candidates.Any(ArchiveFolder.Contains) && candidates.Any(c => !ArchiveFolder.Contains(c)))
+        if (!exact && !ArchiveFolder.Contains(source) && candidates.Any(ArchiveFolder.Contains) && candidates.Any(c => !ArchiveFolder.Contains(c)))
         {
             candidates = [.. candidates.Where(c => !ArchiveFolder.Contains(c))];
         }
