@@ -78,6 +78,17 @@ describe("Skills", () => {
     expect(await screen.findByLabelText("Name")).toBeInTheDocument();
   });
 
+  it("offers each skill as a .zip", async () => {
+    api();
+    renderApp("/skills/installed");
+    await screen.findByText("builtin");
+    const zipOf = (name: string) => within(screen.getByText(name).closest("li")!).getByRole("link", { name: "Download .zip" });
+    expect(zipOf("work-x")).toHaveAttribute("href", "/api/skills/zip?path=%2FWork%2F_skills%2Fx");
+    expect(zipOf("spaced")).toHaveAttribute("href", "/api/skills/zip?path=%2FMy%20Vault%2F_skills%2Fspaced");
+    expect(zipOf("builtin")).toHaveAttribute("href", "/api/skills/zip?path=system%3Abuiltin");
+    expect(zipOf("mine")).toHaveAttribute("download");
+  });
+
   it("offers no Move for a system skill", async () => {
     api();
     renderApp("/skills/installed");
