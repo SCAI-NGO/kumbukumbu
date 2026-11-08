@@ -136,6 +136,11 @@ public sealed class UserDocument
     [BsonElement("skillsAt"), BsonIgnoreIfNull]
     public DateTime? SkillsAt { get; set; }
 
+    /// <summary>Which vault or alias made room for the vault Skills (<see cref="Skills.SkillsVaults.NoticeAsync"/>), sealed
+    /// under a key derived from the user key; null when there was none or she dismissed it.</summary>
+    [BsonElement("skillsNotice"), BsonIgnoreIfNull]
+    public byte[]? SkillsNotice { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

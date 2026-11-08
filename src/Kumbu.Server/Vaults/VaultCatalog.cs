@@ -1580,7 +1580,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     private static byte[] UserKek(byte[] userKey, string vaultId) => VaultCrypto.Derive(userKey, UserKekLabel, Encoding.UTF8.GetBytes(vaultId));
 
-    private static string NormaliseVaultName(string name) => name.Normalize(NormalizationForm.FormC).Trim().ToLowerInvariant();
+    /// <summary>A name as the name index compares it: composed, trimmed, lower case (an own vault's and an alias's alike).</summary>
+    internal static string NormaliseVaultName(string name) => name.Normalize(NormalizationForm.FormC).Trim().ToLowerInvariant();
 
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 

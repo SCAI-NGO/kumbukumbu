@@ -21,8 +21,15 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
 /// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
 /// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
-/// the shell's notice asks for the storage only then.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited);
+/// the shell's notice asks for the storage only then. <c>skillsNotice</c>: the vault or alias renamed to make room for
+/// the vault Skills, until she dismisses it (<c>DELETE /api/account/skills-notice</c>); null when there is none.</summary>
+public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, SkillsNoticeView? SkillsNotice = null);
+
+/// <summary><c>renamed</c>: the name the vault (or, with <c>alias</c>, the vault shared with her) has now.</summary>
+public sealed record SkillsNoticeView(string Renamed, bool Alias)
+{
+    public static SkillsNoticeView? From(Skills.SkillsRename? rename) => rename is null ? null : new(rename.NewName, rename.Alias);
+}
 
 /// <summary><c>remember</c>: "Keep me signed in on this device", a session of 30 days (7 idle) with the normal limits
 /// for the actions that need the password; false when left out.</summary>
@@ -215,6 +222,7 @@ public static class AccountApi
         account.MapGet("/account/storage", StorageAsync).Errors(401, 403);
         account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
         account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
+        account.MapDelete("/account/skills-notice", DismissSkillsNoticeAsync).Errors(401, 403);
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
@@ -247,7 +255,8 @@ public static class AccountApi
         // Never fails the sign-in, and not cancellable by the client, as at the join.
         await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
-            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct)));
+            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
+            SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -315,7 +324,14 @@ public static class AccountApi
         await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct)));
+            await quota.LimitedAsync(caller.User.Id, ct), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
+    }
+
+    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>
+    private static async Task<NoContent> DismissSkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
+    {
+        await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        return TypedResults.NoContent();
     }
 
     /// <summary>

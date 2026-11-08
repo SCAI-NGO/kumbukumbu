@@ -288,26 +288,39 @@ public static class NoteApi
         if (string.Equals(name, access.Name, StringComparison.Ordinal)) return TypedResults.NoContent();
         try
         {
-            await catalog.RenameVaultAsync(caller.User.Id, caller.UserKey!, access.Vault, name, ct);
+            await RenameOwnedVaultAsync(catalog, pairings, hub, caller.User, caller.UserKey!, access, name, ct);
         }
         // Exactly ArgumentException, her slot not found, as ApiErrors maps it: its subclasses come from bugs.
         catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
         {
             throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         }
+
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>Renames the user's own vault, with what a rename takes along: her open pairing codes go and her sockets
+    /// are told, also when the outcome isn't known. The catalog's refusals, and <see cref="ArgumentException"/> for a
+    /// slot not found, come out with neither.</summary>
+    internal static async Task RenameOwnedVaultAsync(
+        VaultCatalog catalog, Pairings pairings, Sync.SyncHub hub, User user, byte[] userKey, VaultAccess access, string name, CancellationToken ct)
+    {
+        try
+        {
+            await catalog.RenameVaultAsync(user.Id, userKey, access.Vault, name, ct);
+        }
         // As the catalog has it: anything but a refusal may come after the commit. Her sockets are told too: the catalog
         // forgot the vault, so they keep the name they hold, but her tabs read the vault list again and take a new ticket.
-        catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException))
+        catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException) && e.GetType() != typeof(ArgumentException))
         {
-            pairings.DropAll(caller.User.Id);
-            hub.VaultRenamed(caller.User.Id, access.Id);
+            pairings.DropAll(user.Id);
+            hub.VaultRenamed(user.Id, access.Id);
             throw;
         }
 
         // An open code would hand a device the old name, which no longer finds the vault.
-        pairings.DropAll(caller.User.Id);
-        hub.VaultRenamed(caller.User.Id, access.Id, access.Name);
-        return TypedResults.NoContent();
+        pairings.DropAll(user.Id);
+        hub.VaultRenamed(user.Id, access.Id, access.Name);
     }
 
     /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
