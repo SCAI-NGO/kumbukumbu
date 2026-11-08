@@ -66,18 +66,20 @@ public sealed class MarketplaceIndexTests
                  { "plugins": [
                    { "name": "local", "source": "./" },
                    { "name": "remote", "source": { "source": "github", "repo": "bob-example/tools" }, "skills": ["./skills/tools"] },
-                   { "name": "far", "source": "https://kumbu.example.org/far.git" }
+                   { "name": "far", "source": "https://kumbu.example.org/far.git" },
+                   { "name": "bare", "source": "bob-example/tools" }
                  ] }
                  """),
-            Skill("skills/pdf"), Skill("skills/tools")));
+            Skill("skills/pdf"), Skill("skills/tools"), Skill("bob-example/tools/skills/x")));
 
         Assert.Equal(
-            [new MarketplacePlugin("local", "./", true), new MarketplacePlugin("remote", "bob-example/tools", false), new MarketplacePlugin("far", "https://kumbu.example.org/far.git", false)],
+            [new MarketplacePlugin("local", "./", true), new MarketplacePlugin("remote", "bob-example/tools", false), new MarketplacePlugin("far", "https://kumbu.example.org/far.git", false),
+             new MarketplacePlugin("bare", "bob-example/tools", false)],
             listing.Plugins);
         var local = listing.Skills.Where(s => s.Plugin == "local").ToList();
         Assert.Equal(["skills/pdf", "skills/tools"], local.Select(s => s.Path));
         Assert.All(local, s => Assert.True(s.Installable));
-        Assert.DoesNotContain(listing.Skills, s => s.Plugin is "remote" or "far" && s.Installable);
+        Assert.DoesNotContain(listing.Skills, s => s.Plugin is "remote" or "far" or "bare" && s.Installable);
     }
 
     [Fact]
