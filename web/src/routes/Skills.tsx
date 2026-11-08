@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Fragment, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { usePublishEnabled } from "../api/publications";
 import { AccountScreen } from "../components/form";
 import Installed from "../skills/Installed";
+import Shared from "../skills/Shared";
 import Try from "../skills/Try";
 
-const tabs = [
+const allTabs = [
   { id: "installed", label: "Installed" },
   { id: "try", label: "Try" },
+  { id: "shared", label: "Shared" },
 ] as const;
 
-type Tab = (typeof tabs)[number]["id"];
+type Tab = (typeof allTabs)[number]["id"];
 
 /** Each tab's content. */
 const panels: Record<Tab, () => ReactNode> = {
   installed: () => <Installed />,
   try: () => <Try />,
+  shared: () => <Shared />,
 };
 
 const tabClass = (on: boolean) =>
@@ -26,7 +30,17 @@ export default function Skills() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const refs = useRef<Partial<Record<Tab, HTMLAnchorElement | null>>>({});
+  // Shared only where the server publishes; until the session says, the tab waits rather than flicker.
+  const publishEnabled = usePublishEnabled();
+  const tabs = allTabs.filter((t) => t.id !== "shared" || publishEnabled === true);
 
+  if (tab === "shared" && publishEnabled === undefined) {
+    return (
+      <AccountScreen title="Skills">
+        <p className="text-text-body">Loading…</p>
+      </AccountScreen>
+    );
+  }
   const index = tabs.findIndex((t) => t.id === tab);
   if (index < 0) return <Navigate to="/skills/installed" replace />;
   const current = tabs[index];

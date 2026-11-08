@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useVaults } from "../api/notes";
 import { errorText } from "../api/error-text";
-import { useSkills, type SkillView } from "../api/skills";
+import { usePublishEnabled } from "../api/publications";
+import { shareSkill, useSkills, type SkillView } from "../api/skills";
 import { FormError, secondaryButtonClass } from "../components/form";
+import { useSession } from "../state/session";
+import { ConfirmShareAnew, SkillLinkReveal } from "./Shared";
 import TargetDialog from "./TargetDialog";
+import { useWithdrawn, withdrawnKey } from "./withdrawn";
 
 /** The groups in the order shown: System, Skills, then the other vaults as they come. */
 function groups(skills: SkillView[]) {
@@ -22,6 +27,7 @@ function origin(s: SkillView): string[] {
     ...(s.byOther ? ["another user"] : []),
     ...(s.source ? [`from ${s.source}`] : []),
     ...(s.originEdited ? ["origin edited"] : []),
+    ...(s.shared ? ["shared by link"] : []),
   ];
 }
 
@@ -31,11 +37,32 @@ export default function Installed() {
   const skills = useSkills();
   const vaults = useVaults();
   const [acting, setActing] = useState<{ skill: SkillView; mode: "copy" | "move" } | null>(null);
+  const queryClient = useQueryClient();
+  const publishEnabled = usePublishEnabled();
+  const user = useSession((s) => s.user?.id ?? "");
+  const withdrawn = useWithdrawn((s) => s.keys);
+  const [asking, setAsking] = useState<SkillView | null>(null);
+  // The new link, in this component's state alone: the mutation is reset once it is in, so no cache keeps it.
+  const [revealed, setRevealed] = useState<{ name: string; link: string } | null>(null);
+  const share = useMutation({
+    mutationFn: (s: SkillView) => shareSkill(s.path!),
+    onSuccess: ({ link }, s) => {
+      setRevealed({ name: s.name, link });
+      share.reset();
+      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    },
+    onSettled: () => setAsking(null),
+  });
 
+  if (revealed) return <SkillLinkReveal name={revealed.name} link={revealed.link} onDone={() => setRevealed(null)} />;
   if (skills.isPending) return <p className="text-text-body">Loading…</p>;
   if (skills.isError) return <FormError>{errorText(skills.error)}</FormError>;
   const { withoutSkills } = skills.data;
   const list = groups(skills.data.skills);
+  // Her own vaults: a member never shares (skills design §3.7).
+  const own = new Set((vaults.data ?? []).filter((v) => v.owner == null).map((v) => v.name));
+  const mayShare = (s: SkillView) => publishEnabled === true && s.path != null && s.location !== "system" && own.has(s.location) && !s.shared;
+  const onShare = (s: SkillView) => (withdrawn.includes(withdrawnKey(user, s.path!)) ? setAsking(s) : share.mutate(s));
 
   return (
     <>
@@ -78,12 +105,19 @@ export default function Installed() {
                       Move to…
                     </button>
                   )}
+                  {mayShare(s) && (
+                    <button type="button" disabled={share.isPending} onClick={() => onShare(s)} className={secondaryButtonClass}>
+                      Share
+                    </button>
+                  )}
                 </div>
+                {share.isError && share.variables?.path === s.path && <FormError>{errorText(share.error)}</FormError>}
               </li>
             ))}
           </ul>
         </section>
       ))}
+      {asking && <ConfirmShareAnew busy={share.isPending} onCancel={() => setAsking(null)} onShare={() => share.mutate(asking)} />}
       {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data} onClose={() => setActing(null)} />}
     </>
   );

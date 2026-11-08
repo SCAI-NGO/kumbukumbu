@@ -24,3 +24,16 @@ export const copySkill = (from: string, to: string, name?: string) =>
 
 export const moveSkill = (from: string, to: string, name?: string) =>
   call(api.POST("/api/skills/move", { body: { from, to, ...(name ? { name } : {}) } }));
+
+export type SharedSkillView = components["schemas"]["SharedSkillView"];
+
+/** Her skills shared by link: never a link, which only the answer that makes it holds. */
+export const useSharedSkills = () => useQuery({ queryKey: ["skills", "shared"], queryFn: () => call(api.GET("/api/skills/shared")) });
+
+/** Shares the skill's folder by link: the answer is the one place the link is ever shown, so it is kept in no cache. */
+export const shareSkill = (path: string) => call(api.POST("/api/skills/shared", { body: { path } }));
+
+/** A new copy under the same link. */
+export const updateSharedSkill = (id: string) => call(api.POST("/api/skills/shared/{id}/update", { params: { path: { id } } }));
+
+export const withdrawSharedSkill = (id: string) => call(api.DELETE("/api/skills/shared/{id}", { params: { path: { id } } }));

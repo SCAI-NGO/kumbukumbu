@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+using Kumbu.Core.Publishing;
+using Kumbu.Core.Sh;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Publishing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server.Skills;
 
@@ -19,6 +24,21 @@ public sealed record SkillView(
 
 /// <summary>The skills the caller sees, and her live agent keys and connections that lack the vault Skills (by name).</summary>
 public sealed record SkillsView(SkillView[] Skills, string[] WithoutSkills);
+
+/// <summary>The skill to share by link: its folder ("/Skills/x", "/Work/_skills/x").</summary>
+public sealed record SkillShareRequest(string Path);
+
+/// <summary>A skill's new link, the code in its fragment: this answer is the only one that ever holds it (Decision 15).</summary>
+public sealed record SkillLinkView(string Link, DateTime SnapshotAt)
+{
+    public override string ToString() => $"SkillLinkView {{ SnapshotAt = {SnapshotAt:O} }}";
+}
+
+/// <summary>One of her skills shared by link: <c>Changed</c> when a file of the folder changed since the copy. Never the link.</summary>
+public sealed record SharedSkillView(string Id, string Path, DateTime SnapshotAt, bool Changed);
+
+/// <summary>When the copy behind a skill's link was taken.</summary>
+public sealed record SkillSnapshotView(DateTime SnapshotAt);
 
 /// <summary>A skill that fits a request: its place (1 first) and its fused score.</summary>
 public sealed record SkillHitView(int Rank, double Score, SkillView Skill);
@@ -40,6 +60,21 @@ public static class SkillsApi
         group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(401, 403, 404, 503);
+        MapSharing(group);
+    }
+
+    /// <summary>
+    /// Sharing by link (skills design §3.7, Decision 15): her session alone, though <see cref="Publications"/> would take
+    /// any of her credentials that may publish. Sharing and updating put content out, so they need the password window,
+    /// as a note's publishing does; withdrawing only reduces what is out. The link is in the answer that makes it, never
+    /// in another.
+    /// </summary>
+    private static void MapSharing(RouteGroupBuilder group)
+    {
+        group.MapGet("/shared", SharedAsync).Errors(401, 403, 503);
+        group.MapPost("/shared", ShareAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
+        group.MapPost("/shared/{id}/update", UpdateSharedAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
+        group.MapDelete("/shared/{id}", WithdrawSharedAsync).Errors(401, 403, 404, 409, 503);
     }
 
     private static async Task<Ok<SkillCopiedView>> CopyAsync(
@@ -62,7 +97,8 @@ public static class SkillsApi
     }
 
     private static async Task<Ok<SkillsView>> ListAsync(
-        RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections, TimeProvider time, CancellationToken ct)
+        RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections, PublicationStore publishing, TimeProvider time,
+        CancellationToken ct)
     {
         var open = await caller.OpenVaultsAsync(ct);
         var skillsVault = open.FirstOrDefault(v => v.IsSkillsVault)?.Id;
@@ -77,12 +113,12 @@ public static class SkillsApi
                 .Where(c => c.State is ConnectionState.Waiting or ConnectionState.Connected or ConnectionState.NeedsReconnect && !c.Vaults.ContainsKey(skillsVault)).Select(c => c.Name));
         }
 
-        return TypedResults.Ok(new SkillsView([.. await ViewsAsync(store, skills, ct)], [.. without]));
+        return TypedResults.Ok(new SkillsView([.. await ViewsAsync(store, publishing, skills, ct)], [.. without]));
     }
 
     private static async Task<Ok<SkillHitView[]>> FindAsync(
         [FromQuery] string? q, [FromQuery(Name = "as")] string? credential, RequestCaller caller, EncryptedNoteStore store, IWriterLabels labels, ApiKeys keys, Connections connections,
-        CancellationToken ct)
+        PublicationStore publishing, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(q)) throw ApiErrors.BadRequest("Give what to look for, as q.");
         IReadOnlySet<string>? vaults = null;
@@ -106,7 +142,7 @@ public static class SkillsApi
         {
             foreach (var skill in skills) manifests.Add((skill, await directory.ManifestAsync(skill, ct)));
             var hits = await SkillSearch.RankAsync(manifests, q, store, ct);
-            var views = (await ViewsAsync(store, [.. hits.Select(h => h.Skill)], ct)).ToList();
+            var views = (await ViewsAsync(store, publishing, [.. hits.Select(h => h.Skill)], ct)).ToList();
             return TypedResults.Ok(hits.Select((h, i) => new SkillHitView(h.Rank, h.Score, views[i])).ToArray());
         }
         finally
@@ -132,16 +168,104 @@ public static class SkillsApi
         }
     }
 
-    private static async Task<List<SkillView>> ViewsAsync(EncryptedNoteStore store, IReadOnlyList<Skill> skills, CancellationToken ct)
+    private static async Task<List<SkillView>> ViewsAsync(EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
     {
+        var shared = await SharedFoldersAsync(store, publishing, skills, ct);
         var views = new List<SkillView>(skills.Count);
         foreach (var s in skills)
         {
             var canWrite = s.Vault is { } vault && await store.VaultInfoAsync(vault, ct) is { Level: >= AccessLevel.Write };
             views.Add(new SkillView(
-                s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, s.Source, s.LastEditor, s.ByOther, [.. s.Warnings], CanWrite: canWrite, OriginEdited: s.OriginEdited));
+                s.Name, s.Description, s.Vault ?? "system", s.Folder?.Value, s.Source, s.LastEditor, s.ByOther, [.. s.Warnings],
+                Shared: s.Folder is { } folder && shared.Contains(folder.Value), CanWrite: canWrite, OriginEdited: s.OriginEdited));
         }
 
         return views;
     }
+
+    /// <summary>The folders of <paramref name="skills"/> shared by link, in the caller's view: whether, not how (no link).</summary>
+    private static async Task<HashSet<string>> SharedFoldersAsync(EncryptedNoteStore store, PublicationStore publishing, IReadOnlyList<Skill> skills, CancellationToken ct)
+    {
+        var folders = new HashSet<string>(StringComparer.Ordinal);
+        var vaults = skills.Select(s => s.Vault).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        if (vaults.Count == 0) return folders;
+        foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(a => vaults.Contains(a.Name)))
+        {
+            var record = (await publishing.ReadAsync(null, access.Vault, ct)).Record;
+            foreach (var entry in record.Publications.Where(p => p.Kind == PublicationKinds.Skill))
+            {
+                if (VaultPath.TryParse(entry.Note, out var stored)) folders.Add(access.ToCaller(stored).Value);
+            }
+        }
+
+        return folders;
+    }
+
+    /// <summary>The skills of her own vaults shared by link.</summary>
+    private static async Task<Ok<SharedSkillView[]>> SharedAsync(Publications publications, EncryptedNoteStore store, CancellationToken ct)
+    {
+        var views = new List<SharedSkillView>();
+        foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(Owned))
+        {
+            views.AddRange((await publications.SkillStatesAsync(access, store, ct)).Select(s => new SharedSkillView(s.Id, s.Folder.Value, s.SnapshotAt, s.Changed)));
+        }
+
+        return TypedResults.Ok(views.OrderBy(v => v.Path, StringComparer.Ordinal).ToArray());
+    }
+
+    private static async Task<Created<SkillLinkView>> ShareAsync(
+        SkillShareRequest body, HttpContext http, RequestCaller caller, Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options, CancellationToken ct)
+    {
+        if (!VaultPath.TryParse((body.Path ?? "").TrimEnd('/'), out var folder) || folder.Vault is not { } vault
+            || (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(a => a.Name == vault) is not { } access)
+        {
+            throw ApiErrors.NotFound($"There is no skill at {body.Path}.");
+        }
+
+        var (by, byRef) = Writer(caller, access);
+        try
+        {
+            var shared = await publications.PublishSkillAsync(access, store, folder, caller.User!.Id, by, byRef, Publications.BaseUrl(http, options.Value), ct);
+            return TypedResults.Created((string?)null, new SkillLinkView(shared.Link, shared.SnapshotAt));
+        }
+        // One link per skill: the Shared tab withdraws it, then Share makes a new one.
+        catch (PublishRefusedException e) when (e.Kind == ShellErrorKind.Conflict && e.Message.StartsWith($"{folder} is already shared", StringComparison.Ordinal))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, $"{folder.Value} is shared already: withdraw its link first to make a new one.");
+        }
+    }
+
+    private static async Task<Ok<SkillSnapshotView>> UpdateSharedAsync(
+        string id, RequestCaller caller, Publications publications, EncryptedNoteStore store, CancellationToken ct)
+    {
+        var (access, state) = await HolderAsync(id, publications, store, ct);
+        var (by, byRef) = Writer(caller, access);
+        return TypedResults.Ok(new SkillSnapshotView(await publications.UpdateSkillAsync(access, store, state.Folder, by, byRef, ct)));
+    }
+
+    private static async Task<NoContent> WithdrawSharedAsync(
+        string id, RequestCaller caller, Publications publications, EncryptedNoteStore store, CancellationToken ct)
+    {
+        var (access, _) = await HolderAsync(id, publications, store, ct);
+        var (by, byRef) = Writer(caller, access);
+        await publications.WithdrawSkillAsync(access, store, id, by, byRef, ct);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>Her own vault holding the skill link <paramref name="id"/>, and the link's state; a member's alias holds none.</summary>
+    private static async Task<(VaultAccess Access, SkillPublicationState State)> HolderAsync(string id, Publications publications, EncryptedNoteStore store, CancellationToken ct)
+    {
+        foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(Owned))
+        {
+            if ((await publications.SkillStatesAsync(access, store, ct)).FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.Ordinal)) is { } state) return (access, state);
+        }
+
+        throw ApiErrors.NotFound("You have no such shared skill.");
+    }
+
+    private static bool Owned(VaultAccess access) => access.IsOwner && access.Membership is null;
+
+    /// <summary>As <see cref="PublicationApi"/>'s: a member is refused before anything is written, so her writer id isn't needed.</summary>
+    private static (string By, WriterRef ByRef) Writer(RequestCaller caller, VaultAccess access) =>
+        access.Membership is null ? (caller.WriterIn(access.Name), caller.ReferenceIn(access.Name)) : ("", caller.Reference);
 }

@@ -32,6 +32,9 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
     /// <summary>The <see cref="ApiError.Type"/> of a target folder that exists: the web app asks for another name.</summary>
     public const string NameTaken = "name-taken";
 
+    /// <summary>The <see cref="ApiError.Type"/> of a move of a skill shared by link: its link is withdrawn first.</summary>
+    public const string Shared = "shared";
+
     public Task<VaultPath> CopyAsync(SkillCopyRequest request, CancellationToken ct) => RunAsync(request, move: false, ct);
 
     public Task<VaultPath> MoveAsync(SkillCopyRequest request, CancellationToken ct) => RunAsync(request, move: true, ct);
@@ -77,7 +80,12 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
             if (source.Folder is not { } moved) throw ApiErrors.BadRequest("A system skill stays where it is; copy it instead.");
             RequireWritable(moved.Vault!);
             if (((ICaller)caller).RefuseFolder("mv", moved) is { } refused) throw NoteApi.Refused(refused);
-            // A skill shared by link stays where its link reads it from: skill publications refuse its move here.
+            // A skill shared by link stays where its link reads it from; a copy leaves it there.
+            var stored = source.Access!.ToVault(moved).Value;
+            if ((await publishing.ReadAsync(null, source.Access.Vault, ct)).Record.Publications.Any(p => p.Kind == PublicationKinds.Skill && string.Equals(p.Note, stored, StringComparison.Ordinal)))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, "Withdraw the link first: a shared skill stays where its link reads it.", type: Shared);
+            }
         }
 
         RequireWritable(target.Name);
