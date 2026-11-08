@@ -12,7 +12,35 @@
 
 ## Plan review
 
-(Filled in after the review by a fresh subagent; see the end of this section once the review has run.)
+A fresh subagent reviewed spec, brief and the draft against the code (pdf.js 6.4.299 source included); all 27 findings were accepted. **Where a ruling below and a task's text disagree, the ruling wins**; each implementer gets the rulings for its task.
+
+1. Tasks 7 and 12 also update `web/src/console/console-fixture.json` ("refused", checked by `ConsoleFixtureTests.Refused_is_the_servers`), the refused sentence in `help.ts`'s `helpBlock` and its assertions in `web/src/console/ConsolePage.test.tsx` (≈`:275`, `:307`); run `--filter-class "*ConsoleFixtureTests"` and `pnpm -C web test --run src/console`.
+2. Decision 3 revised: extraction jobs keep `verbosity: 1` only with `console.log`/`console.warn`/`console.error` replaced *inside the job's worker* by a counter that matches exactly `Image exceeded maximum allowed size and was removed.` and swallows every message; a test asserts nothing reaches the console. No pdf.js warning reaches the log.
+3. Both `extractImage` and `renderRegion` also cap the long edge at 16,384 px (`ImageHeader.MaxSide`), saying "scaled down"; a 20000×50 fixture tests it. `PdfSidecar`'s checks use `LongEdge: 16_384`.
+4. Decision 4 revised: budget 20 s (`PdfImages.Budget`, init-settable), listing stops at half of it and only listed pages are written; writing stops at a page boundary once the budget is spent, with a hard ceiling of 50 s: if that is hit mid-page, the output says exactly what was stored of page K and tells to run page K again into another folder or remove those files first. "go on with pages K-" names the first page not (fully) written.
+5. Task 1 pdf.js specifics: decoded images resolve asynchronously, so read them with the callback form `objs.get(id, cb)` wrapped in a Promise (`commonObjs` for ids starting with the document's `g_` prefix, `page.objs` otherwise); `paintInlineImageXObject` carries its image in its arguments; `paintInlineImageXObjectGroup` is one RGBA atlas plus a `map` of `{x, y, w, h, transform}` to cut out per entry; `paintImageMaskXObjectGroup` entries carry their own `data`; masks have no `kind`, their data is packed 1-bit with a 0 bit painted (Decode applied).
+6. Fixtures and tests for 1-bit grey (kind 1), raw 8-bit DeviceRGB, `paintImageXObjectRepeat` (the same XObject 3+ times in a row), 10+ masks (group/repeat) and 10+ small inline images (atlas): colours and numbering right.
+7. An image pdf.js fails to decode (`null` data) is listed with `hash: null` and `failed: true`; the C# check allows it; `pdfimages` names it as skipped ("could not be decoded").
+8. Boxes are clipped to the page in the sidecar as `classify`'s `clip` does; an image wholly off the page is left out of the list (and not numbered); tested.
+9. Memory: list hashes pdf.js's decoded `data` with kind, width, height, quarter turn, flip and mask colour (no conversion); extract converts and turns in one pass into one buffer, scales, and drops references.
+10. Task 13's folder trash calls the existing `TreeWriter.RemoveAsync` (`TreeWriter.cs:31-58`), no new method; `PublishedNoteException` maps to 403 and is tested; `.`/`..` segments and `\` validated as `MoveAsync` does.
+11. Filters in `rg`, `tags` and `ls` go after the empty-result checks, so a vault whose notes are all archived answers empty, not "No such file or directory"; tested.
+12. Test classes: `SemsearchPdfTests` and `Search/SearchTests` (not `*SemsearchTests`), `CheckpointTests` (not `CheckpointCommandsTests`), `HelpTests` is in `Kumbu.Core.Tests`; every command names its `--project`.
+13. Task 14: an archived folder's **Open** expands it inside the Archive view, listing its files each with Open; a file's Open uses the existing note/attachment route.
+14. `NoteMover` gains `internal TimeProvider Time => time;` in Task 4; `pdfimages` and `archive` take it from there. Budgets measure with `time.GetTimestamp()`/`GetElapsedTime`; tests advance the `FakeTimeProvider` in the fake (or `AutoAdvanceAmount`) so `Task.Delay(…, time)` completes.
+15. Task 3 adds `PixelsProblem.Busy` (its `Kind` is `Unavailable`) and maps `busy` to it for the new methods; `too_large` maps to `TooLarge` with its own sentences for the new methods; tested.
+16. A quota stop returns `ShellResult.Error(partial lines + sentence) with { Kind = ShellErrorKind.Refused, Code = e.Owner ? Refusals.Quota : null }`, " See `df`." only for the owner; writer refusals keep their own `Kind`.
+17. The archive figure of account storage is computed with `StorageQuota`'s count or cached per owner for its `ShownFor` time, owned vaults only; the 100 % sentence (`fullSentence`) names the archive too.
+18. Registries go into the task that registers a command: `KnownCommands`, `Refused`, the console fixture, `help.ts`, `Manual.ToolDescription` and `HelpTests` for `pdfimages` in Task 4, for `archive` in Task 9; Tasks 7 and 12 keep the help texts, topic and the server tests.
+19. A JPEG fallback flattens onto white first (Skia writes transparent as black); PNG keeps alpha; tested.
+20. Task 13 adds a test in `CheckpointReadApiTests` that a checkpoint's tree shows `_archive/`, so mutation (a) fails.
+21. `analyse.ts`'s analysis must not change: a separate walker (or a callback) in `extract.ts`; `analyse.test.ts` and `classify.test.ts` pass unchanged.
+22. Task 14's restore checks for a note, file or folder at the target, and a 409 from `/api/move` reopens the "Restore as…" dialog; tested.
+23. Archive items: the outermost stamped ancestor wins (nothing inside a stamped folder is an item of its own); `.vaultkeep` is never an item; tested.
+24. `originalWidth`/`originalHeight` and "(scaled down from W×H)" are in the turned orientation.
+25. Task 16's red test asserts `SystemSkills.Find("ingest-attachments")` is not null and checks the content (root links with `%20`, crop only drawing regions, the 5 % note); also run `SkillsCommandTests`, `SkillDirectoryTests`, `SystemSkillsTests`, `HandshakeInstructionsTests`.
+26. Wording: the time-zone check is Task 17; web test file `web/src/shell/TreeDrawerArchive.test.tsx`; `TagsCommandTests` usage assertion is `:109`.
+27. `pdfimages`'s help says duplicates are found within one call; a follow-up call stores a repeated image again.
 
 ## Global constraints
 
@@ -44,7 +72,7 @@
 11. Size cap: 8 MP = 8,000,000 pixels; the scale is `min(1, sqrt(8e6 / (w*h)))`, sides floored, at least 1. The output line adds "(scaled down from W×H)".
 12. **OP 12–15, 17, 20–22**: settled in Phases 3 and 4 below.
 13. **OP 18** The timestamp goes before the format's extension: `NAME YYYY-MM-DD HHmmss.EXT` for a file (extension as in the name, `.jpeg` stays `.jpeg`), `NAME YYYY-MM-DD HHmmss` for a note `.md` (`v1.2 notes 2026-11-08 213005.md`) and for a folder. On a clash within the second: ` -2`, ` -3` … is appended after the time (`report 2026-11-08 213005-2.pdf`).
-14. **OP 19** `compose.yaml` gains `TZ: ${TZ:-UTC}` for `kumbu`, `.env.example` and the README a line; whether the `aspnet` image honours `TZ` is checked in Task 18 and recorded.
+14. **OP 19** `compose.yaml` gains `TZ: ${TZ:-UTC}` for `kumbu`, `.env.example` and the README a line; whether the `aspnet` image honours `TZ` is checked in Task 17 and recorded.
 15. **OP 23, 24**: Phase 5.
 
 ---
