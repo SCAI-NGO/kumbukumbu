@@ -190,6 +190,10 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["DELETE /api/unpublishable/{vault}/{**path}"] = "the owner's own mark, lifted in her session: it publishes nothing",
         ["PUT /api/keys/{id}/instructions"] = "how skills reach a key's instructions: a preference about a text, no right (skills spec §3.4)",
         ["PUT /api/connections/{id}/instructions"] = "how skills reach a connection's instructions: a preference about a text, no right (skills spec §3.4)",
+        ["GET /api/skills/"] = Reading,
+        ["GET /api/skills/find"] = Reading,
+        ["POST /api/skills/copy"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
+        ["POST /api/skills/move"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
         ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
     };
 
