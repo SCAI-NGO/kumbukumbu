@@ -63,9 +63,15 @@ public sealed class DfServerTests(KumbuAppFactory app) : IAsyncDisposable
         await bob.CreateAsync("notes/one.md", "One\n");
         await bob.CreateAsync("notes/two.md", "Two\n");
         await alice.ShareWithAsync(bob, "garten", MemberRole.Write);
+        // Every vault of his own, his vault Skills too, so the total is a share of his limit.
+        var skills = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(bob.User.Id, bob.UserKey, Ct)).Single(v => v.Vault.Kind == VaultKinds.Skills).Id;
         var key = (await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
             bob.User, bob.UserKey, DateTime.UtcNow, "Claude",
-            new Dictionary<string, KeyRight> { [await bob.VaultIdOfSharedAsync("garten")] = KeyRight.Write, [await bob.VaultIdAsync()] = KeyRight.Write }, Ct)).Key;
+            new Dictionary<string, KeyRight>
+            {
+                [await bob.VaultIdOfSharedAsync("garten")] = KeyRight.Write, [await bob.VaultIdAsync()] = KeyRight.Write, [skills] = KeyRight.Read,
+            },
+            Ct)).Key;
         Assert.False((await bob.ShAsync("rm /Work/notes/two.md", key)).IsError);
         await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<UserDocument>("users")
             .UpdateOneAsync(u => u.Id == bob.User.Id, Builders<UserDocument>.Update.Set(u => u.Quota, 2L << 30), cancellationToken: Ct);
@@ -82,8 +88,7 @@ public sealed class DfServerTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("1", row.Groups[2].Value);
         Assert.Equal("0", row.Groups[3].Value);
         Assert.True(long.Parse(row.Groups[1].Value) > "One\nTwo\n".Length);
-        // His vault Skills, which the key doesn't open, counts against the limit too.
-        Assert.Matches(@"^Total +\d+  \(vaults this key opens; your other vaults count against the 2147483648 limit too\)$", lines[^1]);
+        Assert.Matches(@"^Total +\d+  of 2147483648 \(\d+ %\)$", lines[^1]);
 
         var shared = await bob.ShAsync("df /garten", key);
         Assert.True(shared.IsError);

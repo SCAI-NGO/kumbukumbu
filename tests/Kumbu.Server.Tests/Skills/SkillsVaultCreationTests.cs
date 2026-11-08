@@ -73,7 +73,7 @@ public sealed class SkillsVaultCreationTests(KumbuAppFactory app)
         {
             // The first to get here gives the others a moment to come in beside it, as they would without the per-user gate.
             if (Interlocked.Increment(ref calls) > 1) second.TrySetResult();
-            else await second.Task.WaitAsync(TimeSpan.FromSeconds(1), token).ContinueWith(_ => { }, TaskScheduler.Default);
+            else await second.Task.WaitAsync(TimeSpan.FromMilliseconds(250), token).ContinueWith(_ => { }, TaskScheduler.Default);
         };
 
         var results = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => Task.Run(() => skills.EnsureAsync(user, key, readAt, Ct), Ct)));
@@ -153,6 +153,29 @@ public sealed class SkillsVaultCreationTests(KumbuAppFactory app)
     {
         var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
         var key = await alice.KeyAsync("Claude Code", KeyRight.Write);
+        Assert.Equal("Work/", (await alice.ShAsync("ls /", key)).Text);
+        Assert.True((await alice.ShAsync("ls /Skills", key)).IsError);
+    }
+
+    [Fact]
+    public async Task A_key_and_a_connection_made_before_the_vault_Skills_dont_gain_it()
+    {
+        // A user from before the vault Skills: a vault, a key and a connection, and no sign-in yet.
+        var (user, userKey, readAt) = await SignedInAsync(app.PublicApi);
+        var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
+        var work = await catalog.CreateForUserAsync("Work", user.Id, userKey, Ct, readAt);
+        var rights = new Dictionary<string, KeyRight> { [work.Id] = KeyRight.Write };
+        var (key, _) = await app.PublicApi.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, readAt, "Claude Code", rights, Ct);
+        await app.PublicApi.Services.GetRequiredService<Connections>().CreateAsync(user, userKey, readAt, "Claude", rights, Ct);
+        Assert.DoesNotContain(await catalog.OpenForUserAsync(user.Id, userKey, Ct), a => a.Vault.Kind == VaultKinds.Skills);
+
+        using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = user.Username, password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
+
+        var skills = (await catalog.OpenForUserAsync(user.Id, userKey, Ct)).Single(a => a.Vault.Kind == VaultKinds.Skills);
+        // Its key is wrapped for the user key alone: no slot of the key, the connection or anything else.
+        Assert.Equal([SlotDocument.User], (await catalog.Slots.Find(s => s.Vault == skills.Id).ToListAsync(Ct)).Select(s => s.Kind));
+        var alice = RestClient.Existing(app.PublicApi, user, userKey, SessionOf(signIn), "Work");
         Assert.Equal("Work/", (await alice.ShAsync("ls /", key)).Text);
         Assert.True((await alice.ShAsync("ls /Skills", key)).IsError);
     }

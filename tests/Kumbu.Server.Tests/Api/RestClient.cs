@@ -67,6 +67,10 @@ public sealed class RestClient
         return new RestClient(api, username, session, user, userKey, vault);
     }
 
+    /// <summary>A user the test made and signed in itself, with <paramref name="session"/>.</summary>
+    internal static RestClient Existing(WebApplicationFactory<Program> api, User user, byte[] userKey, string session, string vault) =>
+        new(api, user.Username, session, user, userKey, vault);
+
     /// <summary>A new session of this user, e.g. after a test moved the clock past the old one's timeout.</summary>
     public async Task<RestClient> SignInAgainAsync()
     {
