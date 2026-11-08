@@ -9709,13 +9709,13 @@ export interface components {
         PublishRequest: {
             password?: null | string;
         };
-        PurgeTrashRequest: {
-            password?: null | string;
-            entries?: null | components["schemas"]["TrashEntryRequest"][];
-        };
         PurgedTrashView: {
             /** Format: int32 */
             deleted: number | string;
+        };
+        PurgeTrashRequest: {
+            password?: null | string;
+            entries?: null | components["schemas"]["TrashEntryRequest"][];
         };
         PutNoteRequest: {
             content: string;
@@ -9773,10 +9773,16 @@ export interface components {
             revokedApiKeys: number | string;
             /** Format: int32 */
             disconnectedApps: number | string;
-            /** Format: int32 */
-            withdrawnInvitations?: number | string;
-            /** Format: int32 */
-            revokedShares?: number | string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            withdrawnInvitations: number | string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            revokedShares: number | string;
         };
         RenameAliasRequest: {
             alias: string;
