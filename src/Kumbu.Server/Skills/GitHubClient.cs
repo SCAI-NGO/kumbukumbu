@@ -397,7 +397,11 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
     /// whatever a metadata entry (a PAX <c>x</c> or <c>g</c>, a GNU <c>L</c> or <c>K</c>) says its length is. Each header
     /// is checked before its last byte is handed on: its checksum, its size (octal or base-256, a PAX <c>size</c> record
     /// included), at most <see cref="MaxMetadataBytes"/> for any entry that isn't a regular file (whose data TarReader
-    /// streams), and at most <see cref="MaxEntries"/> headers of any kind. What it can't follow exactly it refuses.</summary>
+    /// streams), and at most <see cref="MaxEntries"/> entries that aren't metadata. Only the shapes real archives have
+    /// pass, so that TarReader applies every metadata header just as the guard does: one <c>g</c> as the very first header
+    /// (git archive's), and before an entry at most one <c>x</c> (POSIX, as is the entry), or a GNU <c>L</c>, <c>K</c> or
+    /// <c>L</c> then <c>K</c> (GNU, as is the entry); the entry a regular file, a directory or a link. That bounds the
+    /// metadata headers to two per entry and one more. Anything else is refused.</summary>
     internal sealed class TarGuard(Stream inner) : Stream
     {
         public const int MaxMetadataBytes = 64 * 1024;
@@ -409,9 +413,17 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         private byte[]? _pax;   // a PAX x entry's data, collected while it passes
         private int _paxFilled;
         private long? _nextSize;   // its size record, for the entry that follows
-        private bool _afterPax;
+        private Pending _pending;
+        private bool _started;
+        private int _entries;
 
-        public int Headers { get; private set; }
+        private enum Pending
+        {
+            None,
+            Pax,
+            LongName,
+            LongLink,
+        }
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -477,22 +489,53 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
         private void OnHeader()
         {
             var h = _header.AsSpan();
-            if (!h.ContainsAnyExcept((byte)0)) return;   // the end of the archive (two of these), or padding after it
-            if (++Headers > MaxEntries) throw new CappedStream.TooLongException();
-            if (!ChecksumHolds(h)) throw new InvalidDataException("A tar header's checksum is wrong.");
+            if (!h.ContainsAnyExcept((byte)0))   // the end of the archive (two of these), or padding after it
+            {
+                if (_pending != Pending.None) throw Unexpected();
+                return;
+            }
 
+            if (!ChecksumHolds(h)) throw new InvalidDataException("A tar header's checksum is wrong.");
             var type = (char)h[156];
             var size = Number(h.Slice(124, 12));
-            var metadata = type is 'x' or 'g' or 'L' or 'K';
-            if (_afterPax && metadata) throw new InvalidDataException("A PAX header followed by another header of its kind.");
-            if (!metadata && _nextSize is { } paxSize) size = paxSize;
-            _afterPax = false;
-            _nextSize = null;
+            var posix = h.Slice(257, 8).SequenceEqual("ustar\000"u8);
+            var gnu = h.Slice(257, 8).SequenceEqual("ustar  \0"u8);
+            var first = !_started;
+            _started = true;
+            switch (type)
+            {
+                case 'g':
+                    if (!first || !posix) throw Unexpected();
+                    break;
+                case 'x':
+                    if (_pending != Pending.None || !posix) throw Unexpected();
+                    _pending = Pending.Pax;
+                    break;
+                case 'L':
+                    if (_pending != Pending.None || !gnu) throw Unexpected();
+                    _pending = Pending.LongName;
+                    break;
+                case 'K':
+                    if (_pending is not (Pending.None or Pending.LongName) || !gnu) throw Unexpected();
+                    _pending = Pending.LongLink;
+                    break;
+                default:
+                    if (_pending != Pending.None)
+                    {
+                        if (type is not ('0' or '\0' or '7' or '5' or '1' or '2') || (_pending == Pending.Pax ? !posix : !gnu)) throw Unexpected();
+                        if (_nextSize is { } paxSize) size = paxSize;
+                    }
+
+                    _pending = Pending.None;
+                    _nextSize = null;
+                    if (++_entries > MaxEntries) throw new CappedStream.TooLongException();
+                    break;
+            }
+
             if (type is not ('0' or '\0' or '7') && size > MaxMetadataBytes) throw new CappedStream.TooLongException();
 
             if (type == 'x')
             {
-                _afterPax = true;
                 _pax = new byte[size];
                 _paxFilled = 0;
                 if (size == 0) EndPax();
@@ -501,6 +544,8 @@ public sealed partial class GitHubClient(IHttpClientFactory http, IOptions<Kumbu
             _dataLeft = size;
             _padLeft = (Block - size % Block) % Block;
         }
+
+        private static InvalidDataException Unexpected() => new("A tar header where real archives have none of its kind.");
 
         /// <summary>PAX records, <c>"&lt;length&gt; &lt;key&gt;=&lt;value&gt;\n"</c>; only <c>size</c> matters here.</summary>
         private void EndPax()

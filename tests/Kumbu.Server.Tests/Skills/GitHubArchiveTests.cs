@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
+using System.Text;
 using Kumbu.Server.Api;
 using Kumbu.Server.Skills;
 using Microsoft.Extensions.Logging;
@@ -69,18 +71,69 @@ public sealed class GitHubArchiveTests
     }
 
     // 1 GiB stays below Array.MaxLength, so an allocation of the declared size would really happen and be measured.
-    [Theory, InlineData('0', false), InlineData('x', false), InlineData('g', false), InlineData('L', true), InlineData('K', true)]
-    public async Task A_1_GB_header_is_refused_before_allocating(char type, bool gnu)
+    // The last three: a PAX size TarReader doesn't apply (after a GNU L or K, or before one) would make the guard skip
+    // a header TarReader reads, here an x declaring 1 GiB inside what the guard took for the file's 1024 bytes.
+    [Theory, InlineData("0", "too-large"), InlineData("x", "too-large"), InlineData("g", "too-large"), InlineData("L", "too-large"), InlineData("K", "too-large"),
+        InlineData("L x file", "bad-answer"), InlineData("K x file", "bad-answer"), InlineData("x L file", "bad-answer")]
+    public async Task A_1_GB_header_is_refused_before_allocating(string shape, string kind)
     {
         var (client, fake, _, _) = Make();
-        fake.Archive = type == '0'
-            ? FakeGitHub.TarWithDeclaredSize("r/huge.bin", 1L << 30, actual: new byte[16])
-            : FakeGitHub.GzipTar(FakeGitHub.UstarHeader("r/", '5', 0), FakeGitHub.UstarHeader(gnu ? "././@LongLink" : "PaxHeaders/x", type, 1L << 30, gnu), new byte[16]);
+        var dir = FakeGitHub.UstarHeader("r/", '5', 0);
+        var hidden = FakeGitHub.UstarHeader("PaxHeaders/y", 'x', 1L << 30).Concat(new byte[512]).ToArray();
+        var size = Pax("size", "1024");
+        var longName = "r/long"u8.ToArray();
+        fake.Archive = shape switch
+        {
+            "0" => FakeGitHub.TarWithDeclaredSize("r/huge.bin", 1L << 30, actual: new byte[16]),
+            "x" => FakeGitHub.GzipTar(dir, FakeGitHub.UstarHeader("PaxHeaders/x", 'x', 1L << 30), new byte[16]),
+            "g" => FakeGitHub.GzipTar(FakeGitHub.UstarHeader("pax_global_header", 'g', 1L << 30), new byte[16]),   // first, where it may be
+            "L" or "K" => FakeGitHub.GzipTar(dir, FakeGitHub.UstarHeader("././@LongLink", shape[0], 1L << 30, gnu: true), new byte[16]),
+            "L x file" => FakeGitHub.GzipTar(dir, FakeGitHub.UstarHeader("././@LongLink", 'L', longName.Length, gnu: true), longName,
+                FakeGitHub.UstarHeader("PaxHeaders/x", 'x', size.Length), size, FakeGitHub.UstarHeader("r/f.bin", '0', 0), hidden),
+            "K x file" => FakeGitHub.GzipTar(dir, FakeGitHub.UstarHeader("././@LongLink", 'K', longName.Length, gnu: true), longName,
+                FakeGitHub.UstarHeader("PaxHeaders/x", 'x', size.Length), size, FakeGitHub.UstarHeader("r/f.bin", '0', 0), hidden),
+            _ => FakeGitHub.GzipTar(dir, FakeGitHub.UstarHeader("PaxHeaders/x", 'x', size.Length), size,
+                FakeGitHub.UstarHeader("././@LongLink", 'L', longName.Length, gnu: true), longName, FakeGitHub.UstarHeader("r/f.bin", '0', 0, gnu: true), hidden),
+        };
         var before = GC.GetTotalAllocatedBytes(precise: true);
         var refused = await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct));
         var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
         Assert.True(allocated < 256L * 1024 * 1024, $"{allocated} bytes allocated");
-        Assert.Equal("too-large", refused.Kind);
+        Assert.Equal(kind, refused.Kind);
+    }
+
+    [Fact]
+    public async Task The_shapes_real_archives_have_are_read()
+    {
+        var (client, fake, _, _) = Make();
+        var deep = string.Join('/', Enumerable.Repeat("folder-with-a-long-name", 12)) + "/SKILL.md";
+        var comment = Pax("comment", Sha);
+        var path = Pax("path", "r/" + deep);
+        // git archive: a global header with the commit, then ustar entries, an x before a long name.
+        fake.Archive = FakeGitHub.GzipTar(FakeGitHub.UstarHeader("pax_global_header", 'g', comment.Length), comment, FakeGitHub.UstarHeader("r/", '5', 0),
+            FakeGitHub.UstarHeader("PaxHeaders/x", 'x', path.Length), path, FakeGitHub.UstarHeader("r/x", '0', 1), "a"u8.ToArray(),
+            FakeGitHub.UstarHeader("r/b.md", '0', 1), "b"u8.ToArray());
+        Assert.Equal([deep, "b.md"], (await client.ArchiveAsync(Repo, Sha, Ct)).Files.Select(f => f.Path));
+
+        // tar --format=gnu: an L before a long name, an L and a K before a link with a long name and target.
+        var name = Encoding.ASCII.GetBytes("r/" + deep + "\0");
+        var link = Encoding.ASCII.GetBytes("r/" + deep + "-link\0");
+        fake.Archive = FakeGitHub.GzipTar(FakeGitHub.UstarHeader("r/", '5', 0, gnu: true),
+            FakeGitHub.UstarHeader("././@LongLink", 'L', name.Length, gnu: true), name, FakeGitHub.UstarHeader("r/x", '0', 1, gnu: true), "a"u8.ToArray(),
+            FakeGitHub.UstarHeader("././@LongLink", 'L', link.Length, gnu: true), link, FakeGitHub.UstarHeader("././@LongLink", 'K', name.Length, gnu: true), name,
+            FakeGitHub.UstarHeader("r/l", '2', 0, gnu: true), FakeGitHub.UstarHeader("r/b.md", '0', 1, gnu: true), "b"u8.ToArray());
+        var gnu = await client.ArchiveAsync(Repo, Sha[..39] + "9", Ct);
+        Assert.Equal([deep, "b.md"], gnu.Files.Select(f => f.Path));
+        Assert.Equal([deep + "-link"], gnu.Skipped);
+    }
+
+    /// <summary>One PAX record, its length counting itself.</summary>
+    private static byte[] Pax(string key, string value)
+    {
+        var body = $" {key}={value}\n";
+        var length = body.Length + 1;
+        while ((length.ToString(CultureInfo.InvariantCulture) + body).Length != length) length++;
+        return Encoding.UTF8.GetBytes(length.ToString(CultureInfo.InvariantCulture) + body);
     }
 
     [Fact]
@@ -94,7 +147,8 @@ public sealed class GitHubArchiveTests
         Assert.Equal(16, archive.Files[0].Bytes.Length);
     }
 
-    public static TheoryData<string> Malformed => ["size", "checksum", "mode", "sparse", "pax-length", "pax-then-pax"];
+    public static TheoryData<string> Malformed =>
+        ["size", "checksum", "mode", "sparse", "pax-length", "pax-then-pax", "g-not-first", "two-l", "k-then-l", "x-then-fifo", "x-then-gnu", "l-then-posix", "x-then-end"];
 
     [Theory, MemberData(nameof(Malformed))]
     public async Task A_malformed_header_is_a_bad_answer(string kind)
@@ -107,20 +161,27 @@ public sealed class GitHubArchiveTests
             "mode" => [FakeGitHub.UstarHeader("r/a", '0', 0, beforeSum: h => "zzzzzzz\0"u8.CopyTo(h.AsSpan(100)))],
             "sparse" => [FakeGitHub.UstarHeader("r/a", 'S', 0, gnu: true)],   // TarReader: NotSupportedException
             "pax-length" => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 11), "99 size=16\n"u8.ToArray(), FakeGitHub.UstarHeader("r/a", '0', 0)],
-            _ => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0), FakeGitHub.UstarHeader("PaxHeaders/b", 'x', 0), FakeGitHub.UstarHeader("r/a", '0', 0)],
+            "pax-then-pax" => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0), FakeGitHub.UstarHeader("PaxHeaders/b", 'x', 0), FakeGitHub.UstarHeader("r/a", '0', 0)],
+            "g-not-first" => [FakeGitHub.UstarHeader("pax_global_header", 'g', 0), FakeGitHub.UstarHeader("r/a", '0', 0)],
+            "two-l" => [FakeGitHub.UstarHeader("././@LongLink", 'L', 0, gnu: true), FakeGitHub.UstarHeader("././@LongLink", 'L', 0, gnu: true), FakeGitHub.UstarHeader("r/a", '0', 0, gnu: true)],
+            "k-then-l" => [FakeGitHub.UstarHeader("././@LongLink", 'K', 0, gnu: true), FakeGitHub.UstarHeader("././@LongLink", 'L', 0, gnu: true), FakeGitHub.UstarHeader("r/a", '2', 0, gnu: true)],
+            "x-then-fifo" => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0), FakeGitHub.UstarHeader("r/a", '6', 0)],
+            "x-then-gnu" => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0), FakeGitHub.UstarHeader("r/a", '0', 0, gnu: true)],
+            "l-then-posix" => [FakeGitHub.UstarHeader("././@LongLink", 'L', 0, gnu: true), FakeGitHub.UstarHeader("r/a", '0', 0)],
+            _ => [FakeGitHub.UstarHeader("PaxHeaders/a", 'x', 0)],
         };
         fake.Archive = FakeGitHub.GzipTar([FakeGitHub.UstarHeader("r/", '5', 0), .. blocks]);
         Assert.Equal("bad-answer", (await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct))).Kind);
     }
 
     [Fact]
-    public async Task Metadata_headers_count_toward_5000()
+    public async Task Metadata_headers_dont_count_toward_5000()
     {
         var (client, fake, _, _) = Make();
-        // 2,501 files with a long PAX name each: 2,501 entries, but 5,002 headers (plus the top folder's).
-        var deep = string.Join('/', Enumerable.Repeat("folder-with-a-long-name", 12));
-        fake.Archive = FakeGitHub.Tar(Enumerable.Range(0, 2501).Select(i => ($"r/{deep}/{i}.md", Array.Empty<byte>())).ToArray());
-        Assert.Equal("too-large", (await Assert.ThrowsAsync<GitHubException>(() => client.ArchiveAsync(Repo, Sha, Ct))).Kind);
+        // 5,000 entries, each after its own PAX header (as TarWriter writes them): 10,000 headers. The shapes allowed
+        // bound the metadata headers to two per entry and one global header.
+        fake.Archive = FakeGitHub.Tar(Enumerable.Range(0, 5000).Select(i => ($"r/{i}.md", Array.Empty<byte>())).ToArray());
+        Assert.Equal(5000, (await client.ArchiveAsync(Repo, Sha, Ct)).Files.Count);
     }
 
     [Fact]
