@@ -84,7 +84,7 @@ export default function Installed() {
           </ul>
         </section>
       ))}
-      {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data ?? []} onClose={() => setActing(null)} />}
+      {acting && <TargetDialog skill={acting.skill} mode={acting.mode} vaults={vaults.data} onClose={() => setActing(null)} />}
     </>
   );
 }

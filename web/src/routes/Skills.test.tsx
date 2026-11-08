@@ -60,6 +60,15 @@ describe("Skills", () => {
     await waitFor(() => expect(body).toEqual({ from: "/Work/_skills/x", to: "Skills" }));
   });
 
+  it("shows the dialog's loading state while the vaults load", async () => {
+    api([], { "GET /api/vaults": () => new Promise<Response>(() => {}) });
+    renderApp("/skills/installed");
+    const card = (await screen.findByText("work-x")).closest("li")!;
+    await userEvent.click(within(card).getByRole("button", { name: "Copy to…" }));
+    expect(within(screen.getByRole("dialog")).getByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByText(/no other vault/i)).not.toBeInTheDocument();
+  });
+
   it("asks for another name when the name is taken", async () => {
     api([], { "POST /api/skills/copy": () => json(409, { error: "taken", type: "name-taken" }) });
     renderApp("/skills/installed");
