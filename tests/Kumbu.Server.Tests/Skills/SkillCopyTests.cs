@@ -8,6 +8,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Sharing;
+using Kumbu.Server.Skills;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
@@ -85,6 +86,37 @@ public sealed class SkillCopyTests(KumbuAppFactory app)
     {
         Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync(Ct));
         return (await RestClient.JsonAsync(response))["path"]!.GetValue<string>();
+    }
+
+    [Fact]
+    public async Task The_default_name_is_the_folders_never_the_manifests()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        await PutNoteAsync(alice, "/Skills/x/SKILL.md", "---\nname: ../evil\ndescription: Does x.\n---\n# X\n");
+
+        using var response = await CopyAsync(alice, new { from = "/Skills/x", to = "Work" });
+
+        Assert.Equal("/Work/_skills/x", await PathOfAsync(response));
+        Assert.Equal(["_skills/x/SKILL.md"], await FilesAsync(alice, "/Work"));
+    }
+
+    [Theory]
+    [InlineData("../evil")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData(".hidden")]
+    [InlineData("..")]
+    [InlineData("")]
+    public async Task TargetOf_refuses_a_name_that_escapes(string name)
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var work = await AccessAsync(alice, "Work");
+
+        var refused = Assert.Throws<ApiException>(() => SkillCopier.TargetOf(work, name));
+
+        Assert.Equal(StatusCodes.Status400BadRequest, refused.Status);
+        Assert.Equal(P("/Work/_skills/x"), SkillCopier.TargetOf(work, "x"));
+        Assert.Equal(P("/Skills/x"), SkillCopier.TargetOf(await AccessAsync(alice, "Skills"), "x"));
     }
 
     [Fact]

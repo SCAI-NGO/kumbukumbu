@@ -36,7 +36,7 @@ async function sessionOrNull(): Promise<SessionView | null> {
  * Add to my skills, `/skills/add#<code>` (skills design §3.12, Decision 6), the way in from a shared skill's page: the
  * code is moved from the fragment into this tab's session storage and the address becomes plain `/skills/add`, also
  * across signing in, as `/share` does. Signed in, she picks the target (Skills preselected, or `_skills/` of any vault
- * she may write); the code is forgotten only once the copy is made, so a taken name leaves it for another try.
+ * she may write); the code is forgotten once the copy is made or she cancels, so a taken name leaves it for another try.
  */
 export default function AddSkill() {
   const location = useLocation();
@@ -95,6 +95,11 @@ function AddScreen({ title, lead, children }: { title: string; lead?: ReactNode;
   );
 }
 
+/** The code out of this tab's session storage, unless another link replaced it meanwhile. */
+function forget(code: string) {
+  if (sessionStorage.getItem(skillCodeKey) === code) sessionStorage.removeItem(skillCodeKey);
+}
+
 function Target({ code }: { code: string }) {
   const navigate = useNavigate();
   const vaults = useVaults();
@@ -111,10 +116,14 @@ function Target({ code }: { code: string }) {
         mode="add"
         code={code}
         vaults={vaults.data}
-        onClose={() => navigate("/skills/installed", { replace: true })}
+        onClose={() => {
+          // She chose not to add it: the code goes, as once added; the link brings it back.
+          forget(code);
+          navigate("/skills/installed", { replace: true });
+        }}
         onAdded={(path) => {
           // Only now: until the copy is made, the code must stay for another try.
-          if (sessionStorage.getItem(skillCodeKey) === code) sessionStorage.removeItem(skillCodeKey);
+          forget(code);
           setAdded(path);
         }}
       />

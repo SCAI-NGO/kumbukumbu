@@ -79,6 +79,17 @@ describe("Add to my skills", () => {
     expect(await bodies(fetch)).toEqual([{ code, vault: "Work" }]);
   });
 
+  it("forgets the code on Cancel", async () => {
+    const { fetch } = addApi({ "GET /api/skills": () => json(200, { skills: [], withoutSkills: [] }), "GET /api/skills/shared": () => json(200, []) });
+    const router = renderApp(`/skills/add#${code}`);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(sessionStorage.getItem(skillCodeKey)).toBeNull();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/skills/installed"));
+    expect(await bodies(fetch)).toEqual([]);
+  });
+
   it("forgets the code once added", async () => {
     let n = 0;
     const { fetch } = addApi({

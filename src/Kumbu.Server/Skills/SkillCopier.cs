@@ -42,9 +42,11 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
     public Task<VaultPath> MoveAsync(SkillCopyRequest request, CancellationToken ct) => RunAsync(request, move: true, ct);
 
     /// <summary>The skill's folder in <paramref name="target"/>: <c>/&lt;vault&gt;/&lt;name&gt;</c> in the marked vault
-    /// Skills, else <c>/&lt;vault&gt;/_skills/&lt;name&gt;</c>.</summary>
+    /// Skills, else <c>/&lt;vault&gt;/_skills/&lt;name&gt;</c>. A name with a <see cref="NameProblem"/> is refused here, 400,
+    /// so no caller makes a folder of one: <see cref="VaultPath.Child"/> takes any text as one segment.</summary>
     public static VaultPath TargetOf(VaultAccess target, string folderName)
     {
+        if (NameProblem(folderName) is { } problem) throw ApiErrors.BadRequest($"Choose another name: {problem}.");
         var vault = VaultPath.Root.Child(target.Name);
         return (target.IsSkillsVault ? vault : vault.Child(SkillPaths.LocationFolder)).Child(folderName);
     }
@@ -53,6 +55,8 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
     public static string? NameProblem(string name) =>
         string.IsNullOrWhiteSpace(name) ? "a skill's name isn't empty"
         : name.Contains('/', StringComparison.Ordinal) ? "a skill's name has no '/'"
+        : name.Contains('\\', StringComparison.Ordinal) ? "a skill's name has no '\\'"
+        : name.StartsWith('.') ? "a skill's name never starts with '.'"
         : NoteNames.NameProblem(VaultPath.Root.Child("x").Child(name));
 
     internal sealed record Source(VaultAccess? Access, VaultPath? Folder, string Name, IReadOnlyList<SourceFile> Files);
@@ -69,7 +73,6 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         var target = open.FirstOrDefault(v => string.Equals(v.Name, request.To, StringComparison.Ordinal))
             ?? throw ApiErrors.NotFound($"There is no vault '{request.To}'.");
         var name = request.Name ?? source.Name;
-        if (NameProblem(name) is { } problem) throw ApiErrors.BadRequest($"Choose another name: {problem}.");
         var folder = TargetOf(target, name);
 
         if (source.Folder is { } from && SkillPaths.LocationOf(from, marked) == SkillPaths.LocationOf(folder, marked))
@@ -111,7 +114,6 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         var target = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => string.Equals(v.Name, vault, StringComparison.Ordinal))
             ?? throw ApiErrors.NotFound($"There is no vault '{vault}'.");
         name ??= opened.Copy.Name;
-        if (NameProblem(name) is { } problem) throw ApiErrors.BadRequest($"Choose another name: {problem}.");
         var folder = TargetOf(target, name);
         await RequireFreeAsync(target, folder, "copy", ct);
 
@@ -138,8 +140,8 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         return folder;
     }
 
-    /// <summary>An image's width and height as its bytes say, never as anyone else told; null for another file, or a
-    /// header that doesn't read, which the writer then refuses.</summary>
+    /// <summary>An image's width and height as its bytes say, never as anyone else told; null for another file, and for
+    /// a header that doesn't read: the writer then stores the image without them.</summary>
     private static (int W, int H)? Dimensions(VaultPath path, byte[] bytes) =>
         AttachmentFormat.ForPath(path) is { Kind: AttachmentKind.Image } ? ImageHeader.Read(bytes, out _) : null;
 

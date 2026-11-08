@@ -46,11 +46,11 @@ public sealed class AddSkillTests(KumbuAppFactory app)
     }
 
     /// <summary>Alice's skill write-as-alice in her vault Skills, shared by link; the code, normalised.</summary>
-    private async Task<(RestClient Alice, string Code)> AlicesLinkAsync()
+    private async Task<(RestClient Alice, string Code)> AlicesLinkAsync(string manifest = Manifest, string post = "# Post\n")
     {
         var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
-        await PutNoteAsync(alice, "/Skills/write-as-alice/SKILL.md", Manifest);
-        await PutNoteAsync(alice, "/Skills/write-as-alice/examples/post.md", "# Post\n");
+        await PutNoteAsync(alice, "/Skills/write-as-alice/SKILL.md", manifest);
+        await PutNoteAsync(alice, "/Skills/write-as-alice/examples/post.md", post);
         using var shared = await alice.SendAsync(HttpMethod.Post, "/api/skills/shared", new { path = "/Skills/write-as-alice" });
         Assert.Equal(HttpStatusCode.Created, shared.StatusCode);
         var link = (await RestClient.JsonAsync(shared))["link"]!.GetValue<string>();
@@ -112,6 +112,44 @@ public sealed class AddSkillTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, added.StatusCode);
         Assert.Equal("/Skills/write-as-alice", (await RestClient.JsonAsync(added))["path"]!.GetValue<string>());
         Assert.Equal(["SKILL.md", "examples/post.md"], await FilesAsync(dave, "/Skills/write-as-alice"));
+    }
+
+    [Fact]
+    public async Task The_default_name_is_the_folders_never_the_manifests()
+    {
+        var (_, code) = await AlicesLinkAsync("---\nname: ../evil\ndescription: Writes posts.\n---\n# Write\n");
+        var dave = await RestClient.NewAsync(app.PublicApi, vault: "Writing");
+
+        using var added = await AddAsync(dave, new { code, vault = "Writing" });
+
+        Assert.Equal(HttpStatusCode.Created, added.StatusCode);
+        Assert.Equal("/Writing/_skills/write-as-alice", (await RestClient.JsonAsync(added))["path"]!.GetValue<string>());
+        Assert.Equal(["_skills/write-as-alice/SKILL.md", "_skills/write-as-alice/examples/post.md"], await FilesAsync(dave, "/Writing"));
+        Assert.Empty(await FilesAsync(dave, "/Skills"));
+        Assert.Equal("/Writing/_skills/write-as-alice", Assert.Single((await RecordAsync(dave, "Writing")).Origins).Path);
+    }
+
+    [Fact]
+    public async Task A_received_note_keeps_its_bytes_and_its_hash()
+    {
+        // Every write path stores a note's \r\n as \n, so a shared note holds none; a byte order mark is content. The copy
+        // stores the bytes the link gave, which are the bytes its hash covers.
+        const string post = "\uFEFF# Post\r\n\r\nA line.\r\n";
+        var (alice, code) = await AlicesLinkAsync(post: post);
+        var dave = await RestClient.NewAsync(app.PublicApi, vault: "Writing");
+
+        using (var added = await AddAsync(dave, new { code, vault = "Writing" })) Assert.Equal(HttpStatusCode.Created, added.StatusCode);
+
+        var shared = await NoteAsync(alice, "/Skills/write-as-alice/examples/post.md");
+        var copied = await NoteAsync(dave, "/Writing/_skills/write-as-alice/examples/post.md");
+        Assert.Equal(shared, copied);
+        Assert.Equal("\uFEFF# Post\n\nA line.\n", copied);
+        var hash = SkillHash.Of([
+            ("SKILL.md", Encoding.UTF8.GetBytes(await NoteAsync(alice, "/Skills/write-as-alice/SKILL.md"))),
+            ("examples/post.md", Encoding.UTF8.GetBytes(copied)),
+        ]);
+        Assert.Equal(hash, SkillManifest.Read("write-as-alice", await NoteAsync(dave, "/Writing/_skills/write-as-alice/SKILL.md")).Hash);
+        Assert.Equal(hash, Assert.Single((await RecordAsync(dave, "Writing")).Origins).Hash);
     }
 
     [Fact]
