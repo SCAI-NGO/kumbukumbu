@@ -301,17 +301,24 @@ public sealed class MarketplaceApiTests(KumbuAppFactory app)
         await using var api = Api();
         var alice = await UserAsync(api);
 
+        // Refused by the route's own checks, before the request reaches the fetcher or the GitHub client.
+        var sentence = repo != Repo ? "Give a GitHub repository as owner/repo."
+            : !Commits.IsValid(commit) ? "Give the commit as its 40 lower-case hex digits."
+            : "Give the skill's folder in the repository, as path.";
         using var installed = await InstallAsync(alice, Install(commit: commit, path: path, repo: repo));
         Assert.Equal(HttpStatusCode.BadRequest, installed.StatusCode);
+        Assert.Equal(sentence, await RestClient.ErrorAsync(installed));
         if (repo == Repo)
         {
             using var preview = await alice.GetAsync($"/api/skills/marketplaces/{repo}/skill?commit={Uri.EscapeDataString(commit)}&path={Uri.EscapeDataString(path)}");
             Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+            Assert.Equal(sentence, await RestClient.ErrorAsync(preview));
         }
         else
         {
             using var added = await alice.SendAsync(HttpMethod.Post, "/api/skills/marketplaces", new { repo });
             Assert.Equal(HttpStatusCode.BadRequest, added.StatusCode);
+            Assert.Equal(sentence, await RestClient.ErrorAsync(added));
         }
 
         Assert.Empty(_github.Requests);
