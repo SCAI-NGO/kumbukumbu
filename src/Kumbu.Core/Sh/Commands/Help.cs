@@ -90,7 +90,8 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               Not hidden: history, trash, du (the archive is a line of its own), df, restore, mv,
               checkpoints, the board; nor WebDAV, sync, the export, publishing or sharing.
               Links prefer what is outside the archive: a link that matches both an archived and a living
-              note or attachment leads to the living one; only when nothing else matches does it lead in.
+              note or attachment leads to the living one; only when nothing else matches does it lead in
+              (a full path still leads where it says; a note in the archive resolves its links as before).
 
               archive <path> moves a note, an attachment or a folder there, keeping its folder path and
               adding the time, in the server's time zone, to its name: /Work/Inbox/report.pdf becomes
@@ -109,7 +110,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
     public static string Of(ICommand command) => Shell.Readers.Contains(command.Name)
         ? command.Help.TrimEnd() + "\n  --checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'"
         : Topics.ContainsKey(command.Name)
-            ? command.Help.TrimEnd() + $"\n  'help {command.Name}' adds the {command.Name} topic: what is hidden where, and what is not"
+            ? command.Help.TrimEnd() + $"\n  'help {command.Name}' adds the {command.Name} topic"
             : command.Help;
 
     public bool ReadsInput => false;

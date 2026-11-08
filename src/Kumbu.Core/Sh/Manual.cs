@@ -29,7 +29,7 @@ public static class Manual
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
           mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
-          archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow
+          archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)
           mkdir <path>                    make a folder; an empty folder stays until you remove it
           rm <path>                       move a note or an empty folder to the trash (kept 30 days)
           trash [path]                    list removed notes and folders

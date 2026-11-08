@@ -475,6 +475,7 @@ public static class NoteApi
             if (at == 0)
             {
                 if (FolderMarker.Is(file.Path)) continue;
+                // A Note carries no write time: a loose note, put there by hand, not by archive, costs a read each.
                 var written = file.WrittenAt ?? (await store.GetAsync(file.Path, ct))?.LastWriteAt;
                 loose.Add(new ArchiveItem(file.Path.Value, file.Path.Name, Original(file.Path, file.Path.Name), written, false, 1, file.Bytes, file.Kind));
                 continue;

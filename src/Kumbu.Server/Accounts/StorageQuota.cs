@@ -250,8 +250,9 @@ public sealed class StorageQuota
     {
         lock (_lock)
         {
-            // What df and Settings were shown is stale too: their next ask counts again.
+            // What df and Settings were shown is stale too, the archive's bytes with it: their next ask counts again.
             _shown.Remove(ownerId);
+            _archives.Remove(ownerId);
             var account = AccountOf(ownerId);
             if (account.Refresh is { } running)
             {

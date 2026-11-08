@@ -151,6 +151,7 @@ public class HelpTests
         Assert.Contains("Asking: --archive on each of them, or a path inside the archive: ls /Work/_archive/", text);
         Assert.Contains("Not hidden: history, trash, du (the archive is a line of its own), df, restore, mv, checkpoints, the board; nor WebDAV, sync, the export, publishing or sharing.", text);
         Assert.Contains("Links prefer what is outside the archive", text);
+        Assert.Contains("only when nothing else matches does it lead in (a full path still leads where it says; a note in the archive resolves its links as before).", text);
         Assert.Contains("adding the time, in the server's time zone, to its name", text);
         Assert.Contains("/Work/_archive/Inbox/report 2026-11-08 213005.pdf", text);
         Assert.Contains("To restore, mv it back without the time (mv never overwrites).", text);
@@ -163,7 +164,7 @@ public class HelpTests
         var help = (await Run("archive --help")).Output;
         Assert.StartsWith("archive <path>", help);
         Assert.DoesNotContain("\nthe archive\n", help);
-        Assert.EndsWith("'help archive' adds the archive topic: what is hidden where, and what is not", help);
+        Assert.EndsWith("\n  'help archive' adds the archive topic", help);
     }
 
     [Fact]
@@ -171,6 +172,7 @@ public class HelpTests
     {
         Assert.Contains("'help archive' for what a vault's _archive/ hides.", (await Run("help")).Output);
         Assert.Contains("'help archive' the command and the vault's archive", (await Run("help help")).Output);
+        Assert.Contains("\n  archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)\n", Manual.ToolDescription);
     }
 
     [Fact]
