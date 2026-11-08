@@ -164,7 +164,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// where it is (WebDAV design §3.6 case 6: a share's <c>DELETE</c>, held and not carried out): the attempt in the log,
     /// and the owner's vault event for it, in one transaction; the publication is as it was. Nothing if the note isn't
     /// published (any longer). No check of who may publish: it changes nothing that is out, and it only tells the owner.
-    /// A share that tries again and again (a client retrying its sync) is recorded once per <see cref="KeptFold"/>.
+    /// A share that tries again and again (a client retrying its sync) is recorded once per note per <see cref="KeptFold"/>.
     /// </summary>
     public async Task RecordKeptAsync(VaultAccess access, VaultPath note, string by, WriterRef byRef, CancellationToken ct)
     {
@@ -175,8 +175,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
             if (Find(record, stored) is null) return;
             var now = Now;
-            if (record.Log.LastOrDefault(l => l.Kind == PublishingKinds.Kept) is { } last
-                && last.Note == stored.Value && last.By == by && last.ByRef == reference && now - last.At < KeptFold)
+            // The last attempt on this note by this writer, not the last of all: alternating between notes mustn't defeat
+            // the fold.
+            if (record.Log.LastOrDefault(l => l.Kind == PublishingKinds.Kept && l.Note == stored.Value && l.By == by && l.ByRef == reference) is { } last
+                && now - last.At < KeptFold)
             {
                 return;
             }

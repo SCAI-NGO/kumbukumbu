@@ -285,6 +285,25 @@ public sealed class DavPublishedTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(2, (await RecordAsync(dav.Owner)).Log.Count(l => l.Kind == PublishingKinds.Kept));
     }
 
+    /// <summary>Alternating between two published notes folds too: each note's attempt is compared with that note's last
+    /// one by the same writer, not with the last attempt of all (security review finding 7).</summary>
+    [Fact]
+    public async Task Alternating_attempts_on_two_notes_are_recorded_once_per_note()
+    {
+        var (dav, _) = await PublishedAsync("Ideas/other.md");
+        await PublishAsync(dav.Owner, "/Work/Ideas/other.md");
+
+        async Task AttemptAsync(string note)
+        {
+            Assert.Equal(HttpStatusCode.NoContent, await SendAsync(dav, HttpMethod.Delete, "/dav/Work/Ideas/" + note));
+            _time.Advance(TimeSpan.FromSeconds(61));
+            await NextRequestAsync(dav);
+        }
+
+        foreach (var note in new[] { "plan.md", "other.md", "plan.md", "other.md" }) await AttemptAsync(note);
+        Assert.Equal(2, (await RecordAsync(dav.Owner)).Log.Count(l => l.Kind == PublishingKinds.Kept));
+    }
+
     /// <summary>A hold its share doesn't come back for within the parking TTL is forgotten (<see cref="Kumbu.Server.Dav.DavHolds"/>):
     /// the note is simply there again, and no request ended it, so nothing is recorded.</summary>
     [Fact]
