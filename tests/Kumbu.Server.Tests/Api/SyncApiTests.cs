@@ -451,4 +451,43 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(["note", "image"], since["notes"]!.AsArray().Select(n => n!["kind"]!.GetValue<string>()));
         Assert.Equal(["/Arbeit/report.pdf", "/Arbeit/shot.png"], Paths(since, "deleted"));
     }
+
+    [Fact]
+    public async Task Old_clients_never_see_text_files()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("plan.md", "plan\n");
+        await user.CreateFileAsync("_skills/x/run.py", "print(1)\n"u8.ToArray());
+
+        var full = await JsonAsync(await user.GetAsync(AttachmentsUrl(user)));
+        Assert.Equal(["/Arbeit/plan.md"], Paths(full));
+
+        _time.Advance(TimeSpan.FromMinutes(10));
+        var cursor = Cursor(full);
+        using var rm = await user.SendAsync(HttpMethod.Delete, user.Url("_skills/x/run.py", "files"));
+        Assert.True(rm.IsSuccessStatusCode);
+
+        var since = await JsonAsync(await user.GetAsync(AttachmentsUrl(user, cursor)));
+        Assert.DoesNotContain("run.py", since.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_client_asking_for_text_files_gets_them()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("plan.md", "plan\n");
+        await user.CreateFileAsync("_skills/x/run.py", "print(1)\n"u8.ToArray());
+
+        var full = await JsonAsync(await user.GetAsync(AttachmentsUrl(user) + "&text=1"));
+        Assert.Equal(["/Arbeit/_skills/x/run.py", "/Arbeit/plan.md"], Paths(full));
+        Assert.Equal(["text", "note"], full["notes"]!.AsArray().Select(n => n!["kind"]!.GetValue<string>()));
+
+        _time.Advance(TimeSpan.FromMinutes(10));
+        var cursor = Cursor(full);
+        using var rm = await user.SendAsync(HttpMethod.Delete, user.Url("_skills/x/run.py", "files"));
+        Assert.True(rm.IsSuccessStatusCode);
+
+        var since = await JsonAsync(await user.GetAsync(AttachmentsUrl(user, cursor) + "&text=1"));
+        Assert.Equal(["/Arbeit/_skills/x/run.py"], Paths(since, "deleted"));
+    }
 }

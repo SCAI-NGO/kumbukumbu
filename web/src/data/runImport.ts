@@ -62,7 +62,7 @@ export const serverImportApi: ImportApi = {
     await call(api.POST("/api/vaults", { body: { name } }));
   },
   async versions(vault) {
-    const answer = await call(api.GET("/api/vaults/{vault}/versions", { params: { path: { vault }, query: { attachments: "1" } } }));
+    const answer = await call(api.GET("/api/vaults/{vault}/versions", { params: { path: { vault }, query: { attachments: "1", text: "1" } } }));
     // The API's paths are from the root of the tree: "/Work/a.md".
     const prefix = `/${vault}/`;
     return new Map(answer.notes.filter((n) => n.path.startsWith(prefix)).map((n) => [n.path.slice(prefix.length), n.version]));

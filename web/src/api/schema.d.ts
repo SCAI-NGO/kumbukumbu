@@ -6292,6 +6292,7 @@ export interface paths {
                 query?: {
                     since?: string;
                     attachments?: string;
+                    text?: string;
                 };
                 header?: never;
                 path: {
