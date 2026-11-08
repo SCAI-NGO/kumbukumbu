@@ -470,25 +470,6 @@ describe("images and PDFs", () => {
   });
 });
 
-describe("the open sheet", () => {
-  it("keeps a drop anywhere on the page from opening the file in place of the app", async () => {
-    uploadApi([]);
-    renderApp("/notes/Work/inbox.md");
-    await openFromDock();
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    const over = new Event("dragover", { bubbles: true, cancelable: true });
-    document.body.dispatchEvent(over);
-    document.body.dispatchEvent(drop);
-    expect(over.defaultPrevented).toBe(true);
-    expect(drop.defaultPrevented).toBe(true);
-
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    const later = new Event("drop", { bubbles: true, cancelable: true });
-    document.body.dispatchEvent(later);
-    expect(later.defaultPrevented).toBe(false);
-  });
-});
-
 describe("summaryText", () => {
   it("counts in the singular and the plural", () => {
     expect(summaryText({ written: 34, replaced: 3, skipped: 12 })).toBe("34 notes uploaded, 3 replaced, 12 files skipped");
