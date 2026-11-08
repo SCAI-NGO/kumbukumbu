@@ -471,4 +471,25 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
         Assert.Contains("/dav/Work/.backup/a.md", listing);
         Assert.Equal(2, (await Store(dav.Owner).ListNotesUnderAsync(P("/Work"), Ct)).Count);
     }
+
+    /// <summary>A stored folder copied onto a parked name that wouldn't fit the share's parking cap by itself is a 507
+    /// before a byte of it is read (security review finding 3): nothing of it is parked, and what the share had parked
+    /// stays, rather than the server reading gigabytes into memory and then evicting.</summary>
+    [Fact]
+    public async Task Copy_of_a_stored_folder_larger_than_the_parking_cap_is_507_and_parks_nothing()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        var pdf = new byte[14_000_000];
+        "%PDF-1.4\n"u8.CopyTo(pdf);
+        // Five of them: 70 MB, beyond the 64 MiB a share may park.
+        for (var i = 0; i < 5; i++) await dav.Owner.CreateFileAsync($"Archive/{i}.pdf", pdf);
+        Assert.True(5L * pdf.Length > Kumbu.Server.Dav.DavRules.ParkingCap);
+        using (var kept = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.keep", Bytes([1, 2, 3]))) Assert.Equal(HttpStatusCode.Created, kept.StatusCode);
+
+        using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/Archive/", headers: To(".backup/"));
+
+        Assert.Equal(HttpStatusCode.InsufficientStorage, copy.StatusCode);
+        using (var backup = await dav.PropfindAsync("/dav/Work/.backup/", depth: "0")) Assert.Equal(HttpStatusCode.NotFound, backup.StatusCode);
+        using (var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/.keep")) Assert.Equal([1, 2, 3], await get.Content.ReadAsByteArrayAsync(Ct));
+    }
 }

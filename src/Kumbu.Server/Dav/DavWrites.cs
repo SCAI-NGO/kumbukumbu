@@ -342,15 +342,38 @@ internal sealed partial class DavWrites(
 
     /// <summary>
     /// A <c>COPY</c> of what the store has onto a parked name (a backup <c>plan.md~</c>, a folder into <c>.backup/</c>): a
-    /// parked copy of what the share sees there, for this share only; the store is not touched. Everything is read
-    /// before what was parked at the destination goes.
+    /// parked copy of what the share sees there, for this share only; the store is not touched. What it is comes from
+    /// the tree's listing first, and a copy that wouldn't fit <see cref="DavRules.ParkingCap"/> or
+    /// <see cref="DavRules.ParkingEntries"/> by itself is a 507 before a byte is read, as parking refuses what doesn't fit:
+    /// a folder of gigabytes is never read into memory to be evicted afterwards. Everything is read before what was
+    /// parked at the destination goes, each file held to what is left of the cap as it comes.
     /// </summary>
     private async Task CopyIntoParkingAsync(VaultPath from, DavPlace to, bool deep, bool replaced, CancellationToken ct)
     {
-        var files = new List<(string Path, byte[]? Bytes)>();
-        await ReadForParkingAsync(from, to.Path, deep, files, ct);
+        var plan = new ParkingPlan();
+        await PlanParkingAsync(await tree.FindAsync(from, ct) ?? throw NotFound(), to.Path, deep, plan, ct);
+        var files = new List<(string Path, byte[]? Bytes)>(plan.Items.Count);
+        long read = 0;
+        foreach (var (at, source) in plan.Items)
+        {
+            if (source is null)
+            {
+                files.Add((at, null));
+                continue;
+            }
+
+            var content = await tree.ContentAsync(source, ct) ?? throw NotFound();
+            // The listing's length is what the plan counted; a file that grew since is held to the cap all the same.
+            read += DavParking.Cost(at, content.Length);
+            if (read > DavRules.ParkingCap) throw ParkingFull();
+            await using var stream = await content.Open(ct);
+            using var bytes = new MemoryStream((int)content.Length);
+            await stream.CopyToAsync(bytes, ct);
+            files.Add((at, bytes.ToArray()));
+        }
+
         if (replaced) parking.Remove(caller.ShareId, to.VaultId, to.Path);
-        // Folders before what is in them, as they were read.
+        // Folders before what is in them, as they were listed.
         foreach (var (path, bytes) in files)
         {
             if (bytes is null) parking.MakeFolder(caller.ShareId, to.VaultId, path);
@@ -360,24 +383,32 @@ internal sealed partial class DavWrites(
         Response.StatusCode = replaced ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
     }
 
-    /// <summary>What <paramref name="from"/> holds as the share sees it, at <paramref name="at"/> below the vault: a
-    /// file's bytes, or a folder (no bytes) and, if <paramref name="deep"/>, everything in it.</summary>
-    private async Task ReadForParkingAsync(VaultPath from, string at, bool deep, List<(string, byte[]?)> files, CancellationToken ct)
+    /// <summary>What a copy into the parking area takes: each path below the vault, with the file it is read from (null
+    /// for a folder), and what it costs of the cap.</summary>
+    private sealed class ParkingPlan
     {
-        if (await tree.ContentAsync(from, ct) is { } content)
-        {
-            await using var stream = await content.Open(ct);
-            using var bytes = new MemoryStream();
-            await stream.CopyToAsync(bytes, ct);
-            files.Add((at, bytes.ToArray()));
-            return;
-        }
+        public List<(string At, VaultPath? Source)> Items { get; } = [];
 
-        if (await tree.FindAsync(from, ct) is not { IsCollection: true } folder) throw NotFound();
-        files.Add((at, null));
-        if (!deep) return;
-        foreach (var child in await tree.ChildrenAsync(folder, ct)) await ReadForParkingAsync(child.Path, at + "/" + child.Path.Name, deep, files, ct);
+        public long Cost { get; private set; }
+
+        public void Add(string at, VaultPath? source, long length)
+        {
+            Cost += DavParking.Cost(at, length);
+            if (Cost > DavRules.ParkingCap || Items.Count >= DavRules.ParkingEntries) throw ParkingFull();
+            Items.Add((at, source));
+        }
     }
+
+    /// <summary><paramref name="resource"/> as the share sees it, at <paramref name="at"/> below the vault, into the plan:
+    /// a file, or a folder and, if <paramref name="deep"/>, everything in it. Stops at the first entry beyond the cap.</summary>
+    private async Task PlanParkingAsync(DavResource resource, string at, bool deep, ParkingPlan plan, CancellationToken ct)
+    {
+        plan.Add(at, resource.IsCollection ? null : resource.Path, resource.Length ?? 0);
+        if (!resource.IsCollection || !deep) return;
+        foreach (var child in await tree.ChildrenAsync(resource, ct)) await PlanParkingAsync(child, at + "/" + child.Path.Name, deep, plan, ct);
+    }
+
+    private static DavException ParkingFull() => new(StatusCodes.Status507InsufficientStorage, DavParking.NoRoom);
 
     /// <summary>
     /// A <c>COPY</c> or <c>MOVE</c> of a parked file onto a path of the store: a <c>PUT</c> of its bytes there (brief

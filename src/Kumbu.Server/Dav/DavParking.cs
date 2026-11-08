@@ -143,7 +143,14 @@ public sealed class DavParking(TimeProvider time)
 
     /// <summary>What an item takes of the cap: its bytes, its path and <see cref="DavRules.ParkingEntryCost"/>, so that
     /// empty files and folders cost what they take.</summary>
-    private static long Cost(ParkedItem item) => (item.Bytes?.LongLength ?? 0) + item.Path.Length * sizeof(char) + DavRules.ParkingEntryCost;
+    private static long Cost(ParkedItem item) => Cost(item.Path, item.Bytes?.LongLength ?? 0);
+
+    /// <summary>What an item at <paramref name="path"/> of <paramref name="length"/> bytes takes of the cap, before it is
+    /// read (a copy into the parking area counts first).</summary>
+    public static long Cost(string path, long length) => length + path.Length * sizeof(char) + DavRules.ParkingEntryCost;
+
+    /// <summary>The refusal of what doesn't fit (507).</summary>
+    public const string NoRoom = "This share has no room left for parked files.";
 
     private static string Parent(string path) => path.LastIndexOf('/') is var slash and >= 0 ? path[..slash] : "";
 
@@ -190,7 +197,7 @@ public sealed class DavParking(TimeProvider time)
         while (area.Bytes + adding > DavRules.ParkingCap || area.Count + entries > DavRules.ParkingEntries)
         {
             var oldest = area.OldestFiles().FirstOrDefault(e => !keep.Contains(e))
-                ?? throw new DavException(StatusCodes.Status507InsufficientStorage, "This share has no room left for parked files.");
+                ?? throw new DavException(StatusCodes.Status507InsufficientStorage, NoRoom);
             area.Remove(oldest);
         }
     }
