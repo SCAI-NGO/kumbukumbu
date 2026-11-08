@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -13,6 +13,7 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
+import { sizeText } from "../components/Sheet";
 import { LeaveDialog } from "../components/shownOnce";
 import { topDialog, useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
@@ -189,6 +190,9 @@ function FolderButton({
 /** What a file row's "Delete" opens: a note's dialog, or an attachment's at the version the tree shows. */
 export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment"; path: string; version: string };
 
+/** A sheet of the vault's that opens over the tree: from its menu, or the archive from its entry below the tree. */
+export type VaultSheet = { kind: "trash" | "activity" | "checkpoints" | "archive"; vault: string };
+
 /**
  * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
  * server's deletion needs, can't be deleted from here.
@@ -243,6 +247,18 @@ function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: 
       <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
       {unpublishable && <UnpublishableMark />}
+    </button>
+  );
+}
+
+/** The archive's entry at the bottom of the tree, dimmed: what it holds is put away, yet it takes space. */
+function ArchiveEntry({ files, bytes, onOpen }: { files: number; bytes: number; onOpen(): void }) {
+  return (
+    <button type="button" data-tree-row onClick={onOpen} className={`${rowClass} mt-1 w-full pl-[22px] text-muted`}>
+      <Archive size={18} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />
+      <span className="min-w-0 flex-1 truncate">
+        Archive · {files === 1 ? "1 file" : `${files} files`} · {sizeText(bytes)}
+      </span>
     </button>
   );
 }
@@ -390,7 +406,8 @@ function DrawerFrame({ style, className, children, after }: { style: CSSProperti
 
 /**
  * The tree from the left: the active vault's tree, then the vault switcher and the account row at the bottom. The
- * vault's menu also opens its trash, its activity and its checkpoints (`onVaultSheet`), as sheets over it. Below the
+ * vault's menu also opens its trash, its activity and its checkpoints (`onVaultSheet`), as sheets over it, and a dimmed
+ * entry below the tree its archive, which the tree leaves out. Below the
  * desktop breakpoint a drawer over the note, which a note opened from it closes; from there on (`docked`) a sidebar
  * beside the note that stays open and is no dialog, so the focus moves freely between it and the note.
  */
@@ -403,7 +420,7 @@ export default function TreeDrawer(props: {
   onNewVault(): void;
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
-  onVaultSheet(sheet: { kind: "trash" | "activity" | "checkpoints"; vault: string }): void;
+  onVaultSheet(sheet: VaultSheet): void;
 }) {
   const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
@@ -586,6 +603,9 @@ export default function TreeDrawer(props: {
           <p className="px-2.5 py-2 text-sm text-muted">
             {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
           </p>
+        )}
+        {tree.data?.archive && activeVault && (
+          <ArchiveEntry files={Number(tree.data.archive.files)} bytes={Number(tree.data.archive.bytes)} onOpen={() => onVaultSheet({ kind: "archive", vault: activeVault })} />
         )}
       </div>
 
