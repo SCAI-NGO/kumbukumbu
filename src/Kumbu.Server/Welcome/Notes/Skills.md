@@ -8,7 +8,7 @@ Your account has a vault called Skills for your own skills. Each skill is a fold
 
 A skill that belongs to the work of one vault goes into a folder `_skills` at the top of that vault instead, `_skills/release-notes/`, say. Everyone who has that vault sees it, and every list of skills says who last changed it.
 
-Your AI sees your skills only if its key or connection has the vault Skills. A new key or connection starts with Skills set to read; for keys and connections made before, add it in drawer → Access. To let your AI write skills, give it write on Skills.
+Your AI sees the skills in Skills only if its key or connection has the vault Skills; without it, it still sees the built-in skills and those in the `_skills` folders of the vaults it has. A new key or connection starts with Skills set to read; for keys and connections made before, add it in drawer → Access. To let your AI write skills, give it write on Skills.
 
 ## Making a skill
 
