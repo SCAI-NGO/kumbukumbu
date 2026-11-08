@@ -27,6 +27,14 @@ public class SkillHashTests
         Assert.NotEqual(SkillHash.Of([F("a", "xb\0y")]), SkillHash.Of([F("a", "x"), F("b", "y")]));
 
     [Fact]
+    public void A_changed_content_byte_changes_the_hash() =>
+        Assert.NotEqual(SkillHash.Of([F("a.py", "x")]), SkillHash.Of([F("a.py", "y")]));
+
+    [Fact]
+    public void Paths_that_collide_after_normalisation_are_refused() =>
+        Assert.Throws<ArgumentException>(() => SkillHash.Of([F("caf\u00e9.txt", "x"), F("cafe\u0301.txt", "y")]));
+
+    [Fact]
     public void Composed_and_decomposed_paths_hash_alike() =>
         Assert.Equal(SkillHash.Of([F("café.txt", "x")]), SkillHash.Of([F("café.txt", "x")]));
 

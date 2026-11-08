@@ -126,4 +126,11 @@ public class FrontmatterTests
 
         Assert.Equal("---\ntitle: T\ncolumn: Doing\n---\n", output);
     }
+
+    [Fact]
+    public void A_block_value_leaves_no_trailing_space_after_its_key()
+    {
+        Assert.Equal("---\na: 1\nm:\n  k: \"v\"\n---\n", Frontmatter.Set("---\na: 1\n---\n", Changes(("m", "\n  k: \"v\""))));
+        Assert.Equal("---\nm:\n  k: \"v\"\n---\nbody", Frontmatter.Set("body", Changes(("m", "\n  k: \"v\""))));
+    }
 }

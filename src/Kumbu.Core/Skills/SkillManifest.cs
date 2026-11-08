@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
 using Kumbu.Core.Sections;
@@ -54,27 +55,70 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
         var metadata = NoMetadata;
         if (read.Values.TryGetValue("metadata", out var raw) && raw is not null)
         {
-            if (raw is IReadOnlyDictionary<string, object?> map && map.Values.All(v => v is null or string)) metadata = map.ToDictionary(p => p.Key, p => (string?)p.Value ?? "");
+            if (raw is IReadOnlyDictionary<string, object?> map) metadata = map.Where(p => p.Value is string).ToDictionary(p => p.Key, p => (string)p.Value!);
             else problems.Add("metadata must be a map of keys and values");
         }
 
         return new SkillManifest(name, description, Text(read.Values, "license"), Text(read.Values, "compatibility"), Text(read.Values, "allowed-tools"), metadata, problems);
     }
 
-    /// <summary>Writes the origin under <c>metadata</c>, replacing older origin fields; every other line stays as it was
-    /// (the other metadata entries are written out again, quoted).</summary>
+    /// <summary>Writes the origin under <c>metadata</c>, replacing older origin fields. Other scalar entries are written out again, quoted;
+    /// entries that are lists or maps stay as they were.</summary>
     public static string WithOrigin(string content, string source, string hash)
     {
-        var existing = Frontmatter.Read(Normalise(content)).Values.GetValueOrDefault("metadata") is IReadOnlyDictionary<string, object?> map
-            ? map.Where(p => p.Key is not (SourceKey or HashKey) && p.Value is null or string).Select(p => (p.Key, (string?)p.Value ?? ""))
-            : [];
-        var block = new StringBuilder();
-        foreach (var (key, value) in existing.Append((SourceKey, source)).Append((HashKey, hash)))
+        content = Normalise(content);
+        var (entries, indent) = Entries(content);
+        entries.AddRange([$"{indent}{SourceKey}: {Quote(source)}", $"{indent}{HashKey}: {Quote(hash)}"]);
+        return Frontmatter.Set(content, [("metadata", "\n" + string.Join('\n', entries))]);
+    }
+
+    /// <summary>The lines of the existing metadata block without the origin keys, and the indent its entries use.</summary>
+    private static (List<string> Lines, string Indent) Entries(string content)
+    {
+        var indent = "  ";
+        var values = Frontmatter.Read(content).Values;
+        if (values.GetValueOrDefault("metadata") is not IReadOnlyDictionary<string, object?> map) return ([], indent);
+
+        var lines = Lines.Split(content);
+        var close = Outline.FrontmatterEnd(lines) - 1;
+        var at = -1;
+        for (var i = 1; i < close && at < 0; i++)
         {
-            block.Append("\n  ").Append(Key(key)).Append(": ").Append(Quote(value));
+            if (new[] { "metadata", "\"metadata\"", "'metadata'" }.Any(k => lines[i].StartsWith(k, StringComparison.Ordinal) && lines[i][k.Length..].TrimStart() is [':', ..] rest && rest[1..].Trim().Length == 0)) at = i;
         }
 
-        return Frontmatter.Set(content, [("metadata", block.ToString())]);
+        if (at < 0)
+        {
+            // Written in flow style on the key's own line: every entry is written out again.
+            var flow = indent;
+            return (map.Where(p => p.Key is not (SourceKey or HashKey))
+                .Select(p => $"{flow}{Key(p.Key)}: {(p.Value is string text ? Quote(text) : JsonSerializer.Serialize(p.Value))}").ToList(), indent);
+        }
+
+        var block = lines.Skip(at + 1).Take(close - at - 1).TakeWhile(l => l.Trim().Length == 0 || l.StartsWith(' ') || l.StartsWith('\t'))
+            .Where(l => l.Trim().Length > 0).ToList();
+        if (block.Count == 0) return ([], indent);
+        indent = block[0][..(block[0].Length - block[0].TrimStart().Length)];
+
+        var chunks = new List<List<string>>();
+        foreach (var line in block)
+        {
+            if (line.StartsWith(indent, StringComparison.Ordinal) && !char.IsWhiteSpace(line[indent.Length..].FirstOrDefault('x'))) chunks.Add([line]);
+            else chunks[^1].Add(line);
+        }
+
+        var result = new List<string>();
+        foreach (var chunk in chunks)
+        {
+            var head = chunk[0][indent.Length..];
+            var colon = head.IndexOf(':');
+            var key = colon < 0 ? null : head[..colon].Trim().Trim('"', '\'');
+            if (key is SourceKey or HashKey) continue;
+            if (key is not null && chunk.Count == 1 && map.GetValueOrDefault(key) is string text) result.Add($"{indent}{Key(key)}: {Quote(text)}");
+            else result.AddRange(chunk);
+        }
+
+        return (result, indent);
     }
 
     /// <summary>What follows the frontmatter; the whole text when there is none.</summary>
@@ -90,7 +134,7 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
 
     private static SkillManifest Failed(string problem) => new(null, null, null, null, null, NoMetadata, [problem]);
 
-    private static string Normalise(string content) => content.TrimStart('﻿').Replace("\r\n", "\n");
+    private static string Normalise(string content) => content.TrimStart('\uFEFF').Replace("\r\n", "\n");
 
     private static string? Text(IReadOnlyDictionary<string, object?> values, string key) => values.GetValueOrDefault(key) as string;
 
@@ -116,7 +160,7 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
         return quoted.Append('"').ToString();
     }
 
-    [GeneratedRegex("^[a-z0-9-]{1,64}$")]
+    [GeneratedRegex(@"^[a-z0-9-]{1,64}\z")]
     private static partial Regex ValidName();
 
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+$")]
