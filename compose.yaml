@@ -108,6 +108,8 @@ services:
       Kumbu__Skills__GitHubToken: ${KUMBU_GITHUB_TOKEN:-}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
+      # The server's time zone, e.g. Europe/Berlin: the time archive adds to the names of what it moves.
+      TZ: ${TZ:-UTC}
       # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.
       Kumbu__Metrics__Url: http://0.0.0.0:9464
       # The PDF sidecar below (img, pdf; empty, neither shows anything). The server refuses connections from its address.

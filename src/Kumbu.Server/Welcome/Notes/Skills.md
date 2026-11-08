@@ -19,6 +19,10 @@ Kumbu² comes with a skill for making skills, `create-skill`. Say to your AI:
 
 It asks what the skill is for and when it should be used, writes the folder, and checks it. Without write on Skills it gives you the files to add yourself.
 
+## Making notes of a PDF
+
+A second built-in skill, `ingest-attachments`, turns a PDF into notes: drop a pump manual into a folder Inbox and say to your AI "Make notes of the pump manual in Inbox." It asks whether you want one note or a folder of them, writes the notes with the manual's pictures and diagrams where they stood, and asks whether to keep, archive or delete the PDF; archived, it moves to the vault's `_archive/` folder, out of the way of search, and the notes' links follow it there.
+
 ## The Skills screen
 
 In the drawer, **Skills** lists every skill you and your AI can see, where each one comes from and who last changed it. From there you copy or move a skill to another vault, download it as a .zip, and share it with a link of its own, which looks like {{server}}/k#… and is shown once. **Try** shows which skills your AI would find for a request. Your server may also offer **Marketplaces**: collections of skills on GitHub that you add skills from.
