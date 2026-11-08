@@ -296,6 +296,24 @@ public sealed class SkillPageApiTests(KumbuAppFactory app)
         Assert.All(archive.Entries, e => Assert.Equal(at.ToString("s"), e.LastWriteTime.DateTime.ToString("s")));
     }
 
+    // The stored paths are checked where they are written; the archive refuses anything that would unpack outside its root.
+    [Theory]
+    [InlineData("", "SKILL.md")]
+    [InlineData(".", "SKILL.md")]
+    [InlineData("..", "SKILL.md")]
+    [InlineData("a/b", "SKILL.md")]
+    [InlineData("a\\b", "SKILL.md")]
+    [InlineData("x", "")]
+    [InlineData("x", "/etc/passwd")]
+    [InlineData("x", "../SKILL.md")]
+    [InlineData("x", "scripts/../../y")]
+    [InlineData("x", "scripts/./run.py")]
+    [InlineData("x", "scripts//run.py")]
+    [InlineData("x", "scripts/")]
+    [InlineData("x", "scripts\\run.py")]
+    public void The_zip_refuses_a_path_that_leaves_its_root(string folderName, string path) =>
+        Assert.Throws<ArgumentException>(() => SkillZip.Of(folderName, [(path, [1])], DateTime.UtcNow));
+
     [Theory]
     [InlineData(new[] { "SKILL.md", "examples/post.md" }, false)]
     [InlineData(new[] { "SKILL.md", "scripts/README.md" }, true)]

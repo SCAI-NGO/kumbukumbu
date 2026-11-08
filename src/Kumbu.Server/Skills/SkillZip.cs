@@ -11,9 +11,17 @@ namespace Kumbu.Server.Skills;
 /// </summary>
 internal static class SkillZip
 {
-    /// <summary>Every file as <c>&lt;folderName&gt;/&lt;path&gt;</c>, each entry dated <paramref name="at"/>.</summary>
+    /// <summary>Every file as <c>&lt;folderName&gt;/&lt;path&gt;</c>, each entry dated <paramref name="at"/>. A folder
+    /// name or path that could unpack outside that root (an empty, <c>.</c> or <c>..</c> segment, a leading <c>/</c>, a
+    /// backslash) throws, though the stored paths are checked where they are written.</summary>
     internal static byte[] Of(string folderName, IReadOnlyList<(string Path, byte[] Bytes)> files, DateTime at)
     {
+        if (folderName.Contains('/') || !Plain(folderName)) throw new ArgumentException("The folder name isn't a plain name.", nameof(folderName));
+        foreach (var (path, _) in files)
+        {
+            if (!Plain(path)) throw new ArgumentException("A file path leaves the skill's folder.", nameof(files));
+        }
+
         // A zip keeps a time of day without a zone: the UTC one, as it is.
         var stamp = new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Unspecified), TimeSpan.Zero);
         using var buffer = new MemoryStream();
@@ -30,6 +38,8 @@ internal static class SkillZip
 
         return buffer.ToArray();
     }
+
+    private static bool Plain(string path) => !path.Contains('\\') && path.Split('/').All(s => s is not ("" or "." or ".."));
 
     /// <summary>The download's <c>Content-Disposition</c> (RFC 6266): an ASCII fallback, in which anything outside
     /// <c>[A-Za-z0-9._-]</c> is <c>_</c>, and the name itself in UTF-8.</summary>
