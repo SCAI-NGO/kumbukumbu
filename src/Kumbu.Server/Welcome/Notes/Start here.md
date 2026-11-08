@@ -20,6 +20,7 @@ A vault is a top-level collection of notes; this one is called "Welcome". You ca
 
 - How your notes are protected, and what the people running your server can and can't see: [[Security and privacy]].
 - How to take your notes with you, bring them in, or delete them: [[Your data]].
+- How to keep instructions for tasks you do again, which your AI follows: [[Skills]].
 
 ## Try it
 
