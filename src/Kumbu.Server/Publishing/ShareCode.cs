@@ -81,4 +81,7 @@ public static class ShareCode
 
     /// <summary>The code goes in the fragment, which a browser never sends to the server.</summary>
     public static string Link(string baseUrl, string normalised) => $"{baseUrl.TrimEnd('/')}/s#{Format(normalised)}";
+
+    /// <summary>A shared skill's link, its code in the fragment as a note's.</summary>
+    public static string SkillLink(string baseUrl, string normalised) => $"{baseUrl.TrimEnd('/')}/k#{Format(normalised)}";
 }

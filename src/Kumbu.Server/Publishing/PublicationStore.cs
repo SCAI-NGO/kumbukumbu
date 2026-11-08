@@ -13,7 +13,8 @@ namespace Kumbu.Server.Publishing;
 /// each publication's key (the vault-side slot, decision 6). Each copy is a mini vault: its publication key seals the
 /// copy and its files, and a reader slot holds that key, with the owner's id (decision 7), under the reader key
 /// derived from the share code. Everything of a copy is bound to its lookup id (L, lower-case hex): the reader slot
-/// to <c>publication:{L}:reader</c>, the copy to <c>publication:{L}:copy</c>, file n to <c>publication:{L}:file:{n}</c>.
+/// to <c>publication:{L}:reader</c>, the copy to <c>publication:{L}:copy</c> (a skill's to <c>publication:{L}:skill</c>),
+/// file n to <c>publication:{L}:file:{n}</c>.
 /// Writing needs the vault unlocked; reading a copy needs only its code. The code is a secret, never logged.
 /// </summary>
 internal sealed class PublicationStore(VaultCatalog catalog)
@@ -136,8 +137,19 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     }
 
     /// <summary>A new copy under <paramref name="code"/>, sealed under <paramref name="key"/>; file n is <paramref name="files"/>[n].</summary>
-    public async Task InsertCopyAsync(
-        IClientSessionHandle session, string vaultId, string code, byte[] key, string ownerId, PublishedCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct)
+    public Task InsertCopyAsync(
+        IClientSessionHandle session, string vaultId, string code, byte[] key, string ownerId, PublishedCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct) =>
+        InsertAsync(session, vaultId, code, key, ownerId, null, l => SealCopy(key, l, copy), files, ct);
+
+    /// <summary>A skill's new copy under <paramref name="code"/>, of kind <see cref="PublicationKinds.Skill"/>, sealed under
+    /// <paramref name="key"/> to <c>publication:{L}:skill</c>; file n is <paramref name="files"/>[n], as it is in the folder.</summary>
+    public Task InsertSkillCopyAsync(
+        IClientSessionHandle session, string vaultId, string code, byte[] key, string ownerId, PublishedSkillCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct) =>
+        InsertAsync(session, vaultId, code, key, ownerId, PublicationKinds.Skill, l => SealSkill(key, l, copy), files, ct);
+
+    private async Task InsertAsync(
+        IClientSessionHandle session, string vaultId, string code, byte[] key, string ownerId, string? kind, Func<string, byte[]> seal, IReadOnlyList<byte[]> files,
+        CancellationToken ct)
     {
         var lookup = ShareCode.Lookup(code);
         var l = Convert.ToHexStringLower(lookup);
@@ -156,7 +168,7 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         try
         {
             await catalog.Publications.InsertOneAsync(
-                session, new PublicationDocument { Id = id, Vault = vaultId, Lookup = lookup, Reader = reader, Blob = SealCopy(key, l, copy), At = catalog.Now }, cancellationToken: ct);
+                session, new PublicationDocument { Id = id, Vault = vaultId, Lookup = lookup, Reader = reader, Blob = seal(l), At = catalog.Now, Kind = kind }, cancellationToken: ct);
         }
         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
@@ -168,11 +180,20 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     }
 
     /// <summary>An update (decision 15): the same document, lookup, reader slot and time, a new copy and new files.</summary>
-    public async Task ReplaceCopyAsync(IClientSessionHandle session, string code, byte[] key, PublishedCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct)
+    public Task ReplaceCopyAsync(IClientSessionHandle session, string code, byte[] key, PublishedCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct) =>
+        ReplaceAsync(session, code, key, null, l => SealCopy(key, l, copy), files, ct);
+
+    /// <summary>As <see cref="ReplaceCopyAsync"/>, of a skill's copy.</summary>
+    public Task ReplaceSkillCopyAsync(IClientSessionHandle session, string code, byte[] key, PublishedSkillCopy copy, IReadOnlyList<byte[]> files, CancellationToken ct) =>
+        ReplaceAsync(session, code, key, PublicationKinds.Skill, l => SealSkill(key, l, copy), files, ct);
+
+    private async Task ReplaceAsync(
+        IClientSessionHandle session, string code, byte[] key, string? kind, Func<string, byte[]> seal, IReadOnlyList<byte[]> files, CancellationToken ct)
     {
         var lookup = ShareCode.Lookup(code);
         var l = Convert.ToHexStringLower(lookup);
         var doc = await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) ?? throw new PublishingConflictException();
+        if (doc.Kind != kind) throw new PublishingConflictException();
         // The reader slot stays: a copy under another key than the slot's would never open for a reader.
         var readerKey = ShareCode.ReaderKey(code);
         try
@@ -190,7 +211,7 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         }
 
         var updated = await catalog.Publications.UpdateOneAsync(
-            session, P.Eq(d => d.Id, doc.Id) & P.Eq(d => d.Blob, doc.Blob), Builders<PublicationDocument>.Update.Set(d => d.Blob, SealCopy(key, l, copy)), cancellationToken: ct);
+            session, P.Eq(d => d.Id, doc.Id) & P.Eq(d => d.Blob, doc.Blob), Builders<PublicationDocument>.Update.Set(d => d.Blob, seal(l)), cancellationToken: ct);
         if (updated.MatchedCount == 0) throw new PublishingConflictException();
         await catalog.PublicationFiles.DeleteManyAsync(session, Files.Eq(d => d.Publication, doc.Id), cancellationToken: ct);
         await InsertFilesAsync(session, doc.Vault, doc.Id, l, key, files, ct);
@@ -228,14 +249,24 @@ internal sealed class PublicationStore(VaultCatalog catalog)
 
     /// <summary>As <see cref="OpenFileAsync(string, int, CancellationToken)"/>, of a copy already opened: only the file's
     /// document is read and opened.</summary>
-    public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(OpenedPublication opened, int index, CancellationToken ct)
+    public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(OpenedPublication opened, int index, CancellationToken ct) =>
+        opened.Copy.Files.FirstOrDefault(f => f.Index == index) is { } file && await OpenFileBytesAsync(opened.Id, opened.Key, opened.Lookup, index, ct) is { } bytes
+            ? (bytes, file.MediaType)
+            : null;
+
+    /// <summary>File <paramref name="index"/> of a skill's copy already opened; null as <see cref="OpenFileAsync(OpenedPublication, int, CancellationToken)"/>.</summary>
+    public async Task<(byte[] Bytes, string MediaType)?> OpenSkillFileAsync(OpenedSkill opened, int index, CancellationToken ct) =>
+        opened.Copy.Files.FirstOrDefault(f => f.Index == index) is { } file && await OpenFileBytesAsync(opened.Id, opened.Key, opened.Lookup, index, ct) is { } bytes
+            ? (bytes, file.MediaType)
+            : null;
+
+    private async Task<byte[]?> OpenFileBytesAsync(ObjectId publication, byte[] key, byte[] lookup, int index, CancellationToken ct)
     {
-        if (opened.Copy.Files.FirstOrDefault(f => f.Index == index) is not { } file) return null;
-        var doc = await catalog.PublicationFiles.Find(Files.Eq(d => d.Publication, opened.Id) & Files.Eq(d => d.Index, index)).FirstOrDefaultAsync(ct);
+        var doc = await catalog.PublicationFiles.Find(Files.Eq(d => d.Publication, publication) & Files.Eq(d => d.Index, index)).FirstOrDefaultAsync(ct);
         if (doc is null) return null;
         try
         {
-            return (VaultCrypto.Open(opened.Key, doc.Blob, FileContext(Convert.ToHexStringLower(opened.Lookup), index)), file.MediaType);
+            return VaultCrypto.Open(key, doc.Blob, FileContext(Convert.ToHexStringLower(lookup), index));
         }
         catch (CryptographicException)
         {
@@ -243,19 +274,39 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         }
     }
 
-    /// <summary>The publication under <paramref name="code"/>, opened; null as <see cref="OpenCopyAsync"/>.</summary>
+    /// <summary>The publication under <paramref name="code"/>, opened; null as <see cref="OpenCopyAsync"/>, and for a skill's
+    /// copy, which only <see cref="OpenSkillAsync"/> opens.</summary>
     public async Task<OpenedPublication?> OpenPublicationAsync(string code, CancellationToken ct)
     {
-        var lookup = ShareCode.Lookup(code);
-        if (await catalog.Publications.Find(P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { } doc) return null;
-        var l = Convert.ToHexStringLower(lookup);
+        // A note's copy has no kind.
+        if (await FindAsync(code, ct) is not { } doc || doc.Kind is not null) return null;
+        return Open(code, doc, (key, l) => JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(key, doc.Blob, CopyContext(l))),
+            (owner, copy, key) => new OpenedPublication(doc.Id, owner, copy, key, doc.Lookup));
+    }
+
+    /// <summary>The skill's copy under <paramref name="code"/>, opened; null if no document has the code's lookup, it is a
+    /// note's, or its reader slot or copy doesn't open.</summary>
+    public async Task<OpenedSkill?> OpenSkillAsync(string code, CancellationToken ct)
+    {
+        if (await FindAsync(code, ct) is not { } doc || doc.Kind != PublicationKinds.Skill) return null;
+        return Open(code, doc, (key, l) => JsonSerializer.Deserialize<PublishedSkillCopy>(VaultCrypto.Open(key, doc.Blob, SkillContext(l))),
+            (owner, copy, key) => new OpenedSkill(doc.Id, owner, copy, key, doc.Lookup));
+    }
+
+    private async Task<PublicationDocument?> FindAsync(string code, CancellationToken ct) =>
+        await catalog.Publications.Find(P.Eq(d => d.Lookup, ShareCode.Lookup(code))).FirstOrDefaultAsync(ct);
+
+    /// <summary>The reader slot opened with the code's reader key, then the copy with the publication key it holds.</summary>
+    private static T? Open<TCopy, T>(string code, PublicationDocument doc, Func<byte[], string, TCopy?> copyOf, Func<string, TCopy, byte[], T> opened)
+        where TCopy : class where T : class
+    {
+        var l = Convert.ToHexStringLower(doc.Lookup);
         var readerKey = ShareCode.ReaderKey(code);
         try
         {
             var slot = JsonSerializer.Deserialize<ReaderSlot>(VaultCrypto.Open(readerKey, doc.Reader, ReaderContext(l)));
             if (slot?.Key is not { } key || slot.Owner is not { } owner) return null;
-            var copy = JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(key, doc.Blob, CopyContext(l)));
-            return copy is null ? null : new OpenedPublication(doc.Id, owner, copy, key, doc.Lookup);
+            return copyOf(key, l) is { } copy ? opened(owner, copy, key) : null;
         }
         catch (Exception e) when (e is CryptographicException or JsonException)
         {
@@ -278,9 +329,13 @@ internal sealed class PublicationStore(VaultCatalog catalog)
 
     private static byte[] SealCopy(byte[] key, string l, PublishedCopy copy) => VaultCrypto.Seal(key, JsonSerializer.SerializeToUtf8Bytes(copy), CopyContext(l));
 
+    private static byte[] SealSkill(byte[] key, string l, PublishedSkillCopy copy) => VaultCrypto.Seal(key, JsonSerializer.SerializeToUtf8Bytes(copy), SkillContext(l));
+
     private static string ReaderContext(string l) => $"publication:{l}:reader";
 
     private static string CopyContext(string l) => $"publication:{l}:copy";
+
+    private static string SkillContext(string l) => $"publication:{l}:skill";
 
     private static string FileContext(string l, int n) => $"publication:{l}:file:{n}";
 }
@@ -295,6 +350,21 @@ internal sealed class OpenedPublication(ObjectId id, string owner, PublishedCopy
     public string Owner { get; } = owner;
 
     public PublishedCopy Copy { get; } = copy;
+
+    internal byte[] Key { get; } = key;
+
+    internal byte[] Lookup { get; } = lookup;
+}
+
+/// <summary>A skill's copy opened with its code (<see cref="PublicationStore.OpenSkillAsync"/>), as
+/// <see cref="OpenedPublication"/> is a note's. Holds the publication key: kept for a request, never stored or logged.</summary>
+internal sealed class OpenedSkill(ObjectId id, string owner, PublishedSkillCopy copy, byte[] key, byte[] lookup)
+{
+    public ObjectId Id { get; } = id;
+
+    public string Owner { get; } = owner;
+
+    public PublishedSkillCopy Copy { get; } = copy;
 
     internal byte[] Key { get; } = key;
 

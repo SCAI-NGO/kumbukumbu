@@ -38,12 +38,20 @@ internal sealed record SkillOrigin(string Path, string Source, string Hash);
 /// <summary>
 /// One publication. Id: 16 random bytes in lower-case hex. Code: the share code, normalised (for Copy link again).
 /// Key: the publication key; this is the vault-side slot (decision 6). NoteVersion and the files' versions tell when
-/// the copy is older than what it was made from. Not logged: <see cref="ToString"/> leaves out the code and the key.
+/// the copy is older than what it was made from. Kind: <see cref="PublicationKinds.Skill"/> for a skill shared by link,
+/// whose Note is the skill's folder, NoteVersion the copy's <see cref="PublishedSkillCopy.Hash"/> and Files every file
+/// of the folder; null for a note. Not logged: <see cref="ToString"/> leaves out the code and the key.
 /// </summary>
 internal sealed record PublicationEntry(
-    string Id, string Note, string Code, byte[] Key, DateTime SnapshotAt, string NoteVersion, IReadOnlyList<PublishedFile> Files, string By, WriterRefPayload ByRef)
+    string Id, string Note, string Code, byte[] Key, DateTime SnapshotAt, string NoteVersion, IReadOnlyList<PublishedFile> Files, string By, WriterRefPayload ByRef,
+    string? Kind = null)
 {
-    public override string ToString() => $"PublicationEntry {{ Id = {Id}, Note = {Note}, SnapshotAt = {SnapshotAt:O}, Files = {Files.Count} }}";
+    public override string ToString() => $"PublicationEntry {{ Id = {Id}, Note = {Note}, SnapshotAt = {SnapshotAt:O}, Files = {Files.Count}, Kind = {Kind} }}";
+}
+
+internal static class PublicationKinds
+{
+    public const string Skill = "skill";
 }
 
 internal sealed record PublishedFile(string Path, string Version);
@@ -71,6 +79,13 @@ internal static class WithdrawalReasons
 internal sealed record PublishedCopy(string Title, string Markdown, DateTime SnapshotAt, IReadOnlyList<PublishedCopyFile> Files);
 
 internal sealed record PublishedCopyFile(int Index, string MediaType);
+
+/// <summary>What a skill's link opens, sealed under the publication key: the folder's name, the manifest's description and
+/// text, when it was taken, every file of the folder by its path relative to it, and their <c>kumbu-hash</c>
+/// (<see cref="Kumbu.Core.Skills.SkillHash"/>).</summary>
+internal sealed record PublishedSkillCopy(string Name, string Description, string Manifest, DateTime SnapshotAt, IReadOnlyList<PublishedSkillFile> Files, string Hash);
+
+internal sealed record PublishedSkillFile(int Index, string Path, string MediaType, long Size);
 
 /// <summary>The reader slot, sealed under the reader key: the publication key, and the owner, whose account the
 /// reader endpoint checks before it opens the copy (decision 7).</summary>
