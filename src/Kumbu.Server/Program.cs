@@ -112,6 +112,7 @@ builder.Services.AddSingleton<DavHolds>();
 builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
+builder.Services.AddGitHubClient();
 builder.Services.AddSingleton<OAuthClients>();
 builder.Services.AddSingleton<AuthorizationRequests>();
 builder.Services.AddSingleton<OAuthTokens>();
