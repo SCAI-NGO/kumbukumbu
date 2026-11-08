@@ -19,7 +19,7 @@
   "dependencies": {
     "@napi-rs/canvas": "1.0.13",
     "omggif": "1.0.10",
-    "pdfjs-dist": "6.4.299"
+    "pdfjs-dist": "6.5.438"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
