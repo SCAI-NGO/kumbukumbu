@@ -136,7 +136,7 @@ public class ShellTests
     [Fact]
     public void ManualMentionsCommands()
     {
-        Assert.Contains("ls [path]", Manual.ToolDescription);
+        Assert.Contains("ls [--archive] [path]", Manual.ToolDescription);
         Assert.Contains("cat <path>", Manual.ToolDescription);
         Assert.Contains("rg --files", Manual.ToolDescription);
         Assert.Contains("help [command]", Manual.ToolDescription);

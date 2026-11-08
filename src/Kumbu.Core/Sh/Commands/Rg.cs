@@ -580,7 +580,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");
             var scope = VaultPath.Root;
             if (operands.Count == 1 && !CommandArgs.TryParsePath(Name, operands[0], out scope, out var scopeError)) return scopeError!;
-            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, ct);
+            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, archive: true, ct);
             if (all is null) return readError!;
             var (carrying, tagError) = TagFilter.Narrow(all, tags, scope);
             return carrying is null

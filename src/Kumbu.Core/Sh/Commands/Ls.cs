@@ -9,16 +9,23 @@ public sealed class Ls(INoteReader notes) : ICommand
 {
     public string Name => "ls";
 
-    public string Usage => "ls [path]";
+    private static readonly Option[] Spec = [new(null, "archive")];
+
+    public string Usage => "ls [--archive] [path]";
 
     public string Summary => "list a directory; no path lists the vaults";
 
     public string Help => """
-        ls [path]
+        ls [--archive] [path]
           List a directory. Directories end with '/'. Without a path, list the vaults; a vault shared
           with you shows its owner and what you may do in it: garten/ (shared by "Alice", read).
           A note's path lists just that path. An attachment (an image or a PDF) is listed with its
           kind, pixel size and file size: shot.png  image 1440×3120 412 KB.
+          A vault's listing leaves out _archive/; ls /Work/_archive/ lists what it holds.
+          _archive/ is the vault's archive (see 'help archive'); hiding it is about attention, not
+          access: whoever may read the vault may read it.
+
+          --archive   list the vault's _archive/ too
 
           ls
           ls /Demo/projects
@@ -32,11 +39,12 @@ public sealed class Ls(INoteReader notes) : ICommand
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (CommandArgs.RefuseVersion(Name, args, "ls lists directories, which have none") is { } versionError) return versionError;
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count > 1) return ShellResult.Error("ls: too many arguments");
+        if (!Options.TryParse(Name, args, Spec, out var options, out var optionError)) return optionError;
+        var operands = options.Operands;
+        if (operands.Count > 1) return ShellResult.Error("ls: too many arguments");
 
         var dir = VaultPath.Root;
-        if (args.Count == 1 && !CommandArgs.TryParsePath(Name, args[0], out dir, out var pathError))
+        if (operands.Count == 1 && !CommandArgs.TryParsePath(Name, operands[0], out dir, out var pathError))
         {
             return pathError!;
         }
@@ -83,6 +91,11 @@ public sealed class Ls(INoteReader notes) : ICommand
 
             return ShellResult.Error($"ls: cannot access '{dir.Value}': No such file or directory");
         }
+
+        // Left out only here, after the checks above: a vault holding nothing but its archive lists as empty.
+        var archive = ArchiveFolder.Shown(dir, options.Has("archive"));
+        below = archive ? below : below.Where(n => !ArchiveFolder.Contains(n)).ToList();
+        files = archive ? files : files.Where(f => !ArchiveFolder.Contains(f.Path)).ToList();
 
         // Sorted by name; an attachment's line adds what it is after its name.
         var entries = new Dictionary<string, string>(StringComparer.Ordinal);

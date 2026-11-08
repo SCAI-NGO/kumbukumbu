@@ -48,6 +48,26 @@ public class HelpTests
         }
     }
 
+    [Theory]
+    [InlineData("ls", "ls [--archive] [path]", "ls [--archive] [path]")]
+    [InlineData("tags", "tags [--archive] [path]", "tags [--archive] [tag] [path]")]
+    [InlineData("backlinks", "backlinks [--archive] <path>", "backlinks [--archive] <path>")]
+    public async Task The_readers_that_hide_the_archive_take_archive(string command, string help, string usage)
+    {
+        var details = (await Run($"help {command}")).Output;
+        Assert.StartsWith(help, details);
+        Assert.Contains("\n  --archive ", details);
+        Assert.Contains($"\n  {usage} ", Manual.ToolDescription);
+        Assert.Contains($"\n  {usage} ", (await Run("help")).Output);
+    }
+
+    [Fact]
+    public async Task Help_ls_says_hiding_the_archive_is_not_access_control()
+    {
+        var help = System.Text.RegularExpressions.Regex.Replace((await Run("help ls")).Output, @"\s+", " ");
+        Assert.Contains("_archive/ is the vault's archive (see 'help archive'); hiding it is about attention, not access: whoever may read the vault may read it.", help);
+    }
+
     [Fact]
     public async Task Help_mkdir_says_an_empty_folder_stays()
     {

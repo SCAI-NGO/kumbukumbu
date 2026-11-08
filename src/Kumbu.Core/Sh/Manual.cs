@@ -7,7 +7,7 @@ public static class Manual
         Shell over Kumbu² — a Markdown second brain. Top-level directories are vaults.
 
         Commands:
-          ls [path]                       list a directory (directories end with '/'); no path lists the vaults
+          ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
           cat <path>[#section]            print a note or one section; its version token comes as a separate block
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
@@ -17,8 +17,8 @@ public static class Manual
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
-          backlinks <path>                the notes that link to a note, as path:line:text
-          tags [tag] [path]               the tags below a path with counts; with a tag, the notes that carry it
+          backlinks [--archive] <path>    the notes that link to a note, as path:line:text
+          tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on

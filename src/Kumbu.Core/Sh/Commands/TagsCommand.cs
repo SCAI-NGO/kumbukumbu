@@ -9,19 +9,23 @@ public sealed class TagsCommand(INoteReader notes) : ICommand
 {
     public string Name => "tags";
 
-    public string Usage => "tags [tag] [path]";
+    private static readonly Option[] Spec = [new(null, "archive")];
+
+    public string Usage => "tags [--archive] [tag] [path]";
 
     public string Summary => "the tags below a path with their counts, or the notes with one tag";
 
     public string Help => """
-        tags [path]
+        tags [--archive] [path]
           The tags of the notes below a path (default: every vault), one per line as #tag (notes),
           most used first. Tags are read as Obsidian reads them: the frontmatter's tags property and
           #tags in the text, not in code or comments. Case doesn't count (#Research is #research);
           nested tags are listed in full (#project/kumbu).
-        tags <tag> [path]
+        tags [--archive] <tag> [path]
           The notes that carry a tag, as path:line:text (like rg), the line where the tag stands.
           A tag covers its nested tags: 'tags project' finds #project/kumbu too. With or without '#'.
+
+          --archive   count the notes in a vault's archive (_archive/) too; a path inside it always does
 
         To search only the notes with a tag: rg --tag <tag> and semsearch --tag <tag>.
 
@@ -35,14 +39,14 @@ public sealed class TagsCommand(INoteReader notes) : ICommand
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (CommandArgs.RefuseVersion(Name, args, "tags reads every note below a path") is { } versionError) return versionError;
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        var paths = args.Where(a => a.StartsWith('/')).ToList();
-        var asked = args.Where(a => !a.StartsWith('/')).ToList();
-        if (paths.Count > 1 || asked.Count > 1) return ShellResult.Error($"tags: too many arguments (tags [tag] [path]){CommandArgs.QuoteHint}");
+        if (!Options.TryParse(Name, args, Spec, out var options, out var optionError)) return optionError;
+        var paths = options.Operands.Where(a => a.StartsWith('/')).ToList();
+        var asked = options.Operands.Where(a => !a.StartsWith('/')).ToList();
+        if (paths.Count > 1 || asked.Count > 1) return ShellResult.Error($"tags: too many arguments ({Usage}){CommandArgs.QuoteHint}");
 
         var scope = VaultPath.Root;
         if (paths.Count == 1 && !CommandArgs.TryParsePath(Name, paths[0], out scope, out var pathError)) return pathError!;
-        var (found, readError) = await ReadScopeAsync(notes, Name, scope, ct);
+        var (found, readError) = await ReadScopeAsync(notes, Name, scope, options.Has("archive"), ct);
         if (found is null) return readError!;
 
         if (asked.Count == 0)
@@ -67,12 +71,18 @@ public sealed class TagsCommand(INoteReader notes) : ICommand
     }
 
     /// <summary>The notes below a vault, folder or note, for the commands that take a tag filter. An existing empty vault
-    /// has none; a path that is nothing gives the error <c>cat</c> would.</summary>
+    /// has none; a path that is nothing gives the error <c>cat</c> would. The notes in a vault's archive are left out
+    /// after those checks, so a vault holding nothing but its archive has none, unless <paramref name="archive"/> or
+    /// the scope lies inside it.</summary>
     internal static async Task<(IReadOnlyList<Note>? Notes, ShellResult? Error)> ReadScopeAsync(
-        INoteReader notes, string command, VaultPath scope, CancellationToken ct)
+        INoteReader notes, string command, VaultPath scope, bool archive, CancellationToken ct)
     {
         var below = await notes.ReadNotesUnderAsync(scope, ct);
-        if (below.Count > 0 || scope.IsRoot) return (below, null);
+        if (below.Count > 0 || scope.IsRoot)
+        {
+            return (ArchiveFolder.Shown(scope, archive) ? below : below.Where(n => !ArchiveFolder.Contains(n.Path)).ToList(), null);
+        }
+
         if (await notes.ReadAsync(scope, ct) is { } content) return ([new Note(scope, content)], null);
         if (scope.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(scope.Segments[0])) return ([], null);
         return (null, await CommandArgs.ReadNoteAsync(command, notes, scope, ct));
