@@ -303,6 +303,21 @@ describe("readImport", () => {
     expect(vaults[0].folders).toEqual([]);
     expect(vaults[0].skipped.map((s) => s.path)).toEqual([".gitkeep", ".git/x/.vaultkeep"]);
   });
+
+  it("imports a skill's text files into Skills and skips them elsewhere", async () => {
+    const vaults = await readImport(
+      zip({ "Skills/pdf/SKILL.md": "S", "Skills/pdf/scripts/run.py": "print(1)\n", "Skills/run.py": "print(2)\n", "Work/run.py": "print(3)\n", "Work/_skills/x/LICENSE": "MIT" }),
+      "export.zip",
+    );
+    const skills = vaults.find((v) => v.name === "Skills")!;
+    const work = vaults.find((v) => v.name === "Work")!;
+    expect(skills.notes.map((n) => n.path)).toEqual(["pdf/SKILL.md"]);
+    expect(skills.files.map((f) => f.path)).toEqual(["pdf/scripts/run.py"]);
+    expect(skills.skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]);
+    expect(work.files.map((f) => f.path)).toEqual(["_skills/x/LICENSE"]);
+    expect(work.skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]);
+    expect(new TextDecoder().decode(await skills.files[0].read())).toBe("print(1)\n");
+  });
 });
 
 describe("versionOfBytes", () => {

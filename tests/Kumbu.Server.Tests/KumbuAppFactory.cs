@@ -70,7 +70,15 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
             // No sidecar container in tests: canned analyses and solid-colour pictures stand in for it.
             services.RemoveAll<Kumbu.Server.Attachments.IPdfSidecar>();
             services.AddSingleton<Kumbu.Server.Attachments.IPdfSidecar>(Sidecar);
+            // No test reaches the real GitHub: one that needs it brings a Skills.FakeGitHub through WithWebHostBuilder.
+            services.AddHttpClient(Kumbu.Server.Skills.GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => new NoGitHub());
         });
+    }
+
+    private sealed class NoGitHub : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException($"A test asked GitHub ({request.RequestUri}) without a FakeGitHub.");
     }
 
     public Search.FakeEmbedder Embedder { get; } = new();

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Crypto;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
@@ -58,6 +59,9 @@ public sealed record ConnectionInfo(
 {
     /// <summary>The ids of the vaults the connection may publish on ("May publish"), all among <see cref="Vaults"/>.</summary>
     public IReadOnlySet<string> Publish { get; init; } = new HashSet<string>();
+
+    /// <summary>How skills reach the instructions this connection is shown (<see cref="Connections.SetInstructionsAsync"/>).</summary>
+    public InstructionsMode Instructions { get; init; } = InstructionsMode.ListAndHint;
 }
 
 /// <summary>
@@ -179,6 +183,24 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         }
 
         return result;
+    }
+
+    /// <summary>Sets how skills reach the instructions of one of the user's connections: a plain field, no right, so it
+    /// can't change what the connection opens. False if the user has no such connection that isn't revoked.</summary>
+    public async Task<bool> SetInstructionsAsync(User user, string id, InstructionsMode mode, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var update = mode == InstructionsMode.HintOnly
+            ? Builders<ConnectionDocument>.Update.Set(c => c.Instructions, "hint")
+            : Builders<ConnectionDocument>.Update.Unset(c => c.Instructions);
+        return (await Docs.UpdateOneAsync(c => c.Id == id && c.User == user.Id && c.RevokedAt == null, update, cancellationToken: ct)).MatchedCount > 0;
+    }
+
+    /// <summary>The mode of a connection by its id: the default, list and hint, for one that has none set or isn't there.</summary>
+    public async Task<InstructionsMode> InstructionsAsync(string id, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        return ApiKeys.ModeOf(await Docs.Find(c => c.Id == id).Project(c => c.Instructions).FirstOrDefaultAsync(ct));
     }
 
     /// <summary>
@@ -421,6 +443,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
             meta.Client)
         {
             Publish = PublishOf(doc, meta),
+            Instructions = ApiKeys.ModeOf(doc.Instructions),
         };
     }
 
@@ -687,6 +710,10 @@ public sealed class ConnectionDocument
     /// (<see cref="ConnectionRevocation.RemoveVaultsAsync"/>).</summary>
     [BsonElement("wraps")]
     public long Wraps { get; set; }
+
+    /// <summary>In the clear, as it is no right: <c>hint</c> for hint only; absent for list and hint.</summary>
+    [BsonElement("instructions"), BsonIgnoreIfNull]
+    public string? Instructions { get; set; }
 }
 
 public sealed class ConnectionNameTakenException(string name) : Exception($"You already have an API key or connection named '{name}'.");

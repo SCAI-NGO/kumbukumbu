@@ -51,8 +51,9 @@ export default defineConfig({
     // pdf.js (540 kB, loaded only to show a PDF) is the one chunk over Vite's 500 kB default; the app's stay far below.
     chunkSizeWarningLimit: 600,
     rollupOptions: {
-      // The reader page (s.html) is an entry of its own: strangers open it, and it loads none of the app.
-      input: { main: "index.html", s: "s.html" },
+      // The reader page (s.html) and the skill page (k.html) are entries of their own: strangers open them, and they
+      // load none of the app.
+      input: { main: "index.html", s: "s.html", k: "k.html" },
       output: {
         // The libraries in chunks of their own: they change seldom, so a release mostly replaces the app's own code,
         // and the main chunk stays under Vite's 500 kB warning.

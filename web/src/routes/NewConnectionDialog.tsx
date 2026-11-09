@@ -7,7 +7,7 @@ import { useVaults } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
-import { ExpiryPicker, grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
+import { ExpiryPicker, grant, publishing, RightsPicker, useChosenRights } from "./NewKeyDialog";
 
 type Connection = components["schemas"]["ConnectionView"];
 
@@ -18,7 +18,7 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
   const dialog = useDialog<HTMLFormElement>(onClose);
   const vaults = useVaults();
   const [name, setName] = useState("");
-  const [chosen, setChosen] = useState<Record<string, Right>>({});
+  const [chosen, setChosen] = useChosenRights(vaults);
   const [publish, setPublish] = useState<string[]>([]);
   // As for keys: one that ends by itself is the safer default.
   const [expiresInDays, setExpiresInDays] = useState(90);

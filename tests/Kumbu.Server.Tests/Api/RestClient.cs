@@ -67,6 +67,10 @@ public sealed class RestClient
         return new RestClient(api, username, session, user, userKey, vault);
     }
 
+    /// <summary>A user the test made and signed in itself, with <paramref name="session"/>.</summary>
+    internal static RestClient Existing(WebApplicationFactory<Program> api, User user, byte[] userKey, string session, string vault) =>
+        new(api, user.Username, session, user, userKey, vault);
+
     /// <summary>A new session of this user, e.g. after a test moved the clock past the old one's timeout.</summary>
     public async Task<RestClient> SignInAgainAsync()
     {
@@ -194,7 +198,7 @@ public sealed class RestClient
     public static async Task<string> ErrorAsync(HttpResponseMessage response) =>
         (await JsonAsync(response))["error"]!.GetValue<string>();
 
-    private static async Task<HttpResponseMessage> SendAsync(
+    internal static async Task<HttpResponseMessage> SendAsync(
         WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer,
         IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null, CancellationToken? cancel = null)
     {

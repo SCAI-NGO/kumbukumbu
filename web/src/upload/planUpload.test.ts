@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { ACCEPT, MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, NOT_SUPPORTED, planUpload, toBatches } from "./planUpload";
+import { ACCEPT, MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, NOT_SUPPORTED, planUpload, toBatches, TOO_LARGE_FILE } from "./planUpload";
 
 const entry = (path: string, size = 10) => ({ path, size });
 
@@ -64,6 +64,7 @@ describe("planUpload", () => {
     const types = ACCEPT.split(",");
     expect(types).toEqual(expect.arrayContaining(".pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp".split(",")));
     expect(types).toEqual(expect.arrayContaining([".md", ".markdown"]));
+    expect(types).toEqual(expect.arrayContaining([".py", ".sh", ".json", ".svg", ".html"]));
     expect(types.filter((t) => t.endsWith("/*"))).toEqual([]);
   });
 
@@ -108,5 +109,23 @@ describe("toBatches", () => {
     const { batches, skipped } = toBatches([{ path: "huge.md", content: "ü".repeat(524_289) }, { path: "a.md", content: "a" }]);
     expect(batches).toEqual([[{ path: "a.md", content: "a" }]]);
     expect(skipped).toEqual([{ path: "huge.md", reason: "larger than 1048576 bytes (1 MiB), the limit for a note" }]);
+  });
+
+  it("sends a script picked into a skill folder", () =>
+    expect(planUpload([entry("run.py", 9)], { vault: "Work", folder: "_skills/pdf/scripts" }).files).toHaveLength(1));
+
+  it("sends a script of a picked folder below a skill folder, by its whole path", () =>
+    expect(planUpload([entry("scripts/run.py", 9)], { vault: "Skills", folder: "pdf" }).files).toHaveLength(1));
+
+  it("skips a script picked elsewhere", () =>
+    expect(planUpload([entry("run.py", 9)], { vault: "Work", folder: "" }).skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]));
+
+  it("skips a script without a place", () =>
+    expect(planUpload([entry("run.py", 9)]).skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]));
+
+  it("skips a text file over 15 MB instead of offering to shrink it", () => {
+    const plan = planUpload([entry("run.py", MAX_ATTACHMENT_BYTES + 1)], { vault: "Work", folder: "_skills/x" });
+    expect(plan.tooLarge).toEqual([]);
+    expect(plan.skipped).toEqual([{ path: "run.py", reason: TOO_LARGE_FILE }]);
   });
 });

@@ -85,6 +85,13 @@ describe("Consent", () => {
     expect(screen.getByText("Privat: read")).toBeInTheDocument();
   });
 
+  it("shows Skills among the connection's vaults", async () => {
+    api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, connection: { ...view.connection, vaults: { Skills: "read", Arbeit: "write" } } }) });
+    renderApp("/consent?request=r1");
+    expect(await screen.findByText("Skills: read")).toBeInTheDocument();
+    expect(screen.getByText("Arbeit: read and write")).toBeInTheDocument();
+  });
+
   it("warns about an app that registered itself and shows the expiry", async () => {
     api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, client: { ...view.client, verified: false }, connection: { ...view.connection, expiresAt: "2026-12-01T09:00:00Z" } }) });
     renderApp("/consent?request=r1");

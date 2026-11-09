@@ -3,6 +3,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
 
 namespace Kumbu.Core.Notes;
 
@@ -108,6 +109,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (caller.Refuse("mv", path) is { } refusedPath) return refusedPath;
         }
 
+        if (TextFilesOutsideSkills(map, source, await store.SkillsVaultAsync(ct)) is { } outside)
+        {
+            return ShellResult.Error($"mv: {source.Value}/ can't move to {target.Value}/: text files are kept only inside a skill's folder: {outside} (move them into a skill's folder first, or remove them)");
+        }
+
         foreach (var (from, to) in map)
         {
             if (await CheckTargetAsync(from, to, [.. map.Keys, .. replaced], ct) is { } problem) return problem;
@@ -117,6 +123,18 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count(a => !FolderMarker.Is(a)), "attachment") }.Where(c => c is not null));
         var result = await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", card: false, replacing, ct);
         return map.Count == 1 && FolderMarker.Is(map.Keys.First()) ? result with { Version = null } : result;
+    }
+
+    /// <summary>The text files among <paramref name="moves"/> that would land outside a skill's folder, named relative to
+    /// <paramref name="source"/>, at most five and then "and N more"; null if there are none. <see cref="TreeWriter"/> copies by the same rule.</summary>
+    internal static string? TextFilesOutsideSkills(IEnumerable<KeyValuePair<VaultPath, VaultPath>> moves, VaultPath source, string? skillsVault)
+    {
+        var names = moves
+            .Where(m => AttachmentFormat.ForPath(m.Key)?.Kind == AttachmentKind.Text && !SkillPaths.IsInSkillFolder(m.Value, skillsVault))
+            .Select(m => string.Join('/', m.Key.Segments.Skip(source.Segments.Count)))
+            .Order(StringComparer.Ordinal).ToList();
+        if (names.Count == 0) return null;
+        return names.Count <= 5 ? string.Join(", ", names) : $"{string.Join(", ", names.Take(5))} and {names.Count - 5} more";
     }
 
     /// <summary>The paths <paramref name="replacing"/> trashes: in its batch they don't count as existing.</summary>

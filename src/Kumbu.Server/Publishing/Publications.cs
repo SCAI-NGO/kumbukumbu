@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Security.Cryptography;
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Links;
@@ -7,6 +8,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Sharing;
@@ -31,8 +33,18 @@ public sealed record PublicationState(
         $"PublicationState {{ Note = {Note}, SnapshotAt = {SnapshotAt:O}, Older = {Older}, ChangedAt = {ChangedAt:O}, PublishedBy = {PublishedBy} }}";
 }
 
+/// <summary>A skill's new link, shown once (Decision 15). Not logged: <see cref="ToString"/> leaves the link out.</summary>
+public sealed record PublishedSkill(string Link, DateTime SnapshotAt)
+{
+    public override string ToString() => $"PublishedSkill {{ SnapshotAt = {SnapshotAt:O} }}";
+}
+
+/// <summary>A skill shared by link, for its owner: the entry's id, the folder in her view, when the copy was taken and
+/// whether any file of the folder changed since. Never the link.</summary>
+public sealed record SkillPublicationState(string Id, VaultPath Folder, DateTime SnapshotAt, bool Changed);
+
 /// <summary>
-/// Publishing, updating and withdrawing one note (publish spec §3.1–3.5). Only the vault's owner, and only through a
+/// Publishing, updating and withdrawing one note (publish spec §3.1–3.5), and a skill as a whole (skills design §3.12). Only the vault's owner, and only through a
 /// caller that may publish there (<see cref="VaultAccess.MayPublish"/>); never what an unpublishable mark covers. The
 /// copy is the note's fair copy (<see cref="FairCopies"/>) with the images it embeds, their metadata stripped, at most
 /// <see cref="CopyLimit"/> bytes of them. Each change is one transaction under the vault's gate: the copy, its files,
@@ -64,6 +76,12 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// <summary>The most bytes of images one copy takes, after stripping; an image past it is plain text.</summary>
     internal long CopyLimit { get; init; } = 64L * 1024 * 1024;
 
+    /// <summary>The most files a shared skill holds (Decision 29).</summary>
+    internal int SkillFileLimit { get; init; } = 200;
+
+    /// <summary>The most bytes a shared skill holds, its files together (Decision 29).</summary>
+    internal long SkillByteLimit { get; init; } = 10L * 1024 * 1024;
+
     /// <summary>Where links point: <c>Kumbu:PublicUrl</c>, else the request's scheme and host.</summary>
     public static string BaseUrl(HttpContext http, KumbuOptions options) => OAuthUrls.Origin(http, options.PublicUrl);
 
@@ -76,6 +94,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         Check(access, publishing: true);
         var stored = access.ToVault(note);
+        RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
         {
             var current = await notes.GetAsync(note, ct) ?? throw NoSuchNote(note);
@@ -110,6 +129,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         Check(access, publishing: true);
         var stored = access.ToVault(note);
+        RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
         {
             var current = await notes.GetAsync(note, ct) ?? throw NoSuchNote(note);
@@ -200,7 +220,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         var scope = access.ToVault(under).Value;
         var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
-        return [.. record.Publications.Where(p => Covered([scope], p.Note)).Select(p => access.ToCaller(Parse(p.Note)))];
+        return [.. record.Publications.Where(p => p.Kind is null && Covered([scope], p.Note)).Select(p => access.ToCaller(Parse(p.Note)))];
     }
 
     /// <summary>The vault's unpublishable marks, in the caller's view; none for a member.</summary>
@@ -231,13 +251,16 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             }
 
             string[] marks = [.. record.Unpublishable, stored.Value];
-            var withdrawn = record.Publications.Where(p => Covered(marks, p.Note) || p.Files.Any(f => Covered(marks, f.Path))).ToList();
+            // A skill's link also goes for a mark on a file its copy doesn't hold yet: it is shared as a whole.
+            var withdrawn = record.Publications.Where(p =>
+                Covered(marks, p.Note) || p.Files.Any(f => Covered(marks, f.Path)) || (p.Kind == PublicationKinds.Skill && Covered([p.Note], stored.Value))).ToList();
             var at = Now;
             var logged = withdrawn.Select(p => LogEntry(PublishingKinds.Withdrawn, Parse(p.Note), at, by, byRef, WithdrawalReasons.Unpublishable)).ToList();
             var next = record with
             {
                 Publications = [.. record.Publications.Except(withdrawn)],
                 Unpublishable = marks,
+                Withdrawn = WithdrawnWith(record.Withdrawn, withdrawn.Where(p => p.Kind == PublicationKinds.Skill).Select(p => p.Note)),
                 Log = Appended(record.Log, [.. logged]),
             };
             var written = await WriteAsync(access, attempt, async session =>
@@ -261,15 +284,22 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// the owner's session can lift a mark (<paramref name="bySession"/>); for anyone else, each note or file the batch
     /// moves out from under a mark takes a mark of its own along. A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
     /// under a mark too (<c>unpublishable</c>); otherwise it follows its note and files, under the same link. Edits
-    /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw: anyone else
-    /// gets <see cref="PublishedNoteException"/>, which aborts the batch.
+    /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw a note's:
+    /// anyone else gets <see cref="PublishedNoteException"/>, which aborts the batch. A skill's link follows its folder to
+    /// another skill folder of the vault and is withdrawn by any writer's batch that trashes its <c>SKILL.md</c> or takes
+    /// it out of a skill folder (<c>removed</c>), or lands any of its files under a mark (Decision 31); the record's sealed
+    /// skill state follows and goes with the folder the same way (<see cref="SkillFolderAfter"/>).
     /// </summary>
     internal async Task FollowAsync(
         IClientSessionHandle session, VaultAccess access, bool device, bool bySession, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
         var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
-        if (record.Publications.Count == 0 && record.Unpublishable.Count == 0) return;
+        if (record.Publications.Count == 0 && record.Unpublishable.Count == 0 && record.SkillCodes.Count == 0 && record.Origins.Count == 0
+            && record.Updates.Count == 0 && record.Skipped.Count == 0 && record.Withdrawn.Count == 0)
+        {
+            return;
+        }
 
         var moved = batch.Moves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value))
             .Concat(batch.AttachmentMoves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value)))
@@ -289,22 +319,54 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         var withdrawn = new List<(PublicationEntry Entry, string Reason)>();
         foreach (var entry in record.Publications)
         {
-            var note = moved.GetValueOrDefault(entry.Note, entry.Note);
             var files = entry.Files.Select(f => f with { Path = moved.GetValueOrDefault(f.Path, f.Path) }).ToList();
+            if (entry.Kind == PublicationKinds.Skill)
+            {
+                if (SkillFolderAfter(access.Vault, entry.Note, moved, trashed) is not { } folder) withdrawn.Add((entry, WithdrawalReasons.Removed));
+                else if (entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
+                else kept.Add(folder == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = folder, Files = files });
+                continue;
+            }
+
+            var note = moved.GetValueOrDefault(entry.Note, entry.Note);
             if (trashed.Contains(entry.Note)) withdrawn.Add((entry, WithdrawalReasons.Removed));
+            // A skill is shared as a whole, by link; a note that lands in a skill's place is no longer a note publication.
+            else if (note != entry.Note && InSkillPlace(access.Vault, Parse(note))) withdrawn.Add((entry, WithdrawalReasons.Removed));
             else if (Newly(entry.Note, note) || entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
             else kept.Add(note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files });
         }
 
-        if (withdrawn.Count > 0 && !(IsOwner(access) && (access.MayPublish || device)))
+        // A skill's link goes whoever changes its folder (Decision 31); only a note's publication holds the write back.
+        if (withdrawn.FirstOrDefault(w => w.Entry.Kind is null).Entry is { } held && !(IsOwner(access) && (access.MayPublish || device)))
         {
-            var shown = access.ToCaller(Parse(withdrawn[0].Entry.Note));
+            var shown = access.ToCaller(Parse(held.Note));
             throw new PublishedNoteException(access.Membership is not null
                 ? $"{shown} is published by the vault's owner; only the owner can remove it or move it into an unpublishable folder"
                 : $"{shown} is published, and {(access.ViaShare ? "a WebDAV share never publishes" : $"this key may not publish in {access.Name}")}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
         }
 
-        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)) return;
+        // The sealed skill state, by folder, follows the folder as a link does and goes with it.
+        string? After(string folder) => SkillFolderAfter(access.Vault, folder, moved, trashed);
+        // A withdrawn link's folder is remembered where its SKILL.md went to the trash too: restored or written anew, it warns.
+        string? Stays(string folder) => After(folder) ?? (trashed.Contains(folder + "/" + SkillPaths.Manifest) ? folder : null);
+        var next = record with
+        {
+            Publications = kept,
+            Unpublishable = marks,
+            SkillCodes = [.. record.SkillCodes.Select(c => After(c.Path) is { } to ? c with { Path = to } : null).OfType<SkillCode>()],
+            Origins = [.. record.Origins.Select(o => After(o.Path) is { } to ? o with { Path = to } : null).OfType<SkillOrigin>()],
+            Updates = [.. record.Updates.Select(After).OfType<string>()],
+            Skipped = [.. record.Skipped.Select(k => After(k.Path) is { } to ? k with { Path = to } : null).OfType<SkippedUpdate>()],
+            Withdrawn = WithdrawnWith(
+                [.. record.Withdrawn.Select(Stays).OfType<string>()],
+                withdrawn.Where(w => w.Entry.Kind == PublicationKinds.Skill).Select(w => Stays(w.Entry.Note) ?? w.Entry.Note)),
+        };
+        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)
+            && next.SkillCodes.SequenceEqual(record.SkillCodes) && next.Origins.SequenceEqual(record.Origins)
+            && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped) && next.Withdrawn.SequenceEqual(record.Withdrawn))
+        {
+            return;
+        }
 
         // Each withdrawal is logged under the path its note had before the batch.
         var logged = withdrawn.Select(w => LogEntry(PublishingKinds.Withdrawn, Parse(w.Entry.Note), at, by, byRef, w.Reason)).ToList();
@@ -314,7 +376,23 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             await EventAsync(session, access, log, ct);
         }
 
-        await store.WriteAsync(session, access.Vault, doc, record with { Publications = kept, Unpublishable = marks, Log = Appended(record.Log, [.. logged]) }, ct);
+        await store.WriteAsync(session, access.Vault, doc, next with { Log = Appended(record.Log, [.. logged]) }, ct);
+    }
+
+    /// <summary>
+    /// Where the skill folder <paramref name="folder"/> (stored) is after the batch, by its <c>SKILL.md</c>: where it was
+    /// while the batch leaves that alone, the folder it moves to when that is a skill folder of the vault, and null when
+    /// the batch trashes it or moves it anywhere else (out of a skill location, deeper down, or under another name).
+    /// </summary>
+    private static string? SkillFolderAfter(UnlockedVault vault, string folder, IReadOnlyDictionary<string, string> moved, IReadOnlySet<string> trashed)
+    {
+        var manifest = folder + "/" + SkillPaths.Manifest;
+        if (trashed.Contains(manifest)) return null;
+        if (!moved.TryGetValue(manifest, out var to)) return folder;
+        var target = Parse(to);
+        if (target.Segments[^1] != SkillPaths.Manifest) return null;
+        var parent = to[..^(SkillPaths.Manifest.Length + 1)];
+        return SkillPaths.FolderOf(target, vault.Kind == VaultKinds.Skills ? vault.Name : null)?.Value == parent ? parent : null;
     }
 
     /// <summary>
@@ -394,7 +472,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         var scope = under.IsRoot ? null : access.ToVault(under).Value;
         var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
         var states = new List<PublicationState>();
-        foreach (var entry in record.Publications.Where(p => scope is null || Covered([scope], p.Note)).OrderBy(p => p.Note, StringComparer.Ordinal))
+        foreach (var entry in record.Publications.Where(p => p.Kind is null && (scope is null || Covered([scope], p.Note))).OrderBy(p => p.Note, StringComparer.Ordinal))
         {
             states.Add(await StateOfAsync(access, notes, entry, linkBase, ct));
         }
@@ -441,6 +519,194 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             linkBase is null ? null : ShareCode.Link(linkBase, entry.Code));
     }
 
+    /// <summary>
+    /// Shares the skill at <paramref name="folder"/> by link: a copy of every file of the folder as it is (notes as their
+    /// text, files as their bytes; no fair copy), at most <see cref="SkillFileLimit"/> files and <see cref="SkillByteLimit"/>
+    /// bytes, none of them covered by a mark. Only the owner (her session: no <c>sh</c> command shares a skill); one link
+    /// per skill, so a skill shared already is refused until its link is withdrawn (Decision 15).
+    /// </summary>
+    public async Task<PublishedSkill> PublishSkillAsync(
+        VaultAccess access, EncryptedNoteStore notes, VaultPath folder, string ownerId, string by, WriterRef byRef, string baseUrl, CancellationToken ct)
+    {
+        CheckSkill(access, publishing: true);
+        var stored = access.ToVault(folder);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
+            if (FindSkill(record, stored) is not null)
+            {
+                throw new PublishRefusedException($"{folder} is already shared; withdraw its link first", ShellErrorKind.Conflict, Refusals.SkillShared);
+            }
+
+            var made = await MakeSkillAsync(access, notes, folder, record, ct);
+            var (code, key, at) = (ShareCode.New(), VaultCrypto.NewKey(), Now);
+            var entry = new PublicationEntry(NewId(), stored.Value, code, key, at, made.Hash, made.Files, by, Ref(byRef), PublicationKinds.Skill);
+            var next = record with
+            {
+                Publications = [.. record.Publications, entry],
+                Withdrawn = [.. record.Withdrawn.Where(w => !string.Equals(w, stored.Value, StringComparison.Ordinal))],
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Published, stored, at, by, byRef, null)),
+            };
+            var written = await WriteAsync(access, attempt, async session =>
+            {
+                await store.InsertSkillCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Bytes, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
+                await store.WriteAsync(session, access.Vault, doc, next, ct);
+            }, ct);
+            if (written) return new PublishedSkill(ShareCode.SkillLink(baseUrl, code), at);
+        }
+    }
+
+    /// <summary>A new copy of the skill's folder under the same link; when it was taken.</summary>
+    public async Task<DateTime> UpdateSkillAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath folder, string by, WriterRef byRef, CancellationToken ct)
+    {
+        CheckSkill(access, publishing: true);
+        var stored = access.ToVault(folder);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
+            var entry = FindSkill(record, stored) ?? throw new PublishRefusedException($"{folder} is not shared", ShellErrorKind.NotFound);
+            var made = await MakeSkillAsync(access, notes, folder, record, ct);
+            var at = Now;
+            var updated = entry with { SnapshotAt = at, NoteVersion = made.Hash, Files = made.Files, By = by, ByRef = Ref(byRef) };
+            var next = record with
+            {
+                Publications = [.. record.Publications.Select(p => p.Id == entry.Id ? updated : p)],
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Updated, stored, at, by, byRef, null)),
+            };
+            var written = await WriteAsync(access, attempt, async session =>
+            {
+                await store.ReplaceSkillCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Bytes, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
+                await store.WriteAsync(session, access.Vault, doc, next, ct);
+            }, ct);
+            if (written) return at;
+        }
+    }
+
+    /// <summary>The skill's link goes, by its entry's id, so also when the folder is gone; also while switched off.</summary>
+    public async Task WithdrawSkillAsync(VaultAccess access, EncryptedNoteStore notes, string id, string by, WriterRef byRef, CancellationToken ct)
+    {
+        CheckSkill(access, publishing: false);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
+            var entry = record.Publications.FirstOrDefault(p => p.Kind == PublicationKinds.Skill && string.Equals(p.Id, id, StringComparison.Ordinal))
+                ?? throw new PublishRefusedException("no such shared skill", ShellErrorKind.NotFound);
+            var next = record with
+            {
+                Publications = [.. record.Publications.Where(p => p.Id != entry.Id)],
+                Withdrawn = WithdrawnWith(record.Withdrawn, [entry.Note]),
+                Log = Appended(record.Log, LogEntry(PublishingKinds.Withdrawn, Parse(entry.Note), Now, by, byRef, WithdrawalReasons.ByRight)),
+            };
+            var written = await WriteAsync(access, attempt, async session =>
+            {
+                await store.DeleteCopyAsync(session, entry.Code, ct);
+                await EventAsync(session, access, next.Log[^1], ct);
+                await store.WriteAsync(session, access.Vault, doc, next, ct);
+            }, ct);
+            if (written) return;
+        }
+    }
+
+    /// <summary>The vault's skills shared by link, by folder; none for anyone but the owner.</summary>
+    public async Task<IReadOnlyList<SkillPublicationState>> SkillStatesAsync(VaultAccess access, EncryptedNoteStore notes, CancellationToken ct)
+    {
+        if (!IsOwner(access)) return [];
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        var states = new List<SkillPublicationState>();
+        foreach (var entry in record.Publications.Where(p => p.Kind == PublicationKinds.Skill).OrderBy(p => p.Note, StringComparer.Ordinal))
+        {
+            var folder = access.ToCaller(Parse(entry.Note));
+            var current = new HashSet<PublishedFile>();
+            foreach (var path in await notes.ListNotesUnderAsync(folder, ct))
+            {
+                if (await notes.GetAsync(path, ct) is { } note) current.Add(new PublishedFile(access.ToVault(path).Value, note.Version));
+            }
+
+            foreach (var attachment in await StoreAttachments.UnderAsync(notes, folder, ct)) current.Add(new PublishedFile(access.ToVault(attachment.Path).Value, attachment.Version));
+            states.Add(new SkillPublicationState(entry.Id, folder, entry.SnapshotAt, !current.SetEquals(entry.Files)));
+        }
+
+        return states;
+    }
+
+    /// <summary>As <see cref="Check"/>, in the words of a skill: only her session shares one, from the Skills screen.</summary>
+    private void CheckSkill(VaultAccess access, bool publishing)
+    {
+        if (publishing && !Enabled) throw Refused(Refusals.PublishingOff, "publishing is switched off on this server");
+        if (!IsOwner(access)) throw Refused(Refusals.NotOwner, $"only the owner of {access.Name} can share its skills");
+        if (!access.MayPublish) throw Refused(Refusals.NoPublishRight, "a skill is shared from the Skills screen in the web app");
+    }
+
+    private sealed record MadeSkill(
+        string Name, string Description, string Manifest, IReadOnlyList<PublishedFile> Files, IReadOnlyList<PublishedSkillFile> CopyFiles, IReadOnlyList<byte[]> Bytes, string Hash)
+    {
+        public PublishedSkillCopy Copy(DateTime at) => new(Name, Description, Manifest, at, CopyFiles, Hash);
+    }
+
+    /// <summary>Every file of the skill's folder as it is: a note's text in UTF-8, a file's bytes. Refused when the folder
+    /// isn't a skill with a <c>SKILL.md</c>, holds too much, or a mark covers any of it.</summary>
+    private async Task<MadeSkill> MakeSkillAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath folder, PublishingRecord record, CancellationToken ct)
+    {
+        var marked = access.IsSkillsVault ? access.Name : null;
+        if (SkillPaths.FolderOf(folder, marked) != folder) throw new PublishRefusedException($"{folder}: no such skill", ShellErrorKind.NotFound);
+        var stored = access.ToVault(folder);
+        var prefix = folder.Value.Length + 1;
+        var noteFiles = new List<StoredNote>();
+        foreach (var path in await notes.ListNotesUnderAsync(folder, ct))
+        {
+            if (await notes.GetAsync(path, ct) is { } note) noteFiles.Add(note);
+        }
+
+        var attachments = await StoreAttachments.UnderAsync(notes, folder, ct);
+        if (noteFiles.Count == 0 && attachments.Count == 0) throw new PublishRefusedException($"{folder}: no such skill", ShellErrorKind.NotFound);
+        if (noteFiles.FirstOrDefault(n => n.Path == folder.Child(SkillPaths.Manifest)) is not { } manifest)
+        {
+            throw new PublishRefusedException($"{folder} has no {SkillPaths.Manifest}", ShellErrorKind.Invalid);
+        }
+
+        if (noteFiles.Count + attachments.Count > SkillFileLimit) throw new PublishRefusedException($"{folder} has more than {SkillFileLimit} files", ShellErrorKind.Invalid);
+        if (noteFiles.Sum(n => (long)Encoding.UTF8.GetByteCount(n.Content)) + attachments.Sum(a => a.Current.Size) > SkillByteLimit)
+        {
+            throw new PublishRefusedException($"{folder} is larger than {SkillByteLimit / (1024 * 1024)} MB", ShellErrorKind.Invalid);
+        }
+
+        var covered = noteFiles.Select(n => n.Path).Concat(attachments.Select(a => a.Path)).FirstOrDefault(p => Covered(record.Unpublishable, access.ToVault(p).Value));
+        if (covered is not null || Covered(record.Unpublishable, stored.Value))
+        {
+            throw Refused(Refusals.Unpublishable, $"{covered ?? folder} is marked unpublishable, so {folder} can't be shared; only the vault's owner can lift the mark, in the web app");
+        }
+
+        var files = new List<(string Path, string MediaType, byte[] Bytes, PublishedFile Published)>();
+        foreach (var note in noteFiles) files.Add((note.Path.Value[prefix..], NoteMediaType, Encoding.UTF8.GetBytes(note.Content), new PublishedFile(access.ToVault(note.Path).Value, note.Version)));
+        foreach (var attachment in attachments)
+        {
+            var bytes = await StoreAttachments.ReadBytesAsync(notes, attachment.Path, attachment.Current, ct)
+                ?? throw new ContentMissingException($"The content of {attachment.Path.Value} is missing.");
+            files.Add((attachment.Path.Value[prefix..], attachment.Current.MediaType, bytes, new PublishedFile(access.ToVault(attachment.Path).Value, attachment.Version)));
+        }
+
+        // The read sizes, as the check before them counted what the records say.
+        if (files.Sum(f => (long)f.Bytes.Length) > SkillByteLimit) throw new PublishRefusedException($"{folder} is larger than {SkillByteLimit / (1024 * 1024)} MB", ShellErrorKind.Invalid);
+        files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
+        var name = folder.Segments[^1];
+        return new MadeSkill(
+            name,
+            SkillManifest.Read(name, manifest.Content).Description ?? "",
+            manifest.Content,
+            [.. files.Select(f => f.Published)],
+            [.. files.Select((f, n) => new PublishedSkillFile(n, f.Path, f.MediaType, f.Bytes.Length))],
+            [.. files.Select(f => f.Bytes)],
+            SkillHash.Of(files.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes))));
+    }
+
+    /// <summary>A note of a shared skill is served as Markdown text.</summary>
+    private const string NoteMediaType = "text/markdown; charset=utf-8";
+
+    private static PublicationEntry? FindSkill(PublishingRecord record, VaultPath stored) =>
+        record.Publications.FirstOrDefault(p => p.Kind == PublicationKinds.Skill && string.Equals(p.Note, stored.Value, StringComparison.Ordinal));
+
     /// <summary>The checks every change makes first, in this order; the switch only for publishing and updating.</summary>
     private void Check(VaultAccess access, bool publishing)
     {
@@ -457,6 +723,18 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     }
 
     private static bool IsOwner(VaultAccess access) => access.IsOwner && access.Membership is null;
+
+    /// <summary>The vault marked as the skills vault, and a skill location (<c>_skills</c> at a vault's root), hold skills,
+    /// which are shared as a whole, not as notes.</summary>
+    private static bool InSkillPlace(UnlockedVault vault, VaultPath stored) => vault.Kind == VaultKinds.Skills || SkillPaths.LocationOf(stored, null) is not null;
+
+    private static void RequireNotInSkillPlace(UnlockedVault vault, VaultPath stored, VaultPath note)
+    {
+        if (InSkillPlace(vault, stored))
+        {
+            throw Refused(Refusals.Unpublishable, $"{note} is in a skill's place; a skill is shared as a whole, by link, from the Skills screen");
+        }
+    }
 
     private static void RequireNotMarked(PublishingRecord record, VaultPath stored, VaultPath note)
     {
@@ -488,8 +766,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
 
+        // A file of a skill's place stays out of a note's copy, as an unpublishable one does: a skill is shared as a whole.
         bool MayCopy(VaultPath p) =>
-            !unusable.Contains(p) && attachments.ContainsKey(p) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image && !Covered(record.Unpublishable, p.Value);
+            !unusable.Contains(p) && attachments.ContainsKey(p) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image && !Covered(record.Unpublishable, p.Value)
+            && !InSkillPlace(access.Vault, p);
 
         while (true)
         {
@@ -577,8 +857,13 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
+    /// <summary><paramref name="withdrawn"/> with the folders of skill links that just went, each once.</summary>
+    private static IReadOnlyList<string> WithdrawnWith(IReadOnlyList<string> withdrawn, IEnumerable<string> folders) =>
+        [.. withdrawn.Concat(folders).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>A note's publication; a skill's (<see cref="FindSkill"/>) is none.</summary>
     private static PublicationEntry? Find(PublishingRecord record, VaultPath stored) =>
-        record.Publications.FirstOrDefault(p => string.Equals(p.Note, stored.Value, StringComparison.Ordinal));
+        record.Publications.FirstOrDefault(p => p.Kind is null && string.Equals(p.Note, stored.Value, StringComparison.Ordinal));
 
     /// <summary>The log with <paramref name="entries"/> after it, cut to its newest <see cref="LogLimit"/>.</summary>
     private static IReadOnlyList<PublishingLogEntry> Appended(IReadOnlyList<PublishingLogEntry> log, params PublishingLogEntry[] entries)

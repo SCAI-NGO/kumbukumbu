@@ -165,7 +165,7 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
     {
         var client = await Api.RestClient.NewAsync(app.PublicApi);
 
-        Assert.Equal(["Arbeit"], await VaultNamesAsync(app.PublicApi, client.Session));
+        Assert.Equal(["Arbeit", "Skills"], await VaultNamesAsync(app.PublicApi, client.Session));
     }
 
     [Fact]

@@ -34,11 +34,12 @@ namespace Kumbu.Server.Api;
 /// active again, and she may still export it (the banner: "Alice's account is deactivated …", <c>owner</c> named).
 /// <c>closingAt</c>: on a vault shared with her, its owner deleted her account and gave the members time: it is
 /// read-only, may be exported, and is deleted at this time. <c>ownerUsername</c>: on a vault shared with her, the
-/// owner's username beside <c>owner</c>, which is free text: two owners of one display name stay two.</summary>
+/// owner's username beside <c>owner</c>, which is free text: two owners of one display name stay two. <c>kind</c>: on her
+/// own vault, what it is marked as (<c>skills</c>); absent for an ordinary vault and for one shared with her.</summary>
 public sealed record VaultView(
     string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
     int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false, DateTime? ClosingAt = null,
-    string? OwnerUsername = null);
+    string? OwnerUsername = null, string? Kind = null);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c>, <c>connections</c> and <c>shares</c>: what would lose
 /// access if the vault were re-encrypted, the names of her API keys with access to it, of her connected apps that list
@@ -283,29 +284,43 @@ public static class NoteApi
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"You have no vault named '{root.Segments[0]}'.");
         if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        if (access.IsSkillsVault) throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills keeps its name.");
         if (string.Equals(name, access.Name, StringComparison.Ordinal)) return TypedResults.NoContent();
         try
         {
-            await catalog.RenameVaultAsync(caller.User.Id, caller.UserKey!, access.Vault, name, ct);
+            await RenameOwnedVaultAsync(catalog, pairings, hub, caller.User, caller.UserKey!, access, name, ct);
         }
         // Exactly ArgumentException, her slot not found, as ApiErrors maps it: its subclasses come from bugs.
         catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
         {
             throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         }
+
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>Renames the user's own vault, with what a rename takes along: her open pairing codes go and her sockets
+    /// are told, also when the outcome isn't known. The catalog's refusals, and <see cref="ArgumentException"/> for a
+    /// slot not found, come out with neither.</summary>
+    internal static async Task RenameOwnedVaultAsync(
+        VaultCatalog catalog, Pairings pairings, Sync.SyncHub hub, User user, byte[] userKey, VaultAccess access, string name, CancellationToken ct)
+    {
+        try
+        {
+            await catalog.RenameVaultAsync(user.Id, userKey, access.Vault, name, ct);
+        }
         // As the catalog has it: anything but a refusal may come after the commit. Her sockets are told too: the catalog
         // forgot the vault, so they keep the name they hold, but her tabs read the vault list again and take a new ticket.
-        catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException))
+        catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException) && e.GetType() != typeof(ArgumentException))
         {
-            pairings.DropAll(caller.User.Id);
-            hub.VaultRenamed(caller.User.Id, access.Id);
+            pairings.DropAll(user.Id);
+            hub.VaultRenamed(user.Id, access.Id);
             throw;
         }
 
         // An open code would hand a device the old name, which no longer finds the vault.
-        pairings.DropAll(caller.User.Id);
-        hub.VaultRenamed(caller.User.Id, access.Id, access.Name);
-        return TypedResults.NoContent();
+        pairings.DropAll(user.Id);
+        hub.VaultRenamed(user.Id, access.Id, access.Name);
     }
 
     /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
@@ -321,7 +336,8 @@ public static class NoteApi
             name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
             members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access), access.ReadOnlyCode == Refusals.OwnerInactive,
             access.ReadOnlyCode == Refusals.Closing ? access.Membership?.ClosingAt : null,
-            access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null);
+            access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null,
+            access.Membership is null && access.IsOwner ? vault.Kind : null);
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -339,6 +355,11 @@ public static class NoteApi
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
+        if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Name == vault && v.IsSkillsVault))
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills can't be deleted: it holds your skills. Remove single skills instead.");
+        }
+
         // A wrong password throws; null is a right one and no such vault.
         var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
@@ -404,7 +425,7 @@ public static class NoteApi
             .Concat(attachments.Select(a => (a.Path, TreeFile(a)))));
 
     private static TreeNote TreeFile(StoredAttachment file) =>
-        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Name), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
+        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
     private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below)
     {
@@ -614,7 +635,7 @@ public static class NoteApi
                 var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
                 versions.Add(new HistoryEntryView(
                     v.Version, v.WrittenAt, writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, kind,
-                    AttachmentFormat.KindOf(notePath.Name), v.State.MediaType));
+                    AttachmentFormat.KindOf(notePath.Value), v.State.MediaType));
             }
 
             return TypedResults.Ok(versions.ToArray());

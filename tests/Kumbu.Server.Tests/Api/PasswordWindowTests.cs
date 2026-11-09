@@ -116,6 +116,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "POST /api/vaults/{vault}/memberships/{id}/confirm",
         "PUT /api/connections/{id}/vaults",
         "PUT /api/publications/{vault}/{**path}",
+        "POST /api/skills/shared",
+        "POST /api/skills/shared/{id}/update",
     ];
 
     private const string Reading = "reading: the session reads anyway";
@@ -188,6 +190,27 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["DELETE /api/publications/{vault}/{**path}"] = "withdrawing reduces what is out: never guarded",
         ["PUT /api/unpublishable/{vault}/{**path}"] = "a mark reduces what can go out: never guarded",
         ["DELETE /api/unpublishable/{vault}/{**path}"] = "the owner's own mark, lifted in her session: it publishes nothing",
+        ["PUT /api/keys/{id}/instructions"] = "how skills reach a key's instructions: a preference about a text, no right (skills spec §3.4)",
+        ["PUT /api/connections/{id}/instructions"] = "how skills reach a connection's instructions: a preference about a text, no right (skills spec §3.4)",
+        ["GET /api/skills/"] = Reading,
+        ["GET /api/skills/find"] = Reading,
+        ["POST /api/skills/copy"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
+        ["POST /api/skills/move"] = "an ordinary content write between vaults the caller already writes to, as a note move: it grants and exports nothing (skills spec §5)",
+        ["POST /api/skills/add"] = "a content write into a vault the caller already writes to, from a link anyone holding it may open: it grants and exports nothing (skills spec §3.12)",
+        ["GET /api/skills/zip"] = "guarded inline: the ticket when the window is closed, as the files ZIP (a system skill needs none)",
+        ["GET /api/skills/shared"] = Reading,
+        ["DELETE /api/skills/shared/{id}"] = "withdrawing a skill's link reduces what is out: never guarded, as a note's",
+        ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
+        ["GET /api/skills/marketplaces"] = Reading,
+        ["POST /api/skills/marketplaces"] = "a repository's name on her own list: it asks GitHub nothing and grants nothing (skills spec §3.9)",
+        ["DELETE /api/skills/marketplaces/{owner}/{repo}"] = "a repository's name off her own list reduces what she browses: it grants nothing",
+        ["GET /api/skills/marketplaces/{owner}/{repo}"] = "reading a public repository's listing: nothing of hers goes out, nothing is granted (skills spec §3.9)",
+        ["GET /api/skills/marketplaces/{owner}/{repo}/skill"] = "reading a public repository's skill: nothing of hers goes out, nothing is granted (skills spec §3.9)",
+        ["POST /api/skills/updates/check"] = "asking her copies' sources whether they changed: it changes no content and grants nothing (skills spec §3.10)",
+        ["GET /api/skills/updates/review"] = "diffing her copy against its sealed source's new version: nothing of hers goes out, nothing is granted (skills spec §3.10)",
+        ["POST /api/skills/updates/take"] = "a content write from her copy's own sealed source into a vault she already writes to: it grants and exports nothing (skills spec §3.10)",
+        ["POST /api/skills/updates/skip"] = "remembering a version she doesn't want: it changes no content and grants nothing (skills spec §3.10)",
+        ["POST /api/skills/install"] = "a content write from a public repository into a vault the caller already writes to: it grants and exports nothing (skills spec §3.9)",
     };
 
     [Fact]

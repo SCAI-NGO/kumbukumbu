@@ -118,11 +118,13 @@ public static class SyncApi
 
     /// <summary><c>since</c>: a <c>cursor</c> of an earlier answer. Without it, <c>If-None-Match</c> with the last
     /// <c>state</c> answers 304 while nothing changed. <c>attachments=1</c>: attachments too (the Obsidian plugin
-    /// 0.1.1 asks without it and would take every entry for a note).</summary>
+    /// 0.1.1 asks without it and would take every entry for a note). <c>text=1</c>: the text files of skill folders too,
+    /// current and deleted; a client that doesn't know them would keep them as notes or attachments of a kind it lacks.</summary>
     private static async Task<Results<Ok<VersionsView>, StatusCodeHttpResult>> VersionsAsync(
-        string vault, string? since, string? attachments, HttpContext http, EncryptedNoteStore store, VaultCatalog catalog, CancellationToken ct)
+        string vault, string? since, string? attachments, string? text, HttpContext http, EncryptedNoteStore store, VaultCatalog catalog, CancellationToken ct)
     {
         var withFiles = attachments is "1" or "true";
+        var withText = withFiles && text is "1" or "true";
         var root = ApiPaths.Parse(vault, null, note: false);
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
@@ -135,7 +137,7 @@ public static class SyncApi
         var cursor = now.ToString("O", CultureInfo.InvariantCulture);
         var changedAt = unlocked.ChangedAt;
         var notes = unlocked.Notes;
-        var files = withFiles ? unlocked.Attachments : [];
+        var files = withFiles ? unlocked.Attachments.Where(a => withText || a.Value.Attachment.Current.MediaType != AttachmentFormat.TextMediaType).ToDictionary() : [];
         // Damaged attachment records count only for a client that knows attachments: the plain answer stays today's.
         var damaged = withFiles ? unlocked.DamagedPathIds.Count : unlocked.DamagedNotes;
         // The working set holds the vault's own paths; the answer is in the caller's view (a member's alias).
@@ -156,7 +158,7 @@ public static class SyncApi
 
         // Attachments' writes, moves and removals are logged with the notes'; a client that knows no attachments
         // must never see their paths, least of all in deleted, which would trash its copy of a file it keeps.
-        var touched = changedAt.Where(c => c.Value >= from && (withFiles || c.Key.IsNote)).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
+        var touched = changedAt.Where(c => c.Value >= from && (withFiles || c.Key.IsNote) && (withText || !IsText(c.Key))).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
         var listed = new List<VersionEntry>();
         var deleted = new List<string>();
         foreach (var path in touched)
@@ -170,8 +172,11 @@ public static class SyncApi
         return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted, marker));
     }
 
+    /// <summary>Whether the path, current or gone, is one a skill folder keeps as text.</summary>
+    private static bool IsText(VaultPath path) => AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text;
+
     private static VersionEntry Entry(VaultPath path, string version, bool withKind) =>
-        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Name) : null);
+        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value) : null);
 
     /// <summary>
     /// Where a <c>since</c> answer starts, or null for the full list: no cursor, one that doesn't parse, one in the

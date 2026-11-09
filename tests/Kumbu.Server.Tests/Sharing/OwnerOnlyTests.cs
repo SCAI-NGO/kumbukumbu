@@ -83,11 +83,11 @@ public sealed class OwnerOnlyTests(KumbuAppFactory app)
 
         using (var alices = await alice.GetAsync("/api/vaults"))
         {
-            Assert.Equal(["Gartenarbeit"], (await RestClient.JsonAsync(alices)).AsArray().Select(v => v!["name"]!.GetValue<string>()).ToArray());
+            Assert.Equal(["Gartenarbeit", "Skills"], (await RestClient.JsonAsync(alices)).AsArray().Select(v => v!["name"]!.GetValue<string>()).ToArray());
         }
 
         using var bobs = await bob.GetAsync("/api/vaults");
-        Assert.Equal(["Work", "garten"], (await RestClient.JsonAsync(bobs)).AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(["Skills", "Work", "garten"], (await RestClient.JsonAsync(bobs)).AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Theory]

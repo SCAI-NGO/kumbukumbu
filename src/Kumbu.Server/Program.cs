@@ -5,6 +5,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Skills;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
@@ -18,6 +19,7 @@ using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Search;
+using Kumbu.Server.Skills;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
@@ -111,6 +113,8 @@ builder.Services.AddSingleton<DavHolds>();
 builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
+builder.Services.AddGitHubClient();
+builder.Services.AddSingleton<MarketplaceFetcher>();
 builder.Services.AddSingleton<OAuthClients>();
 builder.Services.AddSingleton<AuthorizationRequests>();
 builder.Services.AddSingleton<OAuthTokens>();
@@ -123,6 +127,7 @@ builder.Services.AddSingleton<RestoredDeletions>();
 builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<Kumbu.Server.Welcome.WelcomeVault>();
+builder.Services.AddSingleton<Kumbu.Server.Skills.SkillsVaults>();
 builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<PublicationStore>();
 builder.Services.AddSingleton<Publications>();
@@ -180,18 +185,23 @@ builder.Services.AddScoped(sp => new Checkpoints(
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
+builder.Services.AddScoped<ISkillUpdates, RecordedSkillUpdates>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type
 // and silently registers no tools; the IEnumerable<Type> overload needs the collection expression.
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
+// The message filters add the skills section to the handshake's instructions only (HandshakeInstructions).
+builder.Services.AddSingleton<HandshakeCounter>();
 builder.Services.AddMcpServer(o =>
     {
         o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
         o.Filters.Request.CallToolFilters.Add(Notices.Filter);
+        o.Filters.Message.IncomingFilters.Add(HandshakeInstructions.Incoming);
+        o.Filters.Message.OutgoingFilters.Add(HandshakeInstructions.Outgoing);
     })
     .WithHttpTransport()
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
@@ -250,7 +260,7 @@ var webApp = new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
-        // The reader page, s.html, is never cached (publish spec §3.12).
+        // The reader page, s.html, and the skill page, k.html, are never cached (publish spec §3.12, skills design §3.12).
         context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/assets")
             ? "public, max-age=31536000, immutable"
             : ReaderPaths.Is(context.Context.Request.Path) ? "no-store" : "no-cache";
@@ -292,12 +302,19 @@ app.MapPairingApi();
 app.MapExportApi();
 app.MapSharingApi();
 app.MapPublicationApi();
+app.MapSkillsApi();
+app.MapMarketplaceApi();
+app.MapSkillUpdatesApi();
 app.MapReaderApi();
-// The reader page (publish spec §3.12), an entry of its own: the code is in the fragment, which reaches no server.
-// HEAD too, which would otherwise fall through to the web app's shell.
-app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
-    ? Results.Stream(page.CreateReadStream(), "text/html")
-    : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+app.MapSkillPageApi();
+// The reader page (publish spec §3.12) and the skill page (skills design §3.12), entries of their own: the code is in
+// the fragment, which reaches no server. HEAD too, which would otherwise fall through to the web app's shell.
+foreach (var (route, file) in new[] { ("/s", "s.html"), ("/k", "k.html") })
+{
+    app.MapMethods(route, [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo(file) is { Exists: true } page
+        ? Results.Stream(page.CreateReadStream(), "text/html")
+        : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+}
 
 // WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
 // With WebDAV switched off, / advertises nothing: OPTIONS and PROPFIND there are answered as on any other page.

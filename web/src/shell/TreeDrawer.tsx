@@ -6,8 +6,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
-import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
+import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
@@ -42,7 +42,7 @@ export type Row =
   | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
-const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" ? entry.kind : "note");
+const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
@@ -68,6 +68,7 @@ type Publishing = {
   marks: readonly string[] | undefined;
   published: readonly string[] | undefined;
   enabled: boolean;
+  vault: VaultView | undefined;
   onPublish(note: string): void;
   onMark(path: string, marked: boolean): void;
 };
@@ -78,7 +79,7 @@ const entriesOf = (publishing: Publishing | null, path: string, note: boolean): 
         path,
         note,
         marks: publishing.marks,
-        mayPublish: publishing.enabled && !!publishing.published && !publishing.published.includes(path),
+        mayPublish: publishing.enabled && !!publishing.published && !publishing.published.includes(path) && publishableAsNote(publishing.vault, path),
         onPublish: () => publishing.onPublish(path),
         onMark: (marked) => publishing.onMark(path, marked),
       })
@@ -327,6 +328,10 @@ function AccountRow() {
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
+      <Link to="/skills/installed" onClick={close} className={link}>
+        <Sparkles size={16} aria-hidden className="text-muted" />
+        Skills
+      </Link>
       <Link to="/access/keys" onClick={close} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
         Access
@@ -443,6 +448,7 @@ export default function TreeDrawer(props: {
         marks: publications.data?.unpublishable,
         published,
         enabled: publishEnabled === true,
+        vault: active,
         onPublish: setPublishing,
         onMark: marking.mark,
       }

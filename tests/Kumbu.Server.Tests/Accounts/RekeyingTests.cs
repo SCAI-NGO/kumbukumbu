@@ -188,9 +188,9 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         }
 
         var listed = await VaultListAsync(await SignInAsync(owner.Username, NewPassword));
-        Assert.Equal(["Arbeit", "Diary"], listed.Select(v => v["name"]!.GetValue<string>()));
+        Assert.Equal(["Arbeit", "Diary", "Skills"], listed.Select(v => v["name"]!.GetValue<string>()));
         Assert.All(listed, v => Assert.False(v["pending"]!.GetValue<bool>()));
-        Assert.All(listed, v => Assert.Equal(1, v["notes"]!.GetValue<int>()));
+        Assert.Equal([1, 1, 0], listed.Select(v => v["notes"]!.GetValue<int>()));
 
         // The new recovery key works, the old one doesn't.
         Assert.Null(await users.RecoverAsync(owner.Username, recoveryKey, NewPassword, Ct));
@@ -207,7 +207,7 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         // A recovery whose process died after its commit: nothing started the runner.
         var (_, user, newKey) = (await users.RecoverWithKeyAsync(owner.Username, recoveryKey!, NewPassword, Ct))!.Value;
         Assert.Equal(vaults.Values.Order(StringComparer.Ordinal), await RekeyPendingAsync(owner.User.Id));
-        // "Arbeit" was finished, "Diary" stopped in its two-key period, "Ideas" never started.
+        // "Arbeit" was finished, "Diary" stopped in its two-key period, "Ideas" and "Skills" never started.
         await Catalog.RekeyAsync(vaults["Arbeit"], user.Id, newKey, Ct);
         Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
         try
@@ -219,7 +219,7 @@ public sealed class RekeyingTests(KumbuAppFactory app)
             Catalog.RekeyFaultAt = null;
         }
 
-        Assert.Equal(new[] { vaults["Diary"], vaults["Ideas"] }.Order(StringComparer.Ordinal), await RekeyPendingAsync(owner.User.Id));
+        Assert.Equal(new[] { vaults["Diary"], vaults["Ideas"], vaults["Skills"] }.Order(StringComparer.Ordinal), await RekeyPendingAsync(owner.User.Id));
 
         string session;
         await using (var hold = Hold.Of(Catalog, [vaults["Diary"], vaults["Ideas"]]))
@@ -233,7 +233,7 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         await AllRekeyedAsync(owner.User.Id, vaults.Values);
         foreach (var id in vaults.Values) Assert.True(await MetaOpensAsync(await VaultKeyAsync(newKey, id), id));
         var listed = await VaultListAsync(session);
-        Assert.Equal(3, listed.Length);
+        Assert.Equal(4, listed.Length);
         Assert.All(listed, v => Assert.False(v["pending"]!.GetValue<bool>()));
     }
 
@@ -547,7 +547,7 @@ public sealed class RekeyingTests(KumbuAppFactory app)
             using var response = await listing;
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var listed = (await RestClient.JsonAsync(response)).AsArray();
-            Assert.Equal(["Arbeit"], listed.Select(v => v!["name"]!.GetValue<string>()));
+            Assert.Equal(["Arbeit", "Skills"], listed.Select(v => v!["name"]!.GetValue<string>()));
             Assert.All(listed, v => Assert.False(v!["pending"]!.GetValue<bool>()));
         }
         finally

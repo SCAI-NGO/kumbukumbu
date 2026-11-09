@@ -413,4 +413,12 @@ describe("summaryText", () => {
     ]);
     expect(api.putFile).toHaveBeenLastCalledWith("Work", "later/.vaultkeep", new Uint8Array(0), null);
   });
+
+  it("fills the existing vault Skills from an export instead of making one", async () => {
+    const plans = planImport([vault("Skills", [], [], [file("pdf/scripts/run.py")])], [{ name: "Skills", versions: new Map() }]);
+    const { api, created, puts } = fakeApi();
+    await run(plans, {}, api);
+    expect(created).toEqual([]);
+    expect(puts.map((p) => [p.vault, p.path])).toEqual([["Skills", "pdf/scripts/run.py"]]);
+  });
 });

@@ -21,7 +21,7 @@ const renameText = (from: string, to: string) =>
   folderOf(from) === folderOf(to) ? `${nameOf(from)} → ${nameOf(to)}` : `${inVault(from)} → ${inVault(to)}`;
 
 /** What the file is: the server's `fileKind`, else (an older server) its extension's. */
-const kindOf = (f: ActivityFile): FileKind => (f.fileKind === "image" || f.fileKind === "pdf" || f.fileKind === "note" || f.fileKind === "folder" ? f.fileKind : fileKindOf(f.path));
+const kindOf = (f: ActivityFile): FileKind => (f.fileKind === "image" || f.fileKind === "pdf" || f.fileKind === "text" || f.fileKind === "note" || f.fileKind === "folder" ? f.fileKind : fileKindOf(f.path));
 
 /** A folder as its marker's folder, within the vault: "Drafts/". */
 const folderText = (path: string) => inVault(shownPath(path));

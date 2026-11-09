@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
+import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, isSkillTextFile, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
 
 describe("note paths", () => {
   it("puts a note into the URL one encoded segment at a time", () => {
@@ -62,5 +62,32 @@ describe("folder markers", () => {
     expect(markerOf("/Work/Drafts/2026")).toBe("Drafts/2026/.vaultkeep");
     expect(shownPath("/Work/Drafts/.vaultkeep")).toBe("/Work/Drafts/");
     expect(shownPath("/Work/plan.md")).toBe("/Work/plan.md");
+  });
+});
+
+describe("text files of skill folders", () => {
+  it.each([
+    ["Skills", "pdf/scripts/run.py", true],
+    ["Work", "_skills/x/LICENSE", true],
+    ["Work", "run.py", false],
+    ["Skills", "run.py", false],
+    ["Work", "_skills/x/scripts", false],
+    ["Work", "notes/_skills/x/a.py", false],
+    ["Work", "_Skills/x/a.py", false],
+    ["Work", "_skills/x/README.MD", false],
+    ["Work", "_skills/x/Makefile", true],
+    ["Work", "_skills/x/RUN.PY", true],
+  ])("isSkillTextFile(%s, %s) is %s", (vault, path, expected) => expect(isSkillTextFile(vault, path)).toBe(expected));
+
+  it("fileKindOf names such a file text when it is given the vault, and a note otherwise", () => {
+    expect(fileKindOf("/Work/_skills/x/run.py", "Work")).toBe("text");
+    expect(fileKindOf("/Skills/pdf/scripts/run.py", "Skills")).toBe("text");
+    expect(fileKindOf("/Work/_skills/x/run.py")).toBe("text");
+    expect(fileKindOf("/Work/_skills/x/run.py", "Elsewhere")).toBe("note");
+    expect(fileKindOf("/Work/run.py", "Work")).toBe("note");
+    expect(fileKindOf("/Work/_skills/x/shot.png", "Work")).toBe("image");
+    expect(isAttachment("/Work/_skills/x/run.py")).toBe(true);
+    expect(isAttachment("/Work/run.py")).toBe(false);
+    expect(isAttachment("/Skills/pdf/scripts/run.py")).toBe(true);
   });
 });

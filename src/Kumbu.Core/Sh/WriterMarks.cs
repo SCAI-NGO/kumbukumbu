@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 
@@ -23,8 +24,11 @@ public sealed class WriterMarks(INoteStore notes, IWriterLabels labels)
         {
             if (path.Vault is not { } vault) continue;
             if (!shared.TryGetValue(vault, out var isShared)) shared[vault] = isShared = (await notes.VaultInfoAsync(vault, ct))?.Shared == true;
-            if (!isShared || await notes.GetAsync(path, ct) is not { } note) continue;
-            if (!await labels.IsOwnAsync(vault, note.Ref, ct)) marked.Add(path);
+            if (!isShared) continue;
+            // A note, or a text file in a skill (an attachment): both carry the writer's reference.
+            var found = await notes.GetAsync(path, ct) is { } note ? (true, note.Ref)
+                : await StoreAttachments.GetAsync(notes, path, ct) is { } file ? (true, file.Ref) : (false, null);
+            if (found.Item1 && !await labels.IsOwnAsync(vault, found.Item2, ct)) marked.Add(path);
         }
 
         return marked;

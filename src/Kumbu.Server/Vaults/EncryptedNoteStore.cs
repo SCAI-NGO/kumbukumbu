@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Skills;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -50,6 +51,10 @@ public sealed class EncryptedNoteStore(
     /// <summary>The same accesses by vault id, to show a path of the vault in the caller's view.</summary>
     private Dictionary<string, VaultAccess> _byId = [];
 
+    /// <summary>Whether reading a vault counts as the credential's use of it (<see cref="VaultCatalog.Used"/>); off while
+    /// the MCP handshake lists the skills of every vault the credential reaches (<c>HandshakeInstructions</c>).</summary>
+    internal bool CountsUse { get; set; } = true;
+
     public async Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Keys];
 
     public async Task<string?> ReadAsync(VaultPath path, CancellationToken ct) => (await GetAsync(path, ct))?.Content;
@@ -92,6 +97,10 @@ public sealed class EncryptedNoteStore(
     }
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
+
+    /// <summary>The vault marked as the vault Skills, by the name the caller has for it: her own vault only, never one shared with her.</summary>
+    public async Task<string?> SkillsVaultAsync(CancellationToken ct) =>
+        (await VaultsAsync(ct)).Values.FirstOrDefault(a => a.Vault.Kind == VaultKinds.Skills && a.IsOwner && a.Membership is null)?.Name;
 
     private readonly Dictionary<string, VaultInfo> _infos = new(StringComparer.Ordinal);
 
@@ -179,6 +188,15 @@ public sealed class EncryptedNoteStore(
         var vault = access.Vault;
         batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
+
+        // The last check of the one rule text files stand under: only strictly inside a skill's folder.
+        var skillsVault = vault.Kind == VaultKinds.Skills ? access.Vault.Name : null;
+        var texts = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+            .Concat(batch.AttachmentMoves.Select(m => m.Target)).Concat(batch.AttachmentRestores.Select(r => r.Restored));
+        if (texts.Any(a => a.Current.MediaType == AttachmentFormat.TextMediaType && !SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
+        {
+            throw new InvalidOperationException("A text file outside a skill's folder; nothing was written.");
+        }
 
         VaultPath? conflict = null;
         var written = await WriteAsync(vault, paths, async session =>
@@ -1087,7 +1105,7 @@ public sealed class EncryptedNoteStore(
         if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var access)) return null;
         if (access.Vault.Pending) throw VaultBusyException.Being();
         access.Vault.Touch(catalog.Now);
-        catalog.Used(access);
+        if (CountsUse) catalog.Used(access);
         return access;
     }
 
@@ -1099,7 +1117,7 @@ public sealed class EncryptedNoteStore(
         foreach (var v in all)
         {
             v.Vault.Touch(catalog.Now);
-            catalog.Used(v);
+            if (CountsUse) catalog.Used(v);
         }
 
         return all;

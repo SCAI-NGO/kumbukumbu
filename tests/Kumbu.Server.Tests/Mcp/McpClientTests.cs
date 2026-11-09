@@ -58,7 +58,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
     {
         await using var client = await app.ConnectAsync();
 
-        Assert.Equal(ServerInstructions.Text, client.ServerInstructions);
+        Assert.StartsWith(ServerInstructions.Text, client.ServerInstructions, StringComparison.Ordinal);
         Assert.Contains("semsearch", client.ServerInstructions, StringComparison.Ordinal);
         Assert.Contains("rg", client.ServerInstructions, StringComparison.Ordinal);
     }

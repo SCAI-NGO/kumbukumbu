@@ -44,6 +44,9 @@ public static class SectionSearch
 {
     private const int SnippetLength = 160;
 
+    /// <summary>The k of reciprocal rank fusion: an item scores 1 / (k + its rank) in each list (<c>skills find</c> fuses so too).</summary>
+    internal const double RankFusionK = 60;
+
     /// <summary>Ranks the sections of <paramref name="notes"/> (the notes below <paramref name="scope"/>) and returns
     /// the best <paramref name="max"/>; headings with nothing below them don't count. With <paramref name="pages"/>,
     /// the pages of PDFs the index found by meaning rank among them, by their cosine alone (their text isn't at hand
@@ -196,9 +199,8 @@ public static class SectionSearch
     /// </summary>
     private static List<(Chunk, double?)> FuseByRank(List<(Chunk Chunk, double? Score)> meaning, List<(Chunk Chunk, double? Score)> words)
     {
-        const double K = 60;
-        return [.. meaning.Select((r, i) => (Hit: r, Fused: 1 / (K + i + 1), List: 0))
-            .Concat(words.Select((r, i) => (Hit: r, Fused: 1 / (K + i + 1), List: 1)))
+        return [.. meaning.Select((r, i) => (Hit: r, Fused: 1 / (RankFusionK + i + 1), List: 0))
+            .Concat(words.Select((r, i) => (Hit: r, Fused: 1 / (RankFusionK + i + 1), List: 1)))
             .OrderByDescending(r => r.Fused)
             .ThenBy(r => r.List)
             .Select(r => r.Hit)];

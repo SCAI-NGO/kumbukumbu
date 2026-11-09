@@ -5,7 +5,7 @@ using Kumbu.Server.Welcome;
 
 namespace Kumbu.Server.Tests.Welcome;
 
-/// <summary>The welcome vault's texts: the seven notes, links that work in the web app and in Obsidian, and the
+/// <summary>The welcome vault's texts: the eight notes, links that work in the web app and in Obsidian, and the
 /// rules the texts keep (AI-agnostic, no deployer, the tested markers, the menu names they quote).</summary>
 public sealed partial class WelcomeTextTests
 {
@@ -15,7 +15,7 @@ public sealed partial class WelcomeTextTests
     private const string OtherSection = "## This is how you connect any other MCP client";
 
     private static readonly string[] Names =
-        ["Connect your AI.md", "Obsidian.md", "Security and privacy.md", "Start here.md", "Working by hand.md", "Your AI in Kumbu².md", "Your data.md"];
+        ["Connect your AI.md", "Obsidian.md", "Security and privacy.md", "Skills.md", "Start here.md", "Working by hand.md", "Your AI in Kumbu².md", "Your data.md"];
 
     private static string Text(string name) => WelcomeVault.Texts().Single(t => t.Name == name).Content;
 
@@ -32,7 +32,7 @@ public sealed partial class WelcomeTextTests
         HeadingRegex().Matches(content).Select(m => m.Groups[1].Value.Trim());
 
     [Fact]
-    public void The_vault_holds_exactly_the_seven_notes()
+    public void The_vault_holds_exactly_the_eight_notes()
     {
         Assert.Equal(Names, WelcomeVault.Texts().Select(t => t.Name));
     }
@@ -88,7 +88,7 @@ public sealed partial class WelcomeTextTests
     public void Start_here_links_every_other_note()
     {
         var start = Text("Start here.md");
-        foreach (var link in new[] { "[[Working by hand]]", "[[Your AI in Kumbu²]]", "[[Obsidian]]", "[[Connect your AI]]", "[[Security and privacy]]", "[[Your data]]" })
+        foreach (var link in new[] { "[[Working by hand]]", "[[Your AI in Kumbu²]]", "[[Obsidian]]", "[[Connect your AI]]", "[[Security and privacy]]", "[[Your data]]", "[[Skills]]" })
         {
             Assert.Contains(link, start, StringComparison.Ordinal);
         }

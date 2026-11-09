@@ -366,3 +366,34 @@ describe("connections and vaults shared with the user", () => {
     await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "read", Gartenarbeit: "write" } }]));
   });
 });
+
+describe("Skills preselected for a new connection", () => {
+  it("preselects Skills in a new connection", async () => {
+    const bodies: unknown[] = [];
+    api([], {
+      "GET /api/vaults": () => json(200, [{ name: "Skills", notes: 0, kind: "skills" }, ...vaults]),
+      "POST /api/connections": async (r) => (bodies.push(await r.json()), json(201, { ...base, state: "waiting", client: null })),
+    });
+    renderApp("/access/apps");
+    await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect an app" });
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("Read")).toBeChecked());
+    expect(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("None")).toBeChecked();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
+    await screen.findByText(url);
+    expect(bodies).toEqual([{ name: "Work", vaults: { Skills: "read" }, expiresInDays: 90 }]);
+  });
+});
+
+describe("Skills in the instructions", () => {
+  it("sets a connection to Hint only", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, instructions: "list" }], { "PUT /api/connections/c1/instructions": async (r) => (bodies.push(await r.json()), noContent()) });
+    renderApp("/access/apps");
+    const select = await screen.findByLabelText("Skills in the instructions");
+    expect(select).toHaveValue("list");
+    await userEvent.selectOptions(select, "Hint only");
+    await waitFor(() => expect(bodies).toEqual([{ mode: "hint" }]));
+  });
+});

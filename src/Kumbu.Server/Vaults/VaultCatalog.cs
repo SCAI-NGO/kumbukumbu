@@ -304,7 +304,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// or after it: a rotation of the user key (<see cref="Accounts.UserKeyRotation"/>) may have made
     /// <paramref name="userKey"/> one that no slot uses any more, and a vault under it would be lost.
     /// </summary>
-    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct, DateTime? credentialReadAt = null)
+    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct, DateTime? credentialReadAt = null, string? kind = null)
     {
         await EnsureReadyAsync(ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
@@ -347,7 +347,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         try
         {
             var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
-            var doc = new VaultDocument { Id = id, Meta = meta, CreatedAt = Now };
+            var doc = new VaultDocument { Id = id, Meta = meta, CreatedAt = Now, Kind = kind };
             using var session = await StartSessionAsync(ct);
             await session.WithTransactionAsync(
                 async (s, token) =>
@@ -371,7 +371,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             throw;
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider };
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider, Kind = kind };
         RecordKey(vault);
         _open[id] = vault;
         KumbuMetrics.VaultUnlocked();
@@ -1228,6 +1228,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// </summary>
     internal async Task RenameVaultAsync(string userId, byte[] userKey, UnlockedVault vault, string newName, CancellationToken ct)
     {
+        if (vault.Kind == VaultKinds.Skills) throw new InvalidOperationException("The vault Skills keeps its name.");
         await EnsureReadyAsync(ct);
         await RequireNoneRekeyingAsync([vault.Id], ct);
         CheckWritable(vault);
@@ -1482,9 +1483,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.
             // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
-            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, DisplayName = meta.DisplayName };
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, DisplayName = meta.DisplayName, Kind = doc.Kind };
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, DisplayName = meta.DisplayName };
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, DisplayName = meta.DisplayName, Kind = doc.Kind };
             if (LoadBetweenReads is { } between) await between(id);
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
@@ -1579,7 +1580,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     private static byte[] UserKek(byte[] userKey, string vaultId) => VaultCrypto.Derive(userKey, UserKekLabel, Encoding.UTF8.GetBytes(vaultId));
 
-    private static string NormaliseVaultName(string name) => name.Normalize(NormalizationForm.FormC).Trim().ToLowerInvariant();
+    /// <summary>A name as the name index compares it: composed, trimmed, lower case (an own vault's and an alias's alike).</summary>
+    internal static string NormaliseVaultName(string name) => name.Normalize(NormalizationForm.FormC).Trim().ToLowerInvariant();
 
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 

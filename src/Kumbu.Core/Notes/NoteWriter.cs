@@ -89,6 +89,17 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
+        // A text file in a skill is an attachment of the text kind, written as given.
+        if (AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text)
+        {
+            if (ForAttachments() is not { } files) return ShellResult.Error($"{tool}: {path.Name}: this server keeps no text files") with { Kind = ShellErrorKind.Invalid };
+            var written = (await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct)).Result;
+            // The attachment writer speaks as "upload"; this call was a write.
+            return written.IsError && written.Output.StartsWith("upload:", StringComparison.Ordinal)
+                ? written with { Output = tool + written.Output["upload".Length..] }
+                : written;
+        }
+
         if (NotText(tool, path) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         content = Normalize(content);
@@ -451,6 +462,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// marker is never described, so its path is no such file, as everywhere in the shell.</summary>
     public static ShellResult? NotText(string tool, VaultPath path) =>
         FolderMarker.Is(path) ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory")
+        : AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text ? ShellResult.Error($"{tool}: {path.Name} is a text file in a skill; replace it whole with write")
         : path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
 
     private static ShellResult? TooLarge(string tool, string content)

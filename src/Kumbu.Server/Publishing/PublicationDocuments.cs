@@ -9,6 +9,7 @@ namespace Kumbu.Server.Publishing;
 /// what MongoDB needs: the vault id (for deletion and storage figures), the lookup id derived from the share code
 /// (<see cref="ShareCode.Lookup"/>), and when it was first published. The reader slot holds the publication key under
 /// the reader key; the blob holds the copy under the publication key. Nothing names the note, its title or its owner.
+/// <see cref="Kind"/> tells a skill's copy (<see cref="PublishedSkillCopy"/>) from a note's, so neither reader opens the other.
 /// </summary>
 [BsonIgnoreExtraElements]
 public sealed class PublicationDocument
@@ -30,6 +31,10 @@ public sealed class PublicationDocument
 
     [BsonElement("at")]
     public DateTime At { get; set; }
+
+    /// <summary><see cref="PublicationKinds.Skill"/> for a skill shared by link; absent for a note.</summary>
+    [BsonElement("kind"), BsonIgnoreIfNull]
+    public string? Kind { get; set; }
 }
 
 /// <summary>A file of a published copy (collection <c>publication_files</c>), sealed under the publication key and

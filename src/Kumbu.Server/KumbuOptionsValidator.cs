@@ -59,6 +59,19 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
             }
         }
 
+        if (!string.IsNullOrEmpty(options.Skills.GitHubTokenFile))
+        {
+            if (!string.IsNullOrEmpty(options.Skills.GitHubToken))
+            {
+                failures.Add("Kumbu:Skills: set only one of GitHubToken and GitHubTokenFile");
+            }
+            else if (FileProblem(options.Skills.ReadGitHubToken) is { } problem)
+            {
+                // The path is the admin's own setting; what the file holds is never repeated.
+                failures.Add($"Kumbu:Skills:GitHubTokenFile {options.Skills.GitHubTokenFile} {problem}");
+            }
+        }
+
         if (!string.IsNullOrEmpty(options.PublicUrl) && !KumbuOptions.IsUsablePublicUrl(options.PublicUrl))
         {
             failures.Add(PublicUrlMessage);

@@ -129,7 +129,7 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         Assert.True(await app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName)
             .Find(new BsonDocument { ["vault"] = vaultId, ["kind"] = VaultEvents.InvitationDeclined, ["membership"] = invitation.MembershipId }).AnyAsync(Ct));
         // Her own vault is hers as before.
-        Assert.Equal("Notizen", Assert.Single(await Catalog.OpenForUserAsync(carol.User.Id, carol.UserKey, Ct)).Name);
+        Assert.Equal(["Notizen", "Skills"], (await Catalog.OpenForUserAsync(carol.User.Id, carol.UserKey, Ct)).Select(v => v.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -636,7 +636,7 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         // No closing period: the only copy of the new key was the owner's, and the members couldn't even export.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var receipt = await RestClient.JsonAsync(response);
-        Assert.Equal((1, 1), (receipt["vaults"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
+        Assert.Equal((2, 1), (receipt["vaults"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
         Assert.Empty(receipt["sharedVaultsScheduled"]!.AsArray());
         Assert.False(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId).AnyAsync(Ct));
         Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == vaultId, cancellationToken: Ct));

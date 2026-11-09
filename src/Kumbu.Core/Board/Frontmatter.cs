@@ -46,7 +46,7 @@ public static class Frontmatter
         var end = Outline.FrontmatterEnd(lines);
         if (end == 0)
         {
-            var created = changes.Where(c => c.Yaml is not null).Select(c => $"{c.Key}: {c.Yaml}").ToList();
+            var created = changes.Where(c => c.Yaml is not null).Select(c => Line(c.Key, c.Yaml!)).ToList();
             if (created.Count == 0) return content;
             return string.Join('\n', ["---", .. created, "---"]) + "\n" + content;
         }
@@ -58,7 +58,7 @@ public static class Frontmatter
             if (start < 0)
             {
                 if (yaml is null) continue;
-                lines.Insert(close++, $"{key}: {yaml}");
+                lines.Insert(close++, Line(key, yaml));
                 continue;
             }
 
@@ -72,12 +72,15 @@ public static class Frontmatter
             lines.RemoveRange(start, stop - start);
             close -= stop - start;
             if (yaml is null) continue;
-            lines.Insert(start, $"{key}: {yaml}");
+            lines.Insert(start, Line(key, yaml));
             close++;
         }
 
         return Lines.Join(lines) + (content.EndsWith('\n') ? "\n" : "");
     }
+
+    // A block value starting on the next line ("\n  a: b") leaves no trailing space after the key.
+    private static string Line(string key, string yaml) => yaml.StartsWith('\n') ? $"{key}:{yaml}" : $"{key}: {yaml}";
 
     private static bool IsKeyLine(string line, string key) =>
         new[] { key, $"\"{key}\"", $"'{key}'" }.Any(written =>

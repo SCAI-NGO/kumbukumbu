@@ -100,6 +100,7 @@ public sealed partial class Memberships
             {
                 await MembershipsChangedAsync(s, vaultId, token);
                 await RequireNotClosingAsync(s, vaultId, token);
+                if (await catalog.Vaults.Find(s, v => v.Id == vaultId && v.Kind == VaultKinds.Skills).AnyAsync(token)) throw SharingRefusedException.SkillsVault();
                 await catalog.RequireSameVaultKeysAsync(s, ownerId, ownerKey, new Dictionary<string, byte[]> { [vaultId] = vaultKey }, token);
                 await RequireUnderLimitsAsync(s, vaultId, pending: true, token);
                 await Docs.InsertOneAsync(s, doc, cancellationToken: token);
@@ -529,6 +530,8 @@ public sealed class SharingRefusedException(string code, string message) : Excep
     public string Code { get; } = code;
 
     public static SharingRefusedException Closing() => new(Refusals.Closing, "This vault is closing: its owner deleted their account, and it takes no new members.");
+
+    public static SharingRefusedException SkillsVault() => new("skills-vault", "The vault Skills isn't shared with others. Share a single skill by link from the Skills screen.");
 
     public static SharingRefusedException OwnerInactive() => new(Refusals.OwnerInactive, "The owner's account is deactivated; this invitation can't be used until it is active again.");
 }

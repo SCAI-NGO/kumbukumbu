@@ -105,6 +105,11 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
             if (NoteNames.Problem(to) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {problem}");
         }
 
+        if (folder && NoteMover.TextFilesOutsideSkills(files.Select(f => KeyValuePair.Create(f.From.Path, f.To)), source, await store.SkillsVaultAsync(ct)) is { } outside)
+        {
+            return Fail(ShellErrorKind.Invalid, $"{Cp}: {source.Value}/ can't be copied to {target.Value}/: text files are kept only inside a skill's folder: {outside} (copy them into a skill's folder first, or leave them out)");
+        }
+
         foreach (var (from, to) in files)
         {
             if (to == target && AttachmentFormat.RenameProblem(from.Path, to) is { } renameProblem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {renameProblem}");

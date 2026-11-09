@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { FileText, Image as ImageIcon } from "lucide-react";
+import { FileCode, FileText, Image as ImageIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type RefObject } from "react";
 import { fetchFile, useAttachmentUrl } from "../api/notes";
 import { fileKindOf, inVault, type FileAt } from "../api/paths";
@@ -51,7 +51,10 @@ export default function Thumbnail(props: Props) {
 
 /** The picture itself, for a caller that tells nearness itself (the gallery's tiles). `path` from the root of the tree. */
 export function FileThumb({ vault, path, at = {}, fit = "cover", alt = "" }: Props) {
-  return fileKindOf(path) === "pdf" ? <PdfThumb vault={vault} path={path} at={at} fit={fit} alt={alt} /> : <ImageThumb vault={vault} path={path} at={at} fit={fit} alt={alt} />;
+  const kind = fileKindOf(path);
+  // A text file is never drawn, not even as an image: an icon stands for it.
+  if (kind === "text") return <FileCode size={28} role={alt ? "img" : undefined} aria-label={alt || undefined} aria-hidden={alt ? undefined : true} className="absolute inset-0 m-auto text-dim" />;
+  return kind === "pdf" ? <PdfThumb vault={vault} path={path} at={at} fit={fit} alt={alt} /> : <ImageThumb vault={vault} path={path} at={at} fit={fit} alt={alt} />;
 }
 
 function Placeholder({ pdf, alt }: { pdf: boolean; alt: string }) {

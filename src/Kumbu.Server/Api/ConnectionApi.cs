@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.OAuth;
@@ -22,7 +23,7 @@ public sealed record ClientView(string Name, string Host, bool Verified);
 /// </summary>
 public sealed record ConnectionView(
     string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
-    string State, string? Reason, ClientView? Client, string[] Publish);
+    string State, string? Reason, ClientView? Client, string[] Publish, string Instructions = "list");
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
 /// out or null, the connection doesn't expire. <c>publish</c>: as for an API key.</summary>
@@ -66,6 +67,7 @@ public static class ConnectionApi
         group.MapGet("", ListAsync).Errors(401, 403, 503);
         group.MapPost("", CreateAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         group.MapPut("/{id}/vaults", SetVaultsAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        group.MapPut("/{id}/instructions", SetInstructionsAsync).Errors(400, 401, 403, 404);
         group.MapDelete("/{id}", RevokeAsync).Errors(401, 403, 404);
 
         // The consent page's calls (Ruling 8): session-only too, so the decision, a POST, also passes the Origin check
@@ -215,7 +217,7 @@ public static class ConnectionApi
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
         var info = await connections.CreateAsync(
-            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, AccountApi.PublishByVaultId(body.Publish, names));
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)));
         return TypedResults.Created($"/api/connections/{info.Id}", View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
@@ -225,10 +227,13 @@ public static class ConnectionApi
         var open = await caller.OpenVaultsAsync(ct);
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names))
+        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)))
             ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
+
+    private static async Task<NoContent> SetInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, Connections connections, CancellationToken ct) =>
+        await connections.SetInstructionsAsync(caller.User!, id, AccountApi.ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound(NoSuchConnection);
 
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");
@@ -271,7 +276,8 @@ public static class ConnectionApi
             StateText(info.State),
             info.Reason,
             info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null,
-            AccountApi.PublishNames(info.Publish, Names(open)));
+            AccountApi.PublishNames(info.Publish, Names(open)),
+            AccountApi.InstructionsText(info.Instructions));
     }
 
     private static string StateText(ConnectionState state) => state switch

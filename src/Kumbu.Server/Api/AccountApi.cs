@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.Json.Serialization;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
@@ -21,8 +22,15 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
 /// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
 /// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
-/// the shell's notice asks for the storage only then.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited);
+/// the shell's notice asks for the storage only then. <c>skillsNotice</c>: the vault or alias renamed to make room for
+/// the vault Skills, until she dismisses it (<c>DELETE /api/account/skills-notice</c>); null when there is none.</summary>
+public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, SkillsNoticeView? SkillsNotice = null);
+
+/// <summary><c>renamed</c>: the name the vault (or, with <c>alias</c>, the vault shared with her) has now.</summary>
+public sealed record SkillsNoticeView(string Renamed, bool Alias)
+{
+    public static SkillsNoticeView? From(Skills.SkillsRename? rename) => rename is null ? null : new(rename.NewName, rename.Alias);
+}
 
 /// <summary><c>remember</c>: "Keep me signed in on this device", a session of 30 days (7 idle) with the normal limits
 /// for the actions that need the password; false when left out.</summary>
@@ -68,7 +76,10 @@ public sealed record ReencryptRequest(string Password);
 /// it may publish on ("May publish"), all among <c>vaults</c>.</summary>
 public sealed record ApiKeyView(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt, string Kind, string[] Publish);
+    DateTime? ExpiresAt, string Kind, string[] Publish, string Instructions = "list");
+
+/// <summary><c>mode</c>: <c>list</c> (the skills listed in the instructions, with a hint) or <c>hint</c> (the hint only).</summary>
+public sealed record InstructionsRequest(string Mode);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
 /// out or null, the key doesn't expire. <c>publish</c>: the names of the vaults it may publish on, among <c>vaults</c>
@@ -198,6 +209,8 @@ public static class AccountApi
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
         account.MapPost("/keys", CreateKeyAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
+        // No password window: a preference about the text of the instructions, no right.
+        account.MapPut("/keys/{id}/instructions", SetKeyInstructionsAsync).Errors(400, 401, 403, 404);
 
         // Made and revoked while WebDAV is switched off too: the shares wait for it to be on again.
         account.MapGet("/dav-shares", ListDavSharesAsync).Errors(401, 403, 503);
@@ -215,11 +228,12 @@ public static class AccountApi
         account.MapGet("/account/storage", StorageAsync).Errors(401, 403);
         account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
         account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
+        account.MapDelete("/account/skills-notice", DismissSkillsNoticeAsync).Errors(401, 403);
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        StorageQuota quota, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -244,8 +258,11 @@ public static class AccountApi
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
+        // Never fails the sign-in, and not cancellable by the client, as at the join.
+        await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
-            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct)));
+            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
+            SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -257,8 +274,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<JoinedView>> JoinAsync(
-        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, Welcome.WelcomeVault welcome, AccountLimits limits,
-        CancellationToken ct)
+        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, Welcome.WelcomeVault welcome, Skills.SkillsVaults skills,
+        AccountLimits limits, CancellationToken ct)
     {
         if (limits.Join(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (user, recoveryKey) = await invitations.RedeemAsync(body.Code, body.Username, body.Password, ct);
@@ -272,6 +289,7 @@ public static class AccountApi
             SetSessionCookie(http, secret, remember: false);
             // Never fails the join, and not cancellable, like the rest of the join after the claim.
             await welcome.CreateAsync(signedIn, userKey, readAt, CancellationToken.None);
+            await skills.EnsureAsync(signedIn, userKey, readAt, CancellationToken.None);
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
@@ -305,10 +323,22 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
-    private static async Task<Ok<SessionView>> Session(RequestCaller caller, StorageQuota quota, IOptions<KumbuOptions> options, CancellationToken ct) =>
-        TypedResults.Ok(new SessionView(
+    /// <summary>The session's user; a kept session, which may not sign in for weeks, gets the vault Skills here.</summary>
+    private static async Task<Ok<SessionView>> Session(
+        RequestCaller caller, StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, CancellationToken ct)
+    {
+        await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
+        return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct)));
+            await quota.LimitedAsync(caller.User.Id, ct), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
+    }
+
+    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>
+    private static async Task<NoContent> DismissSkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
+    {
+        await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        return TypedResults.NoContent();
+    }
 
     /// <summary>
     /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No
@@ -423,12 +453,25 @@ public static class AccountApi
 
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
-        var names = await VaultNamesAsync(caller, ct);
+        var open = await caller.OpenVaultsAsync(ct);
+        var names = open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
         var vaults = RightsByVaultId(body.Vaults, names);
         var (key, info) = await keys.CreateAsync(
-            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, publish: PublishByVaultId(body.Publish, names));
+            caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays, publish: PublishByVaultId(body.Publish, names, SkillsVaultIds(open)));
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
+
+    internal static InstructionsMode ParseInstructions(string? mode) => mode switch
+    {
+        "list" => InstructionsMode.ListAndHint,
+        "hint" => InstructionsMode.HintOnly,
+        _ => throw ApiErrors.BadRequest("'mode' is \"list\" or \"hint\"."),
+    };
+
+    internal static string InstructionsText(InstructionsMode mode) => mode == InstructionsMode.HintOnly ? "hint" : "list";
+
+    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
+        await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
 
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
@@ -609,18 +652,27 @@ public static class AccountApi
     }
 
     /// <summary>A request's "May publish" (vault names) by vault id; 400 for a vault the caller has no such name for.
-    /// Whether it may be given there is for the service to say (an <see cref="ArgumentException"/>, a 400 too).</summary>
-    internal static HashSet<string> PublishByVaultId(IReadOnlyList<string>? requested, Dictionary<string, string> names)
+    /// Whether it may be given there is for the service to say (an <see cref="ArgumentException"/>, a 400 too); not for the vault Skills.</summary>
+    internal static HashSet<string> PublishByVaultId(IReadOnlyList<string>? requested, Dictionary<string, string> names, IReadOnlySet<string>? skillsVaults = null)
     {
         var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
         var publish = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in requested ?? []) publish.Add((name is null ? null : idsByName.GetValueOrDefault(name)) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'."));
+        foreach (var name in requested ?? [])
+        {
+            var id = (name is null ? null : idsByName.GetValueOrDefault(name)) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
+            if (skillsVaults?.Contains(id) == true) throw ApiErrors.BadRequest("May publish isn't given for the vault Skills: a skill is shared from the Skills screen.");
+            publish.Add(id);
+        }
+
         return publish;
     }
 
     /// <summary>"May publish" by vault name, in order; as for the rights, a vault that no longer opens for the user isn't listed.</summary>
     internal static string[] PublishNames(IReadOnlySet<string> publish, Dictionary<string, string> names) =>
         [.. publish.Where(names.ContainsKey).Select(id => names[id]).Order(StringComparer.Ordinal)];
+
+    /// <summary>The ids of the caller's own vault marked as the skills vault, which is never given "May publish".</summary>
+    internal static IReadOnlySet<string> SkillsVaultIds(IEnumerable<Vaults.VaultAccess> open) => open.Where(v => v.IsSkillsVault).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The caller's vaults, id → name. Opening them is what a session does on every vault request anyway.</summary>
     internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
@@ -637,7 +689,8 @@ public static class AccountApi
         info.RevokedAt,
         info.ExpiresAt,
         info.Kind == ApiKeyKind.Device ? "device" : "agent",
-        PublishNames(info.Publish, names));
+        PublishNames(info.Publish, names),
+        InstructionsText(info.Instructions));
 
     /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
     private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(

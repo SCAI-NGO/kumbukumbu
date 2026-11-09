@@ -100,7 +100,7 @@ public sealed class PlantedUserSlotTests(KumbuAppFactory app)
     {
         var (alice, bob, _, _) = await PlantedAsync();
         var f = Builders<SlotDocument>.Filter;
-        var hersFilter = f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, VaultCatalog.UserSlotLookup(alice.UserKey, alice.User.Id));
+        var hersFilter = f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, VaultCatalog.UserSlotLookup(alice.UserKey, alice.User.Id)) & f.Eq(s => s.Vault, await alice.VaultIdAsync());
         var before = await Catalog.Slots.Find(hersFilter).SingleAsync(Ct);
 
         using (var rekeyed = await bob.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))

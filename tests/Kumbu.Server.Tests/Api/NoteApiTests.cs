@@ -39,8 +39,8 @@ public sealed class NoteApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var vaults = (await JsonAsync(list)).AsArray();
-        Assert.Equal(["Arbeit", "Privat"], Strings(vaults, "name"));
-        Assert.Equal([1, 0], vaults.Select(v => v!["notes"]!.GetValue<int>()));
+        Assert.Equal(["Arbeit", "Privat", "Skills"], Strings(vaults, "name"));
+        Assert.Equal([1, 0, 0], vaults.Select(v => v!["notes"]!.GetValue<int>()));
 
         using var taken = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "arbeit" });
         Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
@@ -483,7 +483,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         async Task<bool> CanWriteAsync(string? bearer)
         {
             using var response = await user.GetAsync("/api/vaults", bearer);
-            return Assert.Single((await JsonAsync(response)).AsArray())!["canWrite"]!.GetValue<bool>();
+            return (await JsonAsync(response)).AsArray().Single(v => v!["name"]!.GetValue<string>() == user.Vault)!["canWrite"]!.GetValue<bool>();
         }
 
         Assert.False(await CanWriteAsync(reader));
@@ -560,7 +560,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
 
         // A second process unlocks the vault from the database and indexes it again.
         await using var again = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
-        var opened = Assert.Single(await again.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct));
+        var opened = (await again.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == vault);
         await again.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
 
         Assert.Contains(log.Lines, l => l.Contains($"Unlocked vault {opened.Id}", StringComparison.Ordinal));

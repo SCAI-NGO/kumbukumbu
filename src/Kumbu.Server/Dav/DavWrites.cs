@@ -56,7 +56,7 @@ internal sealed partial class DavWrites(
         {
             var name = target.Path.Name;
             if (target.Path.IsNote) await PutNoteAsync(target, ct);
-            else if (AttachmentFormat.ForName(name) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(target.Path, place, format, ct);
+            else if (AttachmentFormat.ForPath(target.Path) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(target.Path, place, format, ct);
             else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
             return;
         }
@@ -441,7 +441,7 @@ internal sealed partial class DavWrites(
         if (await tree.FindAsync(destination.Path, ct) is { IsCollection: true }) throw DavException.FolderHasNoContent();
         var path = destination.Path;
         if (path.IsNote) await PutNoteAsync(destination, ct, item.Bytes, moved: move);
-        else if (AttachmentFormat.ForName(path.Name) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(path, to, format, ct, item.Bytes);
+        else if (AttachmentFormat.ForPath(path) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(path, to, format, ct, item.Bytes);
         else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
         if (move && caller.Place(from) is { } place) parking.Remove(caller.ShareId, place.VaultId, place.Path);
     }

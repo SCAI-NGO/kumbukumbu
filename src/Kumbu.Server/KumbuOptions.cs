@@ -66,6 +66,36 @@ public sealed class KumbuOptions
     public DavOptions Dav { get; set; } = new();
 
     public QuotaOptions Quota { get; set; } = new();
+
+    public SkillsOptions Skills { get; set; } = new();
+}
+
+/// <summary>Skills and the marketplaces they can be installed from.</summary>
+public sealed class SkillsOptions
+{
+    public MarketplacesOptions Marketplaces { get; set; } = new();
+
+    /// <summary>Optional (<c>KUMBU_GITHUB_TOKEN</c>): a GitHub token, for more than 60 requests an hour. Sent to
+    /// api.github.com only, never logged or returned.</summary>
+    public string? GitHubToken { get; set; }
+
+    /// <summary>In place of <see cref="GitHubToken"/>: a file holding it, e.g. a Docker secret under <c>/run/secrets/</c>.
+    /// Its line breaks at the end are not part of it.</summary>
+    public string? GitHubTokenFile { get; set; }
+
+    /// <summary>The token set, or the one in <see cref="GitHubTokenFile"/> (read now, trimmed); null for neither.</summary>
+    public string? ReadGitHubToken() =>
+        !string.IsNullOrEmpty(GitHubToken) ? GitHubToken
+        : string.IsNullOrEmpty(GitHubTokenFile) ? null
+        : File.ReadAllText(GitHubTokenFile).Trim() is { Length: > 0 } token ? token : null;
+}
+
+/// <summary>Skill marketplaces on GitHub.</summary>
+public sealed class MarketplacesOptions
+{
+    /// <summary>Off (<c>KUMBU_SKILLS_MARKETPLACES=false</c>), the web app hides the Marketplaces tab and the server
+    /// fetches nothing; installed copies stay.</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>The storage quota (WebDAV design §3.10).</summary>

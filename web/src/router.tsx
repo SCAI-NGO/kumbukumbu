@@ -101,6 +101,8 @@ export const routes: RouteObject[] = [
       { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
       // Signed in or not: without a session it says what to do first, and keeps the link's secret through sign-in.
       { path: "/share", lazy: lazyPage(() => import("./routes/Share")) },
+      // As /share: a shared skill's code waits through sign-in. Before /skills/:tab, which would take "add" for a tab.
+      { path: "/skills/add", lazy: lazyPage(() => import("./skills/AddSkill")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       { path: "/consent", element: <ConsentRoute /> },
@@ -124,6 +126,8 @@ export const routes: RouteObject[] = [
           { path: "/access", element: <Navigate to="/access/keys" replace /> },
           // The page's address before it had tabs, in bookmarks and older links.
           { path: "/keys", element: <Navigate to="/access/keys" replace /> },
+          { path: "/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
+          { path: "/skills", element: <Navigate to="/skills/installed" replace /> },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },

@@ -225,7 +225,7 @@ public static class Security
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
 /// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL. Peeking at an
 /// account invitation, 20 per minute per network. Renaming a vault, one's own or one shared with one, 30 per minute
-/// per user (together).
+/// per user (together). Asking GitHub for a marketplace, 30 per minute per user.
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
@@ -315,6 +315,14 @@ public sealed class AccountLimits : IDisposable
     /// </summary>
     public const int AliasRenamesPerUser = 30;
 
+    /// <summary>
+    /// A user's requests that may make the server ask GitHub, a minute per user (skills spec §3.9; Decision 30), since
+    /// each may spend the server's GitHub allowance, shared by everyone: every browse, preview and install counts once,
+    /// whether its commit, listing or archive is in the cache or not; an update check counts once per repository whose
+    /// commit isn't in the cache, and not at all when it asks GitHub nothing.
+    /// </summary>
+    public const int GitHubFetchesPerUser = 30;
+
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>No username is longer; a longer one only needs a partition, not a distinct one.</summary>
@@ -335,6 +343,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
     private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
     private readonly PartitionedRateLimiter<string> _aliasRenameByUser;
+    private readonly PartitionedRateLimiter<string> _gitHubFetchByUser = Limiter(GitHubFetchesPerUser);
     private readonly PartitionedRateLimiter<string> _readerReadByAddress;
     private readonly PartitionedRateLimiter<string> _readerReadByNetwork;
     private readonly PartitionedRateLimiter<string> _readerReads;
@@ -408,6 +417,9 @@ public sealed class AccountLimits : IDisposable
     /// <summary>A member's rename of a vault shared with her, or an owner's of her own vault, counted together per user
     /// across her sessions.</summary>
     public TimeSpan? AliasRename(string userId) => Take(_aliasRenameByUser, userId);
+
+    /// <summary>A request of the user's that asks GitHub, counted per user across her sessions.</summary>
+    public TimeSpan? GitHubFetch(string userId) => Take(_gitHubFetchByUser, userId);
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
@@ -507,6 +519,7 @@ public sealed class AccountLimits : IDisposable
         _metadataFetchByAddress.Dispose();
         _metadataFetchByHost.Dispose();
         _aliasRenameByUser.Dispose();
+        _gitHubFetchByUser.Dispose();
         _readerReadByAddress.Dispose();
         _readerReadByNetwork.Dispose();
         _readerReads.Dispose();

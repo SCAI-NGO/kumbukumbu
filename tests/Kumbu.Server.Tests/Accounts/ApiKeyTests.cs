@@ -674,12 +674,12 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (alice, bob, vaultId) = await SharedWorkAsync();
         var catalog = app.PublicApi.Services.GetRequiredService<VaultCatalog>();
 
-        var hers = Assert.Single(await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct));
+        var hers = (await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(v => v.Id == vaultId);
         var his = await catalog.OpenForUserAsync(bob.User.Id, bob.UserKey, Ct);
 
         Assert.True(hers.MayPublish);
         Assert.False(his.Single(v => v.Id == vaultId).MayPublish);
-        Assert.True(his.Single(v => v.Id != vaultId).MayPublish);
+        Assert.True(his.Single(v => v.Name == "Gartenarbeit").MayPublish);
         var dev = await Catalog.OpenAsync(KumbuAppFactory.Token, Ct);
         Assert.NotEmpty(dev);
         Assert.All(dev, v => Assert.False(v.MayPublish));

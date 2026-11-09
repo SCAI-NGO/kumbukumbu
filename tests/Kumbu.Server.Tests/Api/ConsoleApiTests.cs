@@ -251,6 +251,36 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
         Assert.EndsWith(": not in this console, which only reads", Text(view), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("skills copy create-skill")]
+    [InlineData("skills copy create-skill /Work")]
+    [InlineData("ls | skills copy create-skill")]
+    public async Task The_console_refuses_copying_a_skill(string line)
+    {
+        var user = await WorkAsync();
+
+        var view = await ConsoleAsync(user, line);
+
+        Assert.True(IsError(view));
+        Assert.Equal("skills copy: not in this console, which only reads", Text(view));
+        Assert.DoesNotContain("create-skill (/", Text(await ConsoleAsync(user, "skills ls")), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("skills ls", "create-skill (system)")]
+    [InlineData("skills cat create-skill", "name: create-skill")]
+    [InlineData("skills find \"write a skill\"", "create-skill")]
+    [InlineData("skills check", "")]
+    public async Task The_console_reads_skills(string line, string expected)
+    {
+        var user = await WorkAsync();
+
+        var view = await ConsoleAsync(user, line);
+
+        Assert.DoesNotContain("not in this console", Text(view), StringComparison.Ordinal);
+        Assert.Contains(expected, Text(view), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Lines_the_shell_answers_itself()
     {

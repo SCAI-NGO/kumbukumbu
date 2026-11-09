@@ -3,6 +3,7 @@ using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Skills;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -20,14 +21,17 @@ public sealed record ReaderView(string Title, string Markdown, DateTime Snapshot
 /// <summary>A file of the copy: its index and media type, never its name in the vault.</summary>
 public sealed record ReaderFileView(int Index, string MediaType);
 
-/// <summary>The paths strangers open (publish spec §3.12): the reader page and its endpoint. They get the reader's
-/// headers and are left out of the HTTP metrics.</summary>
+/// <summary>The paths strangers open (publish spec §3.12, skills design §3.12): the reader page, the skill page and their
+/// endpoints. They get the reader's headers and are left out of the HTTP metrics.</summary>
 public static class ReaderPaths
 {
-    public static bool Is(PathString path) =>
-        (path.StartsWithSegments("/s", StringComparison.OrdinalIgnoreCase, out var rest) && rest.Value is null or "" or "/")
-        || path.Equals("/s.html", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments(ReaderApi.CookiePath, StringComparison.OrdinalIgnoreCase);
+    public static bool Is(PathString path) => IsPage(path, "/s") || IsPage(path, "/k")
+        || path.StartsWithSegments(ReaderApi.CookiePath, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments(SkillPageApi.CookiePath, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPage(PathString path, string page) =>
+        (path.StartsWithSegments(page, StringComparison.OrdinalIgnoreCase, out var rest) && rest.Value is null or "" or "/")
+        || path.Equals(page + ".html", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

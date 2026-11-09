@@ -55,6 +55,9 @@ public sealed class UnlockedVault
     /// </summary>
     public DateTime Horizon { get; }
 
+    /// <summary>What the vault is marked as (<see cref="VaultKinds"/>), null for an ordinary vault.</summary>
+    public string? Kind { get; init; }
+
     /// <summary>
     /// When each path last changed by a commit through this object (or, for a request still holding an older one, by
     /// that commit: <see cref="EncryptedNoteStore"/> records it here too). Set under <see cref="Gate"/>, after the

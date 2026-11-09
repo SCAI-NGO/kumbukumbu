@@ -370,7 +370,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
         var json = await RestClient.JsonAsync(accepted);
         Assert.Equal((invite.MembershipId, "Garten", "write", "active"), (json["id"]!.GetValue<string>(), json["vault"]!.GetValue<string>(), json["role"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
         using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.OK, note.StatusCode);
 
         var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
@@ -425,7 +425,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
         Assert.Equal("Garten", (await RestClient.JsonAsync(accepted))["vault"]!.GetValue<string>());
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
         using var note = await bob.GetAsync("/api/notes/Garten/plan.md");
         Assert.Equal(HttpStatusCode.OK, note.StatusCode);
         Assert.Equal("/Garten/plan.md", (await RestClient.JsonAsync(note))["path"]!.GetValue<string>());
@@ -445,7 +445,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Equal(0, (await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == bob.User.Id).SingleAsync(Ct)).MembershipsAccepted);
         using var other = await AcceptAsync(bob, invite.Secret, "Garten");
         Assert.Equal(HttpStatusCode.OK, other.StatusCode);
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
     }
 
     [Fact]
@@ -501,7 +501,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
         Assert.Equal("This person is already a member of the vault.", await RestClient.ErrorAsync(second));
         await AssertStillOpenAsync(invite);
-        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Garten", "Skills", "Work"], await VaultNamesAsync(bob));
     }
 
     [Fact]
@@ -523,7 +523,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         using var expired = await AcceptAsync(bob, invite.Secret, "Garten");
 
         Assert.Equal(HttpStatusCode.NotFound, expired.StatusCode);
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         Assert.Null((await Share.MembershipAsync(app.Database, invite.MembershipId)).Member);
 
         // The membership's own expiry decides, whatever its invite slot says.
@@ -553,7 +553,7 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Null(doc.InviteLookup);
         Assert.NotNull(doc.Pin);
         // Nothing opens until the owner confirms.
-        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Equal(["Skills", "Work"], await VaultNamesAsync(bob));
         // It counts towards the ten pending invitations.
         for (var i = 0; i < Memberships.PendingLimit - 1; i++) await InviteDirectAsync(alice);
         await Assert.ThrowsAsync<PendingLimitException>(() => InviteDirectAsync(alice));

@@ -6,7 +6,7 @@ import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
-import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
+import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -26,6 +26,7 @@ import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
+import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
@@ -231,7 +232,7 @@ export default function MobileShell() {
   const noteVault = path ? vaults.data?.find((v) => v.name === vaultOf(path)) : undefined;
   const ownNote = !!noteVault && noteVault.owner == null;
   const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
-  const mayPublish = ownNote && publishEnabled === true && publication.data === null;
+  const mayPublish = ownNote && publishEnabled === true && publication.data === null && publishableAsNote(noteVault, path ?? "");
   // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20).
   const publications = usePublications(noteVault?.name ?? "", ownNote).data;
   const marking = useMarking(publications?.publications.map((p) => p.path));
@@ -263,6 +264,7 @@ export default function MobileShell() {
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />
+      <SkillsNotice />
       <InstallHint />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
       <div className="flex min-h-0 flex-1">

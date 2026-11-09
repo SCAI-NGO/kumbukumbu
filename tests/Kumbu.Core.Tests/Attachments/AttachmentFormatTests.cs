@@ -41,6 +41,44 @@ public class AttachmentFormatTests
     public void IsAttachment_follows_the_six_extensions(string path, bool expected) =>
         Assert.Equal(expected, P(path).IsAttachment);
 
+    [Theory]
+    [InlineData("/Skills/pdf/scripts/run.py", AttachmentKind.Text)]
+    [InlineData("/Work/_skills/x/LICENSE", AttachmentKind.Text)]
+    [InlineData("/Work/_skills/x/makefile", AttachmentKind.Text)]
+    [InlineData("/Skills/pdf/logo.SVG", AttachmentKind.Text)]
+    [InlineData("/Skills/pdf/shot.png", AttachmentKind.Image)]
+    public void Skill_folders_keep_text_files(string path, AttachmentKind kind) => Assert.Equal(kind, AttachmentFormat.ForPath(P(path))!.Kind);
+
+    [Theory]
+    [InlineData("/Work/run.py")] [InlineData("/Skills/run.py")] [InlineData("/Work/_skills/x/scripts")] [InlineData("/Work/logo.svg")] [InlineData("/Skills/pdf/a.exe")]
+    public void Elsewhere_nothing_changes(string path) => Assert.Null(AttachmentFormat.ForPath(P(path)));
+
+    [Fact]
+    public void Text_is_utf8_without_nul()
+    {
+        Assert.Null(AttachmentFormat.Problem(P("/Skills/pdf/a.py"), "print('hé')\n"u8));
+        Assert.Equal("a.py isn't UTF-8 text", AttachmentFormat.Problem(P("/Skills/pdf/a.py"), new byte[] { 0xC3, 0x28 }));
+        Assert.Equal("a.py contains a NUL byte; a skill's folder keeps text only", AttachmentFormat.Problem(P("/Skills/pdf/a.py"), "a\0b"u8));
+        Assert.Equal(AttachmentFormat.UnsupportedMessage, AttachmentFormat.Problem(P("/Work/a.py"), "x"u8));
+    }
+
+    [Fact]
+    public void A_text_file_can_be_renamed_only_within_skill_folders()
+    {
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), P("/Skills/pdf/b.txt")));
+        Assert.Equal("a.py is a text file, kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)",
+            AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), P("/Skills/a.py")));
+    }
+
+    [Fact]
+    public void KindOf_a_full_path_says_text()
+    {
+        Assert.Equal("text", AttachmentFormat.KindOf("/Skills/pdf/a.py"));
+        Assert.Equal("note", AttachmentFormat.KindOf("a.py"));
+    }
+
+    [Fact] public void A_text_summary_says_text() => Assert.Equal("text 2 KB", AttachmentText.Summary(new AttachmentState(AttachmentFormat.TextMediaType, 2048, null, null, "v", "b")));
+
     [Fact]
     public void The_limit_is_15_mebibytes() => Assert.Equal(15_728_640, AttachmentFormat.MaxBytes);
 

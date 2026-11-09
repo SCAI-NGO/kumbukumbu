@@ -340,6 +340,21 @@ describe("May publish", () => {
     expect(dialog).not.toHaveTextContent(hint);
   });
 
+  it("offers no May publish for Skills", async () => {
+    api({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: true }),
+      "GET /api/vaults": () => json(200, [own("Work"), { ...own("Skills"), kind: "skills" }]),
+    });
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    const skills = within(dialog).getByRole("group", { name: "Skills" });
+    await userEvent.click(within(work).getByLabelText("Read"));
+    await userEvent.click(within(skills).getByLabelText("Read"));
+    expect(within(work).getByLabelText("May publish")).toBeInTheDocument();
+    expect(within(skills).queryByLabelText("May publish")).not.toBeInTheDocument();
+  });
+
   it("sends May publish", async () => {
     const bodies: unknown[] = [];
     publishing(true, bodies);
@@ -462,5 +477,97 @@ describe("keys and vaults shared with the user", () => {
     expect(within(group).getByLabelText("Maintain")).toBeInTheDocument();
     await userEvent.click(within(group).getByLabelText("Read and write"));
     expect(group).toHaveTextContent("write, acts as read while you can only read Gartenarbeit");
+  });
+});
+
+describe("Skills preselected for a new key", () => {
+  const skillsVaults = [{ name: "Skills", notes: 0, kind: "skills" }, { name: "Work", notes: 3 }];
+  const bodies: unknown[] = [];
+  const withVaults = (list: unknown[]) =>
+    api({
+      "GET /api/vaults": () => json(200, list),
+      "POST /api/keys": async (r) => (bodies.push(await r.json()), json(201, { key: secret, apiKey: { ...listed, id: "k2", name: "Claude", vaults: { Skills: "read" } } })),
+    });
+  const checked = (dialog: HTMLElement, vault: string) =>
+    within(dialog)
+      .getAllByRole("radio")
+      .filter((r) => (r as HTMLInputElement).checked && within(within(dialog).getByRole("group", { name: vault })).queryAllByRole("radio").includes(r))
+      .map((r) => (r as HTMLInputElement).value);
+
+  it("preselects Skills with Read in a new key", async () => {
+    bodies.length = 0;
+    withVaults(skillsVaults);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("Read")).toBeChecked());
+    expect(checked(dialog, "Work")).toEqual(["none"]);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    await screen.findByText(secret);
+    expect(bodies).toEqual([{ name: "Claude", vaults: { Skills: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("preselects by the mark, not the name", async () => {
+    withVaults([{ name: "Skills", notes: 1 }, { name: "Tools", notes: 0, kind: "skills" }]);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Tools" })).getByLabelText("Read")).toBeChecked());
+    expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("None")).toBeChecked();
+  });
+
+  it("leaves Skills out when set to None", async () => {
+    bodies.length = 0;
+    withVaults(skillsVaults);
+    renderApp("/access/keys");
+    const dialog = await openNewKey();
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("Read")).toBeChecked());
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Skills" })).getByLabelText("None"));
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    await screen.findByText(secret);
+    expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("keeps the user's choice when the list arrives late", async () => {
+    // The list is read again after the user chose (a refresh, a pending vault): her choice is not set back.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let reads = 0;
+    // A changed list, as a new vault or note count makes it: unchanged data would keep its identity and not re-run anything.
+    api({ "GET /api/vaults": () => json(200, [{ ...skillsVaults[0], notes: ++reads }, skillsVaults[1]]) });
+    renderApp("/access/keys", queryClient);
+    const dialog = await openNewKey();
+    const group = await within(dialog).findByRole("group", { name: "Skills" });
+    await waitFor(() => expect(within(group).getByLabelText("Read")).toBeChecked());
+    await userEvent.click(within(group).getByLabelText("None"));
+    const before = reads;
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    expect(reads).toBeGreaterThan(before);
+    // Let the new list reach the dialog and its effects run.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(within(group).getByLabelText("None")).toBeChecked();
+  });
+});
+
+describe("Skills in the instructions", () => {
+  it("sets a key to Hint only", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "GET /api/keys": () => json(200, [{ ...listed, kind: "agent", instructions: "list" }]),
+      "PUT /api/keys/k1/instructions": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/access/keys");
+    const select = await screen.findByLabelText("Skills in the instructions");
+    expect(select).toHaveValue("list");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["List and hint", "Hint only"]);
+    await userEvent.selectOptions(select, "Hint only");
+    await waitFor(() => expect(bodies).toEqual([{ mode: "hint" }]));
+  });
+
+  it("shows no instructions setting for a device key", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, id: "k5", name: "Work – Obsidian Laptop", kind: "device" }]) });
+    renderApp("/access/keys");
+    await screen.findByText("Work – Obsidian Laptop");
+    expect(screen.queryByLabelText("Skills in the instructions")).toBeNull();
   });
 });

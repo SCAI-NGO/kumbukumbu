@@ -42,7 +42,7 @@ public static class FileApi
 
     private const string CutOff = "The upload ended before all of the file arrived; nothing was stored. Try again.";
 
-    private static readonly string[] MediaTypes = [.. AttachmentFormat.All.Select(f => f.MediaType).Distinct()];
+    private static readonly string[] MediaTypes = [.. AttachmentFormat.All.Select(f => f.MediaType).Append(AttachmentFormat.TextMediaType).Distinct()];
 
     public static void MapFileApi(this IEndpointRouteBuilder app)
     {
