@@ -126,11 +126,12 @@ describe("the neutral window", () => {
     expect(neutralWindow.history.state).toEqual({ key: "k1", idx: 1 });
   });
 
-  it("keeps what it remembers of an entry replaced under its own key", () => {
+  it("a replace without a URL keeps the discreet URL the entry stood for", () => {
     shown("Tagebuch");
     neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/notes/Tagebuch/a.md");
-    neutralWindow.history.replaceState({ key: "k1", idx: 1 }, "", "/notes/Tagebuch/b.md");
-    expect(neutralWindow.location.pathname).toBe("/notes/Tagebuch/b.md");
+    neutralWindow.history.replaceState({ key: "k2", idx: 1 }, "");
+    expect(window.location.pathname).toBe("/discreet");
+    expect(neutralWindow.location.pathname).toBe("/notes/Tagebuch/a.md");
   });
 
   it("never loads a discreet URL as a page", () => {

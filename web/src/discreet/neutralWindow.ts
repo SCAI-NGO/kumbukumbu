@@ -83,9 +83,9 @@ export function createNeutralWindow(real: Window): Window {
     const same = url == null;
     const path = same ? currentPath() : pathOf(url);
     const discreet = discreetUrl(path) || (same && method === "replaceState" && !!remembered()?.url);
-    // A replaced entry can't come back: what is remembered of it goes, unless the new one keeps its key.
+    // A replaced entry can't come back: what is remembered of it goes (and comes again below if it is still needed).
     const replaced = method === "replaceState" ? (history.state as HistoryState | null)?.key : undefined;
-    if (typeof replaced === "string" && replaced !== given?.key) memory.delete(replaced);
+    if (typeof replaced === "string") memory.delete(replaced);
     const keepUsr = discreet || (given?.usr != null && useDiscreet.getState().names.size > 0);
     if (!keepUsr) return history[method](state, "", url);
     const { usr, ...rest } = given ?? {};

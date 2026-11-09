@@ -312,13 +312,8 @@ function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldabl
 
 function scrollToFragment(e: MouseEvent<HTMLAnchorElement>, href: string) {
   e.preventDefault();
-  let id = href.slice(1);
-  try {
-    id = decodeURIComponent(id);
-  } catch {
-    // As written.
-  }
-  document.getElementById(id)?.scrollIntoView({ block: "start" });
+  // remark-gfm writes a footnote's id encoded as its href is (`fn-gr%C3%BCsse`): as written, not decoded.
+  document.getElementById(href.slice(1))?.scrollIntoView({ block: "start" });
 }
 
 const components: Components = {

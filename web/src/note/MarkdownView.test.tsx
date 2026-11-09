@@ -266,13 +266,13 @@ describe("MarkdownView", () => {
       scrolled.push(this.id);
     };
     onTestFinished(() => void delete (Element.prototype as Partial<Element>).scrollIntoView);
-    show("Text.[^1]\n\n[^1]: The note.");
+    show("Text.[^Grüße]\n\n[^Grüße]: The note.");
     const ref = screen.getByRole("link", { name: "1" });
     expect(fireEvent.click(ref)).toBe(false);
-    expect(scrolled).toEqual([ref.getAttribute("href")!.slice(1)]);
+    expect(scrolled).toEqual(["user-content-fn-gr%C3%BCsse"]);
     const back = screen.getByRole("link", { name: /back to reference/i });
     expect(fireEvent.click(back)).toBe(false);
-    expect(scrolled).toEqual([ref.getAttribute("href")!.slice(1), ref.id]);
+    expect(scrolled).toEqual(["user-content-fn-gr%C3%BCsse", "user-content-fnref-gr%C3%BCsse"]);
   });
 
   it("does not load images; it names them instead", () => {
