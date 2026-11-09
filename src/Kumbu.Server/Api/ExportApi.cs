@@ -104,8 +104,8 @@ public static class ExportApi
             }
         }
 
-        /// <summary>Whether one of these vaults (by the name the caller sees) is discreet: shown now, as the session
-        /// reaches no hidden one, its ZIP is named without it (discreet design, Decision 15).</summary>
+        /// <summary>Whether one of these vaults (by the name the caller sees) is discreet. The session reaches it only
+        /// while it shows it; its ZIP is then named without it (discreet design, Decision 15).</summary>
         public async Task<bool> AnyDiscreetAsync(IEnumerable<string> names)
         {
             if (Caller.Session is not { } session) return false;
@@ -153,8 +153,9 @@ public static class ExportApi
         export.Log.LogInformation(
             "User {UserId} exported a checkpoint of vault {VaultId}: {Notes} notes, {Files} files",
             export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]), entries.Count(e => e.IsNote), entries.Count(e => !e.IsNote));
+        var now = export.Time.GetUtcNow().UtcDateTime;
         var zipName = await export.AnyDiscreetAsync([root.Segments[0]])
-            ? NeutralZipName(export.Time.GetUtcNow().UtcDateTime)
+            ? NeutralZipName(now)
             : CheckpointZipName(root.Segments[0], name, made, zone);
         return Zip(http, zipName, [(root.Segments[0] + "/", entries)], zone, export.Log, ct);
     }

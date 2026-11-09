@@ -16,7 +16,8 @@ namespace Kumbu.Server.Tests.Discreet;
 
 /// <summary>
 /// Editing a connection's vaults in a session that hides some (Decision 9): the grants on hidden vaults, which the
-/// session can neither see nor name, stay as stored, with their level and "May publish"; revoking stays whole.
+/// session can neither see nor name, stay as stored, with their level and "May publish"; one on hidden vaults alone
+/// answers as no such connection; revoking stays whole.
 /// </summary>
 [Collection("app")]
 public sealed class HiddenGrantsTests(KumbuAppFactory app)
@@ -117,18 +118,19 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_connection_on_hidden_vaults_alone_keeps_them_through_an_empty_edit()
+    public async Task A_connection_on_hidden_vaults_alone_answers_an_edit_as_no_such_connection()
     {
         var world = await HiddenWorld.NewAsync(Api);
-        var workId = await world.In("Work").VaultIdAsync();
         var id = await CreateAsync(world, new() { ["Tagebuch"] = "read" }, ["Tagebuch"]);
         var access = await ConnectAsync(world, id);
         await world.HideAsync();
+        const string madeUp = "aaaaaaaaaaaaaaaa";
 
-        using var empty = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string>() });
+        foreach (var vaults in new[] { new Dictionary<string, string>(), new() { ["Work"] = "write" } })
+        {
+            Assert.Equal(await EditAsync(madeUp, vaults), await EditAsync(id, vaults));
+        }
 
-        Assert.Equal(HttpStatusCode.OK, empty.StatusCode);
-        Assert.Empty((await RestClient.JsonAsync(empty))["vaults"]!.AsObject());
         var stored = await StoredAsync(world, id);
         Assert.Equal([world.TagebuchId], stored.Vaults.Keys);
         Assert.Equal(KeyRight.Read, stored.Vaults[world.TagebuchId]);
@@ -136,14 +138,11 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
         // Nothing changed, so the agent keeps its token.
         Assert.Contains(HiddenWorld.TagebuchWord, await CatAsync(id, access, "/Tagebuch/geheim.md"), StringComparison.Ordinal);
 
-        using var beside = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Work"] = "write" } });
-
-        Assert.Equal(HttpStatusCode.OK, beside.StatusCode);
-        stored = await StoredAsync(world, id);
-        Assert.Equal(
-            new Dictionary<string, KeyRight> { [workId] = KeyRight.Write, [world.TagebuchId] = KeyRight.Read },
-            stored.Vaults.ToDictionary(v => v.Key, v => v.Value));
-        Assert.Equal([world.TagebuchId], stored.Publish);
+        async Task<(HttpStatusCode Status, string Body)> EditAsync(string connection, Dictionary<string, string> vaults)
+        {
+            using var response = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{connection}/vaults", new { vaults });
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        }
     }
 
     [Fact]

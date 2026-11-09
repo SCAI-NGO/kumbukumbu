@@ -2,12 +2,15 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Discreet;
 
@@ -15,6 +18,7 @@ namespace Kumbu.Server.Tests.Discreet;
 /// What the session's lists of access say while it hides vaults (Decisions 9 and 15): a key, device key, WebDAV share or
 /// connection that covers only hidden vaults isn't listed, nor named among those without the vault Skills; one that
 /// covers both kinds lists its visible vaults only; the consent page leaves hidden vaults out; revoking stays whole.
+/// The id of what covers only hidden vaults answers every other request as an id she doesn't have.
 /// While shown, a discreet vault's ZIP is named as an export of several vaults, never by the vault.
 /// </summary>
 [Collection("app")]
@@ -113,6 +117,101 @@ public sealed class HiddenAccessListsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task What_covers_a_hidden_vault_and_one_deleted_since_is_left_out_too()
+    {
+        var world = await HiddenWorld.NewAsync(Api);
+        using (var created = await world.Alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Alt" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        }
+
+        var altId = await world.In("Alt").VaultIdAsync();
+        var (user, userKey, now) = (world.Alice.User, world.Alice.UserKey, DateTime.UtcNow);
+        var vaults = new Dictionary<string, KeyRight> { [world.TagebuchId] = KeyRight.Read, [altId] = KeyRight.Read };
+        var (_, key) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, now, "Tagebuch and Alt", vaults, Ct);
+        var connection = await Api.Services.GetRequiredService<Connections>().CreateAsync(user, userKey, now, "Tagebuch and Alt connection", vaults, Ct);
+        Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(user, userKey, "Alt", RestClient.Password, "Alt", null, Ct));
+        await world.HideAsync();
+
+        var (keysBody, keys) = await GetAsync(world.Alice, "/api/keys");
+        var (connectionsBody, connections) = await GetAsync(world.Alice, "/api/connections");
+
+        Assert.Empty(keys.AsArray());
+        Assert.Empty(connections.AsArray());
+        Assert.DoesNotContain(key.Id, keysBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(connection.Id, connectionsBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_shares_lost_vaults_leave_out_a_hidden_one()
+    {
+        var (world, _) = await WorldWithAccessAsync();
+        var shareId = (await Api.Services.GetRequiredService<DavShares>().ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(s => s.Label == "Both PC").Id;
+        var slot = Builders<BsonDocument>.Filter;
+        await app.Database.GetCollection<BsonDocument>("slots").DeleteOneAsync(
+            slot.Eq("kind", "dav") & slot.Eq("share", shareId) & slot.Eq("vault", world.TagebuchId), Ct);
+        var lost = async () => (await GetAsync(world.Alice, "/api/dav-shares")).Json["shares"]!.AsArray()
+            .Single(s => s!["id"]!.GetValue<string>() == shareId)!["lostVaults"]!.AsArray().Select(v => v!.GetValue<string>());
+
+        Assert.Equal([world.TagebuchId], await lost());
+        await world.HideAsync();
+        Assert.Empty(await lost());
+    }
+
+    /// <summary>The request answers exactly as for an id she never had: the same status, the same body.</summary>
+    private static async Task AssertAsUnknownAsync(RestClient user, HttpMethod method, string path, string id, object? body = null)
+    {
+        const string unknown = "aaaaaaaaaaaaaaaa";
+        Assert.Equal(await SendAsync(path.Replace("{id}", unknown, StringComparison.Ordinal)), await SendAsync(path.Replace("{id}", id, StringComparison.Ordinal)));
+
+        async Task<(string Path, HttpStatusCode Status, string Body)> SendAsync(string url)
+        {
+            using var response = await user.SendAsync(method, url, body);
+            return (path, response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        }
+    }
+
+    [Fact]
+    public async Task The_id_of_what_covers_only_hidden_vaults_answers_as_an_unknown_one()
+    {
+        var (world, _) = await WorldWithAccessAsync();
+        var (keys, connections) = (Api.Services.GetRequiredService<ApiKeys>(), Api.Services.GetRequiredService<Connections>());
+        var keyId = (await keys.ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(k => k.Name == "Tagebuch agent").Id;
+        var connectionId = (await connections.ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Name == "Tagebuch connection").Id;
+        await world.HideAsync();
+
+        await AssertAsUnknownAsync(world.Alice, HttpMethod.Put, "/api/keys/{id}/instructions", keyId, new { mode = "hint" });
+        await AssertAsUnknownAsync(world.Alice, HttpMethod.Put, "/api/connections/{id}/instructions", connectionId, new { mode = "hint" });
+        await AssertAsUnknownAsync(world.Alice, HttpMethod.Put, "/api/connections/{id}/vaults", connectionId, new { vaults = new Dictionary<string, string>() });
+        await AssertAsUnknownAsync(
+            world.Alice, HttpMethod.Put, "/api/connections/{id}/vaults", connectionId, new { vaults = new Dictionary<string, string> { ["Work"] = "write" } });
+        await AssertAsUnknownAsync(world.Alice, HttpMethod.Get, "/api/skills/find?q=mine&as={id}", keyId);
+        await AssertAsUnknownAsync(world.Alice, HttpMethod.Get, "/api/skills/find?q=mine&as={id}", connectionId);
+
+        Assert.Equal(InstructionsMode.ListAndHint, (await keys.ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(k => k.Id == keyId).Instructions);
+        var stored = (await connections.ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Id == connectionId);
+        Assert.Equal(InstructionsMode.ListAndHint, stored.Instructions);
+        Assert.Equal([world.TagebuchId], stored.Vaults.Keys);
+
+        // Shown, they answer as before.
+        await world.RevealAsync();
+        using (var key = await world.Alice.SendAsync(HttpMethod.Put, $"/api/keys/{keyId}/instructions", new { mode = "hint" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, key.StatusCode);
+        }
+
+        using (var connection = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{connectionId}/instructions", new { mode = "hint" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, connection.StatusCode);
+        }
+
+        using (var found = await world.Alice.GetAsync($"/api/skills/find?q=mine&as={keyId}"))
+        {
+            Assert.Equal(HttpStatusCode.OK, found.StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task Revoking_a_key_on_hidden_vaults_only_still_works()
     {
         var world = await HiddenWorld.NewAsync(Api);
@@ -204,7 +303,7 @@ public sealed class HiddenAccessListsTests(KumbuAppFactory app)
         foreach (var url in urls)
         {
             var (name, header) = await ExportNameAsync(world.Alice, url);
-            Assert.Equal((url, true), (url, Dated("Kumbu² export {date}.zip", before).Contains(name)));
+            Assert.True(Dated("Kumbu² export {date}.zip", before).Contains(name), $"{url}: {name}");
             Assert.DoesNotContain("Tagebuch", header, StringComparison.Ordinal);
             Assert.DoesNotContain("Familie", header, StringComparison.Ordinal);
         }

@@ -456,9 +456,9 @@ public static class AccountApi
     private static async Task<Ok<ApiKeyView[]>> ListKeysAsync(RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
-        var hidden = await caller.HiddenIdsAsync(ct);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
         var list = await keys.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(list.Where(k => !OnlyHidden(k.Vaults.Keys, hidden)).Select(k => KeyView(k, names)).ToArray());
+        return TypedResults.Ok(list.Where(k => !onlyHidden(k.Vaults.Keys)).Select(k => KeyView(k, names)).ToArray());
     }
 
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
@@ -480,8 +480,16 @@ public static class AccountApi
 
     internal static string InstructionsText(InstructionsMode mode) => mode == InstructionsMode.HintOnly ? "hint" : "list";
 
-    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
-        await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
+    /// <summary>A key on hidden vaults only answers as one she doesn't have (<see cref="OnlyHidden"/>).</summary>
+    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
+    {
+        var mode = ParseInstructions(body.Mode);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
+        var hidden = (await keys.ListAsync(caller.User!, caller.UserKey!, ct)).Any(k => k.Id == id && onlyHidden(k.Vaults.Keys));
+        return !hidden && await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, mode, ct)
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
+    }
 
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
@@ -490,8 +498,9 @@ public static class AccountApi
     {
         var names = await VaultNamesAsync(caller, ct);
         var hidden = await caller.HiddenIdsAsync(ct);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
         var list = await shares.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Where(s => !OnlyHidden(s.Vaults.Keys, hidden)).Select(s => DavShareView(s, names, hidden))]));
+        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Where(s => !onlyHidden(s.Vaults.Keys)).Select(s => DavShareView(s, names, hidden))]));
     }
 
     private static async Task<Created<CreatedDavShareView>> CreateDavShareAsync(CreateDavShareRequest body, RequestCaller caller, DavShares shares, CancellationToken ct)
@@ -499,7 +508,7 @@ public static class AccountApi
         var names = await VaultNamesAsync(caller, ct);
         var vaults = RightsByVaultId(body.Vaults, names);
         var (_, password, info) = await shares.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Label, vaults, ct, body.ExpiresInDays);
-        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names, await caller.HiddenIdsAsync(ct))));
+        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names)));
     }
 
     private static async Task<NoContent> RevokeDavShareAsync(string id, RequestCaller caller, DavShares shares, CancellationToken ct) =>
@@ -702,12 +711,21 @@ public static class AccountApi
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
 
     /// <summary>
-    /// Whether a key, share or connection covers only vaults the session hides (discreet design, Decision 9): such an
-    /// item isn't listed at all, as a device key's name holds its vault's. One that covers visible vaults too is listed
-    /// with those only; revoking it by id stays whole either way.
+    /// Whether a key, share or connection covers hidden vaults and none the session sees (discreet design, Decision 9),
+    /// whatever else it lists (a vault deleted since): such an item isn't listed at all, as a device key's name holds its
+    /// vault's, and its id answers as one she doesn't have, except to revoke it, which stays whole. One that covers
+    /// visible vaults too is listed with those only.
     /// </summary>
-    internal static bool OnlyHidden(IEnumerable<string> vaultIds, IReadOnlySet<string> hidden) =>
-        hidden.Count > 0 && vaultIds.Any() && vaultIds.All(hidden.Contains);
+    internal static bool OnlyHidden(IEnumerable<string> vaultIds, IReadOnlySet<string> hidden, IReadOnlySet<string> visible) =>
+        vaultIds.Any(hidden.Contains) && !vaultIds.Any(visible.Contains);
+
+    /// <summary><see cref="OnlyHidden"/> for this caller's session.</summary>
+    internal static async Task<Func<IEnumerable<string>, bool>> OnlyHiddenAsync(RequestCaller caller, CancellationToken ct)
+    {
+        var visible = (await caller.OpenVaultsAsync(ct)).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        return ids => OnlyHidden(ids, hidden, visible);
+    }
 
     /// <summary>A vault the key was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
     private static ApiKeyView KeyView(ApiKeyInfo info, Dictionary<string, string> names) => new(
@@ -725,7 +743,7 @@ public static class AccountApi
 
     /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name, nor a lost
     /// vault the session hides by id.</summary>
-    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names, IReadOnlySet<string> hidden) => new(
+    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names, IReadOnlySet<string>? hidden = null) => new(
         info.Id,
         info.Username,
         info.Label,
@@ -734,7 +752,7 @@ public static class AccountApi
         info.LastUsedAt,
         info.RevokedAt,
         info.ExpiresAt,
-        [.. info.LostVaults.Where(v => !hidden.Contains(v))]);
+        [.. info.LostVaults.Where(v => hidden?.Contains(v) != true)]);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

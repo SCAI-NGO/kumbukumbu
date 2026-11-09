@@ -169,14 +169,14 @@ public static class SkillsApi
         if (skillsVault is not null)
         {
             // What covers only hidden vaults isn't named, as the lists of keys and connections don't list it.
-            var hidden = await caller.HiddenIdsAsync(ct);
+            var onlyHidden = await AccountApi.OnlyHiddenAsync(caller, ct);
             without.AddRange((await keys.ListAsync(caller.User!, caller.UserKey!, ct))
                 .Where(k => k.Kind == ApiKeyKind.Agent && k.RevokedAt is null && (k.ExpiresAt is null || k.ExpiresAt > now) && !k.Vaults.ContainsKey(skillsVault)
-                    && !AccountApi.OnlyHidden(k.Vaults.Keys, hidden))
+                    && !onlyHidden(k.Vaults.Keys))
                 .Select(k => k.Name));
             without.AddRange((await connections.ListAsync(caller.User!, caller.UserKey!, ct))
                 .Where(c => c.State is ConnectionState.Waiting or ConnectionState.Connected or ConnectionState.NeedsReconnect && !c.Vaults.ContainsKey(skillsVault)
-                    && !AccountApi.OnlyHidden(c.Vaults.Keys, hidden))
+                    && !onlyHidden(c.Vaults.Keys))
                 .Select(c => c.Name));
         }
 
@@ -195,7 +195,9 @@ public static class SkillsApi
                 ? key.Vaults.Keys.ToHashSet(StringComparer.Ordinal)
                 : (await connections.ListAsync(caller.User!, caller.UserKey!, ct)).FirstOrDefault(c => c.Id == credential && c.State is not (ConnectionState.Revoked or ConnectionState.Expired)) is { } connection
                     ? connection.Vaults.Keys.ToHashSet(StringComparer.Ordinal)
-                    : throw ApiErrors.NotFound("You have no such agent key or connection.");
+                    : null;
+            // One on hidden vaults only answers as one she doesn't have, as the lists leave it out.
+            if (vaults is null || (await AccountApi.OnlyHiddenAsync(caller, ct))(vaults)) throw ApiErrors.NotFound("You have no such agent key or connection.");
         }
 
         var open = await caller.OpenVaultsAsync(ct);
