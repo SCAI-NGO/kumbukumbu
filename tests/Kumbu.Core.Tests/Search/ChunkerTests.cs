@@ -112,10 +112,12 @@ public partial class ChunkerTests
         Assert.All(Enumerable.Range(1, 10), i => Assert.Contains($"| E{i:000} |", parts[1].Text));
     }
 
-    [Fact]
-    public void A_long_table_is_split_between_rows_with_its_header()
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("tokenizer")]
+    public void A_long_table_is_split_between_rows_with_its_header(string name)
     {
-        var bound = Bound("tokenizer");
+        var bound = Bound(name);
         var content = ChunkerFixtures.PumpManual;
         List<string> lines = [.. Lines.Split(content)];
 
@@ -263,6 +265,34 @@ public partial class ChunkerTests
         AssertEveryLineInOneCore(content, chunks);
     }
 
+    [Fact]
+    public void The_chunks_of_a_content_are_reused_for_the_same_path_and_bound_only()
+    {
+        var content = ChunkerFixtures.LongLine;
+
+        var first = Chunker.Split(Manual(content), ChunkBound.Fallback);
+        var again = Chunker.Split(Manual(content), ChunkBound.Fallback);
+        var elsewhere = Chunker.Split(new Note(P("/Demo/log.md"), content), ChunkBound.Fallback);
+        var unbounded = Chunker.Split(Manual(content), ChunkBound.Unbounded);
+
+        Assert.Equal(first, again);
+        Assert.NotSame(first, again);
+        Assert.All(elsewhere, c => Assert.Equal("/Demo/log.md", c.Path.Value));
+        Assert.Equal("log > Log", elsewhere[0].Context);
+        Assert.NotEqual(first.Count, unbounded.Count);
+        Assert.Equal(first, Chunker.Split(Manual(content), ChunkBound.Fallback));
+    }
+
+    [Fact]
+    public void A_paragraph_too_long_for_a_part_starts_in_the_open_one()
+    {
+        var content = "# Meadow\nPoppies.\n\n" + string.Join('\n', Enumerable.Range(0, 400).Select(i => $"cowslip{i}")) + "\n";
+
+        var chunks = Chunker.Split(Manual(content), ChunkBound.Unbounded);
+
+        Assert.Equal([(0, 351), (351, 403)], chunks.Select(c => (c.StartLine, c.EndLine)));
+    }
+
     [Theory]
     [InlineData("fallback")]
     [InlineData("tokenizer")]
@@ -403,6 +433,68 @@ public partial class ChunkerTests
         Assert.Equal(
             [(BlockKind.Heading, 0, 1), (BlockKind.Paragraph, 1, 2), (BlockKind.Table, 2, 5), (BlockKind.List, 5, 8), (BlockKind.Quote, 8, 9), (BlockKind.Code, 10, 15), (BlockKind.Paragraph, 15, 16)],
             blocks.Select(b => (b.Kind, b.Start, b.End)));
+
+        // "a | b" over "---" is a setext heading, not a table: the cells differ. A table without outer pipes ends at a
+        // list item or a quote, though they hold a pipe.
+        List<string> more = [.. Lines.Split("a | b\n---\nSetext.\n\nc | d\n--- | ---\n1 | 2\n- item | with pipe\n> quote | pipe\n")];
+        Assert.Equal(
+            [(BlockKind.Paragraph, 0, 3), (BlockKind.Table, 4, 7), (BlockKind.List, 7, 8), (BlockKind.Quote, 8, 9)],
+            Blocks.Parse(more, 0, more.Count, Outline.CodeLines(more)).Select(b => (b.Kind, b.Start, b.End)));
+    }
+
+    [Fact]
+    public void A_wide_row_goes_without_the_header_and_the_rows_after_it_have_it_again()
+    {
+        var rows = Enumerable.Range(1, 40).Select(i => i == 12 ? $"| E{i:000} | {string.Join(' ', Enumerable.Repeat("drift", 69))} | Recalibrate |" : $"| E{i:000} | Dry run at stage {i} | Fill the inlet |");
+        var content = "# Pump\n## Error codes\n| Code | Meaning | Remedy |\n|------|---------|--------|\n" + string.Join('\n', rows) + "\n";
+        List<string> lines = [.. Lines.Split(content)];
+        var wide = lines.FindIndex(l => l.StartsWith("| E012"));
+        // Too wide to share a part with the header rows, not too wide for a part of its own.
+        Assert.True(lines[wide].Length > 430);
+
+        var chunks = Chunker.Split(Manual(content), ChunkBound.Fallback);
+        var parts = chunks.Where(c => c.Text.Contains("| E0")).ToList();
+
+        AssertEveryLineInOneCore(content, chunks);
+        Assert.All(parts, c => Assert.True(ChunkBound.Fallback.Fits(c.EmbeddingText)));
+        var widePart = Assert.Single(parts, c => c.StartLine <= wide && wide < c.EndLine);
+        Assert.Equal((wide, wide + 1), (widePart.StartLine, widePart.EndLine));
+        Assert.All(parts.Skip(1).Where(c => c != widePart), c => Assert.StartsWith(lines[2] + "\n" + lines[3] + "\n", c.Text));
+    }
+
+    [Fact]
+    public void Header_rows_that_fit_with_no_row_end_the_part_before()
+    {
+        var header = "| " + string.Join(" | ", Enumerable.Range(1, 5).Select(i => $"Column name number {i}".PadRight(26))) + " |";
+        var separator = "|" + string.Join("|", Enumerable.Range(1, 5).Select(_ => new string('-', 28))) + "|";
+        var rows = Enumerable.Range(1, 6).Select(i => "| " + string.Join(" | ", Enumerable.Range(1, 5).Select(c => $"value {i}.{c} of the pump".PadRight(44))) + " |");
+        var content = "# T\n## Readings\nShort intro.\n\n" + header + "\n" + separator + "\n" + string.Join('\n', rows) + "\n";
+
+        var chunks = Chunker.Split(Manual(content), ChunkBound.Fallback);
+
+        AssertEveryLineInOneCore(content, chunks);
+        Assert.All(chunks, c => Assert.True(ChunkBound.Fallback.Fits(c.EmbeddingText)));
+        // No part holds the header rows alone: they go with the intro, as no row fits with them.
+        Assert.DoesNotContain(chunks, c => c.Text.Split('\n').All(l => l == header || l == separator));
+        Assert.Contains(chunks, c => c.Text.StartsWith("## Readings\nShort intro.\n\n" + header + "\n" + separator, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("unbounded")]
+    [InlineData("fallback")]
+    [InlineData("tokenizer")]
+    public void A_run_without_spaces_holds_at_most_the_maximum_of_words(string name)
+    {
+        var bound = Bound(name);
+        var run = string.Join(',', Enumerable.Range(0, 3_000).Select(i => $"w{i % 10}"));
+        var content = "# Dump\n" + run + "\n";
+
+        var chunks = Chunker.Split(Manual(content), bound);
+
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, c => Assert.True(Chunker.Words(c.Text) <= Chunker.MaxWords, $"{Chunker.Words(c.Text)} words"));
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText)));
+        AssertEveryLineInOneCore(content, chunks);
     }
 
     [GeneratedRegex(@"\s+")]

@@ -125,11 +125,10 @@ public static class SectionSearch
         return result;
     }
 
-    /// <summary>The start of a section's text, without its heading, on one line.</summary>
+    /// <summary>The start of a section's text, without its headings, on one line.</summary>
     public static string Snippet(Chunk chunk)
     {
-        var lines = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        var text = string.Join(' ', lines.Skip(SkipsHeading(lines) ? 1 : 0).Select(l => l.Trim()));
+        var text = string.Join(' ', Body(chunk).Select(l => l.Trim()));
         if (text.Length == 0) text = chunk.Text.Trim();
         return Shorten(text);
     }
@@ -141,16 +140,17 @@ public static class SectionSearch
     public static string Snippet(Chunk chunk, string query)
     {
         var terms = Bm25.QueryTerms(query);
-        var lines = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        var first = lines.Skip(SkipsHeading(lines) ? 1 : 0)
+        var first = Body(chunk)
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.Length > 0
                 && (l.Contains(query, StringComparison.OrdinalIgnoreCase) || Bm25.Terms(l).Any(t => terms.Contains(t))));
         return first is null ? Snippet(chunk) : Shorten(first);
     }
 
-    /// <summary>Whether the first line is a heading with more below it (a table part starts with its header row instead).</summary>
-    private static bool SkipsHeading(List<string> lines) => lines.Count > 1 && Outline.HeadingRegex().IsMatch(lines[0]);
+    /// <summary>The non-blank lines of a chunk that aren't headings (a merged chunk holds several; a table part starts
+    /// with its header row instead).</summary>
+    private static IEnumerable<string> Body(Chunk chunk) =>
+        chunk.Text.Split('\n').Where(l => l.Trim().Length > 0 && !Outline.HeadingRegex().IsMatch(l));
 
     /// <summary>At most the length of a snippet, with an ellipsis if cut.</summary>
     public static string Shorten(string text) => text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";

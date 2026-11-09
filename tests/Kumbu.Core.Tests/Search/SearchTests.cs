@@ -22,6 +22,11 @@ public class SearchTests
         Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(part));
         Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(first));
         Assert.Equal("| E115 | Dry run | Fill the inlet and restart |", SectionSearch.Snippet(part, "inlet"));
+
+        // A merged chunk holds several headings; none of them is in the snippet.
+        var merged = new Chunk(P("/Demo/gate.md"), "", 0, 4, "# Gate\nThe service checks rules.\n# Team\nAlice and Bob.", "gate");
+        Assert.Equal("The service checks rules. Alice and Bob.", SectionSearch.Snippet(merged));
+        Assert.Equal("Alice and Bob.", SectionSearch.Snippet(merged, "team alice"));
     }
 
     [Fact]
@@ -149,7 +154,7 @@ public class SearchTests
             1. /Demo/farm.md#Animals  lines 1-2  score 0.80
                Cats, dogs, hens and ducks live together.
             2. /Demo/gate.md  lines 1-4  score 0.55
-               The service checks rules at the entrance. # Team Anna and Ben.
+               The service checks rules at the entrance. Anna and Ben.
             (ranked by words and meaning; cat "path#Section" reads one)
             """,
             result.Output);
@@ -168,7 +173,7 @@ public class SearchTests
             1. /Ideas/x.md  lines 1-1
                rules elsewhere
             2. /Demo/gate.md  lines 1-4
-               The service checks rules at the entrance. # Team Anna and Ben.
+               The service checks rules at the entrance. Anna and Ben.
             (ranked by words only: the embedding model is still being downloaded; cat "path#Section" reads one)
             """,
             result.Output);
@@ -256,7 +261,7 @@ public class SearchTests
         Assert.Equal(
             """
             1. /Demo/gate.md  lines 1-4
-               The service checks rules at the entrance. # Team Anna and Ben.
+               The service checks rules at the entrance. Anna and Ben.
             (ranked by words only: 2 notes aren't indexed yet; cat "path#Section" reads one)
             """,
             (await Run("semsearch rules /Demo", index)).Output);

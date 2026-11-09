@@ -73,7 +73,8 @@ internal static partial class Blocks
     /// <summary>Whether line <paramref name="k"/> still belongs to the block of <paramref name="kind"/> before it.</summary>
     private static bool Continues(BlockKind kind, IReadOnlyList<string> lines, int k, int end, bool[] code)
     {
-        if (kind == BlockKind.Table) return lines[k].Contains('|');
+        // A table runs while its lines hold a pipe, up to a list item or a quote.
+        if (kind == BlockKind.Table) return lines[k].Contains('|') && !ListRegex().IsMatch(lines[k]) && !QuoteRegex().IsMatch(lines[k]);
         if (TableStarts(lines, k, end, code)) return false;
         return kind switch
         {
@@ -83,8 +84,26 @@ internal static partial class Blocks
         };
     }
 
+    /// <summary>A GFM table: a row with a pipe, then a separator row with as many cells ("a | b" over "---" is a
+    /// setext heading).</summary>
     private static bool TableStarts(IReadOnlyList<string> lines, int i, int end, bool[] code) =>
-        lines[i].Contains('|') && i + 1 < end && !code[i + 1] && SeparatorRegex().IsMatch(lines[i + 1]);
+        lines[i].Contains('|') && i + 1 < end && !code[i + 1] && SeparatorRegex().IsMatch(lines[i + 1]) && Cells(lines[i]) == Cells(lines[i + 1]);
+
+    /// <summary>The cells of a table row: its pipes not escaped with a backslash, without a leading and a trailing one.</summary>
+    private static int Cells(string row)
+    {
+        var text = row.Trim();
+        if (text.StartsWith('|')) text = text[1..];
+        if (text.EndsWith('|') && !text.EndsWith("\\|", StringComparison.Ordinal)) text = text[..^1];
+        var cells = 1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\\') i++;
+            else if (text[i] == '|') cells++;
+        }
+
+        return cells;
+    }
 
     private static int Indent(string line) => line.Length - line.TrimStart().Length;
 
