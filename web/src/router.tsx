@@ -7,6 +7,7 @@ import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
 import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
+import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
@@ -41,7 +42,9 @@ function Root() {
     // Write mode ends with the session: the editor keeps its unsaved text as a draft, and the note opens again
     // after signing in (in Write mode, with the draft). Left on, Write mode would outlive the editor.
     useEditor.setState({ mode: "read", currentPath: null });
-    if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(pathname + search)}`, { replace: true });
+    // Never the way back into a discreet view: the session's end has forgotten which vaults are discreet already.
+    const neutral = pathname === NEUTRAL || discreetUrl(pathname) || showsDiscreet();
+    if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(neutral ? "/" : pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
   // The shell shows the update bar under its own top bar; every other page has it above.
@@ -119,6 +122,8 @@ export const routes: RouteObject[] = [
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       { path: "/consent", element: <ConsentRoute /> },
+      // A discreet view's address: one this tab no longer remembers (a reload, a hide) shows the vault list.
+      { path: NEUTRAL, element: <Navigate to="/" replace /> },
       {
         element: <RequireSession />,
         // A page that fails takes only its own place; Root still sends a session that ended to sign-in.

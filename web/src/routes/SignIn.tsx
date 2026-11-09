@@ -6,6 +6,7 @@ import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
+import { NEUTRAL } from "../discreet/neutralWindow";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 
@@ -19,6 +20,8 @@ export function safeNext(next: string | null): string {
   if (url.origin !== window.location.origin) return "/";
   // Dot segments and escapes can turn a harmless-looking input into "//host" once parsed, so the output is checked too.
   const result = url.pathname + url.search + url.hash;
+  // A discreet view's address leads nowhere after a sign-in, which starts with the vaults hidden.
+  if (url.pathname === NEUTRAL) return "/";
   return /^\/[/\\]/.test(result) ? "/" : result;
 }
 

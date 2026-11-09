@@ -221,8 +221,8 @@ function DiscreetSection() {
   return (
     <Section title="Discreet vaults">
       <p className="text-text-body">
-        A PIN of its own shows the vaults you marked as discreet, from More vaults… in the vault menu, for the time you choose. Agents, synced devices and
-        keys see them as before.
+        A PIN of its own shows the vaults you marked as discreet, from More vaults… in the vault menu, for the time you choose. Agents, synced devices,
+        keys, WebDAV and connections see them as before.
       </p>
       {revealed && <DiscreetSwitches />}
       {set && <Done>The PIN is set.</Done>}

@@ -9,6 +9,7 @@ import { onDiscreetFrame } from "../hooks/useSyncSocket";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
+import { forgetDiscreet, showsDiscreet, vaultOfRoute } from "./neutralWindow";
 import { useDiscreet } from "./state";
 
 /** How long before the end the open discreet note is saved, so that the end finds nothing to save. */
@@ -22,19 +23,7 @@ export const LATE_SAVE = 5 * 60_000;
 const RETRY_AFTER = 30_000;
 const LAST_TRY_AHEAD = 1_000;
 
-/** The routes that name a vault first: `/notes/Tagebuch/…`, `/board/Tagebuch`, `/gallery/…`, `/view/…`, `/checkpoints/…`. */
-const vaultRoute = /^\/(?:notes|board|gallery|view|checkpoints)\/([^/?#]+)/;
-
-/** The vault a URL of the app shows, if it shows one. */
-export function vaultOfRoute(pathname: string): string | null {
-  const match = vaultRoute.exec(pathname);
-  if (!match) return null;
-  try {
-    return decodeURIComponent(match[1]).normalize("NFC");
-  } catch {
-    return null;
-  }
-}
+export { vaultOfRoute };
 
 /**
  * Text of a discreet note that couldn't be saved on hiding (offline, say): out of view, not the editor's `draft`, and
@@ -186,13 +175,16 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     useEditor.setState({ searchQuery: "", searchTag: null, find: { query: "", index: 0, count: 0 }, noteTool: null, mode: "read" });
     if (vault) useEditor.getState().setActiveVault(vault);
     useDiscreet.getState().reset();
-    if (shown !== null && names.has(shown)) {
+    // The address bar shows /discreet for a discreet view whatever the router's location says.
+    if ((shown !== null && names.has(shown)) || showsDiscreet()) {
       navigate(ordinary ? noteUrl(ordinary) : "/", { replace: true });
       // The shell doesn't follow the URL while hiding: the note it goes to opens here.
       if (ordinary) useEditor.getState().openNote(ordinary);
     }
     // The views of the discreet vaults go first, so that nothing still shown asks for them again.
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // Going back to a discreet view's entry now finds /discreet, which goes to the vault list.
+    forgetDiscreet();
 
     queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" });
     sweep(queryClient, names);
