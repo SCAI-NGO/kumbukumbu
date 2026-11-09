@@ -119,11 +119,19 @@ public sealed partial class Memberships
     /// secret only to read the vault's meta, and its key is then forgotten; the vault is neither loaded nor unlocked.
     /// <paramref name="alias"/>, or the vault's own name, is checked against the caller's vault names and aliases.
     /// <see cref="InvitationNotFoundException"/> alike for a secret that isn't one, was used, expired or withdrawn;
-    /// <see cref="SharingRefusedException"/> while the owner is inactive or the vault closing.
+    /// <see cref="SharingRefusedException"/> while the owner is inactive or the vault closing. An invitation to a vault in
+    /// <paramref name="hidden"/> (those a web session hides) is not found either, so the answer tells nothing of it.
     /// </summary>
-    public async Task<InvitePeek> PeekAsync(string userId, byte[] userKey, string inviteSecret, string? alias, CancellationToken ct)
+    public async Task<InvitePeek> PeekAsync(
+        string userId, byte[] userKey, string inviteSecret, string? alias, CancellationToken ct, IReadOnlySet<string>? hidden = null)
     {
         var (doc, vaultKey) = await FindInviteAsync(inviteSecret, ct) ?? throw new InvitationNotFoundException();
+        if (hidden?.Contains(doc.Vault) == true)
+        {
+            CryptographicOperations.ZeroMemory(vaultKey);
+            throw new InvitationNotFoundException();
+        }
+
         InviteVaultMeta? meta;
         try
         {
@@ -155,8 +163,8 @@ public sealed partial class Memberships
     /// it, so the link stays usable: a taken alias (<see cref="VaultNameTakenException"/>), her own vault
     /// (<see cref="NotPermittedException"/>), a second membership (<see cref="AlreadyMemberException"/>), an inactive
     /// owner or a closing vault (<see cref="SharingRefusedException"/>). <see cref="InvitationNotFoundException"/> as peek's,
-    /// also for a second membership of a vault in <paramref name="hidden"/> (those a web session hides), so the answer
-    /// tells nothing of it.
+    /// also for her own vault or a second membership of a vault in <paramref name="hidden"/> (those a web session hides),
+    /// so the answer tells nothing of it.
     /// </summary>
     public async Task<AcceptedInvite> AcceptAsync(
         string userId, byte[] userKey, string inviteSecret, string alias, CancellationToken ct, IReadOnlySet<string>? hidden = null)
@@ -164,6 +172,10 @@ public sealed partial class Memberships
         if (DecodeSecret(inviteSecret) is not { } bytes) throw new InvitationNotFoundException();
         await EnsureReadyAsync(ct);
         var lookup = await InviteLookupAsync(inviteSecret, ct);
+        // Read once, whatever the invitation's state: a refusal after it expired must not answer as her vault.
+        var invitedVault = hidden is { Count: > 0 }
+            ? await Docs.Find(m => m.InviteLookup == lookup).Project(m => m.Vault).FirstOrDefaultAsync(ct)
+            : null;
         AcceptedInvite? accepted = null;
         using var session = await catalog.StartSessionAsync(ct);
         try
@@ -202,15 +214,10 @@ public sealed partial class Memberships
         }
         catch (Exception e) when (e is SharingRefusedException or VaultNameTakenException or AlreadyMemberException or MemberLimitException or NotPermittedException)
         {
+            // As a link that isn't valid, which no outcome counts.
+            if (e is AlreadyMemberException or NotPermittedException && invitedVault is not null && hidden!.Contains(invitedVault)) throw new InvitationNotFoundException();
             // Counted by the kind of refusal only, never by its text.
             Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Refused);
-            // The refusal left the invitation open, so its vault is still found by the lookup.
-            if (e is AlreadyMemberException && hidden is { Count: > 0 }
-                && await Docs.Find(OpenInvite(lookup, Now)).Project(m => m.Vault).FirstOrDefaultAsync(ct) is { } vaultId && hidden.Contains(vaultId))
-            {
-                throw new InvitationNotFoundException();
-            }
-
             throw;
         }
         finally

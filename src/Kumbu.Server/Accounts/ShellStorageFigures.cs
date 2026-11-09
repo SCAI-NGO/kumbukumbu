@@ -28,11 +28,10 @@ public sealed class ShellStorageFigures(EncryptedNoteStore store, RequestCaller 
         {
             var figure = await quota.RecentFigureAsync(user.Id, ct);
             (bytes, limit) = (figure.ByVault, figure.Limit);
-            var hidden = await caller.HiddenIdsAsync(ct);
-            // Only whether more vaults count against the limit, never which or how much.
-            allOwned = figure.ByVault.Keys.All(id => own.Any(v => v.Id == id) || hidden.Contains(id));
-            // Keys and MCP keep the sum of their rows.
+            // A session opens or hides every vault she owns; keys and MCP keep the sum of their rows.
             if (caller.Session is not null) total = figure.ByVault.Values.Sum();
+            // Only whether more vaults count against the limit, never which or how much.
+            else allOwned = figure.ByVault.Keys.All(id => own.Any(v => v.Id == id));
         }
         else bytes = await admin.BytesByVaultAsync([.. own.Select(v => v.Id)], ct);
 

@@ -57,7 +57,7 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
                 if (path.Segments.Count > 1) return ShellResult.Error($"df: {path.Value}: df shows whole vaults; du sizes a folder");
                 var vault = path.Segments[0];
                 var one = owned.FirstOrDefault(f => f.Vault == vault);
-                if (one is not null) return ShellResult.Ok(string.Join('\n', Table([one], bytes, out _, one.Used)));
+                if (one is not null) return ShellResult.Ok(string.Join('\n', Table([one], one.Used, bytes, out _)));
                 return await notes.VaultInfoAsync(vault, ct) is { Owner: not null }
                     ? ShellResult.Error($"df: {path.Value}: {SharedVault}")
                     : ShellResult.Error($"df: {path.Value}: No such vault");
@@ -66,7 +66,7 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
 
         if (owned.Count == 0) return ShellResult.Ok("(no vaults of your own)");
         var used = own.Total ?? owned.Sum(f => f.Used);
-        var lines = Table(owned, bytes, out var columns, used);
+        var lines = Table(owned, used, bytes, out var columns);
         lines.Add(new string('─', columns.Width + 2));
         var total = "Total".PadRight(columns.Name) + AttachmentText.Size(used, bytes).PadLeft(columns.Used);
         lines.Add(own.Limit switch
@@ -85,8 +85,8 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
     }
 
     /// <summary>The header and a line per vault; the name column leaves four spaces after the longest name, Used is as
-    /// wide as the widest figure (<paramref name="used"/>, the total's, included), the counts are right-aligned under their headings.</summary>
-    private static List<string> Table(IReadOnlyList<VaultFigure> owned, bool bytes, out Columns columns, long used)
+    /// wide as the widest figure, the total <paramref name="used"/> included, the counts are right-aligned under their headings.</summary>
+    private static List<string> Table(IReadOnlyList<VaultFigure> owned, long used, bool bytes, out Columns columns)
     {
         var total = AttachmentText.Size(used, bytes);
         columns = new Columns(

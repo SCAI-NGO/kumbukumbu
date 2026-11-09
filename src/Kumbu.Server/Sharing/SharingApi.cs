@@ -118,7 +118,7 @@ public static class SharingApi
         VaultInvitationPeekRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
     {
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct);
+        var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct, await caller.HiddenIdsAsync(ct));
         // A name the session hides is free to the peek: only accepting meets the clash (Decision 14).
         var aliasFree = peek.AliasFree || await HiddenNames.ClashesWithHiddenAsync(caller, peek.Alias, ct);
         return TypedResults.Ok(new VaultInvitationPeekView(

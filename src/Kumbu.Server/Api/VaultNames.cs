@@ -41,8 +41,7 @@ internal static class HiddenNames
     /// name index compares vault names; false for every other caller.</summary>
     public static async Task<bool> ClashesWithHiddenAsync(RequestCaller caller, string name, CancellationToken ct)
     {
-        await caller.HiddenIdsAsync(ct);
         var normal = VaultCatalog.NormaliseVaultName(name);
-        return caller.Session?.Hidden.Any(a => VaultCatalog.NormaliseVaultName(a.Name) == normal) == true;
+        return (await caller.HiddenVaultsAsync(ct)).Any(a => VaultCatalog.NormaliseVaultName(a.Name) == normal);
     }
 }
