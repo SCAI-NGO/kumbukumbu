@@ -727,9 +727,11 @@ describe("Settings: discreet vaults", () => {
     await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4712");
     await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("The two PINs differ.");
+    expect(within(dialog).getByLabelText("New PIN again")).toHaveAttribute("aria-invalid", "true");
     expect(bodies).toEqual([]);
     await userEvent.clear(within(dialog).getByLabelText("New PIN again"));
     await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4711");
+    expect(within(dialog).getByLabelText("New PIN again")).not.toHaveAttribute("aria-invalid", "true");
     await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Set or change PIN" })).not.toBeInTheDocument());
     expect(bodies).toEqual([{ password: "my password", pin: "4711" }]);
@@ -747,5 +749,8 @@ describe("Settings: discreet vaults", () => {
     await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4711");
     await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("The password is wrong.");
+    // Another password: the old answer goes.
+    await userEvent.type(within(dialog).getByLabelText("Current password"), "!");
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 });

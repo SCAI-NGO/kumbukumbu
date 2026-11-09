@@ -13,6 +13,8 @@ function useMinutesLeft(until: string | null) {
   useEffect(() => {
     if (!until) return;
     const left = Date.parse(until) - Date.now();
+    // Past the end the number stays at 1 until the mode ends.
+    if (left <= 0) return;
     // The next change of the rounded-up number, just after the minute turns.
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, left % 60_000) + 50);
     return () => clearTimeout(timer);
@@ -43,7 +45,13 @@ export default function DiscreetPill() {
     <div role="group" aria-label="Discreet vaults shown" className="flex min-h-9 w-fit max-w-full items-center gap-1.5 rounded-full border border-discreet bg-discreet-soft pr-0.5 pl-3 text-sm font-medium text-discreet">
       <Eye size={16} aria-hidden className="flex-none" />
       <span className="truncate">
-        Discreet{minutes !== null && <span className="font-mono text-[13px]"> · {minutes} min</span>}
+        Discreet
+        {minutes !== null && (
+          <span className="font-mono text-[13px]">
+            <span aria-hidden> · </span>
+            {minutes} min
+          </span>
+        )}
       </span>
       <span aria-hidden>·</span>
       <button

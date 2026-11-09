@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, cleanup, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
-import { minutesLeft } from "./DiscreetPill";
+import DiscreetPill, { minutesLeft } from "./DiscreetPill";
 import { useDiscreet } from "./state";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   useSession.getState().reset();
@@ -38,6 +41,8 @@ function desktop() {
 
 const frameOf = (box: HTMLElement) => box.querySelector(":scope > [data-discreet-frame]");
 const pill = () => screen.queryByRole("group", { name: "Discreet vaults shown" });
+/** The " · " between the parts, which a screen reader leaves out. */
+const separators = (box: HTMLElement) => [...box.querySelectorAll("[aria-hidden]")].filter((e) => e.textContent?.trim() === "·");
 
 describe("the discreet pill", () => {
   it("rounds the time left up to whole minutes", () => {
@@ -55,6 +60,7 @@ describe("the discreet pill", () => {
     const sidebar = await screen.findByRole("complementary", { name: "File tree" });
     const shown = await within(sidebar).findByRole("group", { name: "Discreet vaults shown" });
     expect(shown).toHaveTextContent("Discreet · 9 min");
+    expect(separators(shown)).toHaveLength(2);
     expect(within(shown).getByRole("button", { name: "Hide discreet vaults" })).toBeInTheDocument();
     expect(frameOf(sidebar)).toBeInTheDocument();
     // Where the menu sits: just above the vault switcher.
@@ -70,6 +76,23 @@ describe("the discreet pill", () => {
     const shown = await within(await screen.findByRole("complementary", { name: "File tree" })).findByRole("group", { name: "Discreet vaults shown" });
     expect(shown).toHaveTextContent(/^Discreet·$/);
     expect(shown).not.toHaveTextContent("min");
+    expect(separators(shown)).toHaveLength(1);
+  });
+
+  it("stops counting once the time is over", async () => {
+    vi.useFakeTimers();
+    useDiscreet.setState({ revealed: true, until: new Date(Date.now() - 1_000).toISOString() });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <DiscreetPill />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(timers).not.toHaveBeenCalled();
+    expect(pill()).toHaveTextContent("Discreet · 1 min");
   });
 
   it("is not there, nor the frame, while they are hidden", async () => {

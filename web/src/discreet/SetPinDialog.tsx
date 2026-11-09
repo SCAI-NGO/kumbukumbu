@@ -8,7 +8,7 @@ import { useSetPin } from "./api";
 
 const pinPattern = /^[0-9]{4,6}$/;
 
-function PinField({ label, value, onChange, hint }: { label: string; value: string; onChange(value: string): void; hint?: string }) {
+function PinField({ label, value, onChange, hint, invalid }: { label: string; value: string; onChange(value: string): void; hint?: string; invalid?: boolean }) {
   const id = useId();
   return (
     <div className="flex flex-col gap-1.5">
@@ -25,6 +25,7 @@ function PinField({ label, value, onChange, hint }: { label: string; value: stri
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
         aria-describedby={hint ? `${id}-hint` : undefined}
+        aria-invalid={invalid || undefined}
         data-bwignore="true"
         data-1p-ignore="true"
         data-lpignore="true"
@@ -80,7 +81,15 @@ export default function SetPinDialog({ onDone, onClose }: { onDone(): void; onCl
         <h2 id={`${id}-title`} className="text-lg font-bold text-text">
           Set or change PIN
         </h2>
-        <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
+        <PasswordField
+          label="Current password"
+          value={password}
+          onChange={(v) => {
+            setPassword(v);
+            setPinMutation.reset();
+          }}
+          autoComplete="current-password"
+        />
         <PinField
           label="New PIN"
           value={pin}
@@ -94,6 +103,7 @@ export default function SetPinDialog({ onDone, onClose }: { onDone(): void; onCl
         <PinField
           label="New PIN again"
           value={again}
+          invalid={mismatch}
           onChange={(v) => {
             setAgain(v);
             setMismatch(false);

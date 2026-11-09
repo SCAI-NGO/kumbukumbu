@@ -15,8 +15,12 @@ import { useDiscreet } from "./state";
 export const SAVE_AHEAD = 15_000;
 /** After the end, the server takes one late save of the note that was open (spec §3.8). */
 export const LATE_SAVE = 5 * 60_000;
-/** A held draft is tried again when the browser is back online, or after this, whichever comes first. */
+/**
+ * A held draft is tried again when the browser is back online, or after this, whichever comes first; while the browser
+ * says it is offline, only when it is online again, or once just before the late-save window closes.
+ */
 const RETRY_AFTER = 30_000;
+const LAST_TRY_AHEAD = 1_000;
 
 /** The routes that name a vault first: `/notes/Tagebuch/…`, `/board/Tagebuch`, `/gallery/…`, `/view/…`, `/checkpoints/…`. */
 const vaultRoute = /^\/(?:notes|board|gallery|view|checkpoints)\/([^/?#]+)/;
@@ -38,8 +42,13 @@ export function vaultOfRoute(pathname: string): string | null {
  */
 let held: { path: string; text: string; version: string; deadline: number; stop(): void } | null = null;
 
-function hold(path: string, text: string, version: string, deadline: number) {
+function hold(path: string, text: string, version: string, deadline: number, { open }: { open: boolean }) {
+  // The open note's text comes first: a draft an earlier session end left never replaces what is held.
+  if (held && !open) return;
   held?.stop();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const last = deadline - LAST_TRY_AHEAD;
+  const wait = (ms: number) => (timer = setTimeout(() => (navigator.onLine || Date.now() >= last ? retry() : wait(last - Date.now())), Math.max(0, ms)));
   const retry = () => {
     const draft = held;
     if (!draft) return;
@@ -50,7 +59,7 @@ function hold(path: string, text: string, version: string, deadline: number) {
       .PUT("/api/notes/{vault}/{path}", { params: { path: { vault: vaultOf(draft.path), path: inVault(draft.path) } }, body: { content: draft.text, version: draft.version } })
       .catch(() => {});
   };
-  const timer = setTimeout(retry, Math.min(RETRY_AFTER, Math.max(0, deadline - Date.now())));
+  wait(Math.min(RETRY_AFTER, last - Date.now()));
   window.addEventListener("online", retry);
   held = {
     path,
@@ -90,18 +99,30 @@ const mentions = (key: readonly unknown[], names: ReadonlySet<string>) =>
 
 /**
  * A view of a discreet vault that renders once more before it goes (its route hasn't changed yet) asks for its
- * queries again: for a while, such a query is dropped as soon as nothing observes it.
+ * queries again: for a while, such a query is dropped as soon as nothing observes it, and a mutation that was under way
+ * (a save, a mark) is dropped when it settles. Until the vaults are shown again, if they are meanwhile.
  */
 function sweep(queryClient: QueryClient, names: ReadonlySet<string>) {
   const cache = queryClient.getQueryCache();
+  const mutations = queryClient.getMutationCache();
   const forget = () => {
     for (const q of cache.findAll({ predicate: (q) => mentions(q.queryKey, names) })) if (q.getObserversCount() === 0) cache.remove(q);
   };
-  const stop = cache.subscribe((event) => {
-    if ((event.type === "added" || event.type === "observerRemoved" || event.type === "updated") && mentions(event.query.queryKey, names)) queueMicrotask(forget);
-  });
+  const stops = [
+    cache.subscribe((event) => {
+      if ((event.type === "added" || event.type === "observerRemoved" || event.type === "updated") && mentions(event.query.queryKey, names)) queueMicrotask(forget);
+    }),
+    mutations.subscribe((event) => {
+      if (event.type === "updated" && (event.action.type === "success" || event.action.type === "error")) queueMicrotask(() => mutations.remove(event.mutation));
+    }),
+    useDiscreet.subscribe((s) => void (s.revealed && stop())),
+  ];
+  const timer = setTimeout(stop, 10_000);
+  function stop() {
+    clearTimeout(timer);
+    for (const s of stops) s();
+  }
   forget();
-  setTimeout(stop, 10_000);
 }
 
 /**
@@ -136,50 +157,68 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
   const until = useDiscreet.getState().until;
   const discreet = (path: string | null | undefined): path is string => path != null && names.has(vaultOf(path));
 
-  const { currentPath } = useEditor.getState();
-  if (!(await saveOpen(names)) && discreet(currentPath)) {
-    const text = useEditor.getState().unsaved?.();
-    const end = Math.min(Date.now(), until ? Date.parse(until) : Date.now());
-    if (text) hold(currentPath, text.text, text.version, end + LATE_SAVE);
-  }
-  // Text a session end left for a discreet note waits the same way, never in view.
-  const { draft } = useEditor.getState();
-  if (draft && discreet(draft.path) && held?.path !== draft.path) hold(draft.path, draft.text, draft.version, Date.now() + LATE_SAVE);
-
-  if (tell) await tellServer();
-
-  const editor = useEditor.getState();
-  const ordinary = editor.recentPaths.find((p) => !discreet(p)) ?? null;
-  const listed = queryClient.getQueryData<{ name: string; discreet?: boolean }[]>(["vaults"]);
-  const fallback = listed?.find((v) => !v.discreet && !names.has(v.name))?.name ?? null;
-  const vault = ordinary ? vaultOf(ordinary) : editor.activeVault && !names.has(editor.activeVault) ? editor.activeVault : fallback;
-  const shown = vaultOfRoute(pathname);
-
+  // From here on no session read is followed, nor the URL of the note on its way out.
   useDiscreet.setState({ hiding: true });
-  for (const name of names) useEditor.getState().forgetVault(name);
-  if (vault) useEditor.getState().setActiveVault(vault);
-  useDiscreet.getState().reset();
-  if (shown !== null && names.has(shown)) navigate(ordinary ? noteUrl(ordinary) : "/", { replace: true });
-  // The views of the discreet vaults go first, so that nothing still shown asks for them again.
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    const { currentPath } = useEditor.getState();
+    if (!(await saveOpen(names)) && discreet(currentPath)) {
+      const text = useEditor.getState().unsaved?.();
+      const end = Math.min(Date.now(), until ? Date.parse(until) : Date.now());
+      if (text) hold(currentPath, text.text, text.version, end + LATE_SAVE, { open: true });
+    }
+    // Text a session end left for a discreet note waits the same way, never in view.
+    const { draft } = useEditor.getState();
+    if (draft && discreet(draft.path)) hold(draft.path, draft.text, draft.version, Date.now() + LATE_SAVE, { open: false });
 
-  queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" });
-  sweep(queryClient, names);
-  for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
-  void queryClient.refetchQueries({ queryKey: ["session"] });
-  useConsole.getState().reset();
-  useSyncStatus.setState({ editors: {} });
-  useDiscreet.setState({ hiding: false });
+    // A session read under way answers as the session was: it is not waited for.
+    await queryClient.cancelQueries({ queryKey: ["session"] });
+    if (tell) await tellServer();
+
+    const editor = useEditor.getState();
+    const ordinary = editor.recentPaths.find((p) => !discreet(p)) ?? null;
+    const listed = queryClient.getQueryData<{ name: string; discreet?: boolean }[]>(["vaults"]);
+    const fallback = listed?.find((v) => !v.discreet && !names.has(v.name))?.name ?? null;
+    const vault = ordinary ? vaultOf(ordinary) : editor.activeVault && !names.has(editor.activeVault) ? editor.activeVault : fallback;
+    const shown = vaultOfRoute(pathname);
+
+    for (const name of names) useEditor.getState().forgetVault(name);
+    // What was looked for, and the note's tools, may name what was in them.
+    useEditor.setState({ searchQuery: "", searchTag: null, find: { query: "", index: 0, count: 0 }, noteTool: null, mode: "read" });
+    if (vault) useEditor.getState().setActiveVault(vault);
+    useDiscreet.getState().reset();
+    if (shown !== null && names.has(shown)) {
+      navigate(ordinary ? noteUrl(ordinary) : "/", { replace: true });
+      // The shell doesn't follow the URL while hiding: the note it goes to opens here.
+      if (ordinary) useEditor.getState().openNote(ordinary);
+    }
+    // The views of the discreet vaults go first, so that nothing still shown asks for them again.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" });
+    sweep(queryClient, names);
+    for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
+    void queryClient.refetchQueries({ queryKey: ["session"] });
+    useConsole.getState().reset();
+    useSyncStatus.setState({ editors: {} });
+  } finally {
+    useDiscreet.setState({ hiding: false });
+  }
+}
+
+/** The pathname now, for callbacks that run later (a timer, a frame, a session read) than the render that made them. */
+export function useLatestPathname(): () => string {
+  const { pathname } = useLocation();
+  const at = useRef(pathname);
+  at.current = pathname;
+  return useCallback(() => at.current, []);
 }
 
 /** Hides the discreet vaults again from a control of this tab (✕), telling the server. */
 export function useHideAgain() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const at = useRef(pathname);
-  at.current = pathname;
-  return useCallback(() => hideAgain(queryClient, navigate, { tell: true, pathname: at.current }), [queryClient, navigate]);
+  const pathname = useLatestPathname();
+  return useCallback(() => hideAgain(queryClient, navigate, { tell: true, pathname: pathname() }), [queryClient, navigate, pathname]);
 }
 
 /**
@@ -190,30 +229,28 @@ export function useHideAgain() {
 export function useDiscreetMode() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const at = useRef(pathname);
-  at.current = pathname;
+  const pathname = useLatestPathname();
   const revealed = useDiscreet((s) => s.revealed);
   const until = useDiscreet((s) => s.until);
 
   useEffect(
     () =>
       onDiscreetFrame((type) => {
-        if (type === "hidden" && useDiscreet.getState().revealed) void hideAgain(queryClient, navigate, { tell: false, pathname: at.current });
+        if (type === "hidden" && useDiscreet.getState().revealed) void hideAgain(queryClient, navigate, { tell: false, pathname: pathname() });
       }),
-    [queryClient, navigate],
+    [queryClient, navigate, pathname],
   );
 
   useEffect(() => {
     if (!revealed || !until) return;
     const left = Date.parse(until) - Date.now();
     const ahead = setTimeout(() => void saveAhead(), Math.max(0, left - SAVE_AHEAD));
-    const end = setTimeout(() => void hideAgain(queryClient, navigate, { tell: true, pathname: at.current }), Math.max(0, left));
+    const end = setTimeout(() => void hideAgain(queryClient, navigate, { tell: true, pathname: pathname() }), Math.max(0, left));
     return () => {
       clearTimeout(ahead);
       clearTimeout(end);
     };
-  }, [revealed, until, queryClient, navigate]);
+  }, [revealed, until, queryClient, navigate, pathname]);
 
   useEffect(
     () =>
@@ -226,23 +263,30 @@ export function useDiscreetMode() {
       }),
     [queryClient],
   );
-
-  // The session ends: a draft held for a late save goes with it.
-  useEffect(() => useSession.subscribe((s) => void (s.user === null && forgetHeld())), []);
 }
+
+// The session ends, or another user's begins: a draft held for a late save goes with it.
+useSession.subscribe((session, previous) => {
+  if (session.user?.id !== previous.user?.id) forgetHeld();
+});
 
 /** The session as read again: shown before, hidden now (the time ran out elsewhere, say), and the tab follows. */
 export function followSession(queryClient: QueryClient, navigate: NavigateFunction, pathname: string, view: { revealed: boolean; until: string | null } | undefined) {
+  // Hiding asks for the session again when it is done; an answer meanwhile may tell of the session as it was.
+  if (useDiscreet.getState().hiding) return;
   if (useDiscreet.getState().unsent) {
     if (!view?.revealed) return useDiscreet.setState({ unsent: false });
     void tellServer().then(() => {
-      if (!useDiscreet.getState().unsent) void queryClient.invalidateQueries({ queryKey: ["session"] });
+      if (useDiscreet.getState().unsent) return;
+      // A vault list read meanwhile still has them.
+      void queryClient.resetQueries({ queryKey: ["vaults"] });
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
     });
     return;
   }
   const was = useDiscreet.getState().revealed;
   if (was && !view?.revealed) {
-    if (!useDiscreet.getState().hiding) void hideAgain(queryClient, navigate, { tell: false, pathname });
+    void hideAgain(queryClient, navigate, { tell: false, pathname });
     return;
   }
   useDiscreet.getState().setFromSession(view);

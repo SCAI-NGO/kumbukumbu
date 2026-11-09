@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
-import { followSession, useDiscreetMode } from "./discreet/hideAgain";
+import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
 import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
@@ -61,19 +61,19 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const signedIn = useSession((s) => s.signedIn);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const at = useRef(pathname);
-  at.current = pathname;
+  const pathname = useLatestPathname();
   useDiscreetMode();
 
   useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
-    if (!session.data) return;
-    signedIn(session.data);
-    followSession(queryClient, navigate, at.current, session.data.discreet);
-    // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).
-  }, [session.data, session.dataUpdatedAt, signedIn, queryClient, navigate]);
+    if (session.data) signedIn(session.data);
+  }, [session.data, signedIn]);
+
+  // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).
+  useEffect(() => {
+    if (session.data) followSession(queryClient, navigate, pathname(), session.data.discreet);
+  }, [session.data, session.dataUpdatedAt, queryClient, navigate, pathname]);
 
   if (session.isPending) return null;
   // A 401 has already sent the app to sign-in; anything else is shown.

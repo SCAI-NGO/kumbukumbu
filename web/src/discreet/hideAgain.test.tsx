@@ -9,7 +9,7 @@ import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
-import { forgetHeld, holding, SAVE_AHEAD } from "./hideAgain";
+import { forgetHeld, hideAgain, holding, SAVE_AHEAD } from "./hideAgain";
 import { useDiscreet } from "./state";
 
 beforeEach(() => {
@@ -100,6 +100,10 @@ function expectForgotten(queryClient: QueryClient) {
   expect(editor.recentPaths.join()).not.toContain("Tagebuch");
   expect(Object.keys(editor.expandedFolders).join()).not.toContain("Tagebuch");
   expect(editor.draft).toBeNull();
+  expect(editor.selectedFolder ?? "").not.toContain("Tagebuch");
+  expect(editor.refused).toBeNull();
+  expect(editor.scrollTarget).toBeNull();
+  expect(editor).toMatchObject({ searchQuery: "", searchTag: null, find: { query: "", index: 0, count: 0 }, noteTool: null, mode: "read" });
   expect(queryClient.getQueryCache().getAll().map((q) => JSON.stringify([q.queryKey, q.state.data])).filter((q) => q.includes("Tagebuch"))).toEqual([]);
   expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("Tagebuch");
   expect(useConsole.getState().entries).toEqual([]);
@@ -131,6 +135,9 @@ describe("hiding the discreet vaults again", () => {
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });
     expect(log).toEqual(["save", "hide"]);
     await waitFor(() => expectForgotten(queryClient));
+    // The note of the URL is the open one again.
+    expect(useEditor.getState().currentPath).toBe("/Work/a.md");
+    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
     // The session is still there, and asked again.
     await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(false));
     expect(requests("GET", "/api/session").length).toBeGreaterThan(1);
@@ -196,6 +203,7 @@ describe("hiding the discreet vaults again", () => {
   });
 
   it("offline, keeps the unsaved text out of view, and tries it and the hide once more when back online", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const writes: string[] = [];
     const { log, net, queryClient, router, requests } = await openDiary(inMinutes(10), {
       "PUT /api/notes/Tagebuch/a.md": async (r) => {
@@ -217,15 +225,19 @@ describe("hiding the discreet vaults again", () => {
     act(() => void window.dispatchEvent(new Event("online")));
     await waitFor(() => expect(writes).toEqual(["Liebes Tagebuch"]));
     expect(holding()).toBe(false);
+    // Back online, the vault list is read before the session is: the server still shows them.
+    await act(() => queryClient.refetchQueries({ queryKey: ["vaults"] }));
     // The session read again still shows them: the hide goes again, and the tab stays hidden.
     await act(() => queryClient.invalidateQueries({ queryKey: ["session"] }));
     await waitFor(() => expect(log).toEqual(["save", "hide"]));
     await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(false));
     expect(useDiscreet.getState().revealed).toBe(false);
     expect(useDiscreet.getState().unsent).toBe(false);
-    // Once only.
+    // The vault list read while the server still showed them goes with the hide sent again.
+    await waitFor(() => expect(JSON.stringify(queryClient.getQueryData(["vaults"]) ?? null)).not.toContain("Tagebuch"));
+    // Once only, whatever comes later.
     act(() => void window.dispatchEvent(new Event("online")));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
     expect(writes).toHaveLength(1);
     expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1);
   });
@@ -243,5 +255,181 @@ describe("hiding the discreet vaults again", () => {
     expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1);
     await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
     expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1);
+  });
+  it("forgets what the view kept of the vault: a marked folder, a refusal, a scroll target, search, find, tools, Write mode", async () => {
+    const { queryClient, router, hidden } = await openDiary(null);
+    act(() =>
+      useEditor.setState({
+        selectedFolder: "/Tagebuch/privat",
+        refused: { path: "/Tagebuch/a.md", code: "read-only", at: 1 },
+        scrollTarget: { path: "/Tagebuch/a.md", line: 3 },
+        searchQuery: "Liebe",
+        searchTag: "privat",
+        find: { query: "Liebe", index: 0, count: 1 },
+        noteTool: "find",
+        mode: "write",
+      }),
+    );
+    await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    FakeSocket.all.at(-1)!.open();
+    hidden();
+    FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await waitFor(() => expectForgotten(queryClient));
+  });
+
+  it("ends its hiding even when a step fails", async () => {
+    const { queryClient, router } = await openDiary(null);
+    vi.spyOn(useConsole.getState(), "reset").mockImplementation(() => {
+      throw new Error("broken");
+    });
+    await expect(hideAgain(queryClient, router.navigate, { tell: false, pathname: "/notes/Tagebuch/a.md" })).rejects.toThrow("broken");
+    expect(useDiscreet.getState().hiding).toBe(false);
+  });
+
+  it("drops a discreet vault's mutation that settles after the hide", async () => {
+    const { log, queryClient, router } = await openDiary(null);
+    editorOn(log);
+    let settle = () => {};
+    const mutation = queryClient.getMutationCache().build(queryClient, { mutationFn: () => new Promise<void>((resolve) => (settle = resolve)) });
+    void mutation.execute({ path: "/Tagebuch/a.md" });
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    act(() => settle());
+    await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("Tagebuch"));
+  });
+
+  it("stops dropping the vault's answers once it is shown again", async () => {
+    const { log, queryClient, router } = await openDiary(null);
+    editorOn(log);
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    act(() => useDiscreet.setState({ revealed: true, names: new Set(["Tagebuch"]) }));
+    act(() => void queryClient.setQueryData(["note", "/Tagebuch/a.md"], { path: "/Tagebuch/a.md", content: "Text.", version: "v1" }));
+    await act(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
+    expect(queryClient.getQueryData(["note", "/Tagebuch/a.md"])).toBeDefined();
+  });
+
+  it("doesn't follow a session read that answers, after the hide, as it was before", async () => {
+    let stale: ((r: Response) => void) | null = null;
+    let state: "shown" | "next is stale" | "hidden" = "shown";
+    const { log, queryClient, router } = await openDiary(inMinutes(10), {
+      "GET /api/session": () => {
+        if (state === "next is stale") {
+          state = "hidden";
+          return new Promise<Response>((resolve) => (stale = resolve));
+        }
+        return json(200, { user, previousSignInAt: null, discreet: { revealed: state === "shown", until: state === "shown" ? inMinutes(10) : null } });
+      },
+    });
+    editorOn(log);
+    state = "next is stale";
+    void queryClient.invalidateQueries({ queryKey: ["session"] });
+    await waitFor(() => expect(stale).not.toBeNull());
+    // It answers just as the tab leaves the discreet note, before the hide is done.
+    const answer = { user, previousSignInAt: null, discreet: { revealed: true, until: inMinutes(10) } };
+    router.subscribe((s) => {
+      if (s.location.pathname !== "/notes/Work/a.md" || !stale) return;
+      stale(json(200, answer));
+      stale = null;
+      queryClient.setQueryData(["session"], answer);
+    });
+    const shownAgain = vi.fn();
+    const stop = useDiscreet.subscribe((s, previous) => void (s.revealed && !previous.revealed && shownAgain()));
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(false));
+    expect(useDiscreet.getState().revealed).toBe(false);
+    expect(shownAgain).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("forgets a held draft when another user signs in", async () => {
+    const { log, net, router } = await openDiary(inMinutes(10));
+    editorOn(log, false);
+    net.offline = true;
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    expect(holding()).toBe(true);
+    act(() => useSession.getState().signedIn({ user: { ...user, id: "u2", username: "bob" }, previousSignInAt: null }));
+    expect(holding()).toBe(false);
+  });
+
+  it("holds the open note's text over a draft a session end left", async () => {
+    const writes: string[] = [];
+    const put = async (r: Request) => {
+      writes.push(`${new URL(r.url).pathname} ${((await r.clone().json()) as { content: string }).content}`);
+      return json(200, { path: "/Tagebuch/a.md", content: "", version: "v2", lastWriter: "ada", lastWriteAt: "2026-11-09T10:00:00Z" });
+    };
+    const { log, net, router } = await openDiary(inMinutes(10), { "PUT /api/notes/Tagebuch/a.md": put, "PUT /api/notes/Tagebuch/b.md": put });
+    editorOn(log, false);
+    useEditor.setState({ draft: { username: "ada", path: "/Tagebuch/b.md", text: "Älter", version: "v1" } });
+    net.offline = true;
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    net.offline = false;
+    act(() => void window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(writes).toEqual(["/api/notes/Tagebuch/a.md Liebes Tagebuch"]));
+  });
+
+  it("while the browser says offline, waits for it to be online again, not for the while", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const { log, net, router, requests } = await openDiary(inMinutes(10), {
+      "PUT /api/notes/Tagebuch/a.md": () => json(200, { path: "/Tagebuch/a.md", content: "Liebes Tagebuch", version: "v2", lastWriter: "ada", lastWriteAt: "2026-11-09T10:00:00Z" }),
+    });
+    editorOn(log, false);
+    net.offline = true;
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await act(() => vi.advanceTimersByTimeAsync(2 * 60_000));
+    expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(0);
+    expect(holding()).toBe(true);
+    net.offline = false;
+    onLine.mockReturnValue(true);
+    act(() => void window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1));
+    expect(holding()).toBe(false);
+  });
+
+  it("while the browser says offline all along, tries once at the end of the late-save window", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const { log, net, router, requests } = await openDiary(inMinutes(10));
+    editorOn(log, false);
+    net.offline = true;
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
+    expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(0);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1);
+    expect(holding()).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(1);
+  });
+
+  it("✕ during a slow save, with the end and a hidden frame on top, saves and hides once", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { queryClient, router, requests, hidden } = await openDiary(inMinutes(1));
+    let finish = (_: boolean) => {};
+    // The save ahead of the end finds nothing to do; the one of the ✕ takes its time.
+    const beforeRead = vi.fn(() => (beforeRead.mock.calls.length === 1 ? Promise.resolve(true) : new Promise<boolean>((resolve) => (finish = resolve))));
+    useEditor.setState({ beforeRead, unsaved: () => null });
+    await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    FakeSocket.all.at(-1)!.open();
+    await act(() => vi.advanceTimersByTimeAsync(60_000 - SAVE_AHEAD + 1_000));
+    expect(beforeRead).toHaveBeenCalledTimes(1);
+    await userEvent.click(hideButton());
+    expect(beforeRead).toHaveBeenCalledTimes(2);
+    // Meanwhile the time runs out, and another tab's hide arrives: both join the one under way.
+    await act(() => vi.advanceTimersByTimeAsync(SAVE_AHEAD));
+    hidden();
+    act(() => FakeSocket.all.at(-1)!.frame({ type: "hidden" }));
+    act(() => finish(true));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await waitFor(() => expectForgotten(queryClient));
+    expect(beforeRead).toHaveBeenCalledTimes(2);
+    expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(1);
   });
 });
