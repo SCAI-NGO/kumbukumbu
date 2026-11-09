@@ -39,9 +39,14 @@ public sealed class ChunkTokenizerTests : IDisposable
             : new EmbeddingsOptions(),
     };
 
-    private static async Task<ChunkTokenizer> SettleAsync(KumbuOptions options, Serving serving)
+    /// <summary>As many attempts as in production, without the pauses between them.</summary>
+    private static ChunkTokenizer Create(KumbuOptions options, Serving serving) =>
+        new(Microsoft.Extensions.Options.Options.Create(options), serving, NullLogger<ChunkTokenizer>.Instance) { RetryDelays = [TimeSpan.Zero, TimeSpan.Zero] };
+
+    private static async Task<ChunkTokenizer> SettleAsync(KumbuOptions options, Serving serving, Action<ChunkTokenizer>? setUp = null)
     {
-        var tokenizer = new ChunkTokenizer(Microsoft.Extensions.Options.Options.Create(options), serving, NullLogger<ChunkTokenizer>.Instance);
+        var tokenizer = Create(options, serving);
+        setUp?.Invoke(tokenizer);
         Assert.False(tokenizer.Settled);
         Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
         await tokenizer.StartAsync(TestContext.Current.CancellationToken);
@@ -96,7 +101,7 @@ public sealed class ChunkTokenizerTests : IDisposable
         var tokenizer = await SettleAsync(Options(external: true), serving);
 
         Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
-        Assert.Single(serving.Requests);
+        Assert.Equal(3, serving.Requests.Count);
         Assert.False(File.Exists(TokenizerFile));
         Assert.Empty(Directory.GetFiles(Folder, "*.part"));
     }
@@ -108,10 +113,16 @@ public sealed class ChunkTokenizerTests : IDisposable
         Assert.Same(ChunkBound.Fallback, (await SettleAsync(Options(external: true), oneMore)).Bound);
         Assert.Empty(Directory.GetFiles(Folder));
 
-        var endless = new EndlessStream();
-        var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(endless) });
+        var endless = new List<EndlessStream>();
+        var serving = new Serving(_ =>
+        {
+            var stream = new EndlessStream();
+            endless.Add(stream);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };
+        });
         Assert.Same(ChunkBound.Fallback, (await SettleAsync(Options(external: true), serving)).Bound);
-        Assert.InRange(endless.Served, ModelFiles.ChunkTokenizer.Size + 1, ModelFiles.ChunkTokenizer.Size + (2 << 20));
+        Assert.Equal(3, endless.Count);
+        Assert.All(endless, e => Assert.InRange(e.Served, ModelFiles.ChunkTokenizer.Size + 1, ModelFiles.ChunkTokenizer.Size + (2 << 20)));
         Assert.Empty(Directory.GetFiles(Folder));
     }
 
@@ -123,8 +134,79 @@ public sealed class ChunkTokenizerTests : IDisposable
         var tokenizer = await SettleAsync(Options(external: true), serving);
 
         Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
-        Assert.Single(serving.Requests);
+        Assert.Equal(3, serving.Requests.Count);
         Assert.False(File.Exists(TokenizerFile));
+    }
+
+    [Fact]
+    public async Task A_passing_failure_is_tried_again()
+    {
+        var bytes = RealTokenizer();
+        var failures = 0;
+        var serving = new Serving(_ => failures++ < 2
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) });
+
+        var tokenizer = await SettleAsync(Options(external: true), serving);
+
+        Assert.Equal("tok-f1cc44ad7faa", tokenizer.Bound.Id);
+        Assert.Equal(3, serving.Requests.Count);
+        Assert.Empty(Directory.GetFiles(Folder, "*.part"));
+    }
+
+    [Fact]
+    public async Task Each_attempt_waits_its_pause_first()
+    {
+        var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var tokenizer = Create(Options(external: true), serving);
+        tokenizer.RetryDelays = [TimeSpan.FromMinutes(10)];
+        await tokenizer.StartAsync(TestContext.Current.CancellationToken);
+        for (var i = 0; i < 600 && serving.Requests.Count == 0; i++) await Task.Delay(50, TestContext.Current.CancellationToken);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        Assert.Single(serving.Requests);
+        Assert.False(tokenizer.Settled);
+        await tokenizer.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_stalled_download_is_given_up()
+    {
+        // Bytes, then nothing ever again: without its own timeouts the download would wait until the next start.
+        var never = new TaskCompletionSource().Task;
+        var stalled = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new HeldStream(never)) });
+
+        var tokenizer = await SettleAsync(Options(external: true), stalled, t => t.IdleLimit = TimeSpan.FromMilliseconds(200));
+
+        Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
+        Assert.Equal(3, stalled.Requests.Count);
+        Assert.Empty(Directory.GetFiles(Folder));
+    }
+
+    [Fact]
+    public async Task A_slow_download_that_keeps_coming_is_not_given_up()
+    {
+        // Each read within the idle limit, all of them together not.
+        var bytes = RealTokenizer();
+        var slow = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new SlowStream(bytes, TimeSpan.FromMilliseconds(40))) });
+
+        var tokenizer = await SettleAsync(Options(external: true), slow, t => t.IdleLimit = TimeSpan.FromMilliseconds(250));
+
+        Assert.Equal("tok-f1cc44ad7faa", tokenizer.Bound.Id);
+        Assert.Single(slow.Requests);
+    }
+
+    [Fact]
+    public async Task A_download_that_trickles_is_given_up()
+    {
+        // A byte at a time keeps within the idle limit, but not within the limit in all.
+        var trickling = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new TricklingStream()) });
+
+        var tokenizer = await SettleAsync(Options(external: true), trickling, t => (t.DownloadLimit, t.IdleLimit) = (TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(60)));
+
+        Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
+        Assert.Equal(3, trickling.Requests.Count);
+        Assert.Empty(Directory.GetFiles(Folder));
     }
 
     [Fact]
@@ -139,7 +221,7 @@ public sealed class ChunkTokenizerTests : IDisposable
         var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
         var tokenizer = await SettleAsync(options, serving);
         Assert.Same(ChunkBound.Fallback, tokenizer.Bound);
-        Assert.Single(serving.Requests);
+        Assert.Equal(3, serving.Requests.Count);
     }
 
     [Fact]
@@ -163,7 +245,7 @@ public sealed class ChunkTokenizerTests : IDisposable
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new HeldStream(release.Task)) });
-        var tokenizer = new ChunkTokenizer(Microsoft.Extensions.Options.Options.Create(Options(external: true)), serving, NullLogger<ChunkTokenizer>.Instance);
+        var tokenizer = Create(Options(external: true), serving);
         await tokenizer.StartAsync(TestContext.Current.CancellationToken);
         try
         {
@@ -225,6 +307,82 @@ public sealed class ChunkTokenizerTests : IDisposable
             buffer.Span.Clear();
             Served += buffer.Length;
             return ValueTask.FromResult(buffer.Length);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary><paramref name="bytes"/>, up to a megabyte per read, each after <paramref name="pause"/>.</summary>
+    private sealed class SlowStream(byte[] bytes, TimeSpan pause) : Stream
+    {
+        private int _at;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(pause, cancellationToken);
+            var n = Math.Min(Math.Min(buffer.Length, 1 << 20), bytes.Length - _at);
+            bytes.AsSpan(_at, n).CopyTo(buffer.Span);
+            _at += n;
+            return n;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A byte every 20 ms, without end.</summary>
+    private sealed class TricklingStream : Stream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(20, cancellationToken);
+            buffer.Span[0] = 0;
+            return 1;
         }
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
