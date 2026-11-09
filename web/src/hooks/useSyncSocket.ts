@@ -105,7 +105,7 @@ export function useSyncSocket() {
           },
         });
         // Hints sent while there was no socket are lost: everything they would have asked again is.
-        if (opened.current) for (const key of ["tree", "vaults", "history", "trash", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
+        if (opened.current) for (const key of ["tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
         opened.current = true;
       };
       s.onmessage = (e: MessageEvent) => onFrame(queryClient, navigate.current, e.data);

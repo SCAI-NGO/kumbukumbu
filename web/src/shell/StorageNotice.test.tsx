@@ -17,8 +17,8 @@ const session = (storageLimited: boolean) => () =>
   json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: false, storageLimited });
 
 /** The notice for her own storage at `used` of `limit`; resolves once the figure was asked. */
-async function renderAt(used: number, limit: number | null) {
-  const fetch = fakeApi({ "GET /api/session": session(true), "GET /api/account/storage": () => json(200, { used, limit }) });
+async function renderAt(used: number, limit: number | null, archive = 0) {
+  const fetch = fakeApi({ "GET /api/session": session(true), "GET /api/account/storage": () => json(200, { used, limit, archive }) });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
@@ -47,6 +47,23 @@ describe("StorageNotice", () => {
 
     await renderAt(2 * GB + 5, 2 * GB);
     expect(await screen.findByRole("status")).toHaveTextContent("Your storage is full (2 GB). Empty the trash or ask your admin for more.");
+  });
+
+  it("names the archive along with the trash once it holds a tenth of the used space", async () => {
+    await renderAt(1900 * MB, 2 * GB, 190 * MB);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Your storage is 92 % full: 1.9 GB of 2 GB. Empty the trash or the archive, or ask your admin for more.",
+    );
+    cleanup();
+
+    await renderAt(1900 * MB, 2 * GB, 171 * MB);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Your storage is 92 % full: 1.9 GB of 2 GB. Empty the trash or ask your admin for more.",
+    );
+    cleanup();
+
+    await renderAt(2 * GB, 2 * GB, 0.1 * 2 * GB);
+    expect(await screen.findByRole("status")).toHaveTextContent("Your storage is full (2 GB). Empty the trash or the archive, or ask your admin for more.");
   });
 
   it("says nothing without a limit", async () => {

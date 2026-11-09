@@ -62,7 +62,7 @@ The console has two prompt lines, the working directory and then `>`. In the scr
 
 ## F. Help
 
-24. `help`. *Expected:* first the console's own block, starting `In this console:`, naming `cd [path] (.. alone is cd ..), pwd, clear, exit`, relative paths and `→`, and the refused commands `restore, mv, mkdir, rm, mkcp and rmcp`; then `The manual agents get, unchanged:` and the shell's manual, which still says that all paths are absolute and names the write tools. The two are clearly apart.
+24. `help`. *Expected:* first the console's own block, starting `In this console:`, naming `cd [path] (.. alone is cd ..), pwd, clear, exit`, relative paths and `→`, and the refused commands `pdfimages, restore, mv, archive, mkdir, rm, mkcp and rmcp`; then `The manual agents get, unchanged:` and the shell's manual, which still says that all paths are absolute and names the write tools. The two are clearly apart.
 25. `help cd`, `help pwd`, `help clear`, `help exit`. *Expected:* short local texts in British English. `help rg`. *Expected:* the shell's own text, with a `→` line.
 26. `clear`. *Expected:* the scrollback is empty, the welcome line stays. Press Up. *Expected:* `clear` and the commands before it come back one by one, and Down walks back to an empty input. A command typed twice in a row is in the history once.
 

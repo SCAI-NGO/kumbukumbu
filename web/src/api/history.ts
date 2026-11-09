@@ -24,7 +24,7 @@ const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(
  */
 function vaultChanged(queryClient: QueryClient, vault: string, { notes = true, versions = false, search = true } = {}) {
   const inIt = (k: unknown) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`));
-  const keys = ["tree", ...(notes ? ["note"] : []), ...(versions ? ["version"] : []), "links", "backlinks", "history", "trash", "checkpoints", "publications", "publication"];
+  const keys = ["tree", ...(notes ? ["note"] : []), ...(versions ? ["version"] : []), "links", "backlinks", "history", "trash", "archive", "checkpoints", "publications", "publication"];
   for (const key of keys) {
     void queryClient.invalidateQueries({ queryKey: [key], predicate: (q) => q.queryKey.some(inIt) });
   }

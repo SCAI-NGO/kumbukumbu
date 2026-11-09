@@ -326,6 +326,31 @@ describe("search in earlier versions", () => {
   });
 });
 
+describe("search in the archive", () => {
+  it("leaves the archive out unless the switch is on", async () => {
+    const searched: URL[] = [];
+    api(() => view([hit("/Work/plan.md")]), [], { "GET /api/search": (r) => (searched.push(new URL(r.url)), json(200, view([hit("/Work/plan.md")]))) });
+    await openSheet();
+    const include = within(sheet()).getByRole("switch", { name: "Include archive" });
+    expect(include).toHaveAttribute("aria-checked", "false");
+
+    await userEvent.type(input(), "seal");
+    await within(sheet()).findByText("1 result", { exact: false });
+    expect(searched.at(-1)!.searchParams.has("archive")).toBe(false);
+
+    await userEvent.click(include);
+    expect(include).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(searched.at(-1)!.searchParams.get("archive")).toBe("true"));
+    expect(searched.at(-1)!.searchParams.get("q")).toBe("seal");
+
+    // Off again, asked without it.
+    const asked = searched.length;
+    await userEvent.click(include);
+    await waitFor(() => expect(searched.length).toBeGreaterThan(asked));
+    expect(searched.at(-1)!.searchParams.has("archive")).toBe(false);
+  });
+});
+
 describe("tags in the search sheet", () => {
   const tagApi = (searched: URL[] = []) =>
     api(() => view([hit("/Work/kumbu.md")]), [], {

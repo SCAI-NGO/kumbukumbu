@@ -46,7 +46,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var tools = await client.ListToolsAsync(cancellationToken: Ct);
 
         Assert.Equal(["board", "edit", "replace", "sh", "write"], tools.Select(t => t.Name).Order());
-        Assert.Contains("ls [path]", tools.Single(t => t.Name == "sh").Description, StringComparison.Ordinal);
+        Assert.Contains("ls [--archive] [path]", tools.Single(t => t.Name == "sh").Description, StringComparison.Ordinal);
         Assert.StartsWith("Create a note", tools.Single(t => t.Name == "write").Description, StringComparison.Ordinal);
         Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);
         Assert.StartsWith("Replace a text in every note", tools.Single(t => t.Name == "replace").Description, StringComparison.Ordinal);

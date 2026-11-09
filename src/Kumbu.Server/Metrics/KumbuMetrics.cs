@@ -75,9 +75,13 @@ public static class KumbuMetrics
         foreach (var kind in Enum.GetValues<RenderKind>())
         {
             RenderDuration.WithLabels(Label(kind));
+            foreach (var reason in Enum.GetValues<FailReason>()) RenderFailures.WithLabels(Label(kind), Label(reason));
+        }
+
+        foreach (var kind in DeliveredKinds)
+        {
             DeliveredBytes.WithLabels(Label(kind));
             DeliveredLongEdge.WithLabels(Label(kind));
-            foreach (var reason in Enum.GetValues<FailReason>()) RenderFailures.WithLabels(Label(kind), Label(reason));
         }
     }
 
@@ -283,13 +287,17 @@ public static class KumbuMetrics
         return null;
     }
 
-    public enum RenderKind { Page, Image }
+    /// <summary>What the sidecar rendered: a page or an image for the model, or a PDF's image or region to store (<c>Extract</c>).</summary>
+    public enum RenderKind { Page, Image, Extract }
 
     /// <summary>Why the sidecar failed: the same four for an analysis and a render.</summary>
     public enum FailReason { Timeout, Unavailable, Invalid, Failed }
 
     // A page the analysis calls text, rendered anyway: the 25 % threshold's miss signal.
     private static readonly PdfMode[] TextPageModes = [PdfMode.ImagesAll, PdfMode.Crop];
+
+    // What is handed to the shell; an extraction is stored instead.
+    private static readonly RenderKind[] DeliveredKinds = [RenderKind.Page, RenderKind.Image];
 
     private static readonly double[] Coverage = [0, 0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 0.95, 1];
 
@@ -354,7 +362,7 @@ public static class KumbuMetrics
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
     private static readonly Histogram RenderDuration = Prometheus.Metrics.CreateHistogram(
-        "kumbu_render_duration_seconds", "How long the sidecar took to render a page or an image, failures included.", Hist(Seconds, "kind"));
+        "kumbu_render_duration_seconds", "How long the sidecar took to render a page or an image, or to extract one to store, failures included.", Hist(Seconds, "kind"));
 
     private static readonly Counter RenderFailures = Prometheus.Metrics.CreateCounter(
         "kumbu_render_failures_total", "Renders that failed, by kind and reason; a page or crop that the request got wrong (no such page, outside the page) is not a failure.", new CounterConfiguration { LabelNames = ["kind", "reason"] });
@@ -395,7 +403,7 @@ public static class KumbuMetrics
     public static void Rendered(RenderKind kind, TimeSpan elapsed) => RenderDuration.WithLabels(Label(kind)).Observe(elapsed.TotalSeconds);
 
     /// <summary>A page or crop the request got wrong: a refusal of the request, not a failure of the render.</summary>
-    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame";
+    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame" or "no_such_image";
 
     public static void RenderFailed(RenderKind kind, FailReason reason) => RenderFailures.WithLabels(Label(kind), Label(reason)).Inc();
 
@@ -478,7 +486,12 @@ public static class KumbuMetrics
         _ => "unavailable",
     };
 
-    private static string Label(RenderKind kind) => kind == RenderKind.Page ? "page" : "image";
+    private static string Label(RenderKind kind) => kind switch
+    {
+        RenderKind.Page => "page",
+        RenderKind.Image => "image",
+        _ => "extract",
+    };
 
     private static string Label(FailReason reason) => reason switch
     {
@@ -519,7 +532,7 @@ public static class KumbuMetrics
     public static readonly IReadOnlyList<string> KnownCommands =
     [
         "ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort",
-        "semsearch", "img", "pdf", "history", "diff", "restore", "mv", "mkdir", "rm", "trash", "df", "du", "mkcp", "lscp", "rmcp", "publish", "skills", "uname", "help",
+        "semsearch", "img", "pdf", "pdfimages", "history", "diff", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "mkcp", "lscp", "rmcp", "publish", "skills", "uname", "help",
     ];
 
     /// <summary>The label values for the commands of a line: distinct, a known name as itself, anything else "other", first seen first.</summary>
@@ -586,6 +599,7 @@ public static class KumbuMetrics
         var types = Values<PageKind>(Label);
         var analysed = new HashSet<string>(types.Where(t => t != "unknown"), StringComparer.Ordinal);
         var textVia = new HashSet<string>(TextPageModes.Select(Label), StringComparer.Ordinal);
+        var delivered = new HashSet<string>(DeliveredKinds.Select(Label), StringComparer.Ordinal);
         var result = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlySet<string>>>(StringComparer.Ordinal);
         void Metric(string name, params (string Label, HashSet<string> Values)[] labels) =>
             result[name] = labels.ToDictionary(l => l.Label, l => (IReadOnlySet<string>)l.Values, StringComparer.Ordinal);
@@ -630,8 +644,8 @@ public static class KumbuMetrics
         Metric("kumbu_rg_regions_total", ("outcome", Values<RegionOutcome>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));
         Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
-        Metric("kumbu_image_delivered_bytes", ("kind", kinds));
-        Metric("kumbu_image_delivered_long_edge_pixels", ("kind", kinds));
+        Metric("kumbu_image_delivered_bytes", ("kind", delivered));
+        Metric("kumbu_image_delivered_long_edge_pixels", ("kind", delivered));
         return result;
     }
 

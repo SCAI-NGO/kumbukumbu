@@ -78,6 +78,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
           the types aren't known, and only --images=all and --crop show pages.
           pdf stands alone, not in a pipeline. A client may drop images; if none follows a page's text, say
           so to the user rather than guess. For image attachments see 'help img'.
+          To store pictures as images: pdfimages (see 'help pdfimages').
 
           pdf info /Work/Papers/paper.pdf
           pdf /Work/Papers/paper.pdf 5-9

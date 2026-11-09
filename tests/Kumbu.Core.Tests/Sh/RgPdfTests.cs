@@ -67,9 +67,17 @@ public class RgPdfTests
             return Task.FromResult(Boxes(path.Value, pages));
         }
 
+        public Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new NotSupportedException();
+
         public void Count(AttachmentUse use)
         {
         }
+
+        public IDisposable? TryStartExtraction() => throw new NotSupportedException();
     }
 
     private readonly InMemoryNoteStore _store = new(
@@ -896,5 +904,41 @@ public class RgPdfTests
             """,
             (await Run("help rg")).Output);
         Assert.Contains("rg --regions also says where on the page a match lies.", (await Run("help pdf")).Output);
+    }
+
+    [Fact]
+    public async Task An_archived_pdf_is_searched_only_when_asked()
+    {
+        await Paper("/V/_archive/paper.pdf");
+
+        Assert.Equal("/V/plan.md:2:needle in a note", (await Run("rg needle /V")).Output);
+        Assert.DoesNotContain("_archive", (await Run("rg needle")).Output);
+        Assert.Equal(
+            "/V/plan.md:2:needle in a note\n/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again",
+            (await Run("rg --archive needle /V")).Output);
+        Assert.Equal("/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again", (await Run("rg needle /V/_archive/")).Output);
+        Assert.Equal("/V/_archive/paper.pdf:p2: the needle sits here\n/V/_archive/paper.pdf:p7: last needle line\n/V/_archive/paper.pdf:p7: needle again", (await Run("rg needle /V/_archive/paper.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task The_scan_hint_names_no_archived_pdf()
+    {
+        await Scanned("/V/_archive/scan.pdf", PageType.Image);
+
+        Assert.Equal("", (await Run("rg zzz /V")).Output);
+        Assert.Equal($"{PictureHintStart}/V/_archive/scan.pdf (1 page of scans or photos){PictureHintEnd}", (await Run("rg --archive zzz /V")).Output);
+        Assert.Equal($"{PictureHintStart}/V/_archive/scan.pdf (1 page of scans or photos){PictureHintEnd}", (await Run("rg zzz /V/_archive/")).Output);
+    }
+
+    [Fact]
+    public async Task A_vault_holding_only_archived_pdfs_finds_nothing()
+    {
+        _store.AddVault("P");
+        await Paper("/P/_archive/paper.pdf");
+
+        var result = await Run("rg needle /P");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("", result.Output);
     }
 }

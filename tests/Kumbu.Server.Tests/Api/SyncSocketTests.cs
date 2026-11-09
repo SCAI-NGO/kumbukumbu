@@ -257,6 +257,8 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     {
         var (_, bob, _, membership) = await SharedAsync(MemberRole.Read);
         using var socket = await SyncSockets.OpenAsync(Api, bob);
+        // The hub registers a socket after the handshake has completed for the client: wait for it.
+        for (var i = 0; i < 50 && SessionVaults(bob).Count == 0; i++) await Task.Delay(100, Ct);
         Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
 
         await Share.SetRoleAsync(app.Database, membership, MemberRole.Maintain);

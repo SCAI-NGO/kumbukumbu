@@ -3,6 +3,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -10,15 +11,20 @@ public sealed class Backlinks(INoteReader notes) : ICommand
 {
     public string Name => "backlinks";
 
-    public string Usage => "backlinks <path>";
+    private static readonly Option[] Spec = [new(null, "archive")];
+
+    public string Usage => "backlinks [--archive] <path>";
 
     public string Summary => "the notes that link to a note or attachment";
 
     public string Help => """
-        backlinks <path>
+        backlinks [--archive] <path>
           List the lines in the vault of a note or attachment that link to it or embed it, as
           path:line:text (like rg), in order. A link counts if it resolves to it by the rules in
-          'help links'.
+          'help links'. Notes in the vault's archive (_archive/) are left out, unless the path itself
+          lies there.
+
+          --archive   list the lines of archived notes too
 
           backlinks /Demo/projects/kumbu.md
           backlinks /Demo/screens/shot.png
@@ -30,10 +36,10 @@ public sealed class Backlinks(INoteReader notes) : ICommand
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (CommandArgs.RefuseVersion(Name, args, "backlinks reads other notes, each with its own versions") is { } versionError) return versionError;
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count == 0) return ShellResult.Error("backlinks: missing operand");
-        if (args.Count > 1) return ShellResult.Error($"backlinks: too many arguments{CommandArgs.QuoteHint}");
-        if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
+        if (!Options.TryParse(Name, args, Spec, out var options, out var optionError)) return optionError;
+        if (options.Operands.Count == 0) return ShellResult.Error("backlinks: missing operand");
+        if (options.Operands.Count > 1) return ShellResult.Error($"backlinks: too many arguments{CommandArgs.QuoteHint}");
+        if (!CommandArgs.TryParsePath(Name, options.Operands[0], out var path, out var pathError)) return pathError!;
 
         var attachment = await StoreAttachments.GetAsync(notes, path, ct);
         var note = attachment is not null
@@ -41,9 +47,30 @@ public sealed class Backlinks(INoteReader notes) : ICommand
             : await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         if (note.IsError) return note;
 
-        var output = (await NoteLinks.ToAsync(notes, path, ct))
+        var archive = ArchiveFolder.Shown(path, options.Has("archive"));
+        var links = await NoteLinks.ToAsync(notes, path, ct);
+        var output = links
+            .Where(b => archive || !ArchiveFolder.Contains(b.Source))
             .Select(b => $"{b.Source.Value}:{b.Line + 1}:{b.Text}{(b.Ambiguous ? $"  (ambiguous, may mean this {(attachment is null ? "note" : "file")})" : "")}")
             .ToList();
-        return note with { Output = output.Count > 0 ? Lines.Join(output) : "(no notes link here)" };
+
+        // Saying that nothing links here while archived notes do could get the target removed or renamed.
+        var hidden = archive ? 0 : links.Select(b => b.Source).Where(ArchiveFolder.Contains).Distinct().Count();
+        var asking = $"backlinks --archive {SectionLookup.Quote(path)}";
+        if (output.Count == 0)
+        {
+            return note with
+            {
+                Output = hidden == 0 ? "(no notes link here)" : $"(no notes outside the archive link here; {Archived(hidden)} {(hidden == 1 ? "does" : "do")}: {asking})",
+            };
+        }
+
+        return note with
+        {
+            Output = Lines.Join(output),
+            Notice = hidden == 0 ? null : $"{Archived(hidden)} link{(hidden == 1 ? "s" : "")} here too: {asking}",
+        };
+
+        static string Archived(int count) => $"{count} archived note{(count == 1 ? "" : "s")}";
     }
 }

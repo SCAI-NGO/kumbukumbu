@@ -67,6 +67,23 @@ public class AttachmentLinkTests
     public void A_wiki_embed_of_a_png_resolves_to_the_attachment(string source, string target, string expected) =>
         Assert.Equal(expected, Resolve(Resolver, source, target));
 
+    [Theory]
+    [InlineData("/W/inbox.md", "shot.png", "attachment /W/Screens/shot.png")]
+    [InlineData("/W/inbox.md", "Shots/old.png", "attachment /W/a/Shots/old.png")]
+    [InlineData("/W/inbox.md", "lone.png", "attachment /W/_archive/lone.png")]
+    [InlineData("/W/inbox.md", "gone.png", "ambiguous: /W/_archive/a/gone.png, /W/_archive/b/gone.png")]
+    [InlineData("/W/inbox.md", "/_archive/Screens/shot.png", "attachment /W/_archive/Screens/shot.png")]
+    public void An_embed_prefers_what_is_outside_the_archive(string source, string target, string expected)
+    {
+        var resolver = new LinkResolver("W", [P("/W/inbox.md")],
+        [
+            P("/W/Screens/shot.png"), P("/W/_archive/Screens/shot.png"), P("/W/a/Shots/old.png"), P("/W/_archive/Shots/old.png"),
+            P("/W/_archive/lone.png"), P("/W/_archive/a/gone.png"), P("/W/_archive/b/gone.png"),
+        ]);
+
+        Assert.Equal(expected, Resolve(resolver, source, target));
+    }
+
     [Fact]
     public void Without_the_vaults_attachments_a_file_link_stays_a_file()
     {

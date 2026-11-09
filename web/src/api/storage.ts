@@ -24,20 +24,29 @@ export function percentUsed(storage: AccountStorage): number | null {
   return limit <= 0 ? 100 : Math.floor((Number(storage.used) / limit) * 100);
 }
 
+/** Whether her archive holds a noticeable share of her storage (from a tenth of the used space), worth naming beside the trash. */
+export const archiveNoticeable = (storage: AccountStorage) => Number(storage.archive ?? 0) > 0 && Number(storage.archive) * 10 >= Number(storage.used);
+
+/** "Empty the trash or ask your admin for more.", naming the archive too when it holds a noticeable share. */
+export const freeSentence = (archive: boolean) => `Empty the trash${archive ? " or the archive," : ""} or ask your admin for more.`;
+
 // The signed-in user's limit as last asked, for the quota refusal's sentence (errorText can't wait for a request).
-let known: { user: string; limit: number | null } | null = null;
+let known: { user: string; limit: number | null; archive: boolean } | null = null;
 
 /** Keeps `user`'s limit for `quotaSentence`; the storage query does this with every answer. */
 export function rememberStorage(user: string, storage: AccountStorage) {
-  known = { user, limit: storage.limit == null ? null : Number(storage.limit) };
+  known = { user, limit: storage.limit == null ? null : Number(storage.limit), archive: archiveNoticeable(storage) };
 }
 
 /** What the owner is told of her full storage (WebDAV design §3.10), with her limit when it is known. */
-export const fullSentence = (limit: number | null) =>
-  `Your storage is full${limit != null ? ` (${storageText(limit)})` : ""}. Empty the trash or ask your admin for more.`;
+export const fullSentence = (limit: number | null, archive = false) =>
+  `Your storage is full${limit != null ? ` (${storageText(limit)})` : ""}. ${freeSentence(archive)}`;
 
 /** The owner's sentence for a write refused for her full storage, with the limit last asked for the signed-in user. */
-export const quotaSentence = () => fullSentence(known && known.user === useSession.getState().user?.id ? known.limit : null);
+export const quotaSentence = () => {
+  const mine = known && known.user === useSession.getState().user?.id ? known : null;
+  return fullSentence(mine?.limit ?? null, mine?.archive ?? false);
+};
 
 /** Whether a storage limit applies to the signed-in user, as the session says (no count of her storage); undefined until
  * the session is in. */

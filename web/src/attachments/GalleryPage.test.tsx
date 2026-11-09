@@ -414,8 +414,8 @@ describe("Gallery", () => {
 
     expect(await within(dialog).findByRole("status")).toHaveTextContent("Moved 2 files.");
     expect(moves).toEqual([
-      { from: "/W/Screenshots/whiteboard.png", to: "/W/Sketches/whiteboard.png", keepLinks: false },
-      { from: "/W/Projects/Teaser/banner.png", to: "/W/Sketches/banner.png", keepLinks: false },
+      { from: "/W/Screenshots/whiteboard.png", to: "/W/Sketches/whiteboard.png", keepLinks: false, exact: false },
+      { from: "/W/Projects/Teaser/banner.png", to: "/W/Sketches/banner.png", keepLinks: false, exact: false },
     ]);
     expect(screen.queryByRole("region", { name: "Selection" })).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));

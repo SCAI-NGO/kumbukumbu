@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A stand-in for dist/worker.js that speaks the same protocol: for the pool's tests, and the server's
-// time-out and busy tests (an analysis never ends here, a page is answered at once).
+// time-out and busy tests (an analysis and an image list never end here, a page is answered at once).
 import { parentPort } from "node:worker_threads";
 
 parentPort.once("message", async (job) => {
@@ -10,6 +10,7 @@ parentPort.once("message", async (job) => {
       break;
     case "hang":
     case "analyse":
+    case "list":
       setInterval(() => {}, 1000);
       break;
     case "page":

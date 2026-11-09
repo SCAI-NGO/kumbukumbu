@@ -96,6 +96,17 @@ public class CheckpointTests
     }
 
     [Fact]
+    public async Task ReadersOnTheCheckpointHideTheArchiveUnlessAsked()
+    {
+        await Write("/Demo/_archive/old.md", "old\n");
+        await Run("mkcp /Demo cp");
+
+        Assert.Equal(ShellResult.Ok("arbeit/\nwelcome.md"), await Run("ls --checkpoint cp /Demo"));
+        Assert.Contains("_archive/", (await Run("ls --archive --checkpoint cp /Demo")).Output.Split('\n'));
+        Assert.Equal(ShellResult.Ok("old.md"), await Run("ls --checkpoint cp /Demo/_archive"));
+    }
+
+    [Fact]
     public async Task ReadingCommandsWorkOnTheCheckpoint()
     {
         await Run("mkcp /Demo/arbeit/ before");

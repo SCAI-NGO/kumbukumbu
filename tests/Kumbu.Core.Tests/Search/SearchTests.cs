@@ -83,6 +83,50 @@ public class SearchTests
         new(new SemanticResult(SemanticState.Ready, [.. hits.Select(h => new SemanticHit(P(h.Path), h.Line, h.Score))], 0));
 
     [Fact]
+    public async Task SemsearchLeavesArchivedNotesOutUnlessAsked()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Demo/gate.md", "# Gate\nThe service checks rules at the entrance.\n"),
+            ("/Demo/_archive/old.md", "# Old\nThe old rules.\n"),
+            ("/Gone/_archive/a.md", "rules of old\n"));
+        var index = Cosines(("/Demo/_archive/old.md", 0, 0.9), ("/Demo/gate.md", 0, 0.5), ("/Gone/_archive/a.md", 0, 0.8));
+
+        foreach (var mode in new[] { "", "--words " })
+        {
+            var hidden = (await Run($"semsearch {mode}rules /Demo", index, store)).Output;
+            Assert.Contains("/Demo/gate.md#Gate", hidden);
+            Assert.DoesNotContain("_archive", hidden);
+            Assert.DoesNotContain("_archive", (await Run($"semsearch {mode}rules", index, store)).Output);
+            Assert.Contains("/Demo/_archive/old.md#Old", (await Run($"semsearch --archive {mode}rules /Demo", index, store)).Output);
+            Assert.Contains("/Demo/_archive/old.md#Old", (await Run($"semsearch {mode}rules /Demo/_archive/", index, store)).Output);
+            Assert.Contains("/Demo/_archive/old.md#Old", (await Run($"semsearch {mode}rules /Demo/_archive/old.md", index, store)).Output);
+
+            // Nothing found while an archived note holds the words: the answer says how to search the archive.
+            var empty = await Run($"semsearch {mode}rules /Gone", index, store);
+            Assert.False(empty.IsError, empty.Output);
+            Assert.StartsWith($"(nothing found for 'rules' below /Gone outside the archive; semsearch --archive {mode}rules /Gone searches it)\n", empty.Output);
+            Assert.StartsWith("(nothing found for 'zebras' below /Gone)\n", (await Run($"semsearch {mode}zebras /Gone", index, store)).Output);
+        }
+
+        Assert.StartsWith(
+            "(nothing found for 'old rules' outside the archive; semsearch --archive -n 3 --meaning old rules searches it)\n",
+            (await Run("semsearch -n 3 --meaning old rules", Cosines(), store)).Output);
+        Assert.StartsWith(
+            "(nothing found for 'rules of' below /Gone too outside the archive; semsearch --archive --words rules of '/Gone too' searches it)\n",
+            (await Run("semsearch --words rules of \"/Gone too\"", index, new InMemoryNoteStore(("/Gone too/_archive/a.md", "rules of old\n")))).Output);
+
+        var tagged = new InMemoryNoteStore(("/Demo/gate.md", "rules\n"), ("/Demo/_archive/old.md", "#old rules\n"), ("/Demo/_archive/new.md", "#new rules\n"), ("/Demo/now.md", "#new\n"));
+        Assert.Equal(
+            ShellResult.Error("semsearch: only archived notes below /Demo carry #old; semsearch --archive --words --tag old rules /Demo searches them"),
+            await Run("semsearch --words --tag old rules /Demo", index, tagged));
+        // Archived notes without the tag don't count for the hint.
+        Assert.StartsWith("(nothing found for 'old' below /Demo)\n", (await Run("semsearch --words --tag new old /Demo", index, tagged)).Output);
+        Assert.StartsWith(
+            "(nothing found for 'rules' below /Demo outside the archive; semsearch --archive --words --tag new rules /Demo searches it)\n",
+            (await Run("semsearch --words --tag new rules /Demo", index, tagged)).Output);
+    }
+
+    [Fact]
     public async Task SemsearchAddsAWordBonusToTheMeaningScore()
     {
         // The farm's cosine is high enough to stay ahead; the gate gets half the word bonus ("rules" but not "door").

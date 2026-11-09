@@ -19,7 +19,9 @@ public sealed class PairingTests(MongoFixture fixture)
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly IMongoDatabase _db = fixture.NewDatabase();
-    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 26, 9, 0, 0, TimeSpan.Zero));
+    // Real time, not a fixed date: MongoDB's TTL monitor expires session slots by the real clock, so a session made at
+    // a past fake time could be swept between creating a code and redeeming it.
+    private readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
     private readonly Argon2Kdf _kdf = new(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1));
     private VaultCatalog? _catalog;
     private ApiKeys? _keys;

@@ -276,9 +276,13 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct) =>
         Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
 
+    /// <summary>The exception storing these bytes throws (a full vault's <see cref="QuotaExceededException"/>, say), or null to store them.</summary>
+    public Func<ReadOnlyMemory<byte>, Exception?>? BlobFails { get; set; }
+
     /// <summary>Blobs keyed by a plain SHA-256: fine for a fake, never for the real store.</summary>
     public Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct)
     {
+        if (BlobFails?.Invoke(bytes) is { } e) throw e;
         var id = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes.Span));
         _blobs.TryAdd((vault, id), bytes.ToArray());
         return Task.FromResult(id);

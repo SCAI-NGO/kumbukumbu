@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 
@@ -14,7 +15,9 @@ namespace Kumbu.Server.Attachments;
 /// An expected failure (sidecar away, a refused page or crop, a PDF that can't be read) becomes a
 /// <see cref="PixelsUnavailableException"/> with a sentence for the model.
 /// </summary>
-public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner) : IAttachmentPixels
+public sealed class AttachmentPixels(
+    EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner, ExtractionGate extractions, RequestCaller caller)
+    : IAttachmentPixels
 {
     /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.</summary>
     public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
@@ -30,19 +33,23 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "PDF rendering", path, page, crop, null));
     }
 
-    /// <summary>A render timed and counted: its duration whatever came of it, a failure by reason, a picture by size.</summary>
-    private static async Task<Picture> MeasuredAsync(KumbuMetrics.RenderKind kind, Func<Task<Picture>> render, Func<SidecarException, PixelsUnavailableException> refuse)
+    /// <summary>
+    /// A render timed and counted: its duration whatever came of it, a failure by reason, a picture for the model by size.
+    /// An extraction's picture is stored, not delivered, and its sidecar being busy is the queue at work, tried again.
+    /// </summary>
+    private static async Task<T> MeasuredAsync<T>(KumbuMetrics.RenderKind kind, Func<Task<T>> render, Func<SidecarException, PixelsUnavailableException> refuse)
     {
         var started = Stopwatch.GetTimestamp();
         try
         {
-            var picture = await render();
-            KumbuMetrics.ImageDelivered(kind, picture.Data.Length, picture.Width, picture.Height);
-            return picture;
+            var result = await render();
+            if (result is Picture picture && kind != KumbuMetrics.RenderKind.Extract) KumbuMetrics.ImageDelivered(kind, picture.Data.Length, picture.Width, picture.Height);
+            return result;
         }
         catch (SidecarException e)
         {
-            if (!KumbuMetrics.IsRequestMistake(e)) KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
+            var busy = kind == KumbuMetrics.RenderKind.Extract && e.Code == SidecarException.Busy;
+            if (!KumbuMetrics.IsRequestMistake(e) && !busy) KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
             throw refuse(e);
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -90,7 +97,28 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         }
     }
 
+    public async Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ListImagesAsync(bytes, page, ct), e => RefusedStoring(e, Extraction.List, path, page, 0, null, false));
+    }
+
+    public async Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ExtractImageAsync(bytes, page, n, ct), e => RefusedStoring(e, Extraction.Image, path, page, n, null, false));
+    }
+
+    public async Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.RenderRegionAsync(bytes, page, crop, rotate, jpeg, ct), e => RefusedStoring(e, Extraction.Region, path, page, 0, crop, jpeg));
+    }
+
     public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
+
+    /// <summary>Keyed by the account, whichever of its credentials calls; the dev token has none, and one place.</summary>
+    public IDisposable? TryStartExtraction() => extractions.TryStart(caller.User?.Id ?? "");
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
         await store.VaultOfAsync(path, ct) is { } vault && EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId) ? (vault, blobId) : null;
@@ -117,6 +145,47 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         }
 
         return $"{path} can't be looked at: {char.ToLowerInvariant(problem![0])}{problem[1..]}";
+    }
+
+    private enum Extraction { List, Image, Region }
+
+    /// <summary>
+    /// A refusal of a PDF's images or a region to store, in sentences of their own (<c>pdfimages</c> quotes them):
+    /// a busy sidecar is <see cref="PixelsProblem.Busy"/>, to be tried again in a moment.
+    /// </summary>
+    private static PixelsUnavailableException RefusedStoring(SidecarException e, Extraction asked, VaultPath path, int page, int n, Crop? crop, bool jpeg)
+    {
+        var what = asked switch
+        {
+            Extraction.List => $"the images of page {page} of {path}",
+            Extraction.Image => $"image {n} on page {page} of {path}",
+            _ => $"the region of page {page} of {path}",
+        };
+        var reading = asked == Extraction.Region ? "rendering" : "reading";
+        return new(e.Code switch
+        {
+            SidecarException.Busy => "PDF image extraction is busy; try again in a moment",
+            SidecarException.Unavailable => "PDF image extraction is unavailable right now; try again later",
+            SidecarException.Timeout => $"{reading} {what} took too long",
+            SidecarException.Aborted => $"{reading} {what} stopped part way (the renderer may have run out of memory)",
+            SidecarException.Encrypted => PdfAnalysisRunner.PasswordProtected,
+            "no_such_page" => $"{path} has no page {page}",
+            "no_such_image" => $"page {page} of {path} has no image {n}",
+            "bad_crop" => $"the crop {crop} lies outside page {page}",
+            "too_large" when asked == Extraction.Region && !jpeg => "the region is over 15 MB as PNG; name the target .jpg",
+            "too_large" when asked == Extraction.Region => "the region is over 15 MB even as JPEG at quality 60; crop a smaller region",
+            "too_large" when asked == Extraction.Image => $"{what} is over 15 MB even as JPEG at quality 60",
+            _ => asked == Extraction.Region ? $"{what} couldn't be rendered" : $"{what} couldn't be read",
+        }, e.Code switch
+        {
+            SidecarException.Busy => PixelsProblem.Busy,
+            SidecarException.Unavailable => PixelsProblem.Unavailable,
+            "no_such_image" => PixelsProblem.NoSuchImage,
+            "no_such_page" => PixelsProblem.NoSuchPage,
+            "bad_crop" => PixelsProblem.BadCrop,
+            "too_large" when asked != Extraction.List => PixelsProblem.TooLarge,
+            _ => PixelsProblem.Failed,
+        });
     }
 
     private static PixelsUnavailableException Refused(SidecarException e, string what, VaultPath path, int? page, Crop? crop, int? frame) => new(e.Code switch

@@ -108,6 +108,8 @@ services:
       Kumbu__Skills__GitHubToken: ${KUMBU_GITHUB_TOKEN:-}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
+      # The server's time zone, e.g. Europe/Berlin: the time archive adds to the names of what it moves.
+      TZ: ${TZ:-UTC}
       # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.
       Kumbu__Metrics__Url: http://0.0.0.0:9464
       # The PDF sidecar below (img, pdf; empty, neither shows anything). The server refuses connections from its address.
@@ -140,9 +142,10 @@ services:
       - no-new-privileges:true
     # The image's `node` user.
     user: "1000:1000"
-    # Two workers of at most 384 MB of JavaScript heap each (768 MB), plus what lives outside it: pdf.js's decoded
-    # images (up to 50 MP, 200 MB at 4 bytes a pixel) and Skia's canvases (a large step is at most 3.7 MP, but a page
-    # or an image decoded for scaling can be larger), and the main thread's buffers (at most 18 bodies of 16 MiB).
+    # Two jobs at a time (the render and the extraction workers share two places), each in a worker of at most 384 MB
+    # of JavaScript heap (768 MB), plus what lives outside it: pdf.js's decoded images (up to 50 MP, 200 MB at 4 bytes
+    # a pixel) and Skia's canvases (a large step is at most 3.7 MP, but a page or an image decoded for scaling can be
+    # larger), and the main thread's buffers (at most 21 bodies of 16 MiB).
     # Past the limit the kernel kills the whole sidecar, which restarts; the server gives up on a PDF that keeps
     # doing it after a few tries.
     mem_limit: 1536m
