@@ -69,7 +69,7 @@ public static class Chunker
     /// <summary>A chunk under this many words merges beyond <see cref="TargetWords"/> where the structure allows.</summary>
     public const int MinWords = 40;
 
-    /// <summary>A roll of a page's chunk holds at most this many characters on each side.</summary>
+    /// <summary>A roll holds at most this many characters on each side.</summary>
     public const int RollChars = 1_000;
 
     /// <summary>About 512 tokens (concept §6); a token is roughly 4 characters of prose. <see cref="Sections"/>' limit.</summary>
@@ -158,6 +158,68 @@ public static class Chunker
             var (first, end) = step > 0 ? (from, from + taken) : (from - taken + 1, from + 1);
             (first, end) = ChunkSplitter.Trimmed(lines, first, end);
             return string.Join('\n', lines.Skip(first).Take(end - first));
+        }
+    }
+
+    /// <summary>
+    /// The text around a chunk of <paramref name="note"/>, for showing a hit and never embedded (spec §3.4): the rest of
+    /// the enclosing section (the parent of the chunk's address heading; the note for none) before and after the core,
+    /// each side whole if within <see cref="RollWords"/> and <see cref="RollChars"/>, else the nearest whole blocks, then
+    /// lines, within them. A table part's repeated header rows are left out; blank lines trimmed at both ends.
+    /// </summary>
+    public static (string Before, string After) Rolls(Note note, Chunk chunk)
+    {
+        var lines = Lines.Split(note.Content);
+        var code = Outline.CodeLines(lines);
+        var parent = chunk.Address.Length == 0 ? null : Outline.Parse(lines).FirstOrDefault(h => h.Address == chunk.Address)?.Parent;
+        var (start, end) = parent is null ? (Outline.FrontmatterEnd(lines), lines.Count) : (parent.Line, parent.End);
+        (start, end) = (Math.Min(start, chunk.StartLine), Math.Max(end, chunk.EndLine));
+
+        // A table part's text starts with the header rows it repeats; they lie before its lines.
+        var header = -1;
+        var core = Lines.Split(chunk.Text);
+        if (core.Count == chunk.EndLine - chunk.StartLine + 2)
+        {
+            for (var i = chunk.StartLine - 2; i >= start && header < 0; i--)
+            {
+                if (lines[i] == core[0] && lines[i + 1] == core[1]) header = i;
+            }
+        }
+
+        var from = chunk.StartLine;
+        foreach (var block in Blocks.Parse(lines, start, chunk.StartLine, code).Reverse())
+        {
+            if (Fits(block.Start, chunk.StartLine))
+            {
+                from = block.Start;
+                continue;
+            }
+
+            for (var i = block.End - 1; i >= block.Start && Fits(i, chunk.StartLine); i--) from = i;
+            break;
+        }
+
+        var to = chunk.EndLine;
+        foreach (var block in Blocks.Parse(lines, chunk.EndLine, end, code))
+        {
+            if (Fits(chunk.EndLine, block.End))
+            {
+                to = block.End;
+                continue;
+            }
+
+            for (var i = block.Start + 1; i <= block.End && Fits(chunk.EndLine, i); i++) to = i;
+            break;
+        }
+
+        return (Text(from, chunk.StartLine), Text(chunk.EndLine, to));
+
+        bool Fits(int first, int last) => Text(first, last) is var text && Words(text) <= RollWords && text.Length <= RollChars;
+
+        string Text(int first, int last)
+        {
+            (first, last) = ChunkSplitter.Trimmed(lines, first, last);
+            return string.Join('\n', Enumerable.Range(first, last - first).Where(i => header < 0 || (i != header && i != header + 1)).Select(i => lines[i]));
         }
     }
 

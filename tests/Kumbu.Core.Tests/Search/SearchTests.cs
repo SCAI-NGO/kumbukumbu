@@ -189,9 +189,13 @@ public class SearchTests
         Assert.Equal(
             """
             1. /Demo/farm.md#Animals  lines 1-2  score 0.80
+               # Animals
                Cats, dogs, hens and ducks live together.
             2. /Demo/gate.md  lines 1-4  score 0.55
-               The service checks rules at the entrance. Anna and Ben.
+               # Gate
+               The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words and meaning; cat "path#Section" reads one)
             """,
             result.Output);
@@ -210,7 +214,10 @@ public class SearchTests
             1. /Ideas/x.md  lines 1-1
                rules elsewhere
             2. /Demo/gate.md  lines 1-4
-               The service checks rules at the entrance. Anna and Ben.
+               # Gate
+               The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words only: the embedding model is still being downloaded; cat "path#Section" reads one)
             """,
             result.Output);
@@ -298,7 +305,10 @@ public class SearchTests
         Assert.Equal(
             """
             1. /Demo/gate.md  lines 1-4
-               The service checks rules at the entrance. Anna and Ben.
+               # Gate
+               The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words only: 2 notes aren't indexed yet; cat "path#Section" reads one)
             """,
             (await Run("semsearch rules /Demo", index)).Output);

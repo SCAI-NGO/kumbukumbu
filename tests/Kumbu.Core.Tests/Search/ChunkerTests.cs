@@ -619,6 +619,81 @@ public partial class ChunkerTests
         Assert.All(pieces, p => Assert.Equal(("Kopf eins\nKopf zwei", "Fuß eins\nFuß zwei"), (p.PreRoll, p.PostRoll)));
     }
 
+    [Fact]
+    public void Rolls_are_the_rest_of_the_enclosing_section()
+    {
+        // Safety and Notes merge under Pump; the section around Pump is Manual's, up to the Appendix.
+        var intro = string.Join(' ', Enumerable.Range(0, 45).Select(i => $"intro{i}"));
+        var safety = string.Join(' ', Enumerable.Range(0, 300).Select(i => $"safety{i}"));
+        var note = Manual($"# Manual\n## Pump\n{intro}\n\n### Safety\n{safety}\n### Notes\nKeep the manual dry.\n\n## Other\nUnrelated.\n# Appendix\nNot in the roll.\n");
+
+        var chunk = Assert.Single(Chunker.Split(note, ChunkBound.Unbounded), c => c.Text.Contains("safety0"));
+        var (before, after) = Chunker.Rolls(note, chunk);
+
+        Assert.Equal(("#Manual#Pump", "### Safety"), (chunk.Address, chunk.Text.Split('\n')[0]));
+        Assert.Equal($"# Manual\n## Pump\n{intro}", before);
+        Assert.Equal("## Other\nUnrelated.", after);
+
+        // At the top, the enclosing section is the note.
+        var team = string.Join(' ', Enumerable.Range(0, 50).Select(i => $"team{i}"));
+        var top = Manual($"{intro}\n# Gate\n{safety}\n# Team\n{team}\n");
+        var gate = Assert.Single(Chunker.Split(top, ChunkBound.Unbounded), c => c.Address == "#Gate");
+        Assert.Equal((intro, "# Team\n" + team), Chunker.Rolls(top, gate));
+    }
+
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("tokenizer")]
+    public void Rolls_of_a_long_table_part_are_neighbouring_rows(string name)
+    {
+        var note = Manual(ChunkerFixtures.PumpManual);
+        List<string> lines = [.. Lines.Split(note.Content)];
+        var parts = Chunker.Split(note, Bound(name)).Where(c => c.Text.Contains("| E")).ToList();
+
+        var (before, after) = Chunker.Rolls(note, parts[1]);
+
+        Assert.Equal(lines[parts[0].EndLine - 1], before.Split('\n')[^1]);
+        Assert.Equal(lines[parts[2].StartLine], after.Split('\n')[0]);
+        Assert.All(new[] { before, after }, roll =>
+        {
+            Assert.InRange(Chunker.Words(roll), 1, Chunker.RollWords);
+            Assert.InRange(roll.Length, 1, Chunker.RollChars);
+        });
+
+        // A short table's second part: its roll is the rest of the note, without the header rows it repeats.
+        var shortNote = Manual("# Codes\n" + ChunkerFixtures.ErrorCodes(9));
+        var second = Chunker.Split(shortNote, ChunkBound.Fallback)[1];
+        Assert.StartsWith("| Code | Meaning | Remedy |\n|------|", second.Text);
+        var shortLines = Lines.Split(shortNote.Content);
+        Assert.Equal(string.Join('\n', shortLines.Take(second.StartLine).Where((_, i) => i is not (1 or 2))), Chunker.Rolls(shortNote, second).Before);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryFixtureAndBound))]
+    public void Rolls_are_never_embedded(string fixture, string name)
+    {
+        var note = Manual(ChunkerFixtures.All[fixture]);
+        List<string> lines = [.. Lines.Split(note.Content)];
+
+        foreach (var chunk in Chunker.Split(note, Bound(name)))
+        {
+            var (before, after) = Chunker.Rolls(note, chunk);
+            List<string> embedded = [.. Lines.Split(chunk.EmbeddingText)];
+            List<string> core = [.. Lines.Split(chunk.Text)];
+            foreach (var line in Lines.Split(before).Concat(Lines.Split(after)).Where(l => l.Trim().Length > 0))
+            {
+                Assert.True(!embedded.Contains(line) || core.Contains(line), $"{line} is embedded");
+            }
+
+            // The rolls are the lines right before and after the core's own, never the core's.
+            var header = core.Count == chunk.EndLine - chunk.StartLine + 2 ? lines.FindLastIndex(chunk.StartLine - 1, l => l == core[0]) : -1;
+            var above = lines.Take(chunk.StartLine).Where((_, i) => header < 0 || (i != header && i != header + 1)).Reverse().SkipWhile(string.IsNullOrWhiteSpace).Reverse();
+            Assert.EndsWith(before, string.Join('\n', above));
+            Assert.StartsWith(after, string.Join('\n', lines.Skip(chunk.EndLine).SkipWhile(string.IsNullOrWhiteSpace)));
+            Assert.All(new[] { before, after }, roll => Assert.True(Chunker.Words(roll) <= Chunker.RollWords && roll.Length <= Chunker.RollChars, roll));
+        }
+    }
+
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
 }

@@ -57,7 +57,7 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
 
         Assert.False(isError, output);
         Assert.StartsWith($"1. {path} p2  score ", output);
-        Assert.Contains("\n   Findings zebras migrate across the savannah more of it\n", output);
+        Assert.Contains("\n   Findings\n   zebras migrate across the savannah\n   more of it\n", output);
         var embeddings = Current(host, vault).Embeddings[P(path)];
         Assert.Equal([1, 2, 3, 4], embeddings.Chunks.Select(c => c.StartLine));
         Assert.Equal((await StateAsync(host, user, "Papers/x.pdf")).Version, embeddings.Version);

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Sh;
 
-/// <summary><c>semsearch</c> with pages of PDFs among the hits by meaning: named by page, shown with the start of the page's text.</summary>
+/// <summary><c>semsearch</c> with pages of PDFs among the hits by meaning: named by page, shown with the page's best chunk.</summary>
 public class SemsearchPdfTests
 {
     private sealed class FakeIndex(params SemanticHit[] hits) : ISearchIndex
@@ -71,7 +71,7 @@ public class SemsearchPdfTests
     private static FakeIndex Index() => new(new SemanticHit(P("/V/paper.pdf"), 7, 0.9), new SemanticHit(P("/V/plan.md"), 0, 0.5));
 
     [Fact]
-    public async Task A_pdf_hit_names_its_page_and_shows_the_start_of_its_text()
+    public async Task A_pdf_hit_names_its_page_and_shows_its_text()
     {
         var sh = await ShellAsync(Index());
 
@@ -79,8 +79,11 @@ public class SemsearchPdfTests
 
         Assert.Equal(
             "1. /V/paper.pdf p7  score 0.90\n"
-            + $"   Methods page 7 measures how {new string('x', 132)}…\n"
+            + "   Methods\n"
+            + "\n"
+            + $"     page 7 measures how {new string('x', 200)}\n"
             + "2. /V/plan.md#Plan  lines 1-2  score 0.60\n"
+            + "   # Plan\n"
             + "   we measure the zebras\n"
             + "(ranked by words and meaning; cat \"path#Section\" reads a section, pdf path N a page)",
             result.Output);
@@ -94,7 +97,7 @@ public class SemsearchPdfTests
 
         var result = await sh.RunAsync("semsearch --meaning zebras /V", Ct);
 
-        Assert.StartsWith("1. /V/plan.md#Plan  lines 1-2  score 0.60\n   we measure the zebras\n2. /V/paper.pdf p3  score 0.55\n", result.Output);
+        Assert.StartsWith("1. /V/plan.md#Plan  lines 1-2  score 0.60\n   # Plan\n   we measure the zebras\n2. /V/paper.pdf p3  score 0.55\n", result.Output);
     }
 
     [Fact]

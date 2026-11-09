@@ -304,13 +304,13 @@ public class ArchiveHiddenTests
     {
         Assert.Contains("\n  --archive ", (await Run("help rg")).Output);
         var semsearch = (await Run("help semsearch")).Output;
-        Assert.StartsWith("semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path]", semsearch);
+        Assert.StartsWith("semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path]", semsearch);
         Assert.Contains("\n  --archive ", semsearch);
         Assert.Contains("--archive   take in the notes in a vault's archive (_archive/) too; a path inside it always does", (await Run("help tags")).Output);
         // The column of the commands' summaries stays where it is; an option that doesn't fit goes into the summary.
         var manual = Kumbu.Core.Sh.Manual.ToolDescription.Split('\n');
         Assert.Contains(manual, l => l.StartsWith("  semsearch <query> [path]        ", StringComparison.Ordinal) && l.Contains("--archive", StringComparison.Ordinal));
         Assert.All(manual.Where(l => l.StartsWith("  ", StringComparison.Ordinal) && l.Length > 36 && l[2] != ' '), l => Assert.True(l[33] == ' ' && l[34] != ' ', l));
-        Assert.Contains("\n  semsearch [-n N] [--words|--meaning] [--tag T] [--archive] <query> [path] ", (await Run("help")).Output);
+        Assert.Contains("\n  semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path] ", (await Run("help")).Output);
     }
 }
