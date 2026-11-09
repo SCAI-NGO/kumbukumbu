@@ -32,10 +32,11 @@ public sealed class RequestCaller : ICaller
 
     private RequestCaller(
         CallerKind kind, User? user, string writer, WriterRef reference, ICredential credential, VaultCatalog catalog, byte[]? userKey = null,
-        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false, SessionDiscreet? discreet = null)
+        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false, SessionDiscreet? discreet = null, bool lateSave = false)
     {
         Kind = kind;
         Discreet = discreet;
+        LateSave = lateSave;
         _human = kind is CallerKind.Session or CallerKind.DavShare || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
@@ -101,6 +102,10 @@ public sealed class RequestCaller : ICaller
     /// <summary>For a session only: its reveal of the discreet vaults as it was resolved for this request; null for every
     /// other caller, and for a session built without it (nothing hidden, nothing shown).</summary>
     internal SessionDiscreet? Discreet { get; }
+
+    /// <summary>This request is a session's late save (<see cref="Api.LateSave"/>), which writes its one note and reads
+    /// nothing: its answers say no more than their status (<see cref="Api.LateSave.Filter"/>).</summary>
+    internal bool LateSave { get; }
 
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
@@ -186,7 +191,7 @@ public sealed class RequestCaller : ICaller
     /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
     /// them (none hidden without). A sealed list that doesn't open hides every vault but the vault Skills, and is logged
     /// to <paramref name="log"/> by the exception's type, once per process for each user. <paramref name="alsoOpen"/>: a
-    /// discreet vault this one request opens anyway, for a late save (<see cref="LateSave"/>).</summary>
+    /// discreet vault this one request opens anyway, for a late save (<see cref="Api.LateSave"/>).</summary>
     internal static RequestCaller ForSession(
         User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null,
         string? alsoOpen = null)
@@ -204,7 +209,7 @@ public sealed class RequestCaller : ICaller
         }
 
         return new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey, filter), catalog, userKey,
-            credentialReadAt, passwordWindowOpen: windowOpen, discreet: discreet);
+            credentialReadAt, passwordWindowOpen: windowOpen, discreet: discreet, lateSave: alsoOpen is not null);
     }
 
     /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>

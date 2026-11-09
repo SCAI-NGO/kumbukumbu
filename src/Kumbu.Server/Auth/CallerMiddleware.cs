@@ -81,7 +81,6 @@ public sealed class CallerMiddleware(
 
         var header = context.Request.Headers.Authorization.ToString();
         RequestCaller? caller = null;
-        (string Secret, byte[] Marker, DateTime RevealUntil)? lateSave = null;
         if (header.StartsWith(Scheme, StringComparison.OrdinalIgnoreCase))
         {
             var ip = WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
@@ -121,9 +120,19 @@ public sealed class CallerMiddleware(
                 && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
                     is var (user, userKey, readAt, windowOpen, discreet))
             {
-                var alsoOpen = await LateSaveAsync(context, secret, user.Id, userKey, discreet);
-                if (alsoOpen is not null) lateSave = (secret, discreet.LateSave!, discreet.RevealUntil!.Value);
-                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log, alsoOpen);
+                if (await LateSaveAsync(context, secret, user.Id, userKey, discreet) is { } taken)
+                {
+                    // From the take on, a late save that doesn't succeed puts the marker back, whatever fails.
+                    await LateSaveRequestAsync(context, secret, taken, () =>
+                    {
+                        context.Features.Set(RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log, taken.VaultId));
+                        rekeying.ResumeOnce(user, userKey);
+                        return next(context);
+                    });
+                    return;
+                }
+
+                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log);
                 // A remembered session may see no sign-in for 30 days, so its first request in this process resumes
                 // what a sign-in would.
                 rekeying.ResumeOnce(user, userKey);
@@ -137,50 +146,74 @@ public sealed class CallerMiddleware(
         }
 
         context.Features.Set(caller);
-        if (lateSave is not { } taken)
+        await next(context);
+    }
+
+    /// <summary>
+    /// A late save, its marker taken: <paramref name="run"/> builds its caller and runs it. If it doesn't succeed (a
+    /// conflict, say, or a fault) the marker goes back for one more try (ruling 10), before the answer starts, so a
+    /// retry made at once finds it.
+    /// </summary>
+    private async Task LateSaveRequestAsync(HttpContext context, string secret, (string VaultId, byte[] Marker, DateTime RevealUntil) taken, Func<Task> run)
+    {
+        var putBack = false;
+        async Task PutBackAsync()
         {
-            await next(context);
-            return;
+            if (putBack) return;
+            putBack = true;
+            try
+            {
+                await sessions.PutBackLateSaveAsync(secret, taken.Marker, taken.RevealUntil, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                // Not to hide what failed the save; the tab's next try then finds no marker.
+                log.LogWarning("A late save's marker could not be put back: {Reason}", e.GetType().Name);
+            }
         }
 
+        context.Response.OnStarting(() => context.Response.StatusCode is >= 200 and < 300 ? Task.CompletedTask : PutBackAsync());
         var saved = false;
         try
         {
-            await next(context);
+            await run();
             saved = context.Response.StatusCode is >= 200 and < 300;
         }
         finally
         {
-            // A late save that didn't succeed (a conflict, say) may be tried once more (ruling 10).
-            if (!saved) await sessions.PutBackLateSaveAsync(taken.Secret, taken.Marker, taken.RevealUntil, CancellationToken.None);
+            if (!saved) await PutBackAsync();
         }
     }
 
     /// <summary>
     /// The late save of discreet vaults design, Decision 12: a session whose timed reveal ended less than
-    /// <see cref="LateSave.Grace"/> ago, whose marker names exactly the note this <c>PUT /api/notes/{vault}/{**path}</c>
-    /// writes, takes the marker (atomically, so only one request does) and answers the vault's id, which this request's
-    /// credential then opens too. Null for every other request, which goes on unchanged.
+    /// <see cref="Api.LateSave.Grace"/> ago, whose marker names exactly the note this <c>PUT /api/notes/{vault}/{**path}</c>
+    /// (<see cref="Api.LateSaveMetadata"/>) writes, takes the marker (atomically, so only one request does) and answers the
+    /// vault's id, which this request's credential then opens too, with what to put back. Null for every other request,
+    /// which goes on unchanged; a marker met past its grace goes.
     /// </summary>
-    private async Task<string?> LateSaveAsync(HttpContext context, string secret, string userId, byte[] userKey, SessionDiscreet discreet)
+    private async Task<(string VaultId, byte[] Marker, DateTime RevealUntil)?> LateSaveAsync(
+        HttpContext context, string secret, string userId, byte[] userKey, SessionDiscreet discreet)
     {
         if (discreet is not { Revealed: false, LateSave: { } sealedMarker, RevealUntil: { } until }) return null;
-        if (!(time.GetUtcNow().UtcDateTime < until + LateSave.Grace) || !HttpMethods.IsPut(context.Request.Method)) return null;
-        if (context.GetEndpoint() is not RouteEndpoint { RoutePattern.RawText: NoteWriteRoute }) return null;
+        if (time.GetUtcNow().UtcDateTime >= until + Api.LateSave.Grace)
+        {
+            await sessions.ForgetLateSaveAsync(secret, sealedMarker, context.RequestAborted);
+            return null;
+        }
+
+        if (context.GetEndpoint()?.Metadata.GetMetadata<Api.LateSaveMetadata>() is null) return null;
         if (context.Request.RouteValues["vault"] is not string vault
-            || LateSave.Of(vault, context.Request.RouteValues["path"] as string) is not { } note
+            || Api.LateSave.Of(vault, context.Request.RouteValues["path"] as string) is not { } note
             || Sessions.SubjectOf(secret) is not { } subject
-            || LateSave.Open(userId, userKey, subject, sealedMarker) is not { } marker
+            || Api.LateSave.Open(userId, userKey, subject, sealedMarker) is not { } marker
             || marker.Name != note.Vault || marker.Path != note.Path)
         {
             return null;
         }
 
-        return await sessions.TakeLateSaveAsync(secret, sealedMarker, context.RequestAborted) ? marker.VaultId : null;
+        return await sessions.TakeLateSaveAsync(secret, sealedMarker, until, context.RequestAborted) ? (marker.VaultId, sealedMarker, until) : null;
     }
-
-    /// <summary>The route of <c>PUT /api/notes/…</c> (NoteApi), the one request a late save may be.</summary>
-    private const string NoteWriteRoute = "/api/notes/{vault}/{**path}";
 
     /// <summary>The third segment of <c>/mcp/c/{id}…</c> (the prefix case-insensitive, as routing is), else null.</summary>
     private static string? ConnectionIdSegment(HttpContext context)

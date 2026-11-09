@@ -62,6 +62,7 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         var (w, version) = await RevealedAsync(api);
         Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
 
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
         _time.Advance(TimeSpan.FromMinutes(6));
         var first = await SaveAsync(w, "geheim.md", "# Geheim\n\nSpät gespeichert\n", version);
         var second = await SaveAsync(w, "geheim.md", "# Geheim\n\nNoch einmal\n", version);
@@ -83,6 +84,7 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         var alt = (await w.In("Tagebuch").ReadAsync("alt.md"))["version"]!.GetValue<string>();
         Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
 
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
         _time.Advance(TimeSpan.FromMinutes(6));
 
         Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "alt.md", "# Alt\n", alt)).Status);
@@ -103,6 +105,8 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         _time.Advance(TimeSpan.FromMinutes(10));
 
         Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "geheim.md", "# Zu spät\n", version)).Status);
+        // Met past its grace, the marker goes.
+        Assert.Null((await SlotAsync(w)).LateSave);
     }
 
     [Fact]
@@ -118,6 +122,7 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         }
 
         Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "geheim.md", "# Nach dem Kreuz\n", version)).Status);
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
         _time.Advance(TimeSpan.FromMinutes(6));
         Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "geheim.md", "# Nach dem Kreuz\n", version)).Status);
     }
@@ -160,6 +165,7 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, null, null));
 
         Assert.Null((await SlotAsync(w)).LateSave);
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
         _time.Advance(TimeSpan.FromMinutes(6));
         Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "geheim.md", "# Weg\n", version)).Status);
     }
@@ -184,12 +190,13 @@ public sealed class LateSaveTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_late_save_that_fails_puts_the_marker_back_for_one_retry()
+    public async Task A_late_save_that_fails_can_be_tried_once_more()
     {
         await using var api = Timed();
         var (w, version) = await RevealedAsync(api);
         Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
 
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
         _time.Advance(TimeSpan.FromMinutes(6));
         var conflict = await SaveAsync(w, "geheim.md", "# Geheim\n\nFalsche Basis\n", "not-the-version");
         var retry = await SaveAsync(w, "geheim.md", "# Geheim\n\nRichtige Basis\n", version);
@@ -198,6 +205,119 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Conflict, conflict.Status);
         Assert.Equal(HttpStatusCode.OK, retry.Status);
         Assert.Equal(HttpStatusCode.NotFound, again.Status);
+    }
+
+    [Fact]
+    public async Task A_second_failure_ends_the_late_save()
+    {
+        await using var api = Timed();
+        var (w, version) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        var first = await SaveAsync(w, "geheim.md", "# Geheim\n\nFalsche Basis\n", "not-the-version");
+        var second = await SaveAsync(w, "geheim.md", "# Geheim\n\nWieder falsch\n", "not-the-version");
+        var correct = await SaveAsync(w, "geheim.md", "# Geheim\n\nRichtige Basis\n", version);
+
+        Assert.Equal(HttpStatusCode.Conflict, first.Status);
+        Assert.Equal(HttpStatusCode.Conflict, second.Status);
+        Assert.Equal(HttpStatusCode.NotFound, correct.Status);
+    }
+
+    [Fact]
+    public async Task A_late_conflict_tells_neither_the_note_nor_a_path()
+    {
+        await using var api = Timed();
+        var (w, _) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        var (status, body) = await SaveAsync(w, "geheim.md", "# Geheim\n\nFalsche Basis\n", "not-the-version");
+
+        Assert.Equal(HttpStatusCode.Conflict, status);
+        foreach (var told in new[] { HiddenWorld.TagebuchWord, "Siehe", "geheim", "Tagebuch", "content" })
+        {
+            Assert.DoesNotContain(told, body, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task A_late_save_of_a_moved_note_tells_not_where_it_went()
+    {
+        await using var api = Timed();
+        var (w, version) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+        using (var moved = await w.Alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Tagebuch/geheim.md", to = "/Tagebuch/versteckt.md" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        }
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        var (status, body) = await SaveAsync(w, "geheim.md", "# Geheim\n", version);
+
+        Assert.Equal(HttpStatusCode.NotFound, status);
+        foreach (var told in new[] { "versteckt", "geheim", "Tagebuch", "moved" })
+        {
+            Assert.DoesNotContain(told, body, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task A_marker_copied_to_another_session_opens_nothing()
+    {
+        await using var api = Timed();
+        var (w, version) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+        var first = await SlotAsync(w);
+
+        var other = await w.Alice.SignInAgainAsync();
+        Assert.True((await api.Services.GetRequiredService<Sessions>().RevealAsync(other.Session, TimeSpan.FromMinutes(5), Ct)).Revealed);
+        var slots = app.Database.GetCollection<UserSlotDocument>("user_slots");
+        await slots.UpdateOneAsync(
+            s => s.User == w.Alice.User.Id && s.Kind == UserSlotDocument.Session && s.Id != first.Id,
+            Builders<UserSlotDocument>.Update.Set(s => s.LateSave, first.LateSave).Set(s => s.RevealedAt, first.RevealedAt).Set(s => s.RevealUntil, first.RevealUntil),
+            cancellationToken: Ct);
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        using var response = await other.SendAsync(HttpMethod.Put, RestClient.Existing(api, other.User, other.UserKey, other.Session, "Tagebuch").Url("geheim.md"), new { content = "# Fremd\n", version });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_reveal_after_the_time_out_and_a_hide_forget_the_note()
+    {
+        await using var api = Timed();
+        var (w, version) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        await w.RevealAsync();
+        using (var hidden = await w.Alice.SendAsync(HttpMethod.Post, "/api/account/discreet/hide"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, hidden.StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.NotFound, (await SaveAsync(w, "geheim.md", "# Danach\n", version)).Status);
+    }
+
+    [Fact]
+    public async Task Only_the_reveal_that_ended_takes_the_marker()
+    {
+        await using var api = Timed();
+        var (w, _) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+        var slot = await SlotAsync(w);
+        var sessions = api.Services.GetRequiredService<Sessions>();
+
+        Assert.False(await sessions.TakeLateSaveAsync(w.Alice.Session, slot.LateSave!, slot.RevealUntil!.Value.AddSeconds(1), Ct));
+        Assert.NotNull((await SlotAsync(w)).LateSave);
+        Assert.True(await sessions.TakeLateSaveAsync(w.Alice.Session, slot.LateSave!, slot.RevealUntil!.Value, Ct));
     }
 
     [Fact]

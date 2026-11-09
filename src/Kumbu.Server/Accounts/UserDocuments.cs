@@ -243,4 +243,8 @@ public sealed class UserSlotDocument
     /// <summary>Sessions only: the discreet note open while revealed, sealed, which one late save may still reach.</summary>
     [BsonElement("lateSave"), BsonIgnoreIfNull]
     public byte[]? LateSave { get; set; }
+
+    /// <summary>Sessions only: <see cref="LateSave"/> was put back once after a failed late save; it isn't again.</summary>
+    [BsonElement("lateSaveRetried"), BsonIgnoreIfDefault]
+    public bool LateSaveRetried { get; set; }
 }
