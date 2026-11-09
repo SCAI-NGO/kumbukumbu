@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -31,11 +32,13 @@ const revealed = (until: string | null) => json(200, { revealed: true, until });
 /** A time `minutes` from now, as the server writes it. */
 const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 
-function renderDialog(onClose = vi.fn()) {
+function renderDialog(onClose = vi.fn(), onSettings?: () => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <PinDialog onClose={onClose} />
+      <MemoryRouter>
+        <PinDialog onClose={onClose} onSettings={onSettings} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return { onClose, queryClient, dialog: screen.getByRole("dialog", { name: "More vaults" }) };
@@ -167,6 +170,39 @@ describe("PinDialog", () => {
     await enter(dialog, "1234");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(tooMany);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("says where the PIN is set, with a link to that section", () => {
+    const { dialog } = renderDialog();
+    expect(within(dialog).getByText((_, el) => el?.tagName === "P" && el.textContent === "The PIN is set in Settings → Discreet vaults.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" })).toHaveAttribute("href", "/settings#discreet-vaults");
+  });
+
+  it("keeps that line, unchanged, after a wrong PIN: below the digits, above the server's sentence", async () => {
+    // With a PIN or without, the dialog asks nothing before the PIN is entered, and a wrong PIN and none set get the
+    // same 400: the line on first render and after it is all there is to compare.
+    fakeApi({ "POST /api/account/discreet/reveal": () => json(400, { error: wrongPin }) });
+    const { dialog } = renderDialog();
+    const line = () => within(dialog).getByRole("link", { name: "Settings → Discreet vaults" }).closest("p")!;
+    const before = line().outerHTML;
+    expect(within(dialog).getByText("4 to 6 digits").nextElementSibling).toBe(line());
+    await enter(dialog, "0000");
+    const error = await within(dialog).findByRole("alert");
+    expect(line().outerHTML).toBe(before);
+    expect(within(dialog).getByText("4 to 6 digits").nextElementSibling).toBe(line());
+    expect(line().compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the link closes the dialog, or does what the caller asks instead", async () => {
+    const { dialog, onClose } = renderDialog();
+    await userEvent.click(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    cleanup();
+    const onSettings = vi.fn();
+    const second = renderDialog(vi.fn(), onSettings);
+    await userEvent.click(within(second.dialog).getByRole("link", { name: "Settings → Discreet vaults" }));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+    expect(second.onClose).not.toHaveBeenCalled();
   });
 
   it("Cancel and Escape close it", async () => {

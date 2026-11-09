@@ -970,3 +970,25 @@ describe("discreet mode on a phone", () => {
     expect(frameOf(await openDrawer())).toBeNull();
   });
 });
+
+describe("More vaults… on a phone", () => {
+  it("leads to where the PIN is set, leaving neither the dialog nor the drawer open", async () => {
+    signedInApi({
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
+      "GET /api/vault-events": () => json(200, []),
+      "GET /api/account/storage": () => json(200, { used: 4096, limit: null }),
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    const tree = await openDrawer();
+    await userEvent.click(await within(tree).findByRole("button", { name: "Switch vault: Work" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "More vaults…" }));
+    const pin = await screen.findByRole("dialog", { name: "More vaults" });
+    await userEvent.click(within(pin).getByRole("link", { name: "Settings → Discreet vaults" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    expect(router.state.location.hash).toBe("#discreet-vaults");
+    expect(screen.queryByRole("dialog", { name: "More vaults" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    // Settings is outside the shell, which unmounts: the drawer is closed in the store, not only out of sight.
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+});

@@ -2,7 +2,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -684,6 +684,25 @@ describe("Settings: discreet vaults", () => {
     }
     expect(texts[0]).toBe(texts[1]);
     expect(texts[0]).not.toContain("Garten");
+  });
+
+  it("has an id to link to", async () => {
+    api({ "GET /api/session": session(false) });
+    renderApp("/settings");
+    expect(await screen.findByRole("region", { name: "Discreet vaults" })).toHaveAttribute("id", "discreet-vaults");
+  });
+
+  it("is scrolled to when a link leads there", async () => {
+    const scrolled: Element[] = [];
+    // jsdom has no scrollIntoView.
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    onTestFinished(() => void delete (Element.prototype as Partial<Element>).scrollIntoView);
+    api({ "GET /api/session": session(false) });
+    renderApp("/settings#discreet-vaults");
+    const region = await screen.findByRole("region", { name: "Discreet vaults" });
+    await waitFor(() => expect(scrolled.some((e) => e.contains(region))).toBe(true));
   });
 
   it("comes after the password", async () => {

@@ -641,7 +641,15 @@ export default function TreeDrawer(props: {
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
-      {askingPin && <PinDialog onClose={() => setAskingPin(false)} />}
+      {askingPin && (
+        <PinDialog
+          onClose={() => setAskingPin(false)}
+          onSettings={() => {
+            setAskingPin(false);
+            setOverlay("none");
+          }}
+        />
+      )}
       {renamingVault && <RenameVaultDialog vault={renamingVault} onClose={() => setRenamingVault(null)} />}
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
