@@ -105,7 +105,7 @@ public sealed class SkillsVaults(VaultCatalog catalog, Pairings pairings, SyncHu
         var newName = RenamedName(n => taken.Contains(VaultCatalog.NormaliseVaultName(n)));
         var alias = clash.Membership is not null;
         var before = await Users.Find(u => u.Id == user.Id).Project(u => u.SkillsNotice).FirstOrDefaultAsync(ct);
-        var notice = JsonSerializer.SerializeToUtf8Bytes(new SkillsRename(newName, alias));
+        var notice = JsonSerializer.SerializeToUtf8Bytes(new SkillsRename(newName, alias, clash.Id));
         await SetNoticeAsync(user.Id, VaultCrypto.Seal(NoticeKey(user.Id, userKey), notice, NoticeContext(user.Id)), ct);
         try
         {
@@ -192,5 +192,5 @@ public sealed class SkillsVaults(VaultCatalog catalog, Pairings pairings, SyncHu
 }
 
 /// <summary>The name a vault (<paramref name="Alias"/> false) or a member's alias (true) was given to make room for the
-/// vault Skills.</summary>
-public sealed record SkillsRename(string NewName, bool Alias);
+/// vault Skills, and that vault's id (null in a notice kept before it was written).</summary>
+public sealed record SkillsRename(string NewName, bool Alias, string? VaultId = null);

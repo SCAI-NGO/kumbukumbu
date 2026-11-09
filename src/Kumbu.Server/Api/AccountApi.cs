@@ -270,12 +270,18 @@ public static class AccountApi
         rekeying.ResumePending(user, userKey);
         // Never fails the sign-in, and not cancellable by the client, as at the join.
         await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
-        // The new session hides the discreet vaults, so its notice of the vault Skills is judged as its requests' will be.
-        var session = RequestCaller.ForSession(
-            user, userKey, readAt, windowOpen: true, catalog, new SessionDiscreet(false, null, await discreet.SealedListAsync(user.Id, ct), null), Log(logs));
+        SkillsNoticeView? notice = null;
+        if (await skills.NoticeAsync(user, userKey, ct) is { } rename)
+        {
+            // A new session hides the discreet vaults, so the Skills notice is filtered as the session's later requests will filter it.
+            var session = RequestCaller.ForSession(
+                user, userKey, readAt, windowOpen: true, catalog, new SessionDiscreet(false, null, await discreet.SealedListAsync(user.Id, ct), null), Log(logs));
+            notice = await ShownAsync(session, rename, ct);
+        }
+
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
-            DiscreetView.Hidden, await SkillsNoticeAsync(session, skills, ct)));
+            DiscreetView.Hidden, notice));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -346,20 +352,29 @@ public static class AccountApi
             await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), await SkillsNoticeAsync(caller, skills, ct)));
     }
 
-    /// <summary>The notice of the vault Skills, left out while the name it gives is that of a vault or alias the session
-    /// hides (Decision 13), compared as vault names are.</summary>
-    private static async Task<SkillsNoticeView?> SkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
+    /// <summary>The notice of the vault Skills as the session may show it (<see cref="ShownAsync"/>).</summary>
+    private static async Task<SkillsNoticeView?> SkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct) =>
+        await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is { } notice ? await ShownAsync(caller, notice, ct) : null;
+
+    /// <summary><paramref name="notice"/>, left out while the session hides the vault it renamed (Decision 13), also
+    /// once that vault is gone or renamed again. One kept before it named the vault's id goes by the name it gives,
+    /// compared as vault names are.</summary>
+    private static async Task<SkillsNoticeView?> ShownAsync(RequestCaller caller, Skills.SkillsRename notice, CancellationToken ct)
     {
-        if (await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is not { } notice) return null;
-        await caller.HiddenIdsAsync(ct);
+        if (notice.VaultId is { } id) return (await caller.HiddenIdsAsync(ct)).Contains(id) ? null : SkillsNoticeView.From(notice);
         var name = VaultCatalog.NormaliseVaultName(notice.NewName);
-        return caller.Session?.Hidden.Any(a => VaultCatalog.NormaliseVaultName(a.Name) == name) == true ? null : SkillsNoticeView.From(notice);
+        return (await caller.HiddenVaultsAsync(ct)).Any(a => VaultCatalog.NormaliseVaultName(a.Name) == name) ? null : SkillsNoticeView.From(notice);
     }
 
-    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>
+    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes. One the session hides
+    /// stays, answered as if dismissed.</summary>
     private static async Task<NoContent> DismissSkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
     {
-        await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        if (await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is not { } notice || await ShownAsync(caller, notice, ct) is not null)
+        {
+            await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        }
+
         return TypedResults.NoContent();
     }
 

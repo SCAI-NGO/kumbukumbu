@@ -69,7 +69,8 @@ public sealed class UserCredential(string userId, byte[] userKey, DiscreetFilter
     public IReadOnlyList<VaultAccess> Hidden => _opened?.Hidden ?? [];
 
     /// <summary>The ids this session hides, after <see cref="OpenAsync"/>: the discreet list's while not shown, those of
-    /// vaults that are gone included, or every vault opened but the vault Skills for a list that didn't open.</summary>
+    /// vaults that are gone included, or every vault opened but the vault Skills for a list that didn't open (a gone
+    /// vault is then covered no more: only a list that opens still names it).</summary>
     public IReadOnlySet<string> HiddenIds => _opened?.HiddenIds ?? None;
 
     public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Visible, vault);

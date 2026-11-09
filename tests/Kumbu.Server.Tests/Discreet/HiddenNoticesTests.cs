@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Text;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Crypto;
 using Kumbu.Core.Skills;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
@@ -18,7 +20,8 @@ namespace Kumbu.Server.Tests.Discreet;
 /// <summary>
 /// What a session says of hidden vaults outside its credential (Decisions 11 and 13): the member notices and the events
 /// of a hidden vault, also of one that is gone, aren't listed, and dismissing such a notice answers as an unknown id;
-/// the notice of the vault Skills is left out while the name it gives is a hidden vault's. Revealed, all are back.
+/// the notice of the vault Skills is left out while the vault it renamed is hidden, and dismissing it then leaves it.
+/// Revealed, all are back.
 /// </summary>
 [Collection("app")]
 public sealed class HiddenNoticesTests(KumbuAppFactory app)
@@ -96,7 +99,7 @@ public sealed class HiddenNoticesTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_notices_of_hidden_vaults_are_left_out_until_revealed()
+    public async Task The_notices_and_events_of_hidden_vaults_are_left_out_until_revealed()
     {
         var world = await NoticeWorldAsync();
         var (hidden, body) = await ListAsync(world.Alice, "/api/member-notices");
@@ -108,53 +111,142 @@ public sealed class HiddenNoticesTests(KumbuAppFactory app)
         var familie = (await Notices.Find(n => n.User == world.Alice.User.Id && n.Vault == world.FamilieId).SingleAsync(Ct)).Id.ToString();
         Assert.Equal(await DismissAsync(world.Alice, ObjectId.GenerateNewId().ToString()), await DismissAsync(world.Alice, familie));
 
+        var (hiddenEvents, eventsBody) = await ListAsync(world.Alice, "/api/vault-events");
+        Assert.NotEmpty(hiddenEvents);
+        Assert.All(hiddenEvents, e => Assert.Equal("Beet", e!["vault"]?.GetValue<string>()));
+        Assert.DoesNotContain("Garten", eventsBody, StringComparison.Ordinal);
+
         await world.RevealAsync();
         var (shown, _) = await ListAsync(world.Alice, "/api/member-notices");
         Assert.Equal(["Beet", "Familie", "Garten"], shown.Select(n => n!["vault"]!.GetValue<string>()).Order(StringComparer.Ordinal));
         Assert.Equal(HttpStatusCode.NoContent, (await DismissAsync(world.Alice, familie)).Item1);
-    }
 
-    [Fact]
-    public async Task The_events_of_hidden_vaults_are_left_out_until_revealed()
-    {
-        var world = await NoticeWorldAsync();
-        await world.RevealAsync();
-        var (shown, _) = await ListAsync(world.Alice, "/api/vault-events");
+        var (shownEvents, _) = await ListAsync(world.Alice, "/api/vault-events");
         // Laube's removal names it no more: she no longer reaches it.
-        Assert.Contains(shown, e => e!["vault"] is null && e["kind"]!.GetValue<string>() == VaultEvents.MembershipRevoked);
-        Assert.Contains(shown, e => e!["vault"]?.GetValue<string>() == "Garten");
-        Assert.Contains(shown, e => e!["vault"]?.GetValue<string>() == "Beet");
-
-        var hiding = await world.Alice.SignInAgainAsync();
-        var (hidden, body) = await ListAsync(hiding, "/api/vault-events");
-        Assert.NotEmpty(hidden);
-        Assert.All(hidden, e => Assert.Equal("Beet", e!["vault"]?.GetValue<string>()));
-        Assert.Equal(shown.Count(e => e!["vault"]?.GetValue<string>() == "Beet"), hidden.Count);
-        Assert.DoesNotContain("Garten", body, StringComparison.Ordinal);
+        Assert.Contains(shownEvents, e => e!["vault"] is null && e["kind"]!.GetValue<string>() == VaultEvents.MembershipRevoked);
+        Assert.Contains(shownEvents, e => e!["vault"]?.GetValue<string>() == "Garten");
+        Assert.Equal(shownEvents.Count(e => e!["vault"]?.GetValue<string>() == "Beet"), hiddenEvents.Count);
     }
 
     /// <summary>A user whose own vault <c>Skills</c> made room for the vault Skills, signed in: its notice names
-    /// <c>Skills (renamed)</c>. She then renames it to <paramref name="rename"/> (if given) and marks it discreet.</summary>
-    private async Task<(RestClient User, JsonNode SignIn)> RenamedSkillsAsync(string? rename)
+    /// <c>Skills (renamed)</c>. <paramref name="change"/> (if given) then acts in that session on the vault, now
+    /// <c>Skills (renamed)</c>; the vault is marked discreet, and she signs in again.</summary>
+    private async Task<(RestClient User, JsonNode SignIn)> RenamedSkillsAsync(Func<RestClient, Task>? change = null)
     {
         var users = Api.Services.GetRequiredService<UserCatalog>();
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
         await users.CreateAsync(username, RestClient.Password, Roles.User, Ct);
         var (user, key, readAt) = (await users.TrySignInAsync(username, RestClient.Password, Ct))!.Value;
         var vault = await Api.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync("Skills", user.Id, key, Ct, readAt);
-        var (first, _) = await SignInAsync(username);
+        var (first, firstSession) = await SignInAsync(username);
         Assert.Equal("Skills (renamed)", first["skillsNotice"]!["renamed"]!.GetValue<string>());
-        if (rename is not null)
-        {
-            var client = RestClient.Existing(Api, user, key, (await SignInAsync(username)).Session, "Skills (renamed)");
-            using var renamed = await client.SendAsync(HttpMethod.Put, "/api/vaults/Skills (renamed)/name", new { name = rename });
-            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
-        }
+        if (change is not null) await change(RestClient.Existing(Api, user, key, firstSession, "Skills (renamed)"));
 
-        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
-            u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, DiscreetVaults.SealList(user.Id, key, [vault.Id])), cancellationToken: Ct);
+        await MarkAsync(user.Id, key, vault.Id);
         var (view, session) = await SignInAsync(username);
         return (RestClient.Existing(Api, user, key, session, "Skills"), view);
+    }
+
+    private Task MarkAsync(string userId, byte[] userKey, params string[] ids) =>
+        app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == userId, Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, DiscreetVaults.SealList(userId, userKey, ids)), cancellationToken: Ct);
+
+    private static Func<RestClient, Task> Rename(string name) => async client =>
+    {
+        using var renamed = await client.SendAsync(HttpMethod.Put, "/api/vaults/Skills (renamed)/name", new { name });
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+    };
+
+    private async Task RevealAsync(RestClient user) =>
+        Assert.True((await Api.Services.GetRequiredService<Sessions>().RevealAsync(user.Session, null, Ct)).Revealed);
+
+    /// <summary>Hidden at the sign-in and in the session, then shown once revealed.</summary>
+    private async Task HiddenUntilRevealedAsync(RestClient user, JsonNode signIn, bool alias = false)
+    {
+        Assert.Null(signIn["skillsNotice"]);
+        Assert.Null(await SkillsNoticeAsync(user));
+
+        await RevealAsync(user);
+        var notice = (await SkillsNoticeAsync(user))!;
+        Assert.Equal("Skills (renamed)", notice["renamed"]!.GetValue<string>());
+        Assert.Equal(alias, notice["alias"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task The_Skills_notice_of_a_hidden_vault_is_left_out_until_revealed()
+    {
+        var (user, signIn) = await RenamedSkillsAsync();
+        await HiddenUntilRevealedAsync(user, signIn);
+    }
+
+    /// <summary>The notice is tied to the vault, not to the name it gives: renamed since, in any spelling, it is still
+    /// the hidden vault's.</summary>
+    [Theory]
+    [InlineData("skills (renamed)")]
+    [InlineData("Werkstatt")]
+    public async Task The_Skills_notice_of_a_hidden_vault_renamed_since_is_left_out_until_revealed(string rename)
+    {
+        var (user, signIn) = await RenamedSkillsAsync(Rename(rename));
+        await HiddenUntilRevealedAsync(user, signIn);
+    }
+
+    [Fact]
+    public async Task The_Skills_notice_of_a_hidden_vault_that_is_gone_is_left_out_until_revealed()
+    {
+        var (user, signIn) = await RenamedSkillsAsync(async client =>
+        {
+            using var deleted = await client.SendAsync(
+                HttpMethod.Post, "/api/vaults/Skills (renamed)/delete", new { password = RestClient.Password, confirm = "Skills (renamed)" });
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        });
+        await HiddenUntilRevealedAsync(user, signIn);
+    }
+
+    /// <summary>A notice kept before it named the vault's id is judged by the name it gives.</summary>
+    [Fact]
+    public async Task A_Skills_notice_without_its_vaults_id_is_left_out_by_its_name()
+    {
+        var (user, _) = await RenamedSkillsAsync();
+        var legacy = VaultCrypto.Seal(VaultCrypto.Derive(user.UserKey, "kumbu/v1/skills-notice", Encoding.UTF8.GetBytes(user.User.Id)),
+            "{\"NewName\":\"Skills (renamed)\",\"Alias\":false}"u8, $"skills-notice:{user.User.Id}");
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == user.User.Id, Builders<UserDocument>.Update.Set(u => u.SkillsNotice, legacy), cancellationToken: Ct);
+        var (signIn, session) = await SignInAsync(user.Username);
+        await HiddenUntilRevealedAsync(RestClient.Existing(Api, user.User, user.UserKey, session, "Skills"), signIn);
+    }
+
+    [Fact]
+    public async Task The_Skills_notice_of_a_hidden_shared_vault_is_left_out_until_revealed()
+    {
+        // Bob's Work, shared with Alice, who named it Skills before the upgrade, so she has no vault Skills yet.
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var alice = await RestClient.NewAsync(Api, vault: "Privat");
+        var membership = await bob.ShareWithAsync(alice, alias: "Garden");
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var alicesSkills = (await catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct)).Single(a => a.Vault.Kind == VaultKinds.Skills);
+        await catalog.DeleteVaultsAsync([alicesSkills.Id], (_, _) => Task.CompletedTask, Ct);
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Unset(u => u.SkillsAt), cancellationToken: Ct);
+        Api.Services.GetRequiredService<Kumbu.Server.Skills.SkillsVaults>().Forget(alice.User.Id);
+        await catalog.RenameAliasAsync(alice.User.Id, alice.UserKey, membership, "Skills", Ct);
+
+        await MarkAsync(alice.User.Id, alice.UserKey, await bob.VaultIdAsync());
+        var (signIn, session) = await SignInAsync(alice.Username);
+        await HiddenUntilRevealedAsync(RestClient.Existing(Api, alice.User, alice.UserKey, session, "Skills"), signIn, alias: true);
+    }
+
+    /// <summary>Dismissing it while it is hidden answers as dismissing no notice, and leaves it.</summary>
+    [Fact]
+    public async Task Dismissing_a_hidden_Skills_notice_leaves_it()
+    {
+        var (user, _) = await RenamedSkillsAsync();
+        using (var dismissed = await user.SendAsync(HttpMethod.Delete, "/api/account/skills-notice"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, dismissed.StatusCode);
+        }
+
+        await RevealAsync(user);
+        Assert.Equal("Skills (renamed)", (await SkillsNoticeAsync(user))!["renamed"]!.GetValue<string>());
     }
 
     private async Task<(JsonNode View, string Session)> SignInAsync(string username)
@@ -170,19 +262,6 @@ public sealed class HiddenNoticesTests(KumbuAppFactory app)
         using var response = await user.GetAsync("/api/session");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return (await RestClient.JsonAsync(response))["skillsNotice"];
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("skills (renamed)")]
-    public async Task The_Skills_notice_naming_a_hidden_vault_is_left_out_until_revealed(string? rename)
-    {
-        var (user, signIn) = await RenamedSkillsAsync(rename);
-        Assert.Null(signIn["skillsNotice"]);
-        Assert.Null(await SkillsNoticeAsync(user));
-
-        Assert.True((await Api.Services.GetRequiredService<Sessions>().RevealAsync(user.Session, null, Ct)).Revealed);
-        Assert.Equal("Skills (renamed)", (await SkillsNoticeAsync(user))!["renamed"]!.GetValue<string>());
     }
 
     [Fact]

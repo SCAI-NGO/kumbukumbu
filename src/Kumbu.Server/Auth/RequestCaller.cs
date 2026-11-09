@@ -157,9 +157,19 @@ public sealed class RequestCaller : ICaller
     /// it doesn't show them. None for every other caller, which sees every vault it has.</summary>
     internal async Task<IReadOnlySet<string>> HiddenIdsAsync(CancellationToken ct)
     {
-        if (Session is not { } session) return NoneHidden;
+        // A revealed session hides nothing: no need to open the vaults to know it.
+        if (Session is not { } session || session.Revealed) return NoneHidden;
         await OpenVaultsAsync(ct);
         return session.HiddenIds;
+    }
+
+    /// <summary>The vaults this session hides (opening its vaults first), each under her name for it; none for every
+    /// other caller.</summary>
+    internal async Task<IReadOnlyList<VaultAccess>> HiddenVaultsAsync(CancellationToken ct)
+    {
+        if (Session is not { } session) return [];
+        await OpenVaultsAsync(ct);
+        return session.Hidden;
     }
 
     /// <summary>Whether this session hides the vault <paramref name="vaultId"/>; false for every other caller.</summary>
@@ -169,10 +179,8 @@ public sealed class RequestCaller : ICaller
     /// answers as one she doesn't have; false for every other caller.</summary>
     internal async Task<bool> HidesMembershipAsync(string membershipId, CancellationToken ct)
     {
-        if (Session is not { } session) return false;
-        await OpenVaultsAsync(ct);
         // Relies on OpenForUserAsync opening exactly her active memberships: they are all a session can hide.
-        return session.Hidden.Any(a => a.Membership?.Id == membershipId);
+        return (await HiddenVaultsAsync(ct)).Any(a => a.Membership?.Id == membershipId);
     }
 
     /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
@@ -187,7 +195,7 @@ public sealed class RequestCaller : ICaller
             var ids = DiscreetVaults.OpenList(user.Id, userKey, discreet.SealedList, out var failure);
             if (ids is null && UnreadableLogged.TryAdd(user.Id, 0))
             {
-                log?.LogWarning("The discreet vaults of user {UserId} could not be read: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
+                log?.LogWarning("The discreet vaults of user {UserId} do not open: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
             }
 
             filter = new DiscreetFilter(discreet.Revealed, ids);

@@ -329,8 +329,7 @@ public static class SharingApi
     {
         await memberships.EnsureReadyAsync(ct);
         var hidden = await caller.HiddenIdsAsync(ct);
-        var notices = (await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct))
-            .Where(n => !hidden.Contains(n.Notice.Vault)).ToList();
+        var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, hidden, ct);
         var active = await MemberNotices.ActiveOwnersAsync(
             db, caller.User.Id, [.. notices.Where(n => n.Notice.Kind == MemberNoticeDocument.VaultRekeyed).Select(n => n.Notice.Membership)], ct);
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);

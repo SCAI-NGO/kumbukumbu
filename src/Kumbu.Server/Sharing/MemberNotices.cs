@@ -75,11 +75,14 @@ public static class MemberNotices
     }
 
     /// <summary>The user's notices, newest first, each with the alias she had for the vault, opened with her user key;
-    /// null where it doesn't open (then "a shared vault").</summary>
+    /// null where it doesn't open (then "a shared vault"). None of a vault in <paramref name="hidden"/>: those are
+    /// never read.</summary>
     internal static async Task<IReadOnlyList<(MemberNoticeDocument Notice, string? Alias)>> ListAsync(
-        IMongoDatabase db, string userId, byte[] userKey, DateTime now, CancellationToken ct)
+        IMongoDatabase db, string userId, byte[] userKey, DateTime now, IReadOnlySet<string> hidden, CancellationToken ct)
     {
-        var docs = await Docs(db).Find(n => n.User == userId && n.At > now - Window).SortByDescending(n => n.At).ToListAsync(ct);
+        var f = Builders<MemberNoticeDocument>.Filter;
+        var docs = await Docs(db).Find(f.Where(n => n.User == userId && n.At > now - Window) & f.Nin(n => n.Vault, hidden))
+            .SortByDescending(n => n.At).ToListAsync(ct);
         return [.. docs.Select(n => (n, AliasOf(n, userKey)))];
     }
 
