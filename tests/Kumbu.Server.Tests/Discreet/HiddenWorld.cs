@@ -85,18 +85,21 @@ internal sealed record HiddenWorld(RestClient Alice, RestClient Bob, string Tage
     /// <summary>
     /// The request for <paramref name="vault"/> (<paramref name="path"/> with <c>{v}</c> for the name, <paramref name="body"/>
     /// made from the name) answers exactly as the same request for <see cref="Nowhere"/>, once that name is replaced
-    /// by the vault's in its answer: the same status, the same body.
+    /// by the vault's in its answer: the same status, the same body. With <paramref name="ticket"/>, each request gets
+    /// a fresh one for <c>{t}</c> in the path.
     /// </summary>
-    public async Task AsNowhereAsync(string vault, HttpMethod method, string path, Func<string, object?>? body = null)
+    public async Task AsNowhereAsync(string vault, HttpMethod method, string path, Func<string, object?>? body = null, Func<Task<string>>? ticket = null)
     {
-        var (hiddenStatus, hiddenBody) = await SendAsync(vault, method, path, body);
-        var (nowhereStatus, nowhereBody) = await SendAsync(Nowhere, method, path, body);
+        var (hiddenStatus, hiddenBody) = await SendAsync(vault, method, path, body, ticket);
+        var (nowhereStatus, nowhereBody) = await SendAsync(Nowhere, method, path, body, ticket);
         Assert.Equal((nowhereStatus, nowhereBody.Replace(Nowhere, vault, StringComparison.Ordinal)), (hiddenStatus, hiddenBody));
     }
 
-    private async Task<(HttpStatusCode, string)> SendAsync(string vault, HttpMethod method, string path, Func<string, object?>? body)
+    private async Task<(HttpStatusCode, string)> SendAsync(string vault, HttpMethod method, string path, Func<string, object?>? body, Func<Task<string>>? ticket)
     {
-        using var response = await Alice.SendAsync(method, path.Replace("{v}", vault, StringComparison.Ordinal), body?.Invoke(vault));
+        path = path.Replace("{v}", vault, StringComparison.Ordinal);
+        if (ticket is not null) path = path.Replace("{t}", await ticket(), StringComparison.Ordinal);
+        using var response = await Alice.SendAsync(method, path, body?.Invoke(vault));
         return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
     }
 

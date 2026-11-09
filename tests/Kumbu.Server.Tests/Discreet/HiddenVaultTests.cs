@@ -3,6 +3,7 @@ using System.Net;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -124,6 +125,65 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         await w.RevealAsync();
         Assert.Equal(["/Tagebuch/alt.md", "/Tagebuch/geheim.md"], await TreeAsync(w, "Tagebuch"));
         Assert.Contains(HiddenWorld.FamilieWord, (await w.In("Familie").ReadAsync("geheim.md"))["content"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_other_vault_endpoints_answer_as_for_a_name_she_never_had()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        using (var trashed = await w.Alice.SendAsync(HttpMethod.Delete, w.In("Tagebuch").Url("alt.md")))
+        {
+            Assert.True(trashed.IsSuccessStatusCode);
+        }
+
+        await w.HideAsync();
+        var pairings = Api.Services.GetRequiredService<Pairings>().Count;
+
+        foreach (var vault in new[] { "Tagebuch", "Familie" })
+        {
+            await w.AsNowhereAsync(vault, HttpMethod.Post, "/api/vaults/{v}/pairing", _ => new { });
+            await w.AsNowhereAsync(vault, HttpMethod.Put, "/api/vaults/{v}/name", _ => new { name = "Umbenannt" });
+            await w.AsNowhereAsync(vault, HttpMethod.Put, "/api/vaults/{v}/embeddings", _ => new { provider = "internal" });
+            await w.AsNowhereAsync(
+                vault, HttpMethod.Post, "/api/upload/{v}/In", _ => new { onConflict = "replace", files = new[] { new { path = "neu.md", content = "neu\n" } } });
+            await w.AsNowhereAsync(vault, HttpMethod.Post, "/api/restore/{v}/alt.md", _ => new { });
+            await w.AsNowhereAsync(vault, HttpMethod.Get, "/api/vaults/{v}/export?ticket={t}", ticket: () => ExportTicketAsync(w));
+            await w.AsNowhereAsync(vault, HttpMethod.Get, "/api/files/{v}/zip?path=bild.png&ticket={t}", ticket: () => ExportTicketAsync(w));
+        }
+
+        Assert.Equal(pairings, Api.Services.GetRequiredService<Pairings>().Count);
+        await w.RevealAsync();
+        Assert.Equal([("Familie", true), ("Skills", false), ("Tagebuch", true), ("Work", false)], await w.VaultsAsync());
+        Assert.Equal(["/Tagebuch/geheim.md"], await TreeAsync(w, "Tagebuch"));
+    }
+
+    /// <summary>A ticket as <c>POST /api/export/ticket</c> issues it, without its password check: that is limited to five a
+    /// minute, and every export takes one.</summary>
+    private Task<string> ExportTicketAsync(HiddenWorld w) =>
+        Task.FromResult(Api.Services.GetRequiredService<Kumbu.Server.Api.ExportTickets>().Issue(w.Alice.User.Id).Ticket);
+
+    [Fact]
+    public async Task A_WebSocket_ticket_holds_no_hidden_vault()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        await w.HideAsync();
+
+        Assert.Equal(["Skills", "Work"], await TicketVaultsAsync(w));
+        await w.RevealAsync();
+        Assert.Equal(["Familie", "Skills", "Tagebuch", "Work"], await TicketVaultsAsync(w));
+    }
+
+    /// <summary>The names of the vaults a fresh WebSocket ticket of Alice's session holds, read back from the tickets.</summary>
+    private async Task<string[]> TicketVaultsAsync(HiddenWorld w)
+    {
+        using var response = await w.Alice.SendAsync(HttpMethod.Post, "/api/ws-ticket");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var ticket = (await RestClient.JsonAsync(response))["ticket"]!.GetValue<string>();
+        var grant = Api.Services.GetRequiredService<SyncTickets>().Take(ticket);
+        Assert.NotNull(grant);
+        var ids = grant.Vaults.Select(v => v.VaultId).ToList();
+        Assert.Equal(ids.Contains(w.TagebuchId), ids.Contains(w.FamilieId));
+        return [.. grant.Vaults.Select(v => v.VaultName).Order(StringComparer.Ordinal)];
     }
 
     [Fact]
