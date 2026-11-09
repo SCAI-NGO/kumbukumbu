@@ -290,8 +290,9 @@ const FootnoteContext = createContext<{ prefix: string; root: RefObject<HTMLDivE
 const footnoteLabel = "footnote-label";
 
 /**
- * A link. One to a fragment (a footnote and its way back) scrolls to its target within the note's scroller and
- * leaves the address alone: the browser would scroll the window, and the router would see a new location.
+ * A link. A footnote's reference and its way back scroll to their target within the note's scroller and leave the
+ * address alone: the browser would scroll the window, and the router would see a new location. Other fragment
+ * links (`[x](#goals)`) stay as they were.
  */
 function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef<"a"> & { footnote: boolean }) {
   const { prefix, root } = useContext(FootnoteContext);
@@ -302,7 +303,12 @@ function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef
     const target = [...(root.current?.querySelectorAll<HTMLElement>("[id]") ?? [])].find((e) => e.id === id);
     if (!target) return;
     target.scrollIntoView({ block: "center" });
-    if (target.matches("a[href], button, [tabindex]")) target.focus({ preventScroll: true });
+    // The focus goes along, so a keyboard or screen reader carries on from there; a definition's item takes it as the h1 does.
+    if (!target.matches("a[href], button, [tabindex]")) {
+      target.tabIndex = -1;
+      target.classList.add("focus:outline-none");
+    }
+    target.focus({ preventScroll: true });
   };
   const describedBy = props["aria-describedby"] === footnoteLabel ? prefix + footnoteLabel : props["aria-describedby"];
   return (
@@ -311,7 +317,7 @@ function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef
       {...props}
       aria-describedby={describedBy}
       {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-      {...(href?.startsWith("#") ? { onClick: jump } : {})}
+      {...(footnote && href?.startsWith("#") ? { onClick: jump } : {})}
       className={footnote ? "px-0.5 text-accent-text no-underline" : "text-accent-text underline decoration-accent/45 underline-offset-[3px]"}
     >
       {children}
@@ -319,7 +325,7 @@ function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef
   );
 }
 
-/** The footnotes' heading, with the view's own id; the other `h2`s keep theirs (none). */
+/** The footnotes' heading, with the view's own id; other headings have no id. */
 function useHeadingId(id: string | undefined) {
   const { prefix } = useContext(FootnoteContext);
   return id === footnoteLabel ? prefix + footnoteLabel : id;
@@ -525,10 +531,12 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
   );
 
   // Every view, an embedded note's and History's too, gets ids of its own: the same note shown twice repeats none.
+  // useId's colons (":r0:") are no characters for an id in a URL fragment.
   const prefix = `user-content-${useId().toLowerCase().replace(/[^a-z0-9-]/g, "")}-`;
   const root = useRef<HTMLDivElement>(null);
   const footnotes = useMemo(() => ({ prefix, root }), [prefix]);
-  const rehypeOptions = useMemo(() => ({ clobberPrefix: prefix }), [prefix]);
+  // The back link's arrow in text presentation: no colour emoji.
+  const rehypeOptions = useMemo(() => ({ clobberPrefix: prefix, footnoteBackContent: "↩︎" }), [prefix]);
 
   return (
     <NoteContext.Provider value={context}>

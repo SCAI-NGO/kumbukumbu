@@ -748,26 +748,35 @@ describe("Footnotes", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Footnotes" })).toHaveClass("sr-only");
   });
 
-  it("jumps from the reference to its definition and back, without following the link", () => {
-    function Where() {
-      const location = useLocation();
-      return <p data-testid="where">{location.pathname + location.hash}</p>;
-    }
-    render(
-      <MemoryRouter initialEntries={["/notes/Work/plan.md"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
-        <Where />
-      </MemoryRouter>,
-    );
+  it("jumps from the reference to its definition and back, without following the link, and takes the focus along", () => {
+    show("Text[^1]\n\n[^1]: The note.");
     const hash = window.location.hash;
+    const definition = document.querySelector("section[data-footnotes] li")!;
 
     expect(prevented(reference())).toBe(true);
-    expect(scrolled).toEqual([document.querySelector("section[data-footnotes] li")]);
-    expect(prevented(backLink())).toBe(true);
-    expect(scrolled.at(-1)).toBe(reference());
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toBe(definition);
+    expect(document.activeElement).toBe(definition);
 
-    expect(screen.getByTestId("where")).toHaveTextContent(/^\/notes\/Work\/plan\.md$/);
+    expect(prevented(backLink())).toBe(true);
+    expect(scrolled).toHaveLength(2);
+    expect(scrolled[1]).toBe(reference());
+    expect(document.activeElement).toBe(reference());
+
     expect(window.location.hash).toBe(hash);
+  });
+
+  // `[x](#goals)` is the server's to resolve (remarkWikiLinks); a reference-style link reaches the `a` as written.
+  it("leaves other fragment links as they were", () => {
+    show("[Goals][g] and [top][t]\n\n## Goals\n\n[g]: #goals\n[t]: #");
+    expect(prevented(screen.getByRole("link", { name: "Goals" }))).toBe(false);
+    expect(prevented(screen.getByRole("link", { name: "top" }))).toBe(false);
+    expect(scrolled).toHaveLength(0);
+  });
+
+  it("shows the back link as a text arrow, not a colour emoji", () => {
+    show("Text[^1]\n\n[^1]: The note.");
+    expect(backLink()).toHaveTextContent("↩︎");
   });
 
   it("gives two views of the same footnotes ids of their own", () => {
