@@ -33,6 +33,9 @@ public static class ModelFiles
         ]),
     }.ToDictionary(m => m.Key);
 
+    /// <summary>The tokenizer chunks are bounded by, whichever model or provider embeds them (<see cref="Search.ChunkTokenizer"/>).</summary>
+    public static readonly ModelFile ChunkTokenizer = Catalogue[Default].Files.Single(f => f.Local == Tokenizer);
+
     /// <summary>Follows a symlink to the file, which <see cref="FileInfo.Length"/> does not.</summary>
     public static bool HasSize(string path, long size)
     {

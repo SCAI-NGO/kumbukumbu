@@ -21,6 +21,12 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready, stri
     /// <summary>Thrown by every call while set: a provider that is down, or refuses the texts.</summary>
     public Exception? Failure { get; set; }
 
+    /// <summary>While set, a call with a text it matches throws, as a provider that refuses that text; counted in
+    /// <see cref="Refused"/>.</summary>
+    public Func<string, bool>? Refuses { get; set; }
+
+    public int Refused { get; private set; }
+
     /// <summary>The texts of every call, in order (queries too), to check what would have left the server.</summary>
     public List<(string Text, bool Query)> Seen { get; } = [];
 
@@ -73,6 +79,12 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready, stri
     private float[][] Embed(IReadOnlyList<string> texts, bool query, bool seen = false)
     {
         if (Failure is not null) throw Failure;
+        if (Refuses is { } refuses && texts.Any(refuses))
+        {
+            Refused++;
+            throw new InvalidOperationException("The provider refuses this text");
+        }
+
         if (texts.Count > MaxBatch) throw new ArgumentException($"At most {MaxBatch} texts per call", nameof(texts));
         Embedded += texts.Count;
         if (!seen) lock (Seen) Seen.AddRange(texts.Select(t => (t, query)));

@@ -13,28 +13,113 @@ public class SearchTests
     private static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
 
     [Fact]
-    public void ChunksAreSectionsWithTheirHeadingPath()
+    public void Snippet_of_a_table_part_keeps_its_header_row()
     {
-        var chunks = Chunker.Split(new Note(P("/Demo/plan.md"), "---\ntags: x\n---\nIntro text.\n\n# Plan\nTop.\n## Goals\nShip it.\n\n## Risks\n\n"));
+        var part = new Chunk(P("/Work/Pump/Manual.md"), "#Pump P-200#Error codes", 120, 140,
+            "| Code | Meaning | Remedy |\n|------|---------|--------|\n| E115 | Dry run | Fill the inlet and restart |", "Manual > Pump P-200 > Error codes");
+        var first = part with { Text = "## Error codes\n" + part.Text };
 
-        Assert.Equal(
-            [("", 3, 4, "Intro text.", "plan"), ("#Plan", 5, 7, "# Plan\nTop.", "plan > Plan"), ("#Plan#Goals", 7, 9, "## Goals\nShip it.", "plan > Plan > Goals"), ("#Plan#Risks", 10, 11, "## Risks", "plan > Plan > Risks")],
-            chunks.Select(c => (c.Address, c.StartLine, c.EndLine, c.Text, c.Context)));
-        Assert.Equal("plan > Plan > Goals\n## Goals\nShip it.", chunks[2].EmbeddingText);
+        Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(part));
+        Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(first));
+        Assert.Equal("| E115 | Dry run | Fill the inlet and restart |", SectionSearch.Snippet(part, "inlet"));
+
+        // A merged chunk holds several headings; none of them is in the snippet.
+        var merged = new Chunk(P("/Demo/gate.md"), "", 0, 4, "# Gate\nThe service checks rules.\n# Team\nAlice and Bob.", "gate");
+        Assert.Equal("The service checks rules. Alice and Bob.", SectionSearch.Snippet(merged));
+        Assert.Equal("Alice and Bob.", SectionSearch.Snippet(merged, "team alice"));
+
+        // A comment in fenced code is no heading.
+        var script = new Chunk(P("/Demo/run.md"), "#Run", 0, 5, "# Run\n```sh\n# start the pump\npump start\n```", "run > Run");
+        Assert.Equal("```sh # start the pump pump start ```", SectionSearch.Snippet(script));
+        Assert.Equal("# start the pump", SectionSearch.Snippet(script, "pump"));
     }
 
     [Fact]
-    public void ALongSectionIsSplitBetweenParagraphs()
+    public async Task Locate_finds_a_piece_by_its_part()
     {
-        var paragraph = string.Join(' ', Enumerable.Repeat("word", 150));
-        var content = "# Long\n" + string.Join("\n\n", Enumerable.Range(0, 6).Select(_ => paragraph)) + "\n";
+        // A line too long for one chunk is split into pieces on the same start line; a hit names its piece.
+        var line = string.Join(' ', Enumerable.Range(0, 1_200).Select(i => $"reading{i}"));
+        Assert.True(line.Length >= 10_000);
+        var note = new Note(P("/Work/log.md"), "# Log\n" + line + "\n");
+        Assert.True(Chunker.Split(note, ChunkBound.Fallback).Count(c => c.StartLine == 1) > 2);
+        var index = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.6), new(note.Path, 1, 0.7) { Part = 2 }], 0), ChunkBound.Fallback);
 
-        var chunks = Chunker.Split(new Note(P("/Demo/long.md"), content));
+        var result = await SectionSearch.RankAsync([note], VaultPath.Root, "reading5", SearchMode.Meaning, 10, index, CancellationToken.None);
 
-        Assert.True(chunks.Count >= 3);
-        Assert.All(chunks, c => Assert.True(c.Text.Length <= Chunker.MaxChars));
-        Assert.All(chunks, c => Assert.Equal("#Long", c.Address));
-        Assert.All(chunks.Skip(1), c => Assert.False(string.IsNullOrWhiteSpace(c.Text.Split('\n')[0])));
+        Assert.Equal([(1, 2, 0.7), (1, 0, 0.6)], result.Hits.Select(h => (h.Chunk.StartLine, h.Chunk.Part, Math.Round(h.Score!.Value, 2))));
+
+        // A part the note no longer has goes to the chunk that contains the start line.
+        var gone = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.5) { Part = 99 }], 0), ChunkBound.Fallback);
+        var located = Assert.Single((await SectionSearch.RankAsync([note], VaultPath.Root, "reading5", SearchMode.Meaning, 10, gone, CancellationToken.None)).Hits);
+        Assert.Equal((1, 0), (located.Chunk.StartLine, located.Chunk.Part));
+    }
+
+    [Fact]
+    public async Task A_hit_maps_only_to_its_own_note()
+    {
+        // A PDF's page and a note that isn't searched (gone, or out of scope) have no chunk here, whatever their lines.
+        var note = new Note(P("/Work/a.md"), "# A\nalpha\nbeta\n");
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Work/a.pdf"), 1, 0.9), new(P("/Work/gone.md"), 1, 0.8)], 0));
+
+        Assert.Empty((await SectionSearch.RankAsync([note], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None)).Hits);
+        var withPages = await SectionSearch.RankAsync([note], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None, pages: true);
+        Assert.Equal([("/Work/a.pdf", (int?)1)], withPages.Hits.Select(h => (h.Chunk.Path.Value, h.Page)));
+
+        // Not even under the PDF's own path: a page is looked up as a page, never among the chunks.
+        var named = new Note(P("/Work/a.pdf"), "# A\nalpha\nbeta\n");
+        Assert.Empty((await SectionSearch.RankAsync([named], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None)).Hits);
+    }
+
+    [Fact]
+    public async Task Every_part_of_a_long_code_block_of_comments_is_listed()
+    {
+        // Each line of the block looks like a heading; only the note's fence says it is code, also in parts without it.
+        var comments = Enumerable.Range(0, 150).Select(i => $"# kettle step {i} boils the water slowly and then pours it out");
+        var note = new Note(P("/Work/script.md"), "# Script\n```python\n" + string.Join('\n', comments) + "\n```\n");
+        var chunks = Chunker.Split(note, ChunkBound.Fallback);
+        Assert.True(chunks.Count > 2);
+        Assert.Contains(chunks, c => !c.Text.Contains("```"));
+
+        var result = await SectionSearch.RankAsync([note], VaultPath.Root, "kettle", SearchMode.Words, 100, new FakeIndex(new SemanticResult(SemanticState.Ready, [], 0)), CancellationToken.None);
+
+        Assert.Equal(chunks.Select(c => c.StartLine).Order(), result.Hits.Select(h => h.Chunk.StartLine).Order());
+        Assert.All(chunks, c => Assert.Contains("# kettle step", SectionSearch.Snippet(c)));
+        Assert.All(chunks, c => Assert.StartsWith("# kettle step", SectionSearch.Snippet(c, "kettle")));
+    }
+
+    [Fact]
+    public async Task One_hit_per_PDF_page_with_its_best_part()
+    {
+        var pdf = P("/Work/manual.pdf");
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready,
+            [new(pdf, 3, 0.4), new(pdf, 3, 0.7) { Part = 2 }, new(pdf, 3, 0.5) { Part = 1 }, new(pdf, 5, 0.6)], 0));
+
+        var result = await SectionSearch.RankAsync([], VaultPath.Root, "seal", SearchMode.Meaning, 10, index, CancellationToken.None, pages: true);
+
+        Assert.Equal([(3, 2, 0.7), (5, 0, 0.6)], result.Hits.Select(h => (h.Page!.Value, h.PagePart!.Value, Math.Round(h.Score!.Value, 2))));
+        Assert.All(result.Hits, h => Assert.Equal(pdf, h.Chunk.Path));
+    }
+
+    [Fact]
+    public async Task Stale_notes_are_ranked_by_words_meanwhile()
+    {
+        // farm.md is being chunked anew: no cosines of its own, but its words still find it, fused by rank.
+        var notes = await Store.ReadNotesUnderAsync(VaultPath.Root, CancellationToken.None);
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/gate.md"), 0, 0.5)], 1) { StaleNotes = [P("/Demo/farm.md")] });
+
+        var hybrid = await SectionSearch.RankAsync(notes, VaultPath.Root, "hens ducks", SearchMode.Hybrid, 10, index, CancellationToken.None);
+        var meaning = await SectionSearch.RankAsync(notes, VaultPath.Root, "hens ducks", SearchMode.Meaning, 10, index, CancellationToken.None);
+
+        Assert.Equal([("/Demo/gate.md", (double?)0.5), ("/Demo/farm.md", null)], hybrid.Hits.Select(h => (h.Chunk.Path.Value, h.Score is { } s ? Math.Round(s, 2) : (double?)null)));
+        Assert.False(hybrid.FellBackToWords);
+        Assert.Equal(["/Demo/gate.md"], meaning.Hits.Select(h => h.Chunk.Path.Value));
+    }
+
+    private sealed class BoundIndex(SemanticResult result, ChunkBound bound) : ISearchIndex
+    {
+        public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) => Task.FromResult(result);
+
+        public ChunkBound Bound => bound;
     }
 
     [Fact]
@@ -137,9 +222,13 @@ public class SearchTests
         Assert.Equal(
             """
             1. /Demo/farm.md#Animals  lines 1-2  score 0.80
+               # Animals
                Cats, dogs, hens and ducks live together.
-            2. /Demo/gate.md#Gate  lines 1-2  score 0.55
+            2. /Demo/gate.md  lines 1-4  score 0.55
+               # Gate
                The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words and meaning; cat "path#Section" reads one)
             """,
             result.Output);
@@ -157,8 +246,11 @@ public class SearchTests
             """
             1. /Ideas/x.md  lines 1-1
                rules elsewhere
-            2. /Demo/gate.md#Gate  lines 1-2
+            2. /Demo/gate.md  lines 1-4
+               # Gate
                The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words only: the embedding model is still being downloaded; cat "path#Section" reads one)
             """,
             result.Output);
@@ -245,8 +337,11 @@ public class SearchTests
 
         Assert.Equal(
             """
-            1. /Demo/gate.md#Gate  lines 1-2
+            1. /Demo/gate.md  lines 1-4
+               # Gate
                The service checks rules at the entrance.
+               # Team
+               Anna and Ben.
             (ranked by words only: 2 notes aren't indexed yet; cat "path#Section" reads one)
             """,
             (await Run("semsearch rules /Demo", index)).Output);
@@ -277,7 +372,7 @@ public class SearchTests
 
         var result = await Run("semsearch der die das /Demo", index);
 
-        Assert.StartsWith("1. /Demo/gate.md#Gate  lines 1-2  score 0.60\n", result.Output);
+        Assert.StartsWith("1. /Demo/gate.md  lines 1-4  score 0.60\n", result.Output);
         Assert.Contains("2. /Demo/farm.md#Animals  lines 1-2  score 0.30\n", result.Output);
     }
 
@@ -293,8 +388,9 @@ public class SearchTests
     [Fact]
     public async Task HeadingOnlySectionsAreLeftOut()
     {
-        var store = new InMemoryNoteStore(("/Demo/diary.md", "# Diary\n## Februar 2026\n## März 2026\nWir waren im Zoo.\n"));
-        var index = Cosines(("/Demo/diary.md", 1, 0.90), ("/Demo/diary.md", 2, 0.50));
+        // März is too long to merge with, so the parent and Februar form a chunk of headings alone.
+        var store = new InMemoryNoteStore(("/Demo/diary.md", "# Diary\n## Februar 2026\n## März 2026\nWir waren im Zoo.\n\n" + string.Join(' ', Enumerable.Repeat("Elefanten", 400)) + "\n"));
+        var index = Cosines(("/Demo/diary.md", 0, 0.90), ("/Demo/diary.md", 2, 0.50));
 
         var result = await Run("semsearch -n 1 --meaning Zoo /Demo", index, store);
 

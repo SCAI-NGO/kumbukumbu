@@ -159,6 +159,7 @@ internal sealed class AwayHost : WebApplicationFactory<Program>
         builder.UseSetting("Kumbu:Seed:Path", "");
         builder.UseSetting("Kumbu:Metrics:Url", "http://127.0.0.1:0");
         builder.ConfigureLogging(l => l.ClearProviders());
+        builder.ConfigureServices(Search.NoDownload.Register);
     }
 }
 

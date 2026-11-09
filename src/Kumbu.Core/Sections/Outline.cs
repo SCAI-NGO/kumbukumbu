@@ -54,12 +54,18 @@ public static partial class Outline
     public static string Rendered(string source) => BackslashEscapeRegex().Replace(source, "$1");
 
     /// <summary>Which lines belong to fenced code blocks (``` or ~~~), the fence lines included.</summary>
-    public static bool[] CodeLines(IReadOnlyList<string> lines)
+    public static bool[] CodeLines(IReadOnlyList<string> lines) => Fences(lines).Code;
+
+    /// <summary><see cref="CodeLines"/>, and for each line the fence of the block open before it (null outside code):
+    /// a piece of a code block, without its opening fence, is told as code by it.</summary>
+    public static (bool[] Code, string?[] Open) Fences(IReadOnlyList<string> lines)
     {
         var code = new bool[lines.Count];
+        var open = new string?[lines.Count];
         string? fence = null;
         for (var i = 0; i < lines.Count; i++)
         {
+            open[i] = fence;
             // A backtick fence's info string holds no backtick (CommonMark): "``` a`b" opens nothing.
             if (FenceRegex().Match(lines[i]) is { Success: true } f && !(fence is null && f.Groups[1].Value[0] == '`' && f.Groups[2].Value.Contains('`')))
             {
@@ -74,7 +80,7 @@ public static partial class Outline
             code[i] = fence is not null;
         }
 
-        return code;
+        return (code, open);
     }
 
     /// <summary>The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0.</summary>

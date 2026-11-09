@@ -24,6 +24,22 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 
     public string RecoveryPath { get; } = Directory.CreateTempSubdirectory("kumbu-app-recovery-").FullName;
 
+    /// <summary>Where the tokenizer is: a copy of <c>KUMBU_TOKENIZER</c>'s file (CI), so chunks are bounded by it;
+    /// without it (locally) nothing is there, and with no provider configured there is no bound.</summary>
+    public string ModelPath { get; } = ModelFolder();
+
+    private static string ModelFolder()
+    {
+        var path = Directory.CreateTempSubdirectory("kumbu-app-models-").FullName;
+        if (Environment.GetEnvironmentVariable("KUMBU_TOKENIZER") is { Length: > 0 } tokenizer && File.Exists(tokenizer))
+        {
+            var folder = Directory.CreateDirectory(Path.Combine(path, Kumbu.Server.Search.ModelFiles.Default)).FullName;
+            File.Copy(tokenizer, Path.Combine(folder, Kumbu.Server.Search.ModelFiles.Tokenizer));
+        }
+
+        return path;
+    }
+
     public string DatabaseName { get; } = "t" + Guid.NewGuid().ToString("N");
 
     /// <summary>The app's database, for tests that change it behind the server's back.</summary>
@@ -51,6 +67,8 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         {
             await _mongo.DisposeAsync();
         }
+
+        if (Directory.Exists(ModelPath)) Directory.Delete(ModelPath, recursive: true);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -62,6 +80,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.UseSetting("Kumbu:Recovery:Path", RecoveryPath);
         // No download in tests: words hashed into vectors stand in for the model.
         builder.UseSetting("Kumbu:Search:Enabled", "false");
+        builder.UseSetting("Kumbu:Search:ModelPath", ModelPath);
         builder.UseSetting("Kumbu:Metrics:Url", "http://127.0.0.1:0");
         builder.ConfigureServices(services =>
         {
@@ -72,6 +91,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
             services.AddSingleton<Kumbu.Server.Attachments.IPdfSidecar>(Sidecar);
             // No test reaches the real GitHub: one that needs it brings a Skills.FakeGitHub through WithWebHostBuilder.
             services.AddHttpClient(Kumbu.Server.Skills.GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => new NoGitHub());
+            Search.NoDownload.Register(services);
         });
     }
 

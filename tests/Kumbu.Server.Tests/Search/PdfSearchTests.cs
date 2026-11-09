@@ -57,11 +57,49 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
 
         Assert.False(isError, output);
         Assert.StartsWith($"1. {path} p2  score ", output);
-        Assert.Contains("\n   Findings zebras migrate across the savannah more of it\n", output);
+        Assert.Contains("\n   Findings\n   zebras migrate across the savannah\n   more of it\n", output);
         var embeddings = Current(host, vault).Embeddings[P(path)];
         Assert.Equal([1, 2, 3, 4], embeddings.Chunks.Select(c => c.StartLine));
         Assert.Equal((await StateAsync(host, user, "Papers/x.pdf")).Version, embeddings.Version);
         Assert.DoesNotContain("x.pdf", words.Text);
+    }
+
+    /// <summary>A page of about 9,000 characters in numbered lines, paragraphs of four, ending with <paramref name="last"/>.</summary>
+    private static string DensePage(string last)
+    {
+        var page = new StringBuilder();
+        for (var i = 1; page.Length < 9_000; i++)
+        {
+            page.Append($"{i}. Die Kreiselpumpe fördert Kühlwasser in den Wärmetauscher; Messwert {i * 37 % 1000},{i % 10} bar bei {1450 + i} 1/min.\n");
+            if (i % 4 == 0) page.Append('\n');
+        }
+
+        return page.Append(last).Append('\n').ToString();
+    }
+
+    [Fact]
+    public async Task A_dense_PDF_page_is_embedded_in_parts()
+    {
+        const string last = "Capybaras bathe in hot springs.";
+        var sidecar = new FakePdfSidecar { Analysis = _ => FakePdfSidecar.Canned(2, n => n == 1 ? DensePage(last) : "filler page of plain words") };
+        await using var host = Host(app, sidecar);
+        var (user, vault, key) = await UploadAsync(host, "dense.pdf", "a dense page");
+        var path = P($"/{user.Vault}/dense.pdf");
+
+        var chunks = Current(host, vault).Embeddings[path].Chunks;
+        var (_, output) = await user.ShAsync($"semsearch -n 1 capybaras bathe hot springs /{user.Vault}", key);
+
+        var first = chunks.Where(c => c.StartLine == 1).ToList();
+        Assert.True(first.Count >= 3, $"{first.Count} parts");
+        Assert.Equal(Enumerable.Range(0, first.Count), first.Select(c => c.Part));
+        Assert.Equal([(2, 0)], chunks.Where(c => c.StartLine != 1).Select(c => (c.StartLine, c.Part)));
+        // Only the page's last part holds its last line, and the search finds it on page 1.
+        string[] embedded;
+        lock (app.Embedder.Seen) embedded = [.. app.Embedder.Seen.Where(t => !t.Query && t.Text.Contains("Capybaras", StringComparison.Ordinal)).Select(t => t.Text)];
+        var text = Assert.Single(embedded);
+        Assert.StartsWith("dense > p1\n", text);
+        Assert.EndsWith("\n" + last, text);
+        Assert.StartsWith($"1. {path.Value} p1  score ", output);
     }
 
     [Fact]
@@ -178,6 +216,46 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
         Assert.Equal((await StateAsync(host, user, "Papers/keys.pdf")).Version, pages.Version);
         Assert.Equal(embedded, Embedded("albatrosses glide for days"));
         Assert.StartsWith($"1. {path.Value} p2  score ", (await user.ShAsync($"semsearch -n 1 albatrosses glide days /{user.Vault}", key)).Text);
+    }
+
+    [Fact]
+    public async Task A_PDF_of_an_older_scheme_stays_findable_by_page()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, key) = await UploadAsync(host, "old.pdf", "quokkas smile at visitors");
+        var path = P($"/{user.Vault}/old.pdf");
+        var scheme = host.Services.GetRequiredService<SearchIndex>().Bound.Scheme;
+        var embedded = Embedded("quokkas smile at visitors");
+
+        // As 0.3 stored it: no scheme. Its pages are still the PDF's text, so they are found while it is chunked anew.
+        var current = Current(host, vault);
+        current.Embeddings = current.Embeddings.SetItem(path, current.Embeddings[path] with { Scheme = null });
+        var (isError, output) = await user.ShAsync($"semsearch quokkas smile visitors /{user.Vault}", key);
+
+        Assert.False(isError, output);
+        Assert.StartsWith($"1. {path.Value} p2  score ", output);
+        Assert.DoesNotContain("indexed yet", output);
+        await EventuallyAsync(() => Task.FromResult(Current(host, vault).Embeddings[path].Scheme == scheme), "the PDF is chunked anew");
+        Assert.Equal([1, 2, 3, 4], Current(host, vault).Embeddings[path].Chunks.Select(c => c.StartLine));
+        Assert.Equal(embedded, Embedded("quokkas smile at visitors"));
+    }
+
+    [Fact]
+    public async Task Pages_stored_with_other_parts_are_stored_anew()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, _) = await UploadAsync(host, "parts.pdf", "wombats dig burrows");
+        var path = P($"/{user.Vault}/parts.pdf");
+        var index = host.Services.GetRequiredService<SearchIndex>();
+
+        // Same pages, same texts, the current scheme, but the parts aren't the ones the pages give.
+        var current = Current(host, vault);
+        var stored = current.Embeddings[path];
+        current.Embeddings = current.Embeddings.SetItem(path, stored with { Chunks = [.. stored.Chunks.Select(c => c with { Part = 7 })] });
+        index.Enqueue(current, [path]);
+        await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.All(Current(host, vault).Embeddings[path].Chunks, c => Assert.Equal(0, c.Part));
     }
 
     [Fact]

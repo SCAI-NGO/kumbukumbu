@@ -66,6 +66,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>Raised when a vault is unlocked (or created), so the search index can catch up with it.</summary>
     public event Action<UnlockedVault>? Unlocked;
 
+    /// <summary>The vaults unlocked now, for the search index to catch up with once its bound has settled.</summary>
+    internal IReadOnlyList<UnlockedVault> OpenVaults => [.. _open.Values];
+
     /// <summary>
     /// Raised with a vault's id after every committed change to its notes or trash, and when it is deleted: what the
     /// sync hints are made of. Handlers run on the writer's thread, under the vault's gate: they must only enqueue.

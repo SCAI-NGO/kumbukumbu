@@ -22,8 +22,11 @@ namespace Kumbu.Server.Search;
 /// A vault catches up when it is unlocked, so nothing written while it was locked, or before a restart, is missed.
 /// Each vault is embedded by its own provider (<see cref="UnlockedVault.EmbeddingProvider"/>): the internal model,
 /// or an external one its owner opted in to or the instance's default.
-/// A PDF's pages are embedded under its path as a note's sections are, one chunk per page with text
-/// (<see cref="EmbeddedChunk.StartLine"/> = the page number), from its stored analysis, once that is there.
+/// A PDF's pages are embedded under its path as a note's sections are, each page with text in chunks
+/// (<see cref="EmbeddedChunk.StartLine"/> = the page number, <see cref="EmbeddedChunk.Part"/> = the chunk's on the
+/// page), from its stored analysis, once that is there.
+/// Embeddings remember the chunking's scheme (<see cref="ChunkBound.Scheme"/>): those of another are chunked anew,
+/// and only texts that changed are embedded again.
 /// </summary>
 public sealed class SearchIndex : BackgroundService
 {
@@ -31,14 +34,21 @@ public sealed class SearchIndex : BackgroundService
     private readonly EmbeddingProviders _providers;
     private readonly ILogger<SearchIndex> _log;
     private readonly PdfAnalyses? _analyses;
+    private readonly ChunkTokenizer? _tokenizer;
     private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
     private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
+    // Notes and PDFs whose last attempt failed, at which version and under which scheme (see Requeue).
+    private readonly ConcurrentDictionary<(string Vault, VaultPath Path), (string Version, string Scheme)> _failed = new();
     private int _busy;
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly SemaphoreSlim _warming = new(1, 1);
+    private Task _warm = Task.CompletedTask;
 
     /// <param name="analyses">Where the text of PDFs is read from; without it, PDFs aren't indexed.</param>
-    public SearchIndex(VaultCatalog catalog, EmbeddingProviders providers, ILogger<SearchIndex> log, PdfAnalyses? analyses = null)
+    /// <param name="tokenizer">What bounds the chunks; without it, the fallback bound.</param>
+    public SearchIndex(VaultCatalog catalog, EmbeddingProviders providers, ILogger<SearchIndex> log, PdfAnalyses? analyses = null, ChunkTokenizer? tokenizer = null)
     {
-        (_catalog, _providers, _log, _analyses) = (catalog, providers, log, analyses);
+        (_catalog, _providers, _log, _analyses, _tokenizer) = (catalog, providers, log, analyses, tokenizer);
         // A queue per provider: one that is down or still loading holds up its own vaults only.
         _queues = providers.All.ToDictionary(p => p.Name, _ => Channel.CreateUnbounded<(UnlockedVault, VaultPath)>(), StringComparer.Ordinal);
         catalog.Unlocked += CatchUp;
@@ -46,6 +56,12 @@ public sealed class SearchIndex : BackgroundService
     }
 
     public EmbeddingProviders Providers => _providers;
+
+    /// <summary>The bound chunks are made with (<see cref="ChunkTokenizer.Bound"/>).</summary>
+    public ChunkBound Bound => _tokenizer?.Bound ?? ChunkBound.Fallback;
+
+    /// <summary>Whether the bound is final; until then, a search by meaning is getting ready.</summary>
+    public bool TokenizerSettled => _tokenizer?.Settled ?? true;
 
     /// <summary>How many notes and PDFs wait to be indexed or are being indexed, in all vaults.</summary>
     public int Queued => _queued.Count + Volatile.Read(ref _busy);
@@ -62,13 +78,37 @@ public sealed class SearchIndex : BackgroundService
         }
     }
 
+    /// <summary>Queues what a search found stale, but not a note or PDF whose last attempt at its current version, under
+    /// the current scheme, failed: each search would send it to the provider again. A write (a new version), another
+    /// scheme or the next unlock tries it again.</summary>
+    public void Requeue(UnlockedVault vault, IEnumerable<VaultPath> paths) => Enqueue(vault, paths.Where(p => !HasFailed(vault, p)));
+
+    internal bool HasFailed(UnlockedVault vault, VaultPath path) =>
+        _failed.TryGetValue((vault.Id, path), out var failed) && failed == (CurrentVersion(vault, path), Bound.Scheme);
+
+    internal void NoteFailed(UnlockedVault vault, VaultPath path)
+    {
+        if (CurrentVersion(vault, path) is { } version) _failed[(vault.Id, path)] = (version, Bound.Scheme);
+    }
+
+    private static string? CurrentVersion(UnlockedVault vault, VaultPath path) =>
+        vault.Notes.TryGetValue(path, out var entry) ? entry.Note.Version
+        : vault.Attachments.TryGetValue(path, out var file) ? file.Attachment.Current.Version
+        : null;
+
     /// <summary>Every note whose current version has no embeddings of the vault's model, and every embedding whose
     /// note is gone. Embeddings of another model count as missing: after a switch (of the internal model, or of the
-    /// vault's provider), the vault is embedded again. PDFs likewise; one without an analysis yet is looked at and
+    /// vault's provider), the vault is embedded again; so do those of another chunking scheme, which are chunked anew
+    /// (an update of the chunking, or the tokenizer settling). PDFs likewise; one without an analysis yet is looked at and
     /// left (its analysis queues it when it is stored), which costs a read of its analysis header at every unlock,
     /// also while no sidecar is configured.</summary>
     public void CatchUp(UnlockedVault vault)
     {
+        Warm(vault);
+        // Compared with the fallback, every note stored under the tokenizer would look stale; ExecuteAsync catches up
+        // every open vault once the bound has settled.
+        if (!TokenizerSettled) return;
+        foreach (var key in _failed.Keys.Where(k => k.Vault == vault.Id)) _failed.TryRemove(key, out _);
         if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
         {
             _log.LogWarning("Vault {VaultId} uses the embedding provider {Provider}, which isn't configured; it isn't indexed", vault.Id, vault.EmbeddingProvider);
@@ -87,9 +127,58 @@ public sealed class SearchIndex : BackgroundService
                 string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
+        var otherScheme = embeddings.Count(e => e.Value.Model == model && e.Value.Scheme != Bound.Scheme && (notes.ContainsKey(e.Key) || pdfs.ContainsKey(e.Key)));
+        if (otherScheme > 0)
+        {
+            _log.LogInformation("Vault {VaultId}: {Count} notes and PDFs to chunk anew under {Scheme}", vault.Id, otherScheme, Bound.Scheme);
+        }
+
         Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note.Version, provider.Driver)).Select(n => n.Key)
             .Concat(pdfs.Where(p => !IsCurrent(embeddings.GetValueOrDefault(p.Key), p.Value, provider.Driver)).Select(p => p.Key))
             .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p) && !pdfs.ContainsKey(p))));
+    }
+
+    /// <summary>The latest warm-up, for tests.</summary>
+    public Task Warming => Volatile.Read(ref _warm);
+
+    /// <summary>
+    /// Splits every note of the vault in the background, one after the other, so that the first search after the unlock
+    /// finds the chunks at hand (<see cref="Chunker.Split"/> keeps them by content). Only once the bound has settled:
+    /// <see cref="ExecuteAsync"/> catches up every open vault again then. One vault at a time, stopped with the index.
+    /// </summary>
+    private void Warm(UnlockedVault vault)
+    {
+        if (!TokenizerSettled) return;
+        var bound = Bound;
+        var token = _stopping.Token;
+        var warm = Task.Run(async () =>
+        {
+            await _warming.WaitAsync(token);
+            try
+            {
+                foreach (var (path, entry) in vault.Notes)
+                {
+                    // A vault that was locked, deleted or re-keyed meanwhile isn't searched any more.
+                    if (token.IsCancellationRequested || !ReferenceEquals(_catalog.Current(vault.Id), vault)) return;
+                    var note = new Note(path, entry.Note.Content);
+                    if (!Chunker.IsSplit(note, bound)) Chunker.Split(note, bound);
+                    await Task.Yield();
+                }
+            }
+            finally
+            {
+                _warming.Release();
+            }
+        }, token);
+        _ = warm.ContinueWith(t => _log.LogWarning("Splitting the notes of vault {VaultId} ahead of a search failed: {Message}", vault.Id, t.Exception!.GetBaseException().Message),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        Volatile.Write(ref _warm, warm);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync();
+        await base.StopAsync(cancellationToken);
     }
 
     /// <summary>The paths whose current state is a PDF, if PDFs are indexed.</summary>
@@ -105,16 +194,26 @@ public sealed class SearchIndex : BackgroundService
             .Select(p => p.Path));
     }
 
-    /// <summary>Embedded by this model, at this version, and with vectors of the length the model gives now: under one key a
-    /// provider's model can change its output length (no Dimensions configured), and such vectors don't compare.</summary>
-    private static bool IsCurrent(NoteEmbeddings? embeddings, string version, IEmbeddingDriver driver) =>
-        embeddings?.Model == driver.ModelKey && embeddings.Version == version && embeddings.Chunks.All(c => FitsLength(c, driver));
+    /// <summary>Embedded by this model, at this version, chunked under the current scheme, and with vectors of the length
+    /// the model gives now: under one key a provider's model can change its output length (no Dimensions configured),
+    /// and such vectors don't compare.</summary>
+    private bool IsCurrent(NoteEmbeddings? embeddings, string version, IEmbeddingDriver driver) =>
+        embeddings?.Model == driver.ModelKey && embeddings.Version == version && embeddings.Scheme == Bound.Scheme && embeddings.Chunks.All(c => FitsLength(c, driver));
 
     /// <summary>A length of 0 is a remote model that hasn't answered yet: then any length fits.</summary>
     private static bool FitsLength(EmbeddedChunk chunk, IEmbeddingDriver driver) => driver.Dimensions == 0 || chunk.Vector.Length == driver.Dimensions;
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (_tokenizer is not null)
+        {
+            // A vault unlocked before the bound settled was compared with the unsettled one.
+            await _tokenizer.WhenSettledAsync(stoppingToken);
+            foreach (var vault in _catalog.OpenVaults) CatchUp(vault);
+        }
+
+        await Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+    }
 
     private async Task RunAsync(EmbeddingProvider provider, ChannelReader<(UnlockedVault Vault, VaultPath Path)> queue, CancellationToken stoppingToken)
     {
@@ -128,6 +227,7 @@ public sealed class SearchIndex : BackgroundService
             {
                 // The owner switched the vault to another provider since: that provider's queue has the note.
                 if (vault.EmbeddingProvider == provider.Name) await IndexAsync(vault, path, stoppingToken);
+                _failed.TryRemove((vault.Id, path), out _);
             }
             catch (EmbeddingUnavailableException e) when (e.ProviderDown)
             {
@@ -139,6 +239,7 @@ public sealed class SearchIndex : BackgroundService
             {
                 // The next write or unlock tries again; one bad note must not stop the index.
                 _log.LogError("Indexing a note of vault {VaultId} failed: {Message}", vault.Id, e.Message);
+                NoteFailed(vault, path);
             }
             finally
             {
@@ -178,7 +279,7 @@ public sealed class SearchIndex : BackgroundService
 
             var note = entry.Note;
             if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note.Version, driver)) return;
-            await EmbedAsync(vault, path, filter, configured, note.Version, [.. Chunker.Split(new Note(path, note.Content)).Select(c => (c.StartLine, c.EmbeddingText))], ct);
+            await EmbedAsync(vault, path, filter, configured, note.Version, [.. Chunker.Split(new Note(path, note.Content), Bound).Select(c => (c.StartLine, c.Part, c.EmbeddingText))], ct);
         }
         finally
         {
@@ -193,49 +294,58 @@ public sealed class SearchIndex : BackgroundService
     }
 
     /// <summary>
-    /// A PDF's pages with text, each a chunk: its file name and page number as context, then the page's text, cut
-    /// where a note's chunk ends (about what the model reads). Read again whenever the PDF is queued, so a new analysis
-    /// of the same version is seen; nothing is embedded if the pages are as before. A PDF whose analysis failed, or
-    /// that has no text (a scan), gets embeddings without chunks: it counts as indexed. Without an analysis yet, the
-    /// pages of an older version go: their text is no longer what the PDF holds.
+    /// A PDF's pages with text, each split into chunks within the bound (<see cref="Chunker.SplitPage"/>): its file
+    /// name and page number as context, then a part of the page's text, none of it cut off. Read again whenever the
+    /// PDF is queued, so a new analysis of the same version is seen; nothing is embedded if the pages are as before.
+    /// A PDF whose analysis failed, or that has no text (a scan), gets embeddings without chunks: it counts as indexed.
+    /// Without an analysis yet, the pages of an older version go: their text is no longer what the PDF holds.
     /// </summary>
     private async Task IndexPdfAsync(UnlockedVault vault, VaultPath path, FilterDefinition<SealedDocument> filter, EmbeddingProvider configured, AttachmentState state, CancellationToken ct)
     {
         if (!EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId)) return;
-        var texts = await _analyses!.SearchTextAsync(vault, blobId, Chunker.MaxChars, ct);
+        var texts = await _analyses!.SearchTextAsync(vault, blobId, ct);
         if (texts is null)
         {
             if (vault.Embeddings.GetValueOrDefault(path) is { } older && older.Version != state.Version && MayIndex(vault, path)) await RemoveAsync(vault, path, filter, ct);
             return;
         }
 
-        var title = path.Name[..^".pdf".Length];
+        var title = Chunker.PdfTitle(path);
+        var bound = Bound;
         await EmbedAsync(vault, path, filter, configured, state.Version,
-            [.. texts.Select((text, i) => (Page: i + 1, Text: text)).Where(p => !string.IsNullOrWhiteSpace(p.Text)).Select(p => (p.Page, $"{title} > p{p.Page}\n{p.Text}"))],
+            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText)))],
             ct);
     }
 
-    /// <summary>Embeds the chunks (start line or page, and the text to embed) and stores them as the path's embeddings
-    /// at <paramref name="version"/>; under the vault's index gate.</summary>
+    /// <summary>Embeds the chunks (start line or page, part, and the text to embed) and stores them as the path's
+    /// embeddings at <paramref name="version"/> under the current scheme; under the vault's index gate.</summary>
     private async Task EmbedAsync(
         UnlockedVault vault, VaultPath path, FilterDefinition<SealedDocument> filter, EmbeddingProvider configured, string version,
-        IReadOnlyList<(int StartLine, string Text)> chunks, CancellationToken ct)
+        IReadOnlyList<(int StartLine, int Part, string Text)> chunks, CancellationToken ct)
     {
         var provider = configured.Name;
         var driver = configured.Driver;
         var kind = configured.External ? KumbuMetrics.ProviderKind.External : KumbuMetrics.ProviderKind.Internal;
         var model = driver.ModelKey;
+        var scheme = Bound.Scheme;
         var hashes = chunks.Select(c => Hash(c.Text)).ToList();
         if (vault.Embeddings.GetValueOrDefault(path) is { } stored && IsCurrent(stored, version, driver)
-            && stored.Chunks.Select(c => (c.StartLine, c.Hash)).SequenceEqual(chunks.Select((c, i) => (c.StartLine, hashes[i]))))
+            && stored.Chunks.Select(c => (c.StartLine, c.Part, c.Hash)).SequenceEqual(chunks.Select((c, i) => (c.StartLine, c.Part, hashes[i]))))
         {
             return;
         }
 
         // Vectors are reused by the hash of their text, but only the current model's: the same text gives
-        // another vector under another model.
+        // another vector under another model. Under another scheme it gives the same, so chunking anew keeps them.
         var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
         var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
+        // The chunker keeps every text within the bound; a last check, counted afresh, so that a slip shows in the log.
+        var over = Oversized(Bound, missing.Select(i => chunks[i].Text));
+        if (over > 0)
+        {
+            _log.LogWarning("Vault {VaultId}: {Count} chunks of {PathId} exceed the bound {Scheme}; embedded as they are", vault.Id, over, vault.PathId(path), scheme);
+        }
+
         // A deletion or a re-keying of the vault cancels a call under way: it waits for this gate, and a provider
         // that hangs with retries would hold it up for minutes.
         using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.InterruptToken(vault.Id));
@@ -268,7 +378,7 @@ public sealed class SearchIndex : BackgroundService
             KumbuMetrics.EmbeddingBatchDone(kind, Stopwatch.GetElapsedTime(started));
         }
 
-        var embeddings = new NoteEmbeddings(model, version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
+        var embeddings = new NoteEmbeddings(model, version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]], c.Part))], scheme);
         // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
         // or deleted the vault.
         if (vault.EmbeddingProvider != provider) return;
@@ -304,12 +414,17 @@ public sealed class SearchIndex : BackgroundService
         while (Queued > 0 && DateTime.UtcNow < until) await Task.Delay(50, ct);
     }
 
+    /// <summary>How many of <paramref name="texts"/> don't fit <paramref name="bound"/> (<see cref="ChunkBound.Fits"/>).</summary>
+    internal static int Oversized(ChunkBound bound, IEnumerable<string> texts) => texts.Count(t => !bound.Fits(t));
+
     private static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
 
     public override void Dispose()
     {
         _catalog.Unlocked -= CatchUp;
         if (_analyses is not null) _analyses.Stored -= OnAnalysed;
+        // Not disposed: a warm-up may still look at its token.
+        _stopping.Cancel();
         base.Dispose();
     }
 }
