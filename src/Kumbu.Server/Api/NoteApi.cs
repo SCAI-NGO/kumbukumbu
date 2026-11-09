@@ -887,7 +887,8 @@ public static class NoteApi
             _ => null,
         };
         return TypedResults.Ok(new SearchView(
-            [.. ranked.Hits.Select(h => Result(h.Chunk, SectionSearch.Snippet(h.Chunk, query), h.Score, Reason(query, h.Chunk)))],
+            // The pieces of one long line share their start line, by which the web app tells results apart: the best one stays.
+            [.. ranked.Hits.DistinctBy(h => (h.Chunk.Path, h.Chunk.StartLine)).Select(h => Result(h.Chunk, SectionSearch.Snippet(h.Chunk, query), h.Score, Reason(query, h.Chunk)))],
             ranked.Semantic?.Pending ?? 0,
             notice));
 

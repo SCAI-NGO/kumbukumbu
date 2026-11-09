@@ -27,12 +27,13 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     /// <summary>A server on <paramref name="world"/>'s database; with <paramref name="start"/> false the index
     /// never runs, so whatever the unlock queues stays queued.</summary>
-    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null)
+    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null, ChunkTokenizer? tokenizer = null,
+        Microsoft.Extensions.Logging.ILogger<SearchIndex>? log = null)
     {
         world ??= new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
         embedder ??= new FakeEmbedder();
-        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), NullLogger<SearchIndex>.Instance);
+        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), log ?? NullLogger<SearchIndex>.Instance, tokenizer: tokenizer);
         if (start) await index.StartAsync(Ct);
         if ((await catalog.OpenAsync(Token, Ct)).Count == 0) await catalog.CreateAsync("Work", Token, null, Ct);
         return new Setup(world, catalog, index, new EncryptedNoteStore(catalog, new FixedCredential(Token), index), embedder);
@@ -44,7 +45,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Written_notes_are_found_by_meaning_section_by_section()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\nThe service checks rules at the entrance.\n# Team\nAnna and Ben.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\n## Rules\nThe service checks rules at the entrance.\n# Team\n## People\nAnna and Ben.\n"), Ct);
         await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
         await IdleAsync(s);
 
@@ -54,6 +55,25 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         Assert.Equal(0, result.Pending);
         Assert.Equal((P("/Work/gate.md"), 0), (result.Hits[0].Path, result.Hits[0].StartLine));
         Assert.Equal(3, result.Hits.Count);
+    }
+
+    [Fact]
+    public async Task The_notes_of_an_unlocked_vault_are_split_ahead_of_the_first_search()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\n## Rules\nThe service checks rules at the entrance.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
+        await IdleAsync(s);
+
+        // After a restart nothing is embedded again, so only the warm-up splits the notes.
+        var later = await StartAsync(s.World);
+        await IdleAsync(later);
+        await later.Index.Warming.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal(0, later.Embedder.Embedded);
+        var notes = await later.Store.ReadNotesUnderAsync(P("/Work"), Ct);
+        Assert.Equal(2, notes.Count);
+        Assert.All(notes, n => Assert.True(Chunker.IsSplit(n, later.Index.Bound), n.Path.Value));
     }
 
     [Fact]
@@ -82,13 +102,13 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Only_changed_sections_are_embedded_again_and_removed_notes_leave()
     {
         var s = await StartAsync();
-        var note = New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n");
+        var note = New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n");
         await s.Store.TryCreateAsync(note, Ct);
         await IdleAsync(s);
         Assert.Equal(3, s.Embedder.Embedded);
 
         var current = (await s.Store.GetAsync(note.Path, Ct))!;
-        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\n## A1\nalpha\n# B\n## B1\nbeta changed\n# C\n## C1\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
         await IdleAsync(s);
         Assert.Equal(4, s.Embedder.Embedded);
 
@@ -96,6 +116,35 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         await IdleAsync(s);
         Assert.Empty((await s.Store.SearchAsync(P("/Work"), "beta", 10, Ct)).Hits);
         Assert.Equal(0, await s.World.Db.GetCollection<BsonDocument>("embeddings").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Until_the_tokenizer_settles_search_is_getting_ready_and_nothing_is_embedded()
+    {
+        var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
+        try
+        {
+            var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { Enabled = false, ModelPath = models } });
+            var tokenizer = new ChunkTokenizer(options, new NoHttp(), NullLogger<ChunkTokenizer>.Instance);
+            var s = await StartAsync(tokenizer: tokenizer);
+            await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+            await Task.Delay(200, Ct);
+
+            var waiting = await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+            Assert.Equal((SemanticState.Preparing, "search by meaning is getting ready (the tokenizer is loading)"), (waiting.State, waiting.Reason));
+            Assert.Equal(0, s.Embedder.Embedded);
+            Assert.Same(ChunkBound.Fallback, s.Store.Bound);
+
+            await tokenizer.StartAsync(Ct);
+            await tokenizer.WhenSettledAsync(Ct);
+            await IdleAsync(s);
+            Assert.Same(ChunkBound.Unbounded, s.Store.Bound);
+            Assert.Equal(P("/Work/a.md"), Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).Hits).Path);
+        }
+        finally
+        {
+            Directory.Delete(models, recursive: true);
+        }
     }
 
     [Fact]
@@ -136,7 +185,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task SwitchingTheModelReEmbedsOnUnlock()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n"), Ct);
         await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats and dogs.\n"), Ct);
         await IdleAsync(s);
         Assert.Equal(3, s.Embedder.Embedded);
@@ -177,7 +226,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task SwitchingBackDoesNotReuseVectorsOfTheOtherModel()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n"), Ct);
         await IdleAsync(s);
 
         var large = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"));
@@ -207,6 +256,269 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         var (opened, embeddings) = vault.OpenEmbeddings(new SealedDocument { Vault = "v1", PathId = pathId, Blob = blob });
 
         Assert.Equal((path, "arctic-m", "v-1", 2), (opened, embeddings.Model, embeddings.Version, embeddings.Chunks[0].Vector.Length));
+    }
+
+    [Fact]
+    public void Embeddings_keep_their_scheme_and_parts()
+    {
+        var vault = new UnlockedVault("v1", "Work", VaultCrypto.NewKey(), T0, new VaultLocks());
+        var path = P("/Work/a.md");
+        var sealedDoc = new SealedDocument
+        {
+            Vault = "v1", PathId = vault.PathId(path),
+            Blob = vault.SealEmbeddings(path, new NoteEmbeddings("arctic-m", "v-1", [new(3, "h0", [1, 0]), new(3, "h2", [0, 1], Part: 2)], "2/tok-f1cc44ad7faa")),
+        };
+
+        var (_, opened) = vault.OpenEmbeddings(sealedDoc);
+
+        Assert.Equal("2/tok-f1cc44ad7faa", opened.Scheme);
+        Assert.Equal([(3, 0, "h0"), (3, 2, "h2")], opened.Chunks.Select(c => (c.StartLine, c.Part, c.Hash)));
+    }
+
+    [Fact]
+    public void Embeddings_before_the_scheme_open_without_one()
+    {
+        var vaultKey = VaultCrypto.NewKey();
+        var vault = new UnlockedVault("v1", "Work", vaultKey, T0, new VaultLocks());
+        var path = P("/Work/a.md");
+        var pathId = vault.PathId(path);
+
+        // The payload as 0.3 wrote it: no scheme, no parts.
+        var before = new { Path = path.Value, Version = "v-1", Model = "arctic-m", Chunks = new[] { new { StartLine = 4, Hash = "h", Vector = Convert.ToBase64String(new byte[4]) } } };
+        var blob = VaultCrypto.Seal(
+            VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(before), $"embeddings:v1:{Convert.ToBase64String(pathId)}");
+
+        var (_, embeddings) = vault.OpenEmbeddings(new SealedDocument { Vault = "v1", PathId = pathId, Blob = blob });
+
+        Assert.Null(embeddings.Scheme);
+        Assert.Equal((4, 0), (embeddings.Chunks[0].StartLine, embeddings.Chunks[0].Part));
+    }
+
+    /// <summary>The vault of <paramref name="s"/>, with the embeddings of <paramref name="paths"/> in its working set
+    /// marked as made under another scheme (as 0.3 stored them).</summary>
+    private static async Task<UnlockedVault> OfAnOlderSchemeAsync(Setup s, params string[] paths)
+    {
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        foreach (var path in paths) vault.Embeddings = vault.Embeddings.SetItem(P(path), vault.Embeddings[P(path)] with { Scheme = null });
+        return vault;
+    }
+
+    [Fact]
+    public async Task A_note_of_an_older_scheme_is_chunked_anew()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "# A\nalpha\n"), Ct);
+        await IdleAsync(s);
+        var vault = await OfAnOlderSchemeAsync(s, "/Work/a.md");
+
+        s.Index.CatchUp(vault);
+        await IdleAsync(s);
+
+        var stored = Assert.Single(await StoredEmbeddingsAsync(s));
+        Assert.Equal(s.Index.Bound.Scheme, stored.Scheme);
+        Assert.Equal(s.Index.Bound.Scheme, vault.Embeddings[P("/Work/a.md")].Scheme);
+        // The same text: its vector is kept.
+        Assert.Equal(1, s.Embedder.Embedded);
+    }
+
+    [Fact]
+    public async Task Unchanged_texts_keep_their_vectors_across_schemes()
+    {
+        // Stored under the character bound; the next start has no provider of a tokenizer and chunks by words alone,
+        // so the long line becomes fewer, longer pieces, and the short note stays as it was.
+        var line = string.Join(' ', Enumerable.Range(0, 300).Select(i => $"reading{i}"));
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/short.md", "# Short\nA few words only.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/log.md", "# Log\n" + line + "\n"), Ct);
+        await IdleAsync(s);
+        var before = (await StoredEmbeddingsAsync(s)).SelectMany(e => e.Chunks).Select(c => c.Hash).ToHashSet();
+        Assert.Equal("2/fallback", Assert.Single((await StoredEmbeddingsAsync(s)).Select(e => e.Scheme).Distinct()));
+
+        var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
+        try
+        {
+            var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { Enabled = false, ModelPath = models } });
+            var tokenizer = new ChunkTokenizer(options, new NoHttp(), NullLogger<ChunkTokenizer>.Instance);
+            await tokenizer.StartAsync(Ct);
+            await tokenizer.WhenSettledAsync(Ct);
+            var later = await StartAsync(s.World, tokenizer: tokenizer);
+            await IdleAsync(later);
+
+            var notes = (await later.Store.ReadNotesUnderAsync(P("/Work"), Ct)).ToDictionary(n => n.Path.Value);
+            var changed = Chunker.Split(notes["/Work/log.md"], later.Index.Bound).Select(c => c.EmbeddingText).Where(t => !before.Contains(Hash(t))).Distinct().ToList();
+            Assert.NotEmpty(changed);
+            Assert.Equal(changed.Count, later.Embedder.Embedded);
+            Assert.DoesNotContain(later.Embedder.Seen, t => t.Text.Contains("A few words only."));
+            Assert.All(await StoredEmbeddingsAsync(later), e => Assert.Equal("2/words", e.Scheme));
+        }
+        finally
+        {
+            Directory.Delete(models, recursive: true);
+        }
+    }
+
+    private static string Hash(string text) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
+
+    [Fact]
+    public async Task Older_scheme_notes_are_pending_until_re_indexed()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/b.md", "alpha beta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/c.md", "alpha gamma\n"), Ct);
+        await IdleAsync(s);
+
+        // The index doesn't run yet: the unlock found everything current, so only the search queues the two.
+        var later = await StartAsync(s.World, start: false);
+        await OfAnOlderSchemeAsync(later, "/Work/a.md", "/Work/b.md");
+
+        var stale = await later.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+
+        Assert.Equal((SemanticState.Ready, 2), (stale.State, stale.Pending));
+        Assert.Equal(P("/Work/c.md"), Assert.Single(stale.Hits).Path);
+        Assert.Equal(["/Work/a.md", "/Work/b.md"], stale.StaleNotes.Select(p => p.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(2, later.Index.Queued);
+
+        await later.Index.StartAsync(Ct);
+        await IdleAsync(later);
+        var current = await later.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+        Assert.Equal(0, current.Pending);
+        Assert.Empty(current.StaleNotes);
+        Assert.Equal(3, current.Hits.Count);
+        Assert.DoesNotContain(later.Embedder.Seen, t => !t.Query);
+    }
+
+    [Fact]
+    public async Task A_note_that_fails_is_not_sent_again_by_every_search()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/bad.md", "alpha poison\n"), Ct);
+        await IdleAsync(s);
+        // Stored under another scheme, and chunked otherwise then: chunking anew has a text to embed.
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        var old = vault.Embeddings[P("/Work/bad.md")];
+        vault.Embeddings = vault.Embeddings.SetItem(P("/Work/bad.md"), old with { Scheme = null, Chunks = [.. old.Chunks.Select(c => c with { Hash = "older" })] });
+        s.Embedder.Refuses = t => t.Contains("poison");
+
+        Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).StaleNotes);
+        await IdleAsync(s);
+        Assert.Equal(1, s.Embedder.Refused);
+        Assert.True(s.Index.HasFailed(vault, P("/Work/bad.md")));
+
+        for (var i = 0; i < 3; i++)
+        {
+            // Still stale, so still ranked by its words, but not queued again.
+            Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).StaleNotes);
+            Assert.Equal(0, s.Index.Queued);
+            await IdleAsync(s);
+        }
+
+        Assert.Equal(1, s.Embedder.Refused);
+
+        // A new version is tried again, by its write; it fails as well, and searches leave it again.
+        var current = (await s.Store.GetAsync(P("/Work/bad.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "alpha poison again\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        await IdleAsync(s);
+        Assert.Equal(2, s.Embedder.Refused);
+        await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+        Assert.Equal(0, s.Index.Queued);
+    }
+
+    [Fact]
+    public async Task Failures_are_forgotten_on_an_unlock_and_with_another_version()
+    {
+        // The index doesn't run: only what is noted here counts.
+        var s = await StartAsync(start: false);
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+
+        s.Index.NoteFailed(vault, P("/Work/a.md"));
+        Assert.True(s.Index.HasFailed(vault, P("/Work/a.md")));
+        s.Index.CatchUp(vault);
+        Assert.False(s.Index.HasFailed(vault, P("/Work/a.md")));
+
+        s.Index.NoteFailed(vault, P("/Work/a.md"));
+        var current = (await s.Store.GetAsync(P("/Work/a.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "alpha beta\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        Assert.False(s.Index.HasFailed(vault, P("/Work/a.md")));
+    }
+
+    [Fact]
+    public async Task Texts_over_the_bound_are_counted_and_normal_notes_stay_quiet()
+    {
+        Assert.Equal(1, SearchIndex.Oversized(ChunkBound.Fallback, [new string('a', ChunkBound.FallbackMaxChars + 1), "short"]));
+        Assert.Equal(0, SearchIndex.Oversized(ChunkBound.Unbounded, [new string('a', 10_000)]));
+
+        var log = new CapturedLog();
+        using var logs = new Microsoft.Extensions.Logging.LoggerFactory([log]);
+        var s = await StartAsync(log: Microsoft.Extensions.Logging.LoggerFactoryExtensions.CreateLogger<SearchIndex>(logs));
+        await s.Store.TryCreateAsync(New("/Work/a.md", "# A\n" + string.Join('\n', Enumerable.Range(0, 200).Select(i => $"line {i} of a long note"))), Ct);
+        await IdleAsync(s);
+
+        Assert.True(Assert.Single(await StoredEmbeddingsAsync(s)).Chunks.Count > 1);
+        Assert.DoesNotContain(log.Lines, l => l.Contains("exceed the bound"));
+    }
+
+    [Fact]
+    public async Task Pieces_of_a_long_line_are_found_by_their_part()
+    {
+        var s = await StartAsync();
+        var line = string.Join(' ', Enumerable.Range(0, 1_200).Select(i => $"reading{i}"));
+        await s.Store.TryCreateAsync(New("/Work/log.md", "# Log\n" + line + "\n"), Ct);
+        await IdleAsync(s);
+        var note = Assert.Single(await s.Store.ReadNotesUnderAsync(P("/Work"), Ct));
+        var third = Chunker.Split(note, s.Index.Bound).Single(c => c.StartLine == 1 && c.Part == 2);
+
+        var result = await s.Store.SearchAsync(P("/Work"), third.Text, 1, Ct);
+
+        Assert.Equal((P("/Work/log.md"), 1, 2), (result.Hits[0].Path, result.Hits[0].StartLine, result.Hits[0].Part));
+    }
+
+    [Fact]
+    public async Task A_note_stored_under_the_fallback_is_re_chunked_once_the_tokenizer_settles()
+    {
+        // With the real tokenizer (KUMBU_TOKENIZER) the bound settles on it; without, on the word limits alone, as
+        // with no provider. Either way not on the fallback the note was stored under.
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "# A\nalpha\n"), Ct);
+        await IdleAsync(s);
+        Assert.Equal("2/fallback", Assert.Single(await StoredEmbeddingsAsync(s)).Scheme);
+
+        var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
+        try
+        {
+            var real = Environment.GetEnvironmentVariable("KUMBU_TOKENIZER");
+            if (real is not null && File.Exists(real))
+            {
+                var dir = ModelFiles.Directory(models, ModelFiles.Default);
+                Directory.CreateDirectory(dir);
+                File.Copy(real, Path.Combine(dir, ModelFiles.Tokenizer));
+            }
+
+            var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { Enabled = false, ModelPath = models } });
+            var tokenizer = new ChunkTokenizer(options, new NoHttp(), NullLogger<ChunkTokenizer>.Instance);
+
+            // Unlocked while the bound is still the fallback: the note looks current then.
+            var later = await StartAsync(s.World, tokenizer: tokenizer);
+            await Task.Delay(200, Ct);
+            Assert.Equal("2/fallback", (await StoredEmbeddingsAsync(later)).Single().Scheme);
+
+            await tokenizer.StartAsync(Ct);
+            await tokenizer.WhenSettledAsync(Ct);
+            var vault = Assert.Single(await later.Catalog.OpenAsync(Token, Ct)).Vault;
+            // The index's catch-up follows the settling a moment later.
+            for (var until = DateTime.UtcNow.AddSeconds(10); vault.Embeddings[P("/Work/a.md")].Scheme == "2/fallback" && DateTime.UtcNow < until;) await Task.Delay(50, Ct);
+            await IdleAsync(later);
+
+            var expected = real is not null && File.Exists(real) ? "2/tok-f1cc44ad7faa" : "2/words";
+            Assert.Equal(expected, later.Index.Bound.Scheme);
+            Assert.Equal(expected, Assert.Single(await StoredEmbeddingsAsync(later)).Scheme);
+        }
+        finally
+        {
+            Directory.Delete(models, recursive: true);
+        }
     }
 
     private static EmbeddingProvider Remote(FakeEmbedder driver, string name = "remote") => new(name, "Remote", "EU, zero data retention", driver);
@@ -343,7 +655,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
             remote.BeforeEmbed = null;
             await s.Catalog.SetEmbeddingProviderAsync(priv, EmbeddingProviders.Internal, Ct);
         };
-        await s.Store.TryCreateAsync(New("/Private/long.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Private/long.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n"), Ct);
         await IdleAsync(s);
 
         Assert.Single(remote.Seen);
@@ -408,7 +720,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task A_note_with_more_sections_than_a_batch_holds_is_embedded_in_several_calls()
     {
         var s = await StartAsync(embedder: new FakeEmbedder { MaxBatch = 2 });
-        await s.Store.TryCreateAsync(New("/Work/long.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n# D\ndelta\n# E\nepsilon\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/long.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n# D\n## D1\ndelta\n# E\n## E1\nepsilon\n"), Ct);
         await IdleAsync(s);
 
         Assert.Equal(5, s.Embedder.Embedded);

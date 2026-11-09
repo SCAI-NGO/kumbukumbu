@@ -26,6 +26,9 @@ public sealed record SectionHit(Chunk Chunk, double? Score)
     /// <summary>For a page of a PDF: its number. <see cref="Chunk"/> then holds the PDF's path and no text (the
     /// index has only the page's vector; its text is read for the output).</summary>
     public int? Page { get; init; }
+
+    /// <summary>With <see cref="Page"/>: the part of the page's best-ranking chunk (<see cref="PageChunk.Part"/>).</summary>
+    public int? PagePart { get; init; }
 }
 
 /// <param name="Semantic">The search by meaning, or null for <see cref="SearchMode.Words"/>.</param>
@@ -56,23 +59,28 @@ public static class SectionSearch
         IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false,
         bool archive = false)
     {
-        var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
+        // The same bound as the stored chunks, so that the boundaries match theirs.
+        var bound = index.Bound;
+        var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(n => Chunker.Split(n, bound)).ToList();
 
         // Every chunk with a cosine takes part, so the bonus can lift a section from anywhere in the scope.
         SemanticResult? semantic = null;
         var fellBack = false;
         List<(Chunk Chunk, double? Score)> ranked;
-        var pageChunks = new Dictionary<Chunk, int>(ReferenceEqualityComparer.Instance);
+        var pageChunks = new Dictionary<Chunk, (int Page, int Part)>(ReferenceEqualityComparer.Instance);
         if (mode == SearchMode.Words) ranked = RankByWords(chunks, query);
         else
         {
             semantic = await index.SearchAsync(scope, query, int.MaxValue, ct);
             if (semantic.State == SemanticState.Ready)
             {
+                // Vaults whose provider is unavailable, and notes being chunked anew, are ranked by words.
                 var wordsOnly = semantic.WordsOnlyVaults.ToHashSet(StringComparer.Ordinal);
-                var (byMeaning, byWords) = wordsOnly.Count == 0
+                var stale = semantic.StaleNotes.ToHashSet();
+                bool ByWords(Chunk c) => wordsOnly.Contains(c.Path.Vault!) || stale.Contains(c.Path);
+                var (byMeaning, byWords) = wordsOnly.Count == 0 && stale.Count == 0
                     ? (chunks, [])
-                    : (chunks.Where(c => !wordsOnly.Contains(c.Path.Vault!)).ToList(), chunks.Where(c => wordsOnly.Contains(c.Path.Vault!)).ToList());
+                    : (chunks.Where(c => !ByWords(c)).ToList(), chunks.Where(ByWords).ToList());
                 ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
                 if (pages) ranked = WithPages(ranked, semantic, pageChunks, ArchiveFolder.Shown(scope, archive));
 
@@ -91,9 +99,11 @@ public static class SectionSearch
             else ranked = RankByWords(chunks, query);
         }
 
-        // A heading with nothing below it says little; it still ranks, but the next section takes its place.
+        // Headings with nothing below them say little; they still rank, but the next section takes their place.
         var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max)
-            .Select(r => new SectionHit(r.Chunk, r.Score) { Page = pageChunks.TryGetValue(r.Chunk, out var page) ? page : null }).ToList();
+            .Select(r => pageChunks.TryGetValue(r.Chunk, out var page)
+                ? new SectionHit(r.Chunk, r.Score) { Page = page.Page, PagePart = page.Part }
+                : new SectionHit(r.Chunk, r.Score)).ToList();
         return new SectionSearchResult(listed, semantic, fellBack);
     }
 
@@ -111,7 +121,7 @@ public static class SectionSearch
             var lines = Lines.Split(note.Content);
             var matches = Enumerable.Range(0, lines.Count).Where(i => regex.IsMatch(lines[i])).ToList();
             if (matches.Count == 0) continue;
-            foreach (var chunk in Chunker.Split(note))
+            foreach (var chunk in Chunker.Sections(note))
             {
                 var first = matches.FirstOrDefault(m => m >= chunk.StartLine && m < chunk.EndLine, -1);
                 if (first < 0) continue;
@@ -123,13 +133,10 @@ public static class SectionSearch
         return result;
     }
 
-    /// <summary>The start of a section's text, without its heading, on one line.</summary>
+    /// <summary>The start of a section's text, without its headings, on one line.</summary>
     public static string Snippet(Chunk chunk)
     {
-        var text = string.Join(' ', chunk.Text.Split('\n')
-            .Where(l => l.Trim().Length > 0)
-            .Skip(chunk.Address.Length > 0 && chunk.Text.Split('\n').Length > 1 ? 1 : 0)
-            .Select(l => l.Trim()));
+        var text = string.Join(' ', Body(chunk).Select(l => l.Trim()));
         if (text.Length == 0) text = chunk.Text.Trim();
         return Shorten(text);
     }
@@ -141,12 +148,21 @@ public static class SectionSearch
     public static string Snippet(Chunk chunk, string query)
     {
         var terms = Bm25.QueryTerms(query);
-        var lines = chunk.Text.Split('\n');
-        var first = lines.Skip(chunk.Address.Length > 0 && lines.Length > 1 ? 1 : 0)
+        var first = Body(chunk)
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.Length > 0
                 && (l.Contains(query, StringComparison.OrdinalIgnoreCase) || Bm25.Terms(l).Any(t => terms.Contains(t))));
         return first is null ? Snippet(chunk) : Shorten(first);
+    }
+
+    /// <summary>The non-blank lines of a chunk that aren't headings (a merged chunk holds several; a table part starts
+    /// with its header row instead). A "# comment" in fenced code is no heading, also in a part of a code block that
+    /// starts after its fence (<see cref="Chunk.Fence"/>).</summary>
+    private static IEnumerable<string> Body(Chunk chunk)
+    {
+        var lines = chunk.Text.Split('\n');
+        var code = chunk.Fence is null ? Outline.CodeLines(lines) : Outline.CodeLines([chunk.Fence, .. lines])[1..];
+        return lines.Where((l, i) => l.Trim().Length > 0 && (code[i] || !Outline.HeadingRegex().IsMatch(l)));
     }
 
     /// <summary>At most the length of a snippet, with an ellipsis if cut.</summary>
@@ -157,12 +173,14 @@ public static class SectionSearch
 
     private static List<(Chunk, double?)> RankByMeaning(List<Chunk> chunks, SemanticResult semantic, string query, bool meaningOnly)
     {
-        var byKey = chunks.ToDictionary(c => c.Key);
+        var byKey = new Dictionary<(VaultPath, int, int), Chunk>();
+        foreach (var chunk in chunks) byKey.TryAdd(chunk.Key, chunk);
+        var byPath = chunks.GroupBy(c => c.Path).ToDictionary(g => g.Key, g => g.ToList());
         var terms = meaningOnly ? [] : Bm25.QueryTerms(query);
-        var cosines = new Dictionary<(VaultPath, int), double>();
+        var cosines = new Dictionary<(VaultPath, int, int), double>();
         foreach (var hit in semantic.Hits)
         {
-            if (Locate(hit, chunks, byKey) is not { } key) continue;
+            if (Locate(hit, byPath, byKey) is not { } key) continue;
             cosines[key] = Math.Max(cosines.GetValueOrDefault(key, double.MinValue), hit.Score);
         }
 
@@ -173,28 +191,30 @@ public static class SectionSearch
             .Select(r => (r.Chunk, (double?)r.Score))];
     }
 
-    /// <summary>The pages of PDFs among the hits, best cosine per page, merged into <paramref name="ranked"/> by score;
-    /// a section goes first on a tie. Those in a vault's archive only if <paramref name="archived"/>.</summary>
-    private static List<(Chunk, double?)> WithPages(List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, int> pageChunks, bool archived)
+    /// <summary>The pages of PDFs among the hits, one per page with the cosine and part of its best chunk, merged
+    /// into <paramref name="ranked"/> by score; a section goes first on a tie, and of a page's parts on a tie, the
+    /// first hit. Those in a vault's archive only if <paramref name="archived"/>.</summary>
+    private static List<(Chunk, double?)> WithPages(
+        List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, (int Page, int Part)> pageChunks, bool archived)
     {
-        var best = new Dictionary<(VaultPath, int), double>();
+        var best = new Dictionary<(VaultPath, int), (double Score, int Part)>();
         foreach (var hit in semantic.Hits)
         {
             if (!AttachmentFormat.IsPdf(hit.Path) || (!archived && ArchiveFolder.Contains(hit.Path))) continue;
-            best[(hit.Path, hit.StartLine)] = Math.Max(best.GetValueOrDefault((hit.Path, hit.StartLine), double.MinValue), hit.Score);
+            if (!best.TryGetValue((hit.Path, hit.StartLine), out var known) || hit.Score > known.Score) best[(hit.Path, hit.StartLine)] = (hit.Score, hit.Part);
         }
 
         if (best.Count == 0) return ranked;
-        foreach (var ((path, page), _) in best) pageChunks[new Chunk(path, "", page, page, "", "")] = page;
-        var found = pageChunks.Select(p => (Chunk: p.Key, Score: (double?)best[(p.Key.Path, p.Value)]))
+        foreach (var ((path, page), (_, part)) in best) pageChunks[new Chunk(path, "", page, page, "", "")] = (page, part);
+        var found = pageChunks.Select(p => (Chunk: p.Key, Score: (double?)best[(p.Key.Path, p.Value.Page)].Score))
             .OrderBy(p => p.Chunk.Path.Value, TextOrder.Default).ThenBy(p => p.Chunk.StartLine);
         return [.. ranked.Select(r => (r.Chunk, r.Score, List: 0)).Concat(found.Select(p => (p.Chunk, p.Score, List: 1)))
             .OrderByDescending(r => r.Score).ThenBy(r => r.List).Select(r => (r.Chunk, r.Score))];
     }
 
     /// <summary>
-    /// Reciprocal rank fusion of the vaults ranked by meaning with those whose embedding provider is unavailable,
-    /// ranked by words: each section scores 1 / (60 + its rank in its own list), ties going to meaning. A cosine and a
+    /// Reciprocal rank fusion of the vaults ranked by meaning with those whose embedding provider is unavailable and
+    /// the notes being chunked anew, ranked by words: each section scores 1 / (60 + its rank in its own list), ties going to meaning. A cosine and a
     /// BM25 score say nothing about each other, so only the ranks are merged (the meaning list keeps its scores, the
     /// words list has none, as in a search by words). Hybrid ranking over one model uses the cosine and the word bonus
     /// instead (<see cref="Fusion"/>), which measured better; this merges lists that can't share a score.
@@ -210,15 +230,15 @@ public static class SectionSearch
 
     private static bool IsHeadingOnly(Chunk chunk)
     {
-        var text = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        return text.Count == 1 && Outline.HeadingRegex().IsMatch(text[0]);
+        return chunk.Text.Trim().Length > 0 && !Body(chunk).Any();
     }
 
-    /// <summary>The current chunk for a hit: the same start line, or the chunk that now contains it (the
-    /// index may lag behind a write by a moment).</summary>
-    private static (VaultPath, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int), Chunk> byKey)
+    /// <summary>The current chunk for a hit: the same start line and part, or the chunk that now contains it (the index
+    /// may lag behind a write by a moment), looked for among the note's own chunks. A PDF's page is no note's.</summary>
+    private static (VaultPath, int, int)? Locate(SemanticHit hit, Dictionary<VaultPath, List<Chunk>> byPath, Dictionary<(VaultPath, int, int), Chunk> byKey)
     {
-        if (byKey.ContainsKey((hit.Path, hit.StartLine))) return (hit.Path, hit.StartLine);
-        return chunks.FirstOrDefault(c => c.Path == hit.Path && c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
+        if (AttachmentFormat.IsPdf(hit.Path)) return null;
+        if (byKey.ContainsKey((hit.Path, hit.StartLine, hit.Part))) return (hit.Path, hit.StartLine, hit.Part);
+        return byPath.GetValueOrDefault(hit.Path)?.FirstOrDefault(c => c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
     }
 }
