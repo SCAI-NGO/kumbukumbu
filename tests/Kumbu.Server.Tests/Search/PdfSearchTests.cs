@@ -181,6 +181,46 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_PDF_of_an_older_scheme_stays_findable_by_page()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, key) = await UploadAsync(host, "old.pdf", "quokkas smile at visitors");
+        var path = P($"/{user.Vault}/old.pdf");
+        var scheme = host.Services.GetRequiredService<SearchIndex>().Bound.Scheme;
+        var embedded = Embedded("quokkas smile at visitors");
+
+        // As 0.3 stored it: no scheme. Its pages are still the PDF's text, so they are found while it is chunked anew.
+        var current = Current(host, vault);
+        current.Embeddings = current.Embeddings.SetItem(path, current.Embeddings[path] with { Scheme = null });
+        var (isError, output) = await user.ShAsync($"semsearch quokkas smile visitors /{user.Vault}", key);
+
+        Assert.False(isError, output);
+        Assert.StartsWith($"1. {path.Value} p2  score ", output);
+        Assert.DoesNotContain("indexed yet", output);
+        await EventuallyAsync(() => Task.FromResult(Current(host, vault).Embeddings[path].Scheme == scheme), "the PDF is chunked anew");
+        Assert.Equal([1, 2, 3, 4], Current(host, vault).Embeddings[path].Chunks.Select(c => c.StartLine));
+        Assert.Equal(embedded, Embedded("quokkas smile at visitors"));
+    }
+
+    [Fact]
+    public async Task Pages_stored_with_other_parts_are_stored_anew()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, _) = await UploadAsync(host, "parts.pdf", "wombats dig burrows");
+        var path = P($"/{user.Vault}/parts.pdf");
+        var index = host.Services.GetRequiredService<SearchIndex>();
+
+        // Same pages, same texts, the current scheme, but the parts aren't the ones the pages give.
+        var current = Current(host, vault);
+        var stored = current.Embeddings[path];
+        current.Embeddings = current.Embeddings.SetItem(path, stored with { Chunks = [.. stored.Chunks.Select(c => c with { Part = 7 })] });
+        index.Enqueue(current, [path]);
+        await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.All(Current(host, vault).Embeddings[path].Chunks, c => Assert.Equal(0, c.Part));
+    }
+
+    [Fact]
     public async Task A_moved_pdf_is_found_under_its_new_path_only()
     {
         await using var host = Host(app, Sidecar());

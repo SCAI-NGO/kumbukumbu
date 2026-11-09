@@ -455,6 +455,8 @@ secrets:
 
 `docker compose up -d` again; the providers appear in the vault's menu. A new key in the file needs a restart (`docker compose restart kumbu`).
 
+**After the update to structural chunking (0.4.0)**, the index chunks every note and PDF anew, once, in the background; `semsearch` counts the notes still waiting as not indexed yet and ranks them by words meanwhile. Only chunks whose text changed are embedded again, which after the new chunking is most of them: vaults on an external provider send their text to it once more.
+
 ## Quickstart
 
 ```sh

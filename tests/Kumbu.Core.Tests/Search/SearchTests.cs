@@ -37,17 +37,36 @@ public class SearchTests
     [Fact]
     public async Task Locate_finds_a_piece_by_its_part()
     {
-        // A line too long for one chunk is split into pieces on the same start line; until hits carry their part,
-        // the hit goes to the first piece.
-        var note = new Note(P("/Work/log.md"), "# Log\n" + string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"reading{i}")) + "\n");
-        Assert.True(Chunker.Split(note, ChunkBound.Fallback).Count(c => c.StartLine == 1) > 1);
-        var index = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.7), new(note.Path, 1, 0.6)], 0), ChunkBound.Fallback);
+        // A line too long for one chunk is split into pieces on the same start line; a hit names its piece.
+        var line = string.Join(' ', Enumerable.Range(0, 1_200).Select(i => $"reading{i}"));
+        Assert.True(line.Length >= 10_000);
+        var note = new Note(P("/Work/log.md"), "# Log\n" + line + "\n");
+        Assert.True(Chunker.Split(note, ChunkBound.Fallback).Count(c => c.StartLine == 1) > 2);
+        var index = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.6), new(note.Path, 1, 0.7) { Part = 2 }], 0), ChunkBound.Fallback);
 
         var result = await SectionSearch.RankAsync([note], VaultPath.Root, "reading5", SearchMode.Meaning, 10, index, CancellationToken.None);
 
-        var hit = Assert.Single(result.Hits);
-        Assert.Equal((1, 0), (hit.Chunk.StartLine, hit.Chunk.Part));
-        Assert.Equal(0.7, hit.Score!.Value, 2);
+        Assert.Equal([(1, 2, 0.7), (1, 0, 0.6)], result.Hits.Select(h => (h.Chunk.StartLine, h.Chunk.Part, Math.Round(h.Score!.Value, 2))));
+
+        // A part the note no longer has goes to the chunk that contains the start line.
+        var gone = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.5) { Part = 99 }], 0), ChunkBound.Fallback);
+        var located = Assert.Single((await SectionSearch.RankAsync([note], VaultPath.Root, "reading5", SearchMode.Meaning, 10, gone, CancellationToken.None)).Hits);
+        Assert.Equal((1, 0), (located.Chunk.StartLine, located.Chunk.Part));
+    }
+
+    [Fact]
+    public async Task Stale_notes_are_ranked_by_words_meanwhile()
+    {
+        // farm.md is being chunked anew: no cosines of its own, but its words still find it, fused by rank.
+        var notes = await Store.ReadNotesUnderAsync(VaultPath.Root, CancellationToken.None);
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/gate.md"), 0, 0.5)], 1) { StaleNotes = [P("/Demo/farm.md")] });
+
+        var hybrid = await SectionSearch.RankAsync(notes, VaultPath.Root, "hens ducks", SearchMode.Hybrid, 10, index, CancellationToken.None);
+        var meaning = await SectionSearch.RankAsync(notes, VaultPath.Root, "hens ducks", SearchMode.Meaning, 10, index, CancellationToken.None);
+
+        Assert.Equal([("/Demo/gate.md", (double?)0.5), ("/Demo/farm.md", null)], hybrid.Hits.Select(h => (h.Chunk.Path.Value, h.Score is { } s ? Math.Round(s, 2) : (double?)null)));
+        Assert.False(hybrid.FellBackToWords);
+        Assert.Equal(["/Demo/gate.md"], meaning.Hits.Select(h => h.Chunk.Path.Value));
     }
 
     private sealed class BoundIndex(SemanticResult result, ChunkBound bound) : ISearchIndex

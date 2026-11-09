@@ -552,7 +552,8 @@ public sealed class EncryptedNoteStore(
     /// scope; a provider that is unavailable leaves its vaults to the words (<see cref="Kumbu.Core.Search.SemanticResult.WordsOnlyVaults"/>),
     /// and the result says so in its reason.
     /// Notes whose current version isn't indexed yet count as pending, and so do notes embedded with another model:
-    /// their vectors don't compare with the query's, so they are skipped until re-embedded.
+    /// their vectors don't compare with the query's, so they are skipped until re-embedded. Notes chunked under another
+    /// scheme are pending too, and queued: their chunks no longer match the note's (<see cref="Kumbu.Core.Search.SemanticResult.StaleNotes"/>).
     /// <para>
     /// The cosines of two providers' models end up in one list as they are, though they aren't on one scale. Measured
     /// (docs/notes-search-external.md), that costs about a query of 37 against the better model alone, and
@@ -590,7 +591,9 @@ public sealed class EncryptedNoteStore(
             return new(Kumbu.Core.Search.SemanticState.Preparing, [], 0, "search by meaning is getting ready (the tokenizer is loading)");
 
         var hits = new List<Kumbu.Core.Search.SemanticHit>();
+        var stale = new List<VaultPath>();
         var pending = 0;
+        var scheme = index.Bound.Scheme;
         var searched = false;
         // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
         var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
@@ -609,6 +612,7 @@ public sealed class EncryptedNoteStore(
                 var vault = access.Vault;
                 var within = access.ToVault(scope);
                 var embeddings = vault.Embeddings;
+                var rechunk = new List<VaultPath>();
                 foreach (var (path, (_, note)) in vault.Notes)
                 {
                     if (!InScope(within, path)) continue;
@@ -623,12 +627,23 @@ public sealed class EncryptedNoteStore(
                         continue;
                     }
 
+                    // Chunked under another scheme: its hits would go to chunks the note no longer has. The words rank
+                    // it until it is chunked anew.
+                    if (e.Scheme != scheme)
+                    {
+                        pending++;
+                        rechunk.Add(path);
+                        stale.Add(access.ToCaller(path));
+                        continue;
+                    }
+
                     if (e.Version != note.Version) pending++;
-                    foreach (var chunk in e.Chunks) hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                    foreach (var chunk in e.Chunks) hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)) { Part = chunk.Part });
                 }
 
                 // The pages of PDFs, as embedded for their current version; any other version's pages are left out
                 // (their text is no longer the PDF's). PDFs don't count as pending: semsearch --words doesn't find them.
+                // Those of another scheme are queued, and found by page meanwhile: a page is the same page under any.
                 foreach (var (path, (_, file)) in vault.Attachments)
                 {
                     if (!AttachmentFormat.IsPdf(file.Current) || !InScope(within, path)) continue;
@@ -639,8 +654,15 @@ public sealed class EncryptedNoteStore(
                         continue;
                     }
 
-                    foreach (var chunk in e.Chunks) hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                    var current = e.Scheme == scheme;
+                    if (!current) rechunk.Add(path);
+                    foreach (var chunk in e.Chunks)
+                    {
+                        hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)) { Part = current ? chunk.Part : 0 });
+                    }
                 }
+
+                if (rechunk.Count > 0) index.Enqueue(vault, rechunk);
             }
         }
 
@@ -655,6 +677,7 @@ public sealed class EncryptedNoteStore(
         return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending, partial)
         {
             WordsOnlyVaults = [.. unavailable.SelectMany(u => u.Vaults).Select(v => v.Name)],
+            StaleNotes = stale,
         };
 
         static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<VaultAccess> Vaults) u) =>

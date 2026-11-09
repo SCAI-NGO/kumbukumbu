@@ -71,10 +71,13 @@ public static class SectionSearch
             semantic = await index.SearchAsync(scope, query, int.MaxValue, ct);
             if (semantic.State == SemanticState.Ready)
             {
+                // Vaults whose provider is unavailable, and notes being chunked anew, are ranked by words.
                 var wordsOnly = semantic.WordsOnlyVaults.ToHashSet(StringComparer.Ordinal);
-                var (byMeaning, byWords) = wordsOnly.Count == 0
+                var stale = semantic.StaleNotes.ToHashSet();
+                bool ByWords(Chunk c) => wordsOnly.Contains(c.Path.Vault!) || stale.Contains(c.Path);
+                var (byMeaning, byWords) = wordsOnly.Count == 0 && stale.Count == 0
                     ? (chunks, [])
-                    : (chunks.Where(c => !wordsOnly.Contains(c.Path.Vault!)).ToList(), chunks.Where(c => wordsOnly.Contains(c.Path.Vault!)).ToList());
+                    : (chunks.Where(c => !ByWords(c)).ToList(), chunks.Where(ByWords).ToList());
                 ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
                 if (pages) ranked = WithPages(ranked, semantic, pageChunks, ArchiveFolder.Shown(scope, archive));
 
@@ -201,8 +204,8 @@ public static class SectionSearch
     }
 
     /// <summary>
-    /// Reciprocal rank fusion of the vaults ranked by meaning with those whose embedding provider is unavailable,
-    /// ranked by words: each section scores 1 / (60 + its rank in its own list), ties going to meaning. A cosine and a
+    /// Reciprocal rank fusion of the vaults ranked by meaning with those whose embedding provider is unavailable and
+    /// the notes being chunked anew, ranked by words: each section scores 1 / (60 + its rank in its own list), ties going to meaning. A cosine and a
     /// BM25 score say nothing about each other, so only the ranks are merged (the meaning list keeps its scores, the
     /// words list has none, as in a search by words). Hybrid ranking over one model uses the cosine and the word bonus
     /// instead (<see cref="Fusion"/>), which measured better; this merges lists that can't share a score.
@@ -221,11 +224,11 @@ public static class SectionSearch
         return chunk.Text.Trim().Length > 0 && !Body(chunk).Any();
     }
 
-    /// <summary>The current chunk for a hit: the same start line and part (a hit is on part 0 for now), or the chunk
-    /// that now contains it (the index may lag behind a write by a moment).</summary>
+    /// <summary>The current chunk for a hit: the same start line and part, or the chunk that now contains it (the index
+    /// may lag behind a write by a moment).</summary>
     private static (VaultPath, int, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int, int), Chunk> byKey)
     {
-        if (byKey.ContainsKey((hit.Path, hit.StartLine, 0))) return (hit.Path, hit.StartLine, 0);
+        if (byKey.ContainsKey((hit.Path, hit.StartLine, hit.Part))) return (hit.Path, hit.StartLine, hit.Part);
         return chunks.FirstOrDefault(c => c.Path == hit.Path && c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
     }
 }

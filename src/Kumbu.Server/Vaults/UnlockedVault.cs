@@ -265,8 +265,8 @@ public sealed class UnlockedVault
     public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
         Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(
             path.Value, embeddings.Version,
-            [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector))))],
-            embeddings.Model));
+            [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector)), c.Part))],
+            embeddings.Model, embeddings.Scheme));
 
     public (VaultPath Path, NoteEmbeddings Embeddings) OpenEmbeddings(SealedDocument doc)
     {
@@ -277,7 +277,8 @@ public sealed class UnlockedVault
             throw new InvalidDataException($"Path id of embeddings {doc.Id} does not match its sealed path");
         }
 
-        return (path, new NoteEmbeddings(p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector))))]));
+        return (path, new NoteEmbeddings(
+            p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector)), c.Part))], p.Scheme));
     }
 
     /// <summary>Vectors are stored as 16-bit floats, half the size; search precision doesn't need more.</summary>
@@ -636,17 +637,21 @@ internal sealed record VaultMeta(
     public string Shown => DisplayName ?? Name;
 }
 
-internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector);
+/// <remarks>Part is missing in embeddings written before structural chunking: they had one chunk per start line.</remarks>
+internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector, int Part = 0);
 
-/// <remarks>Model is missing in embeddings written before step 7b; step 7 had only arctic-m.</remarks>
-internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null);
+/// <remarks>Model is missing in embeddings written before step 7b; step 7 had only arctic-m. Scheme is missing in
+/// embeddings written before structural chunking.</remarks>
+internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null, string? Scheme = null);
 
-/// <summary>A chunk's vector, with the hash of the text it was made from, to reuse it while the text stays.</summary>
-public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector);
+/// <summary>A chunk's vector, with the hash of the text it was made from, to reuse it while the text stays. A chunk
+/// is keyed by its start line (a PDF's page) and its <paramref name="Part"/> on it.</summary>
+public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector, int Part = 0);
 
 /// <summary>The embeddings of one note at one version, made by one model (its key): vectors of different models
-/// don't compare.</summary>
-public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks);
+/// don't compare. <paramref name="Scheme"/> is the chunking they were made with (<see cref="Kumbu.Core.Search.ChunkBound.Scheme"/>),
+/// null before there was one: chunks of another scheme have other boundaries.</summary>
+public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks, string? Scheme = null);
 
 internal sealed record AttachmentStatePayload(string MediaType, long Size, int? Width, int? Height, string Version, string BlobId)
 {
