@@ -207,27 +207,33 @@ describe("the sync socket", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(FakeSocket.all).toHaveLength(2);
 
-    // Never opened: no loop of tickets against a server that closes every socket.
+    // Never opened, and past the five seconds: no loop of tickets against a server that closes every socket.
+    await vi.advanceTimersByTimeAsync(5000);
     last().drop(4412);
     await vi.advanceTimersByTimeAsync(0);
     expect(FakeSocket.all).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1000);
     expect(FakeSocket.all).toHaveLength(3);
 
+    last().open();
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(4);
+
     // Opened, but within five seconds of the last one.
     last().open();
     last().drop(4412);
     await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all).toHaveLength(3);
-    await vi.advanceTimersByTimeAsync(1000);
     expect(FakeSocket.all).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.all).toHaveLength(5);
 
     // Five seconds on: at once again.
     await vi.advanceTimersByTimeAsync(5000);
     last().open();
     last().drop(4412);
     await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all).toHaveLength(5);
+    expect(FakeSocket.all).toHaveLength(6);
   });
 
   it("opens again when a vault it left out after a close for hidden vaults comes back", async () => {
