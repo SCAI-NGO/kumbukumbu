@@ -25,9 +25,10 @@ public sealed class FixedCredential(string secret) : ICredential
 /// <summary>
 /// What a web session hides of the user's vaults (discreet vaults design): the ids of her discreet vaults, null when
 /// their list didn't open (then every vault but the vault Skills counts as discreet, Decision 2), and whether the
-/// session shows them now.
+/// session shows them now. <c>AlsoOpen</c>: a discreet vault shown to this one request anyway, for the late save of
+/// its open note (Decision 12).
 /// </summary>
-public sealed record DiscreetFilter(bool Revealed, IReadOnlySet<string>? Ids);
+public sealed record DiscreetFilter(bool Revealed, IReadOnlySet<string>? Ids, string? AlsoOpen = null);
 
 /// <summary>
 /// A user's key, from their session: opens the user's own vaults, as their owner, and those shared with them, at the
@@ -52,7 +53,7 @@ public sealed class UserCredential(string userId, byte[] userKey, DiscreetFilter
         var all = await catalog.OpenForUserAsync(userId, userKey, ct);
         var skillsIds = all.Where(a => a.IsSkillsVault).Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
         IReadOnlySet<string> hidden = discreet is null || discreet.Revealed ? None
-            : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !skillsIds.Contains(id)).ToHashSet(StringComparer.Ordinal);
+            : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !skillsIds.Contains(id) && id != discreet.AlsoOpen).ToHashSet(StringComparer.Ordinal);
         _opened = new Opened([.. all.Where(a => !hidden.Contains(a.Id))], [.. all.Where(a => hidden.Contains(a.Id))], hidden, skillsIds);
         return _opened.Visible;
     }

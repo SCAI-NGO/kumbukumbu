@@ -185,9 +185,11 @@ public sealed class RequestCaller : ICaller
 
     /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
     /// them (none hidden without). A sealed list that doesn't open hides every vault but the vault Skills, and is logged
-    /// to <paramref name="log"/> by the exception's type, once per process for each user.</summary>
+    /// to <paramref name="log"/> by the exception's type, once per process for each user. <paramref name="alsoOpen"/>: a
+    /// discreet vault this one request opens anyway, for a late save (<see cref="LateSave"/>).</summary>
     internal static RequestCaller ForSession(
-        User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null)
+        User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null,
+        string? alsoOpen = null)
     {
         DiscreetFilter? filter = null;
         if (discreet is not null)
@@ -198,7 +200,7 @@ public sealed class RequestCaller : ICaller
                 log?.LogWarning("The discreet vaults of user {UserId} do not open: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
             }
 
-            filter = new DiscreetFilter(discreet.Revealed, ids);
+            filter = new DiscreetFilter(discreet.Revealed, ids, alsoOpen);
         }
 
         return new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey, filter), catalog, userKey,

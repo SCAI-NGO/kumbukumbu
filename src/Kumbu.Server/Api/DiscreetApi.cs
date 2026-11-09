@@ -25,6 +25,9 @@ public sealed record RevealRequest(string? Pin = null, int? Minutes = null);
 
 public sealed record MarkDiscreetRequest(bool Discreet);
 
+/// <summary>The note open in the tab: its vault and its path in it; a null <c>vault</c> for none.</summary>
+public sealed record OpenNoteRequest(string? Vault = null, string? Path = null);
+
 /// <summary>
 /// Discreet vaults in the web app (discreet vaults design): the PIN, showing and hiding them in this session, and marking
 /// a vault. For a session only. Every answer around the PIN is the same whether or not the user has a PIN or discreet
@@ -43,6 +46,7 @@ public static class DiscreetApi
         api.MapPost("/reveal", RevealAsync).Errors(400, 401, 403, 429);
         api.MapPost("/hide", HideAsync).Errors(401, 403);
         api.MapPut("/vaults/{vault}", MarkAsync).Errors(400, 401, 403, 404, 409);
+        api.MapPut("/open-note", OpenNoteAsync).Errors(401, 403);
     }
 
     /// <summary>The password, checked and limited as every password check behind a session, then the PIN's form.</summary>
@@ -121,6 +125,33 @@ public static class DiscreetApi
         var all = visible.Concat(session.Hidden).Where(v => !v.IsSkillsVault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
         await discreet.SetAsync(user.Id, caller.UserKey!, access.Id, body.Discreet, all, ct);
         await hub.DiscreetChangedAsync(user.Id, access.Id, CancellationToken.None);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// The note open in the tab (Decision 12): while the session shows the discreet vaults and it is a note of one, it is
+    /// recorded, sealed, for one late save should the reveal time out; any other note, or none, forgets it. While hidden
+    /// nothing changes, so a marker left by a time-out stays for its save. Always 204, whatever the vault or the path:
+    /// the answer tells nothing.
+    /// </summary>
+    private static async Task<NoContent> OpenNoteAsync(OpenNoteRequest body, HttpContext http, RequestCaller caller, Sessions sessions, CancellationToken ct)
+    {
+        var session = caller.Session!;
+        if (!session.Revealed) return TypedResults.NoContent();
+        var secret = http.Request.Cookies[CallerMiddleware.SessionCookie]!;
+        if (Sessions.SubjectOf(secret) is not { } subject) return TypedResults.NoContent();
+
+        byte[]? marker = null;
+        if (body.Vault is not null && LateSave.Of(body.Vault, body.Path) is { } note)
+        {
+            var access = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == note.Vault);
+            if (access is not null && session.IsDiscreet(access.Id))
+            {
+                marker = new LateSave(access.Id, access.Name, note.Path).Seal(caller.User!.Id, caller.UserKey!, subject);
+            }
+        }
+
+        await sessions.SetLateSaveAsync(secret, marker, ct);
         return TypedResults.NoContent();
     }
 

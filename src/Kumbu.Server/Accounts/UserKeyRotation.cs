@@ -400,11 +400,12 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         var sessions = mine & f.Eq(s => s.Kind, UserSlotDocument.Session);
         if (rotation.KeptSession is { } kept)
         {
-            // Created just after the stamp, or Sessions.ResolveAsync would refuse it with every other session.
+            // Created just after the stamp, or Sessions.ResolveAsync would refuse it with every other session. Its late
+            // save's marker is sealed under the old user key and would open no more: it goes.
             Require(await UserSlots.UpdateOneAsync(
                 session,
                 sessions & f.Eq(s => s.Id, kept.SlotId) & f.Eq(s => s.Wrapped, kept.OldWrapped),
-                u.Set(s => s.Wrapped, kept.NewWrapped).Set(s => s.CreatedAt, stamp.AddMilliseconds(1)),
+                u.Set(s => s.Wrapped, kept.NewWrapped).Set(s => s.CreatedAt, stamp.AddMilliseconds(1)).Unset(s => s.LateSave),
                 cancellationToken: ct));
             sessions &= f.Ne(s => s.Id, kept.SlotId);
         }

@@ -306,6 +306,49 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Records <paramref name="sealedMarker"/> (<see cref="LateSave"/>) as the discreet note open in the session of
+    /// <paramref name="secret"/>, or forgets it for null; only while the session has a reveal, so a hide that came first
+    /// isn't undone.
+    /// </summary>
+    public async Task SetLateSaveAsync(string secret, byte[]? sealedMarker, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        var update = sealedMarker is null
+            ? Builders<UserSlotDocument>.Update.Unset(s => s.LateSave)
+            : Builders<UserSlotDocument>.Update.Set(s => s.LateSave, sealedMarker);
+        await Slots.UpdateOneAsync(s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.RevealedAt != null, update, cancellationToken: ct);
+    }
+
+    /// <summary>Takes the late save's marker of the session of <paramref name="secret"/>, conditional on its exact bytes,
+    /// so of concurrent requests only one gets it. Answers whether this one did.</summary>
+    public async Task<bool> TakeLateSaveAsync(string secret, byte[] expected, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return false;
+        var lookup = Lookup(bytes);
+        var taken = await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.LateSave == expected,
+            Builders<UserSlotDocument>.Update.Unset(s => s.LateSave),
+            cancellationToken: ct);
+        return taken.ModifiedCount > 0;
+    }
+
+    /// <summary>
+    /// Puts back a marker taken for a late save that didn't succeed (ruling 10), so the tab may try once more: only if
+    /// no marker has been recorded since and the session's reveal is still the one that ended at
+    /// <paramref name="revealUntil"/> (a hide or a new reveal since forgot the marker for good).
+    /// </summary>
+    public async Task PutBackLateSaveAsync(string secret, byte[] sealedMarker, DateTime revealUntil, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.LateSave == null && s.RevealedAt != null && s.RevealUntil == revealUntil,
+            Builders<UserSlotDocument>.Update.Set(s => s.LateSave, sealedMarker),
+            cancellationToken: ct);
+    }
+
     /// <summary>A reveal without an end lasts as long as the session; one with an end, until just before it.</summary>
     private static bool Revealed(UserSlotDocument slot, DateTime now) => slot.RevealedAt is not null && (slot.RevealUntil is not { } until || now < until);
 
