@@ -1,0 +1,22 @@
+# litmus tests that fail by design (WebDAV design §3.4, §3.7, §7), as "suite/name times", where times is how often
+# the test fails in a run (litmus runs some tests several times). tools/litmus/run.sh fails on any other failure, on
+# a test failing more often, and on one failing less often or not at all. Numbers are left out: they differ between
+# litmus versions.
+
+# PROPPATCH answers 207 with every property set and stores nothing (§3.4): Windows and Finder set times and their own
+# properties, and refusing breaks their copies. So a PROPFIND after it finds no dead property: after setting, moving,
+# deleting, replacing, one without a namespace, a value outside the BMP, removing and setting at once, many namespaces.
+props/propget 8                 # dead properties are not stored
+
+# Fake locking (§3.7): LOCK hands out a token and UNLOCK takes it back, but a lock is never enforced, so another
+# client may delete and lock what is locked (an exclusive lock, after the owner wrote, a shared lock, two shared
+# locks, a locked folder).
+locks/notowner_modify 5         # locks are not enforced: DELETE of a locked resource succeeds
+locks/notowner_lock 4           # locks are not enforced: a LOCK over a lock succeeds
+
+# If headers with lock tokens are accepted and ignored (§3.7), so a condition that names a wrong or no longer valid
+# token doesn't fail the request.
+locks/fail_cond_put 1           # If headers are ignored: a PUT with an unknown lock token succeeds
+locks/cond_put_corrupt_token 1  # If headers are ignored: a PUT with a malformed lock token succeeds
+locks/fail_complex_cond_put 1   # If headers are ignored: a PUT whose If lists only false conditions succeeds
+locks/fail_cond_put_unlocked 1  # If headers are ignored: a PUT with the token of an ended lock succeeds

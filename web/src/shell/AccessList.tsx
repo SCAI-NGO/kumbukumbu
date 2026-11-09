@@ -23,7 +23,7 @@ import { maintainSentence } from "../routes/rights";
 import ShareDialog from "./ShareDialog";
 
 const roleLabels: Record<Role, string> = { read: "Read", write: "Read and write", maintain: "Maintain" };
-const kindLabels: Record<string, string> = { key: "API key", connection: "App" };
+const kindLabels: Record<string, string> = { key: "API key", connection: "App", share: "WebDAV share" };
 
 /**
  * Who opened Bob's link and waits for the owner: the one place she sees a member's username (collab design §4.2).

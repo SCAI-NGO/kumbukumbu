@@ -2,9 +2,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { useRestoreNote, useTrash, type TrashEntry } from "../api/history";
+import { usePurgeTrash, useRestoreNote, useTrash, type TrashEntry } from "../api/history";
+import { useLevel } from "../api/notes";
+import { usePasswordWindowOpen } from "../api/publications";
 import { crumbOf, fileKindOf, folderOf, isAttachment, isMarker, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import ConfirmTyped from "../components/ConfirmTyped";
 import { FormError } from "../components/form";
 import { Sheet, sizeText } from "../components/Sheet";
 import { ago } from "../note/AgentBanner";
@@ -20,12 +23,17 @@ const placeOf = (path: string) => crumbOf(isMarker(path) ? folderOf(path) : path
 /**
  * The vault's removed notes, images and PDFs, most recently removed first, each with its kind's icon, when it goes
  * for good and a way back. One restored here leaves the list (the trash is asked again) and is offered to open: a
- * note as the note, an attachment in the lightbox.
+ * note as the note, an attachment in the lightbox. The vault's owner may also delete an entry, or all of them, for good
+ * (WebDAV design §3.11); a member may not, nor may any key or agent.
  */
 export default function TrashSheet({ vault, onClose }: { vault: string; onClose(): void }) {
   const trash = useTrash(vault);
   const navigate = useNavigate();
   const [restored, setRestored] = useState<string[]>([]);
+  // Unknown until the vault list is in, and so not the owner's yet: nothing is offered before.
+  const owner = useLevel(vault) === "owner";
+  // What the confirmation is about: one entry, or "all" for the whole trash.
+  const [purging, setPurging] = useState<TrashEntry | "all" | null>(null);
   const days = trash.data?.retentionDays ?? 30;
   const open = (path: string) => {
     onClose();
@@ -58,17 +66,34 @@ export default function TrashSheet({ vault, onClose }: { vault: string; onClose(
       {trash.isError && <FormError>{errorText(trash.error)}</FormError>}
       {trash.data && trash.data.notes.length === 0 && <p className="text-sm text-muted">The trash is empty.</p>}
       {trash.data && trash.data.notes.length > 0 && (
-        <ul aria-label="Removed notes" className="flex flex-col gap-1.5">
-          {trash.data.notes.map((entry, i) => (
-            <TrashRow key={`${i}-${entry.path}-${entry.version}`} entry={entry} onRestored={() => setRestored((r) => [entry.path, ...r.filter((p) => p !== entry.path)])} />
-          ))}
-        </ul>
+        <>
+          {owner && (
+            <div>
+              <button type="button" onClick={() => setPurging("all")} className={smallButton}>
+                Empty trash…
+              </button>
+            </div>
+          )}
+          <ul aria-label="Removed notes" className="flex flex-col gap-1.5">
+            {trash.data.notes.map((entry, i) => (
+              <TrashRow
+                key={`${i}-${entry.path}-${entry.version}`}
+                entry={entry}
+                onRestored={() => setRestored((r) => [entry.path, ...r.filter((p) => p !== entry.path)])}
+                onPurge={owner ? () => setPurging(entry) : undefined}
+              />
+            ))}
+          </ul>
+        </>
+      )}
+      {purging && trash.data && (
+        <PurgeDialog vault={vault} entry={purging === "all" ? null : purging} count={trash.data.notes.length} onClose={() => setPurging(null)} />
       )}
     </Sheet>
   );
 }
 
-function TrashRow({ entry, onRestored }: { entry: TrashEntry; onRestored(): void }) {
+function TrashRow({ entry, onRestored, onPurge }: { entry: TrashEntry; onRestored(): void; onPurge?(): void }) {
   const restore = useRestoreNote();
   const kind = fileKindOf(entry.path);
   const Icon = fileKindIcon[kind];
@@ -93,7 +118,44 @@ function TrashRow({ entry, onRestored }: { entry: TrashEntry; onRestored(): void
       <p className="text-sm text-muted">
         Removed {ago(entry.deletedAt)} by {entry.deletedBy} · {isMarker(entry.path) ? "" : `${sizeText(Number(entry.size))} · `}gone for good {ago(entry.expiresAt)}
       </p>
+      {onPurge && (
+        <div>
+          <button type="button" aria-label={`Delete ${nameOf(entry.path)} permanently…`} onClick={onPurge} className={smallButton}>
+            Delete permanently…
+          </button>
+        </div>
+      )}
       {restore.isError && <FormError>{errorText(restore.error)}</FormError>}
     </li>
+  );
+}
+
+/**
+ * Confirms deleting `entry` for good, or with null the whole trash (`count` entries): with the password, or without it
+ * while the password window is open, as publishing does. A note's entry carries its history, which goes with it.
+ */
+function PurgeDialog({ vault, entry, count, onClose }: { vault: string; entry: TrashEntry | null; count: number; onClose(): void }) {
+  const passwordWindow = usePasswordWindowOpen();
+  const asks = passwordWindow.known && !passwordWindow.open;
+  // Read through the closure when the request is made, so the mutation cache never holds it.
+  const [password, setPassword] = useState("");
+  const purge = usePurgeTrash(vault, () => (asks ? password : ""));
+  return (
+    <ConfirmTyped
+      title={entry ? `Delete ${nameOf(entry.path)} permanently?` : `Empty the trash of ${vault}?`}
+      text={
+        entry
+          ? "It goes for good now, not when its time in the trash is up. Its history goes with it. This can't be undone."
+          : count === 1
+            ? "The 1 entry in the trash goes for good now, and its history goes with it. This can't be undone."
+            : `All ${count} entries in the trash go for good now, and their history goes with them. This can't be undone.`
+      }
+      action={entry ? "Delete permanently" : "Empty trash"}
+      pending={!passwordWindow.known || purge.isPending}
+      error={purge.isError ? errorText(purge.error) : null}
+      onConfirm={() => purge.mutate(entry ? [entry] : undefined, { onSuccess: onClose })}
+      onClose={onClose}
+      {...(asks ? { password, onPasswordChange: setPassword } : {})}
+    />
   );
 }

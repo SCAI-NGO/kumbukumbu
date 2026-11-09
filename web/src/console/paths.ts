@@ -102,6 +102,9 @@ export const commandTable: Record<string, CommandEntry> = {
     values: [],
     find: (o) => ({ paths: o.length > 1 ? [1] : [], missing: o[0] === "ls" ? "cwd" : undefined }),
   },
+  // Df.cs: without a vault, every vault of one's own; Du.cs: without a path, every vault, so the working directory goes in.
+  df: { values: [], find: (o) => ({ paths: first(o) }) },
+  du: { values: ["-d", "--max-depth"], find: (o) => ({ paths: first(o), missing: "cwd" }) },
   uname: { values: [], find: () => ({ paths: [] }) },
   help: { values: [], find: () => ({ paths: [] }) },
 };

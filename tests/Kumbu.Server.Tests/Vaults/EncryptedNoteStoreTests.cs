@@ -5,6 +5,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Driver;
 using static Kumbu.Server.Tests.Vaults.VaultWorld;
@@ -72,6 +73,21 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         Assert.True(await store.TryAddCheckpointAsync(
             new Checkpoint("vor-Acme-Übernahme-Geheimprojekt-Kauf", P("/Geheimprojekt/Archiv-Übernahme"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]) { Ref = WriterRef.Server },
             [new Note(moved.Path, moved.Content)], Ct));
+        // A WebDAV share of a user's vault: neither its share document nor its slot holds the label, the vault's name or the password.
+        var catalog = world.Catalog();
+        var keys = new Kumbu.Server.Accounts.ApiKeys(world.Db, catalog, TimeProvider.System, NullLogger<Kumbu.Server.Accounts.ApiKeys>.Instance);
+        var users = new Kumbu.Server.Accounts.UserCatalog(
+            world.Db, new Kumbu.Server.Accounts.Argon2Kdf(new Kumbu.Server.Accounts.Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), keys,
+            new Kumbu.Server.Accounts.Connections(world.Db, catalog, TimeProvider.System, NullLogger<Kumbu.Server.Accounts.Connections>.Instance), TimeProvider.System,
+            NullLogger<Kumbu.Server.Accounts.UserCatalog>.Instance);
+        await users.CreateAsync("lea", "correct horse battery staple", Kumbu.Server.Accounts.Roles.User, Ct);
+        var (lea, leaKey, readAt) = (await users.TrySignInAsync("lea", "correct horse battery staple", Ct))!.Value;
+        var tresor = await catalog.CreateForUserAsync("Übernahme-Tresor", lea.Id, leaKey, Ct);
+        var shares = new Kumbu.Server.Accounts.DavShares(world.Db, catalog, TimeProvider.System, NullLogger<Kumbu.Server.Accounts.DavShares>.Instance);
+        var (_, password, _) = await shares.CreateAsync(
+            lea, leaKey, readAt, "Geheimakte-Laptop", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [tresor.Id] = Kumbu.Server.Accounts.KeyRight.Write }, Ct);
+        Assert.Single(await world.Db.GetCollection<BsonDocument>("dav_shares").Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(Ct));
+        Assert.Single(await world.Db.GetCollection<BsonDocument>("slots").Find(Builders<BsonDocument>.Filter.Eq("kind", "dav")).ToListAsync(Ct));
 
         var everything = new StringBuilder();
         foreach (var name in await (await world.Db.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
@@ -87,10 +103,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         }
 
         var dump = everything.ToString();
-        foreach (var secret in new[] { "Acme-Übernahme-Geheimprojekt", "Geheimakte Übernahme", "Geheimprojekt", "Pläne", "Archiv-Übernahme", "Papierkorb-Löschung", Token })
+        foreach (var secret in new[] { "Acme-Übernahme-Geheimprojekt", "Geheimakte Übernahme", "Geheimprojekt", "Pläne", "Archiv-Übernahme", "Papierkorb-Löschung", Token, "Übernahme-Tresor", "Geheimakte-Laptop" })
         {
             Assert.DoesNotContain(secret, dump, StringComparison.OrdinalIgnoreCase);
         }
+
+        // No assertion message: it would print the password.
+        Assert.False(dump.Contains(password, StringComparison.OrdinalIgnoreCase));
+        Assert.False(dump.Contains(Kumbu.Server.Accounts.DavTokens.Normalise(password)!, StringComparison.OrdinalIgnoreCase));
     }
 
     private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>

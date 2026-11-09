@@ -12,6 +12,7 @@ public enum CallerKind
     ApiKey,
     DevToken,
     Connection,
+    DavShare,
 }
 
 /// <summary>
@@ -28,7 +29,7 @@ public sealed class RequestCaller : ICaller
         DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false)
     {
         Kind = kind;
-        _human = kind == CallerKind.Session || device;
+        _human = kind is CallerKind.Session or CallerKind.DavShare || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
         PasswordWindowOpen = passwordWindowOpen;
@@ -41,13 +42,13 @@ public sealed class RequestCaller : ICaller
 
     public CallerKind Kind { get; }
 
-    /// <summary>The signed-in user, or the API key's or connection's owner; null for the dev token.</summary>
+    /// <summary>The signed-in user, or the API key's, connection's or WebDAV share's owner; null for the dev token.</summary>
     public User? User { get; }
 
     public string Writer { get; }
 
     /// <summary>Always the owner's in phase 0: a session (no id), a key (its id; a device's kind is its own), a
-    /// connection (its id), the dev token (the server's).</summary>
+    /// connection (its id), a WebDAV share (an agent's, with its id), the dev token (the server's).</summary>
     public WriterRef Reference { get; }
 
     /// <summary>
@@ -76,7 +77,7 @@ public sealed class RequestCaller : ICaller
         return access.Membership is null ? null : access;
     }
 
-    /// <summary>A person (the session, an Obsidian device key) gets the shorter changeset; agents, connections and the dev token the agent's.</summary>
+    /// <summary>A person (the session, an Obsidian device key, a WebDAV share) gets the shorter changeset; agents, connections and the dev token the agent's.</summary>
     public TimeSpan ChangesetIdle => _human ? Changeset.HumanIdle : Changeset.Idle;
 
     /// <summary>The user key, for a session only: what the account endpoints need to rewrap or list the user's slots.</summary>
@@ -101,15 +102,18 @@ public sealed class RequestCaller : ICaller
 
     public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
-    /// <summary>A person's session isn't a key (planner's decision 4). A vault read-only for every member (its owner
-    /// deactivated) says so instead.</summary>
+    /// <summary>A person's session isn't a key (planner's decision 4), nor is a WebDAV share. A vault read-only for every
+    /// member (its owner deactivated) says so instead.</summary>
     public string ReadOnlySentence(string vault) =>
         ReadOnlyCode(vault) is { } code ? VaultAccess.ReadOnlySentence(code, vault)
         // The same for every name the caller doesn't have, so it tells nothing of other people's vaults.
-        : Level(vault) is null ? (Kind == CallerKind.Session ? $"you have no vault named {vault}" : $"this key has no vault named {vault}")
+        : Level(vault) is null ? (Kind == CallerKind.Session ? $"you have no vault named {vault}" : $"this {CredentialNoun} has no vault named {vault}")
         : Kind == CallerKind.Session ? $"you can only read vault {vault}"
-        : RoleHoldsBack(vault) ? $"your role in vault {vault} is read, and a key never acts above your role; only the owner can change it"
-        : $"this key can only read vault {vault}";
+        : RoleHoldsBack(vault) ? $"your role in vault {vault} is read, and a {CredentialNoun} never acts above your role; only the owner can change it"
+        : $"this {CredentialNoun} can only read vault {vault}";
+
+    /// <summary>What a refusal calls the credential, for every caller but a session.</summary>
+    private string CredentialNoun => Kind == CallerKind.DavShare ? "share" : "key";
 
     /// <summary>A person's role and a key's right are changed by different people, so the refusal says which it is.</summary>
     public string StructuralLimit(string vault)
@@ -117,8 +121,8 @@ public sealed class RequestCaller : ICaller
         if ((Credential as IRightsCredential)?.Access(vault) is not { } access) return "";
         var level = access.Level.ToString().ToLowerInvariant();
         return Kind == CallerKind.Session ? $"Your role there is {level}; only the owner can change it."
-            : RoleHoldsBack(vault) ? $"Your role there is {level}, and a key never acts above your role; only the owner can change it."
-            : $"This key is set to {level}; it takes a key with maintain.";
+            : RoleHoldsBack(vault) ? $"Your role there is {level}, and a {CredentialNoun} never acts above your role; only the owner can change it."
+            : $"This {CredentialNoun} is set to {level}; it takes a {CredentialNoun} with maintain.";
     }
 
     /// <summary>Whether a member's role, not the credential's sealed right, is what she acts at (<c>min(role, sealed)</c>).</summary>
@@ -154,6 +158,16 @@ public sealed class RequestCaller : ICaller
         var credential = new ConnectionCredential(connection.ConnectionId, connection.TokenId, token);
         if ((await credential.OpenAsync(catalog, ct)).Count == 0) return null;
         return new(CallerKind.Connection, connection.User, connection.Name, WriterRef.ForOwner(WriterRef.Agent, connection.ConnectionId), credential, catalog);
+    }
+
+    /// <summary>A WebDAV share's token (normalised), its vaults already opened: null if it opens none (a re-keying took its
+    /// slots), as for a connection. Its writes keep an agent's reference, so history doesn't show them as the user's own
+    /// hand, but a person's changeset timing: an editor is behind it (WebDAV design §3.2).</summary>
+    internal static async Task<RequestCaller?> ForDavShareAsync(ResolvedDavShare share, string token, VaultCatalog catalog, CancellationToken ct)
+    {
+        var credential = new DavShareCredential(share.Id, token);
+        if ((await credential.OpenAsync(catalog, ct)).Count == 0) return null;
+        return new(CallerKind.DavShare, share.User, Writers.Marked(share.Label, "dav"), WriterRef.ForOwner(WriterRef.Agent, share.Id), credential, catalog);
     }
 
     /// <summary>The caller of the current request. Fails closed: a service asking on a request without a

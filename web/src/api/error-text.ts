@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (packages/ui-shared/src/login/login-error-copy.ts)
 import { HttpError } from "./client";
+import { quotaSentence } from "./storage";
 
 /**
  * The sentence to show for a failed call. The API's refusals already carry a sentence meant for the user, so
@@ -11,6 +12,9 @@ export function errorText(err: unknown): string {
     // The password dialog was cancelled: the server's sentence names an API call, which is no use to a person.
     if (err.status === 401 && err.type === "password-required") return "This needs your password, so nothing was done.";
     if (isVaultBusy(err)) return err.message;
+    // Out of space: the owner (her refusal carries the code) is told her limit and what to do; a member the sentence alone.
+    if (err.status === 507 && err.code === "quota") return quotaSentence();
+    if (err.status === 507 && err.message) return err.message;
     if (err.status >= 500) return "The server can't be reached right now. Try again in a moment.";
     if (err.message) return err.message;
   }

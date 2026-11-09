@@ -6,6 +6,7 @@ import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import { withdrawnSentence } from "../api/sharing";
+import { storageText, useAccountStorage } from "../api/storage";
 import ConfirmTyped, { repeats } from "../components/ConfirmTyped";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../components/SharedVaultsChoice";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -188,10 +189,10 @@ function PasswordSection() {
               aria-describedby={`${revokeId}-hint`}
               className="size-5 shrink-0 accent-accent"
             />
-            Also revoke all API keys and disconnect apps
+            Also revoke all API keys and WebDAV shares, and disconnect apps
           </label>
           <p id={`${revokeId}-hint`} className="pl-8 text-sm text-text-body">
-            Agents using them will need new keys, and apps will need to reconnect.
+            Agents using them will need new keys, drives mounted with a share stop working, and apps will need to reconnect.
           </p>
         </div>
         {change.isError && <FormError>{errorText(change.error)}</FormError>}
@@ -256,8 +257,8 @@ function RecoverySection() {
 }
 
 /**
- * New keys for the account and every vault. The server rotates the user key and revokes every API key and app before
- * it answers; the vaults are re-encrypted in the background, each showing as such in the vault list until it is done.
+ * New keys for the account and every vault. The server rotates the user key and revokes every API key, app and WebDAV
+ * share before it answers; the vaults are re-encrypted in the background, each showing as such in the vault list until it is done.
  */
 function ReencryptSection() {
   const queryClient = useQueryClient();
@@ -273,7 +274,7 @@ function ReencryptSection() {
       setPassword("");
       setDone(false);
       setRecoveryKey(view.recoveryKey);
-      void Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      void Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
     },
   });
 
@@ -296,8 +297,8 @@ function ReencryptSection() {
       ) : (
         <>
           <p className="text-text-body">
-            New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new
-            recovery key. If you think your password leaked, change it too.
+            New keys for your account and every vault. API keys, connected apps and WebDAV shares lose access and need to be set up or
+            reconnected; you get a new recovery key. If you think your password leaked, change it too.
           </p>
           <form onSubmit={submit} className="flex flex-col gap-4">
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
@@ -325,6 +326,19 @@ function ReencryptSection() {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** Deleting a vault, with its name typed: the one place in the app that removes notes beyond the trash. */
+/** "Storage: 182 MB of 2 GB": what her own vaults take, as the admin's list counts it and the quota limits it. */
+function StorageLine() {
+  const storage = useAccountStorage();
+  if (storage.isError) return <FormError>{errorText(storage.error)}</FormError>;
+  if (!storage.data) return null;
+  const used = storageText(Number(storage.data.used));
+  return (
+    <p className="text-text-body">
+      {storage.data.limit == null ? `Storage: ${used} (no limit)` : `Storage: ${used} of ${storageText(Number(storage.data.limit))}`}
+    </p>
+  );
+}
+
 function VaultsSection() {
   const vaults = useVaults();
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -333,10 +347,15 @@ function VaultsSection() {
   return (
     <Section title="Vaults">
       <p className="text-text-body">
-        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults; a key that had only this one is revoked.
+        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys and WebDAV shares keep their other vaults; one that had only this one is revoked.
       </p>
       <p className="text-text-body">
-        Re-encrypting a vault gives it a new key. API keys and connected apps with access to it lose it and need to be set up or reconnected.
+        Re-encrypting a vault gives it a new key. API keys, connected apps and WebDAV shares with access to it lose it and need to be set up or
+        reconnected.
+      </p>
+      <StorageLine />
+      <p className="text-sm text-muted">
+        Your vaults with their history, trash and files count; so do vaults you share, whoever writes in them. Vaults shared with you count against their owner.
       </p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}
@@ -477,19 +496,22 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
       setPassword("");
       const keys = Number(view.revokedApiKeys);
       const apps = Number(view.disconnectedApps);
+      const shares = Number(view.revokedShares ?? 0);
       onDone(
         (keys + apps === 0
           ? `${vault} is re-encrypted.`
-          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`) + withdrawnSentence(view),
+          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`) +
+          (shares === 0 ? "" : ` ${plural(shares, "WebDAV share was", "WebDAV shares were")} revoked.`) +
+          withdrawnSentence(view),
       );
-      await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      await Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
       onClose();
     },
   });
   const lists = access.data;
   // Members' keys and apps lose the vault too; the owner sees their names under Access already.
   const membersWith = lists?.members.filter((m) => m.credentials.length > 0) ?? [];
-  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0 && membersWith.length === 0;
+  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0 && lists.shares.length === 0 && membersWith.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -511,9 +533,10 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
         <p className="text-text-body">The vault gets a new key. What has access to it now loses it and needs to be set up or reconnected.</p>
         {access.isPending && <p className="text-muted">Looking up what has access…</p>}
         {access.isError && <FormError>{errorText(access.error)}</FormError>}
-        {nothing && <p className="text-text-body">No API key or connected app has access to it.</p>}
+        {nothing && <p className="text-text-body">No API key, connected app or WebDAV share has access to it.</p>}
         {lists && lists.apiKeys.length > 0 && <AccessList title="API keys" names={lists.apiKeys} />}
         {lists && lists.connections.length > 0 && <AccessList title="Connected apps" names={lists.connections} />}
+        {lists && lists.shares.length > 0 && <AccessList title="WebDAV shares" names={lists.shares} />}
         {membersWith.length > 0 && (
           <AccessList title="Members' keys and apps" names={membersWith.map((m) => `${m.label}: ${m.credentials.map((c) => c.name).join(", ")}`)} />
         )}

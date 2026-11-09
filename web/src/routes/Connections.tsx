@@ -12,13 +12,13 @@ import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, publishing, RightsPicker, type Right } from "./NewKeyDialog";
+import { date } from "./dates";
 import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
+import { useReveal } from "./useReveal";
 
 type Connection = components["schemas"]["ConnectionView"];
 
-const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-const date = (iso: string) => day.format(new Date(iso));
 
 /** Why the server ended or interrupted a connection, in the words the user would use. */
 const reasons: Record<string, string> = {
@@ -57,19 +57,14 @@ function statusText(c: Connection) {
 const isOver = (c: Connection) => c.state === "revoked" || c.state === "expired";
 
 /** The user's connections for apps that sign in with OAuth: made here, their address shown, changed and revoked here. */
-export default function Connections({ onRevealChange }: { onRevealChange?(revealing: boolean): void }) {
+export default function Connections({ subtitle, onRevealChange }: { subtitle?: string; onRevealChange?(revealing: boolean): void }) {
   const connections = useQuery({ queryKey: ["connections"], queryFn: () => call(api.GET("/api/connections")) });
   const [creating, setCreating] = useState(false);
-  const [created, setCreated] = useState<Connection | null>(null);
+  const [created, reveal] = useReveal<Connection>(onRevealChange);
   const [changing, setChanging] = useState<Connection | null>(null);
   const [revoking, setRevoking] = useState<Connection | null>(null);
   const [order, setOrder] = useState<UsageOrder>("created");
   const vaults = useVaults();
-
-  const reveal = (c: Connection | null) => {
-    setCreated(c);
-    onRevealChange?.(c !== null);
-  };
 
   if (created) return <ConnectorReveal connection={created} onDone={() => reveal(null)} />;
 
@@ -80,9 +75,12 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
 
   return (
     <section aria-labelledby="connections-title" className="flex min-w-0 flex-col gap-6">
-      <h2 id="connections-title" className="text-[22px] font-bold text-text">
-        Connections
-      </h2>
+      <div className="flex flex-col gap-1">
+        <h2 id="connections-title" className="text-[22px] font-bold text-text">
+          Connections
+        </h2>
+        {subtitle && <p className="text-sm text-muted">{subtitle}</p>}
+      </div>
       <p className="text-text-body">
         A connection lets an app such as Claude (claude.ai, Desktop and the mobile apps) read or write the vaults you choose. Each connection has its own address.
       </p>

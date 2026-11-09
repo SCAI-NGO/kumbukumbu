@@ -355,7 +355,8 @@ public sealed class VaultEventTests(KumbuAppFactory app)
 
     private static readonly WriterRef BySession = WriterRef.ForOwner(WriterRef.Session, null);
 
-    private static readonly string[] PublicationKinds = [VaultEvents.NotePublished, VaultEvents.PublicationUpdated, VaultEvents.PublicationWithdrawn];
+    private static readonly string[] PublicationKinds =
+        [VaultEvents.NotePublished, VaultEvents.PublicationUpdated, VaultEvents.PublicationWithdrawn, VaultEvents.PublishedNoteKept];
 
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
 
@@ -438,6 +439,8 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         Assert.Equal("The publication of /Work/a.md was withdrawn: “Laptop” removed the note.", Text(VaultEvents.PublicationWithdrawn, "“Laptop”", WithdrawalReasons.Removed));
         Assert.Equal("The publication of /Work/a.md was withdrawn: you made it unpublishable.", Text(VaultEvents.PublicationWithdrawn, "You", WithdrawalReasons.Unpublishable));
         Assert.Equal("The publication of /Work/a.md was withdrawn: “Claude” made it unpublishable.", Text(VaultEvents.PublicationWithdrawn, "“Claude”", WithdrawalReasons.Unpublishable));
+        Assert.Equal("“Work PC (dav)” tried to remove /Work/a.md; it is published, so it stays.", Text(VaultEvents.PublishedNoteKept, "“Work PC (dav)”"));
+        Assert.Equal("A member's WebDAV share tried to remove /Work/a.md; it is published, so it stays.", Text(VaultEvents.PublishedNoteKept, ""));
         foreach (var kind in PublicationKinds)
         {
             Assert.Equal("A publication of this vault changed.", VaultEvents.TextFor(kind, toOwner: true, "", "Work", null, null, note: null));

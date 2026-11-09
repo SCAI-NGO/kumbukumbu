@@ -28,12 +28,17 @@ internal sealed record PublicationEntry(
 
 internal sealed record PublishedFile(string Path, string Version);
 
-/// <summary>An entry of the record's log: a publication, an update or a withdrawal, and why (<see cref="WithdrawalReasons"/>).</summary>
+/// <summary>An entry of the record's log: a publication, an update or a withdrawal, and why (<see cref="WithdrawalReasons"/>),
+/// or a removal that was kept (<see cref="PublishingKinds.Kept"/>).</summary>
 internal sealed record PublishingLogEntry(string Id, string Kind, string Note, DateTime At, string By, WriterRefPayload ByRef, string? Reason);
 
 internal static class PublishingKinds
 {
     public const string Published = "published", Updated = "updated", Withdrawn = "withdrawn";
+
+    /// <summary>A caller that may not withdraw the publication tried to remove its note, and the note stayed (WebDAV
+    /// design §3.6 case 6: a share's <c>DELETE</c>). Nothing of the publication changed.</summary>
+    public const string Kept = "kept";
 }
 
 internal static class WithdrawalReasons

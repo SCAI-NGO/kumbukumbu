@@ -1123,6 +1123,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dav-shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DavSharesView"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateDavShareRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreatedDavShareView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dav-shares/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/users": {
         parameters: {
             query?: never;
@@ -1643,6 +1835,59 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountStorageView"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3049,6 +3294,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         post?: never;
@@ -3780,6 +4034,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -3935,6 +4198,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vaults/{vault}/trash/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    vault: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PurgeTrashRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PurgedTrashView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/checkpoints": {
         parameters: {
             query?: never;
@@ -4072,6 +4430,15 @@ export interface paths {
                 };
                 /** @description Service Unavailable */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Insufficient Storage */
+                507: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4506,6 +4873,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -4841,6 +5217,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -4929,6 +5314,15 @@ export interface paths {
                 };
                 /** @description Service Unavailable */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Insufficient Storage */
+                507: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5031,6 +5425,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -5126,6 +5529,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -5214,6 +5626,15 @@ export interface paths {
                 };
                 /** @description Service Unavailable */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Insufficient Storage */
+                507: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5566,6 +5987,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Insufficient Storage */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -5749,6 +6179,15 @@ export interface paths {
                 };
                 /** @description Service Unavailable */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Insufficient Storage */
+                507: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -8618,6 +9057,12 @@ export interface components {
             secret: string;
             alias: string;
         };
+        AccountStorageView: {
+            /** Format: int64 */
+            used: number | string;
+            /** Format: int64 */
+            limit: null | number | string;
+        };
         ActivityFileView: {
             path: string;
             kind: string;
@@ -8687,6 +9132,9 @@ export interface components {
             bytesStored: number | string;
             /** Format: int32 */
             sharedVaults: number | string;
+            quota: string;
+            /** Format: int64 */
+            limitBytes: null | number | string;
         };
         ApiError: {
             error: string;
@@ -8896,6 +9344,18 @@ export interface components {
             key: string;
             apiKey: components["schemas"]["ApiKeyView"];
         };
+        CreateDavShareRequest: {
+            label: string;
+            vaults: {
+                [key: string]: string;
+            };
+            /** Format: int32 */
+            expiresInDays?: null | number | string;
+        };
+        CreatedDavShareView: {
+            password: string;
+            share: components["schemas"]["DavShareView"];
+        };
         CreatedInvitationView: {
             code: string;
             link: string;
@@ -8935,6 +9395,27 @@ export interface components {
         CurrentNoteView: {
             content: string;
             version: string;
+        };
+        DavSharesView: {
+            enabled: boolean;
+            shares: components["schemas"]["DavShareView"][];
+        };
+        DavShareView: {
+            id: string;
+            username: string;
+            label: string;
+            vaults: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            lastUsedAt: null | string;
+            /** Format: date-time */
+            revokedAt: null | string;
+            /** Format: date-time */
+            expiresAt: null | string;
+            lostVaults: string[];
         };
         DeleteAccountRequest: {
             password: string;
@@ -9228,6 +9709,14 @@ export interface components {
         PublishRequest: {
             password?: null | string;
         };
+        PurgedTrashView: {
+            /** Format: int32 */
+            deleted: number | string;
+        };
+        PurgeTrashRequest: {
+            password?: null | string;
+            entries?: null | components["schemas"]["TrashEntryRequest"][];
+        };
         PutNoteRequest: {
             content: string;
             version?: null | string;
@@ -9284,8 +9773,16 @@ export interface components {
             revokedApiKeys: number | string;
             /** Format: int32 */
             disconnectedApps: number | string;
-            /** Format: int32 */
-            withdrawnInvitations?: number | string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            withdrawnInvitations: number | string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            revokedShares: number | string;
         };
         RenameAliasRequest: {
             alias: string;
@@ -9359,6 +9856,7 @@ export interface components {
             previousSignInAt: null | string;
             passwordWindowOpen: boolean;
             publishEnabled: boolean;
+            storageLimited: boolean;
         };
         SetConnectionVaultsRequest: {
             vaults: {
@@ -9390,6 +9888,10 @@ export interface components {
             line: number | string;
             text: string;
             tag: string;
+        };
+        TrashEntryRequest: {
+            path: string;
+            version: string;
         };
         TrashEntryView: {
             path: string;
@@ -9450,6 +9952,7 @@ export interface components {
             active?: null | boolean;
             role?: null | string;
             password?: null | string;
+            quota?: unknown;
         };
         UploadConflictView: {
             path: string;
@@ -9484,6 +9987,7 @@ export interface components {
             connections: string[];
             members: components["schemas"]["MemberAccessView"][];
             left: components["schemas"]["DepartureView"][];
+            shares: string[];
         };
         VaultEventView: {
             kind: string;

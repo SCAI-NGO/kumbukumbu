@@ -39,11 +39,11 @@ public static class BoardApi
     {
         var api = app.MapGroup("/api/vaults/{vault}/board").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("", GetAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404, 409, 503);
-        api.MapPost("", CreateAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("cards", AddAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("update", UpdateAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("rename-column", RenameColumnAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("", CreateAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        api.MapPost("cards", AddAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        api.MapPost("move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        api.MapPost("update", UpdateAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        api.MapPost("rename-column", RenameColumnAsync).Errors(400, 401, 403, 404, 409, 503, 507);
     }
 
     /// <summary>

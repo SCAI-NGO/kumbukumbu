@@ -58,7 +58,7 @@ describe("Connections", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     const bodies: unknown[] = [];
     api([], { "POST /api/connections": async (r) => (bodies.push(await r.json()), json(201, { ...base, state: "waiting", client: null })) });
-    renderApp("/keys");
+    renderApp("/access/apps");
 
     expect(await screen.findByRole("heading", { level: 1, name: "Access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Connections" })).toBeInTheDocument();
@@ -88,7 +88,7 @@ describe("Connections", () => {
 
   it("needs a name and at least one vault with a right", async () => {
     api();
-    renderApp("/keys");
+    renderApp("/access/apps");
     await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
     const dialog = screen.getByRole("dialog", { name: "Connect an app" });
     const create = within(dialog).getByRole("button", { name: "Connect an app" });
@@ -108,7 +108,7 @@ describe("Connections", () => {
       { ...base, id: "e", name: "Echo", state: "expired", lastUsedAt: null, expiresAt: "2026-10-02T09:00:00Z" },
       { ...base, id: "f", name: "Foxtrot", lastUsedAt: null },
     ]);
-    renderApp("/keys");
+    renderApp("/access/apps");
     await screen.findByText("Alpha");
     const region = screen.getByRole("region", { name: "Connections" });
     const live = () => [...region.querySelectorAll(":scope > ul > li h3")].map((h) => h.textContent);
@@ -132,7 +132,7 @@ describe("Connections", () => {
       { ...base, id: "d", name: "Gone one", state: "revoked", reason: "refresh_reused", revokedAt: "2026-10-06T09:00:00Z" },
       { ...base, id: "e", name: "Old one", state: "expired", expiresAt: "2026-10-02T09:00:00Z" },
     ]);
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = async (name: string) => (await screen.findByText(name)).closest("li")!;
 
     const waiting = await item("Waiting one");
@@ -181,7 +181,7 @@ describe("Connections", () => {
     ["rekeyed", "a vault was re-encrypted"],
   ])("explains the reason %s", async (reason, text) => {
     api([{ ...base, state: "revoked", reason, revokedAt: "2026-10-06T09:00:00Z" }]);
-    renderApp("/keys");
+    renderApp("/access/apps");
     expect((await screen.findByText("Work")).closest("li")).toHaveTextContent(`Revoked: ${text}`);
   });
 
@@ -190,7 +190,7 @@ describe("Connections", () => {
     const fetch = api([base], {
       "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), json(200, { ...base, vaults: { Home: "read" }, state: "needs_reconnect", reason: "rights_changed" })),
     });
-    renderApp("/keys");
+    renderApp("/access/apps");
     await userEvent.click(await screen.findByRole("button", { name: "Change rights of Work" }));
     const dialog = screen.getByRole("dialog", { name: "Change rights" });
     expect(dialog).toHaveTextContent("The app has to reconnect after this.");
@@ -208,7 +208,7 @@ describe("Connections", () => {
   it("shows maintain in the list, and keeps it when the rights are saved unchanged", async () => {
     const bodies: unknown[] = [];
     api([{ ...base, vaults: { Arbeit: "maintain", Home: "read" } }], { "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()) });
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = (await screen.findByText("Work")).closest("li")!;
     expect(item).toHaveTextContent("Arbeit: read, write and maintain");
     expect(within(item).getByText("read, write and maintain")).toHaveClass("text-warning");
@@ -225,7 +225,7 @@ describe("Connections", () => {
   it("revoking asks first", async () => {
     let calls = 0;
     const fetch = api([base], { "DELETE /api/connections/c1": () => (calls++, noContent()) });
-    renderApp("/keys");
+    renderApp("/access/apps");
     await userEvent.click(await screen.findByRole("button", { name: "Revoke Work" }));
     const confirm = screen.getByRole("alertdialog");
     expect(confirm).toHaveTextContent("Revoke Work?");
@@ -243,7 +243,7 @@ describe("Connections", () => {
   it("keeps nothing in browser storage", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     api([], { "POST /api/connections": () => json(201, { ...base, state: "waiting", client: null }) });
-    renderApp("/keys", queryClient);
+    renderApp("/access/apps", queryClient);
     await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
     const dialog = screen.getByRole("dialog", { name: "Connect an app" });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
@@ -263,7 +263,7 @@ describe("May publish of a connection", () => {
   it("sends May publish for a new connection", async () => {
     const bodies: unknown[] = [];
     api([], { "GET /api/session": session, "POST /api/connections": async (r) => (bodies.push(await r.json()), json(201, { ...base, state: "waiting", client: null })) });
-    renderApp("/keys");
+    renderApp("/access/apps");
     await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
     const dialog = screen.getByRole("dialog", { name: "Connect an app" });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
@@ -281,7 +281,7 @@ describe("May publish of a connection", () => {
       "GET /api/session": session,
       "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()),
     });
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
     expect(item).toHaveTextContent("Arbeit: read and write, may publish");
     expect(item).not.toHaveTextContent("Home: read, may publish");
@@ -312,7 +312,7 @@ describe("May publish while publishing is off", () => {
       "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled: false }),
       "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()),
     });
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
     await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
     const dialog = screen.getByRole("dialog", { name: "Change rights" });
@@ -329,7 +329,7 @@ describe("connections and vaults shared with the user", () => {
       { name: "Gartenarbeit", notes: 2, embeddings: "internal", pending: false, canWrite: false, level: "read", owner: '"Alice"', shared: true, membership: "m1" },
     ];
     api([{ ...base, vaults: { Arbeit: "write", Gartenarbeit: "write" } }], { "GET /api/vaults": () => json(200, shared) });
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
     await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
     expect(item).toHaveTextContent("Others can write into Gartenarbeit.");
@@ -344,7 +344,7 @@ describe("connections and vaults shared with the user", () => {
 
   it('a capped connection reads "write, acts as read while you can only read Gartenarbeit"', async () => {
     api([capped], { "GET /api/vaults": () => json(200, garden) });
-    renderApp("/keys");
+    renderApp("/access/apps");
     const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
     await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
     expect(within(item).getByText(/acts as read/).querySelector("em")).toHaveTextContent("Gartenarbeit");
@@ -356,7 +356,7 @@ describe("connections and vaults shared with the user", () => {
       "GET /api/vaults": () => json(200, garden),
       "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), json(200, { ...capped, vaults: { Arbeit: "read", Gartenarbeit: "write" } })),
     });
-    renderApp("/keys");
+    renderApp("/access/apps");
     await userEvent.click(await screen.findByRole("button", { name: "Change rights of Work" }));
     const dialog = screen.getByRole("dialog", { name: "Change rights" });
     await waitFor(() => expect(within(within(dialog).getByRole("group", { name: /Gartenarbeit/ })).getByLabelText("Read and write")).toBeChecked());

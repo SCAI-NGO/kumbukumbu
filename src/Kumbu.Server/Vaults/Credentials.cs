@@ -126,6 +126,27 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
     public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
 }
 
+/// <summary>
+/// A WebDAV share's token (WebDAV design §4): opens the vaults its slots wrap, each with the right sealed into the slot,
+/// as <see cref="ApiKeyCredential"/>, and never publishes. Not a record, so that ToString can't print the token.
+/// </summary>
+public sealed class DavShareCredential(string shareId, string token) : ICredential, IRightsCredential
+{
+    private IReadOnlyList<VaultAccess>? _opened;
+
+    /// <summary>The share's id (not its token).</summary>
+    public string ShareId => shareId;
+
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForDavShareAsync(shareId, token, ct);
+
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
+
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
+}
+
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>
 public class VaultUnavailableException(string message) : Exception(message);
 

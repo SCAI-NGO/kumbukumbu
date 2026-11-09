@@ -11,6 +11,7 @@ using Kumbu.Server.Api;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
+using Kumbu.Server.Dav;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
@@ -103,6 +104,10 @@ builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddSingleton<DavShares>();
+builder.Services.AddSingleton<DavParking>();
+builder.Services.AddSingleton<DavLocks>();
+builder.Services.AddSingleton<DavHolds>();
 builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
@@ -112,6 +117,7 @@ builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<StorageQuota>();
 builder.Services.AddSingleton<DeletionList>();
 builder.Services.AddSingleton<RestoredDeletions>();
 builder.Services.AddHostedService<RestoredDeletionsCheck>();
@@ -139,6 +145,14 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.RespectRequiredConstructorParameters = true;
 });
 builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+// The WebDAV challenge's realm, "Kumbu²" (CallerMiddleware.DavChallenge), isn't ASCII, which Kestrel refuses in a header
+// unless the selector gives an encoding: ISO-8859-1, which clients read a realm in. Kestrel asks twice. When a header is
+// set, by its name: only WWW-Authenticate gets one, so every other header outside ASCII is still refused (a 500), as
+// without the selector. When it writes the headers it knows, WWW-Authenticate among them, with an empty name (Kestrel 10):
+// that must give ISO-8859-1 too, or the realm goes out as "Kumbu?"; the values it writes then all passed the check by
+// name, so the others are ASCII, which ISO-8859-1 writes unchanged. DavAuthTests pins both over Kestrel.
+builder.WebHost.ConfigureKestrel(kestrel => kestrel.ResponseHeaderEncodingSelector = name =>
+    name.Length == 0 || name.Equals(Microsoft.Net.Http.Headers.HeaderNames.WWWAuthenticate, StringComparison.OrdinalIgnoreCase) ? System.Text.Encoding.Latin1 : null);
 builder.Services.AddOpenApi();
 
 // Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
@@ -150,13 +164,14 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credenti
 // By hand: the constructor that takes Publications is internal, and DI only sees public ones.
 builder.Services.AddScoped(sp => new EncryptedNoteStore(
     sp.GetRequiredService<VaultCatalog>(), sp.GetRequiredService<ICredential>(), sp.GetService<SearchIndex>(), sp.GetService<ApiKeys>(),
-    sp.GetService<PdfAnalysisRunner>(), sp.GetRequiredService<Publications>()));
+    sp.GetService<PdfAnalysisRunner>(), sp.GetRequiredService<Publications>(), sp.GetRequiredService<StorageQuota>()));
 builder.Services.AddScoped<WriterLabels>();
 builder.Services.AddScoped<IWriterLabels>(sp => sp.GetRequiredService<WriterLabels>());
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
+builder.Services.AddScoped<TreeWriter>();
 builder.Services.AddScoped<Replacer>();
 builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
@@ -164,6 +179,7 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
+builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
@@ -282,6 +298,22 @@ app.MapReaderApi();
 app.MapMethods("/s", [HttpMethods.Get, HttpMethods.Head], (IWebHostEnvironment environment) => environment.WebRootFileProvider.GetFileInfo("s.html") is { Exists: true } page
     ? Results.Stream(page.CreateReadStream(), "text/html")
     : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
+
+// WebDAV (WebDAV design §3.7): a client probes / with OPTIONS before it goes to /dav/, and a PROPFIND on / gets no web app.
+// With WebDAV switched off, / advertises nothing: OPTIONS and PROPFIND there are answered as on any other page.
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Dav.Enabled)
+{
+    app.MapMethods("/", [HttpMethods.Options], (HttpContext http) => DavHeaders.Options(http.Response, DavHeaders.RootMethods)).AllowAnonymous().ExcludeFromDescription();
+    app.MapMethods("/", ["PROPFIND"], (HttpContext http) =>
+    {
+        http.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+        http.Response.Headers.Allow = DavHeaders.RootMethods;
+    }).AllowAnonymous().ExcludeFromDescription();
+}
+
+// Everything under /dav, /dav itself included: CallerMiddleware lets OPTIONS through without a caller and everything else
+// only with a share's.
+app.MapDav();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.

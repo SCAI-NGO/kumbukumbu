@@ -7,6 +7,9 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Vaults;
 
+/// <summary>A trash entry as the trash lists it and a restore names it: its path in the caller's view, and its version.</summary>
+internal sealed record TrashEntryRef(VaultPath Path, string Version);
+
 /// <summary>
 /// <see cref="INoteStore"/> and <see cref="IAttachmentStore"/> over encrypted vaults, for one credential (one request).
 /// Reads come from the unlocked working set, but for attachments' bytes, which are read from MongoDB on demand; every
@@ -25,10 +28,22 @@ public sealed class EncryptedNoteStore(
     /// the welcome vault): without publications, a trash or move in a vault that publishes is refused.</summary>
     private readonly Publishing.Publications? _publications;
 
+    /// <summary>The storage quota every write that adds data passes (<see cref="RequireSpace"/>). Only the request's store
+    /// has it, as it has publications: the seeder and the welcome vault write without a limit (WebDAV design §3.10).</summary>
+    private readonly Accounts.StorageQuota? _quota;
+
     internal EncryptedNoteStore(
         VaultCatalog catalog, ICredential credential, Search.SearchIndex? index, Accounts.ApiKeys? keys, Attachments.PdfAnalysisRunner? pdf,
-        Publishing.Publications? publications)
-        : this(catalog, credential, index, keys, pdf) => _publications = publications;
+        Publishing.Publications? publications, Accounts.StorageQuota? quota = null)
+        : this(catalog, credential, index, keys, pdf)
+    {
+        _publications = publications;
+        _quota = quota;
+    }
+
+    /// <summary>What a record (an attachment's, a checkpoint's) takes beside the content it names, roughly: the quota's
+    /// estimate, which the recount corrects.</summary>
+    private const long RecordBytes = 256;
 
     private Dictionary<string, VaultAccess>? _vaults;
 
@@ -141,7 +156,7 @@ public sealed class EncryptedNoteStore(
             WriterRef.RequireStorable(note.Ref);
             if (!await InsertNoteAsync(session, vault, id, note, ct)) return null;
             return () => vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
-        }, ct);
+        }, ct, adding: Bytes(note.Content));
     }
 
     public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct) =>
@@ -290,7 +305,7 @@ public sealed class EncryptedNoteStore(
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
             await FollowAsync(session, access, batch, by, byRef, at, ct);
             return () => apply.ForEach(a => a());
-        }, ct);
+        }, ct, adding: batch.AddsData ? Incoming(batch) : null);
 
         // After the commit, which stands: a PDF whose job isn't queued now is queued at the vault's next unlock.
         if (written && pdf is not null)
@@ -443,6 +458,8 @@ public sealed class EncryptedNoteStore(
         var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
 
         catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+        // Counted as new bytes whether or not the vault holds them already: the check can't know before the gate.
+        var owner = RequireSpace(v, bytes.Length);
         await v.Gate.WaitAsync(ct);
         try
         {
@@ -455,6 +472,7 @@ public sealed class EncryptedNoteStore(
                     await catalog.Blobs.InsertOneAsync(
                         new BlobDocument { Id = ObjectId.GenerateNewId(), Vault = v.Id, BlobId = id, Blob = v.SealBlob(id, bytes.Span), At = catalog.Now },
                         cancellationToken: ct);
+                    if (owner is not null) _quota!.Adjust(owner, bytes.Length);
                 }
                 catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
                 {
@@ -706,7 +724,7 @@ public sealed class EncryptedNoteStore(
             await RequireBlobsAsync(session, vault, checkpoint.Attachments.Select(a => (a.Path, a.State.BlobId)), ct);
             var stored = new StoredCheckpoint(id, checkpoint, textIds);
             return () => vault.Checkpoints = vault.Checkpoints.Add(stored);
-        }, ct);
+        }, ct, adding: RecordBytes + notes.DistinctBy(n => n.Content).Sum(n => Bytes(n.Content)));
     }
 
     /// <summary>One transaction: the checkpoint's document, and the texts no other checkpoint holds. The blobs of its
@@ -806,6 +824,9 @@ public sealed class EncryptedNoteStore(
         var vault = access.Vault;
         path = access.ToVault(path);
         StoredNote? restored = null;
+        // The entry's size as the working set has it now, for the quota's check; the transaction reads it again.
+        var adding = vault.Trash.Where(t => t.Trashed.Note.Path == path && (version is null || t.Trashed.Note.Version == version))
+            .Select(t => Bytes(t.Trashed.Note.Content)).DefaultIfEmpty(0).Max();
         var written = await WriteAsync(vault, [path], async session =>
         {
             var latest = vault.Trash
@@ -826,8 +847,57 @@ public sealed class EncryptedNoteStore(
                 vault.Notes = vault.Notes.SetItem(path, (id, restored));
                 vault.Trash = vault.Trash.Remove(latest);
             };
-        }, ct);
+        }, ct, adding);
         return written ? Shown(access, restored!) : null;
+    }
+
+    /// <summary>
+    /// Deletes entries of the vault's trash for good (WebDAV design §3.11): every note and attachment entry, or those
+    /// <paramref name="entries"/> names, each as a restore finds it (the most recently removed at its path with that
+    /// version); one that isn't there any more is passed over. A note's entry carries its history, which goes with it;
+    /// the blobs only an attachment's entry held go with the next <see cref="BlobSweep"/>. One transaction under the
+    /// vault's gate, with the owner's event; it adds nothing, so it passes over the quota. Returns how many went.
+    /// </summary>
+    internal async Task<int> PurgeTrashAsync(string vault, IReadOnlyList<TrashEntryRef>? entries, CancellationToken ct)
+    {
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } access) return 0;
+        var v = access.Vault;
+        var count = 0;
+        await WriteAsync(v, [], async session =>
+        {
+            var wanted = entries?.Select(e => (Path: access.ToVault(e.Path), e.Version)).ToList();
+            var notes = wanted is null ? [.. v.Trash] : wanted.Where(e => e.Path.IsNote)
+                .Select(e => v.Trash.Where(t => t.Trashed.Note.Path == e.Path && t.Trashed.Note.Version == e.Version).OrderByDescending(t => t.Trashed.DeletedAt).FirstOrDefault())
+                .Where(t => t.Trashed is not null).Distinct().ToList();
+            var files = wanted is null ? [.. v.AttachmentTrash] : wanted.Where(e => !e.Path.IsNote)
+                .Select(e => v.AttachmentTrash.Where(t => t.Trashed.Attachment.Path == e.Path && t.Trashed.Attachment.Version == e.Version).OrderByDescending(t => t.Trashed.DeletedAt).FirstOrDefault())
+                .Where(t => t.Trashed is not null).Distinct().ToList();
+            if (notes.Count + files.Count == 0) return null;
+
+            var noteIds = notes.Select(t => t.Id).ToHashSet();
+            var fileIds = files.Select(t => t.Id).ToHashSet();
+            // The trash's TTL index may have taken one meanwhile: what MongoDB deleted is what counts.
+            var deleted = noteIds.Count == 0 ? 0 : (await catalog.Trash.DeleteManyAsync(session, F.Eq(d => d.Vault, v.Id) & F.In(d => d.Id, noteIds), cancellationToken: ct)).DeletedCount;
+            deleted += fileIds.Count == 0 ? 0 : (await catalog.AttachmentTrash.DeleteManyAsync(session, F.Eq(d => d.Vault, v.Id) & F.In(d => d.Id, fileIds), cancellationToken: ct)).DeletedCount;
+            if (deleted == 0) return null;
+            count = (int)deleted;
+            await catalog.RecordTrashEmptiedAsync(session, v.Id, count, ct);
+            var paths = notes.Select(t => t.Trashed.Note.Path).Concat(files.Select(t => t.Trashed.Attachment.Path)).Distinct().ToList();
+            return () =>
+            {
+                // Also on a newer object of the vault (one locked and opened again meanwhile): the ids are the documents'.
+                foreach (var target in new[] { v, catalog.Current(v.Id) }.OfType<UnlockedVault>().Distinct())
+                {
+                    target.Trash = target.Trash.RemoveAll(t => noteIds.Contains(t.Id));
+                    target.AttachmentTrash = target.AttachmentTrash.RemoveAll(t => fileIds.Contains(t.Id));
+                }
+
+                // Embeddings belong to a path's current note or PDF; one left for a removed path goes now.
+                index?.Enqueue(v, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
+                catalog.RaiseNotesChanged(v.Id);
+            };
+        }, ct);
+        return count;
     }
 
     /// <summary>
@@ -835,21 +905,26 @@ public sealed class EncryptedNoteStore(
     /// working set, or null to abort. The working set changes only after MongoDB committed; after an abort,
     /// <paramref name="paths"/> are read again, since someone else wrote them. A cancelled request aborts too,
     /// so it can't leave half a change behind. A change of notes or attachments by an API key is recorded on the key
-    /// afterwards, outside the gate (<see cref="Accounts.ApiKeys.RecordWriteAsync"/>).
+    /// afterwards, outside the gate (<see cref="Accounts.ApiKeys.RecordWriteAsync"/>). A write that adds data says about how
+    /// many bytes in <paramref name="adding"/>: it passes the quota first (<see cref="RequireSpace"/>), and counts after
+    /// its commit. One without (a removal, a move) always passes.
     /// </summary>
-    private async Task<bool> WriteAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
+    private async Task<bool> WriteAsync(
+        UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct, long? adding = null)
     {
-        var written = await WriteUnderGateAsync(vault, paths, work, ct);
+        var written = await WriteUnderGateAsync(vault, paths, work, adding, ct);
         if (written && paths.Count > 0 && credential is ApiKeyCredential key && keys is not null) await keys.RecordWriteAsync(key.KeyId);
         return written;
     }
 
-    private async Task<bool> WriteUnderGateAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
+    private async Task<bool> WriteUnderGateAsync(
+        UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, long? adding, CancellationToken ct)
     {
         // Before waiting too: nothing queues behind a re-keying run. With the caller's own record of the vault: one
         // read-only for her refuses here, whichever route came (collab design §7.4).
         var access = _byId.GetValueOrDefault(vault.Id);
         catalog.CheckWritable(vault, access);
+        var owner = adding is { } bytes ? RequireSpace(vault, bytes) : null;
         await vault.Gate.WaitAsync(ct);
         try
         {
@@ -882,6 +957,7 @@ public sealed class EncryptedNoteStore(
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
+            if (owner is not null) _quota!.Adjust(owner, adding!.Value);
             index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
             return true;
@@ -934,6 +1010,25 @@ public sealed class EncryptedNoteStore(
             // The server already aborted it (a failed write inside a transaction does that).
         }
     }
+
+    /// <summary>
+    /// The storage quota's check of a write that adds about <paramref name="incoming"/> bytes to <paramref name="vault"/>
+    /// (WebDAV design §3.10): against its owner's account, never the caller's, from the cache alone, so it never waits for
+    /// MongoDB. <see cref="QuotaExceededException"/> if it doesn't fit; else the owner whose figure the write adjusts after
+    /// its commit, or null (no quota, the seeder's store; a vault without an owner). A vault the store has no access record
+    /// for passes: every path that writes found the vault through <see cref="VaultAsync"/>, which records it, so none
+    /// arises but from a misuse inside the store, and refusing there would hide that bug behind "out of space".
+    /// </summary>
+    private string? RequireSpace(UnlockedVault vault, long incoming) =>
+        _quota is not null && _byId.GetValueOrDefault(vault.Id) is { } access ? _quota.Require(access, incoming) : null;
+
+    /// <summary>What a batch that adds data adds, roughly: the new notes' text (a replace keeps the old one in the
+    /// history) and the records of attachments, whose bytes were counted when they were put.</summary>
+    private static long Incoming(NoteBatch batch) =>
+        batch.Creates.Sum(n => Bytes(n.Content)) + batch.Replaces.Sum(r => Bytes(r.Next.Content))
+        + RecordBytes * (batch.AttachmentCreates.Count + batch.AttachmentReplaces.Count + batch.AttachmentRestores.Count);
+
+    private static long Bytes(string text) => System.Text.Encoding.UTF8.GetByteCount(text);
 
     /// <summary>Every caller checks the entry first (<see cref="WriterRef.RequireStorable"/>): it throws inside the
     /// transaction, so a write path that forgets a reference is refused whole (collab design §8.1, fail closed).</summary>
@@ -1070,7 +1165,7 @@ public sealed class EncryptedNoteStore(
     private static NoteBatch Stored(VaultAccess a, NoteBatch batch)
     {
         if (!a.Renamed) return batch;
-        var stored = new NoteBatch { Changeset = batch.Changeset };
+        var stored = new NoteBatch { Changeset = batch.Changeset, IsMove = batch.IsMove };
         stored.Replaces.AddRange(batch.Replaces.Select(r => (Stored(a, r.Current), Stored(a, r.Next))));
         stored.Moves.AddRange(batch.Moves.Select(m => (Stored(a, m.Current), Stored(a, m.Target))));
         stored.Trashes.AddRange(batch.Trashes.Select(n => Stored(a, n)));

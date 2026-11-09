@@ -44,26 +44,27 @@ export const publishing = (publish: string[]) => (publish.length > 0 ? { publish
  * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it. A vault shared
  * with her names its owner, any level may be chosen for it, and one above her own is shown as what it acts as; one
  * choice that covers a vault others write into and a private one is warned about. May publish is offered beside a right
- * on a vault of her own while the server publishes, and goes with the right when "None" is chosen.
+ * on a vault of her own while the server publishes, and goes with the right when "None" is chosen; without
+ * `onPublishChange` (a WebDAV share, which never publishes) it isn't offered at all.
  */
 export function RightsPicker({
   vaults,
   chosen,
   onChange,
-  publish,
+  publish = [],
   onPublishChange,
   children,
 }: {
   vaults: UseQueryResult<VaultView[]>;
   chosen: Record<string, Right>;
   onChange(chosen: Record<string, Right>): void;
-  publish: string[];
-  onPublishChange(publish: string[]): void;
+  publish?: string[];
+  onPublishChange?(publish: string[]): void;
   children?: ReactNode;
 }) {
   const id = useId();
   const session = useQuery({ queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) });
-  const publishEnabled = session.data?.publishEnabled === true;
+  const publishEnabled = session.data?.publishEnabled === true && onPublishChange !== undefined;
   const mixed = mixedVault(vaults.data, Object.keys(grant(chosen)));
   return (
     <div className="flex flex-col gap-3">
@@ -87,7 +88,7 @@ export function RightsPicker({
                   checked={(chosen[vault.name] ?? "none") === right.value}
                   onChange={() => {
                     onChange({ ...chosen, [vault.name]: right.value });
-                    if (right.value === "none" && publish.includes(vault.name)) onPublishChange(publish.filter((v) => v !== vault.name));
+                    if (right.value === "none" && publish.includes(vault.name)) onPublishChange?.(publish.filter((v) => v !== vault.name));
                   }}
                   className="sr-only"
                 />
@@ -103,7 +104,7 @@ export function RightsPicker({
                   type="checkbox"
                   checked={publish.includes(vault.name)}
                   aria-describedby={publish.includes(vault.name) ? `${id}-${vault.name}-publish` : undefined}
-                  onChange={(e) => onPublishChange(e.target.checked ? [...publish, vault.name] : publish.filter((v) => v !== vault.name))}
+                  onChange={(e) => onPublishChange?.(e.target.checked ? [...publish, vault.name] : publish.filter((v) => v !== vault.name))}
                   className="size-5 accent-accent"
                 />
                 May publish

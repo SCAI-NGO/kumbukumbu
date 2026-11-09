@@ -443,7 +443,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var elsewhere = await Connections().CreateAsync(a.User, a.Key, a.ReadAt, "elsewhere", new Dictionary<string, KeyRight> { [a.Id("Privat")] = KeyRight.Read }, Ct);
         var revoked = await Connections().CreateAsync(a.User, a.Key, a.ReadAt, "revoked", new Dictionary<string, KeyRight> { [a.Id("Arbeit")] = KeyRight.Read }, Ct);
         Assert.True(await Connections().RevokeAsync(a.User, revoked.Id, Ct));
-        var (keysWithAccess, connectionsWithAccess) = await Catalog().AccessAsync(a.Id("Arbeit"), Ct);
+        var (keysWithAccess, connectionsWithAccess, _) = await Catalog().AccessAsync(a.Id("Arbeit"), Ct);
         Assert.Equal([bothInfo.Id], keysWithAccess);
         Assert.Equal([claude.Id], connectionsWithAccess);
 

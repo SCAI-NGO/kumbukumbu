@@ -10,8 +10,8 @@ import { fakeApi, json, renderApp, user } from "../test/app";
 import { page, RELOADED, RouteError } from "./AppError";
 
 // What a redeploy does to an open tab: the old chunks are gone.
-vi.mock("../routes/Keys", () => {
-  throw new TypeError("Failed to fetch dynamically imported module: /assets/Keys-old.js");
+vi.mock("../routes/Access", () => {
+  throw new TypeError("Failed to fetch dynamically imported module: /assets/Access-old.js");
 });
 vi.mock("../upload/UploadSheet", () => {
   throw new TypeError("Failed to fetch dynamically imported module: /assets/UploadSheet-old.js");
@@ -81,7 +81,7 @@ describe("A part of the app that fails to load", () => {
   it("is caught for a page of the signed-in app", async () => {
     sessionStorage.setItem(RELOADED, "1");
     fakeApi({ "GET /api/session": () => json(200, { user, previousSignInAt: null }) });
-    renderApp("/keys");
+    renderApp("/access/keys");
 
     expect(await screen.findByRole("heading", { name: "This page didn't load" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();

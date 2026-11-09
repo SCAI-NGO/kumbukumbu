@@ -12,7 +12,7 @@ namespace Kumbu.Server.Accounts;
 /// </summary>
 public sealed class Rekeying(
     UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, ApiKeys keys, Connections connections, RekeyRunner runner, IMongoDatabase db,
-    TimeProvider time, ILogger<Rekeying> log, Sharing.Memberships memberships)
+    TimeProvider time, ILogger<Rekeying> log, Sharing.Memberships memberships, DavShares shares)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -27,9 +27,9 @@ public sealed class Rekeying(
 
     /// <summary>
     /// "Re-encrypt my vaults": a new user key (keeping the session of <paramref name="sessionSecret"/>), then every API
-    /// key of the user revoked and the tokens of every connection (<see cref="ConnectionReasons.Rekeyed"/>), then each
-    /// vault handed to the runner. Returns the new recovery key, to be shown once, also when the revocations failed (they
-    /// are logged, and stage 2 makes them per vault); null if the password is wrong.
+    /// key of the user revoked and the tokens of every connection (<see cref="ConnectionReasons.Rekeyed"/>), and every
+    /// WebDAV share revoked, then each vault handed to the runner. Returns the new recovery key, to be shown once, also
+    /// when the revocations failed (they are logged, and stage 2 makes them per vault); null if the password is wrong.
     /// </summary>
     public async Task<string?> ReencryptAccountAsync(User user, byte[] userKey, string password, string sessionSecret, CancellationToken ct)
     {
@@ -54,10 +54,23 @@ public sealed class Rekeying(
             log.LogError(e, "Revoking the API keys and apps of user {Username} after their user key was rotated failed; each goes with its vault's re-keying", user.Username);
         }
 
+        // Apart from the keys: a failure there mustn't spare the shares, whose slots on vaults shared with the user no
+        // re-keying of hers reaches.
+        try
+        {
+            await shares.RevokeAllAsync(user, CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            revoked = false;
+            log.LogError(
+                e, "Revoking the WebDAV shares of user {Username} after their user key was rotated failed; those on their own vaults go with those vaults' re-keying, those on vaults shared with them are not revoked", user.Username);
+        }
+
         foreach (var vaultId in rotated.VaultIds) runner.Start(vaultId, user.Id, rotated.NewUserKey);
 
         // After a failed revocation the error above says what happened to the keys; this line must not claim otherwise.
-        if (revoked) log.LogInformation("User {Username} re-encrypts their {Vaults} vaults; API keys and apps are revoked", user.Username, rotated.VaultIds.Count);
+        if (revoked) log.LogInformation("User {Username} re-encrypts their {Vaults} vaults; API keys, apps and WebDAV shares are revoked", user.Username, rotated.VaultIds.Count);
         else log.LogInformation("User {Username} re-encrypts their {Vaults} vaults", user.Username, rotated.VaultIds.Count);
         return rotated.RecoveryKey;
     }
@@ -76,8 +89,8 @@ public sealed class Rekeying(
         // Through the runner, never RekeyAsync directly: a run of its own would race the runner's.
         var summary = await runner.RunAsync(vaultId, user.Id, userKey).WaitAsync(ct);
         log.LogInformation(
-            "User {Username} re-encrypted vault {VaultId}: {Keys} API keys revoked, {Apps} apps disconnected",
-            user.Username, vaultId, summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count);
+            "User {Username} re-encrypted vault {VaultId}: {Keys} API keys and {Shares} WebDAV shares revoked, {Apps} apps disconnected",
+            user.Username, vaultId, summary.RevokedApiKeys.Count, summary.RevokedShares.Count, summary.DisconnectedConnections.Count);
         return summary;
     }
 
@@ -130,29 +143,33 @@ public sealed class Rekeying(
         }
     }
 
-    /// <summary>The names of what a re-keying of the vault would take access from: API keys with a slot on it, and
-    /// connections that list it and aren't revoked, with the device keys among the keys named apart; and who the vault is shared with (collab design §8.6), with the
+    /// <summary>The names of what a re-keying of the vault would take access from: API keys and WebDAV shares with a
+    /// slot on it, and connections that list it and aren't revoked, with the device keys among the keys named apart; and who the vault is shared with (collab design §8.6), with the
     /// members' credentials on it, and who left it since its last re-encryption (§6.4). Null if the user has no such vault: a vault shared with her is not hers to list.</summary>
     internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct)
     {
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
-        var (keyIds, connectionIds) = await catalog.AccessAsync(vaultId, ct);
+        var (keyIds, connectionIds, shareIds) = await catalog.AccessAsync(vaultId, ct);
         // Only what has access now: a key or app past its expiry, whose slots wait for the sweep, or revoked has none
         // to lose.
         var now = time.GetUtcNow().UtcDateTime;
         var live = (await keys.ListAsync(user, userKey, ct)).Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).ToList();
         var connectionNames = (await connections.ListAsync(user, userKey, ct))
             .Where(c => connectionIds.Contains(c.Id) && c.RevokedAt is null && !(c.ExpiresAt <= now)).Select(c => c.Name);
+        // Her own: a member's share is on her member panel, under the name its membership records.
+        var shareLabels = (await shares.ListAsync(user, userKey, ct))
+            .Where(d => shareIds.Contains(d.Id) && d.RevokedAt is null && !(d.ExpiresAt <= now)).Select(d => d.Label);
         var vaultKey = await catalog.OwnerVaultKeyAsync(user.Id, userKey, vaultId, ct);
         var members = await memberships.AccessListAsync(vaultId, vaultKey, ct);
         var left = await memberships.DeparturesAsync(vaultId, vaultKey, ct);
         return new VaultAccessList(
             [.. live.Select(k => k.Name).Order(StringComparer.Ordinal)],
             [.. live.Where(k => k.Kind == ApiKeyKind.Device).Select(k => k.Name).Order(StringComparer.Ordinal)],
-            [.. connectionNames.Order(StringComparer.Ordinal)], members, left);
+            [.. connectionNames.Order(StringComparer.Ordinal)], members, left, [.. shareLabels.Order(StringComparer.Ordinal)]);
     }
 }
 
 /// <summary>The owner's access list of a vault: her own keys' and apps' names, those of the keys that are devices, the
-/// memberships, and who left since the vault was last re-encrypted.</summary>
-internal sealed record VaultAccessList(string[] ApiKeys, string[] DeviceKeys, string[] Connections, IReadOnlyList<Sharing.MemberAccess> Members, IReadOnlyList<Sharing.Departure> Left);
+/// memberships, who left since the vault was last re-encrypted, and her own WebDAV shares' labels.</summary>
+internal sealed record VaultAccessList(
+    string[] ApiKeys, string[] DeviceKeys, string[] Connections, IReadOnlyList<Sharing.MemberAccess> Members, IReadOnlyList<Sharing.Departure> Left, string[] Shares);

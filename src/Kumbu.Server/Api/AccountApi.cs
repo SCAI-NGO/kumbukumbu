@@ -19,8 +19,10 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// changes: a sign-in or, for a remembered session, the first request after 30 minutes without one.
 /// <c>passwordWindowOpen</c>: whether the actions that need the password lately given go ahead without asking for it
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
-/// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled);
+/// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
+/// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
+/// the shell's notice asks for the storage only then.</summary>
+public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited);
 
 /// <summary><c>remember</c>: "Keep me signed in on this device", a session of 30 days (7 idle) with the normal limits
 /// for the actions that need the password; false when left out.</summary>
@@ -76,15 +78,40 @@ public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 
+/// <summary>A WebDAV share as its owner sees it: its username, label, vault names with their rights; never its password.
+/// <c>expiresAt</c> is null for a share that doesn't expire. <c>lostVaults</c>: the ids of vaults it was given but no
+/// longer opens (a re-keying took them).</summary>
+public sealed record DavShareView(
+    string Id, string Username, string Label, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
+    DateTime? ExpiresAt, string[] LostVaults);
+
+/// <summary>The WebDAV tab: <c>enabled</c> is whether this server answers on <c>/dav/</c> (<c>Kumbu:Dav:Enabled</c>); the
+/// shares are listed either way.</summary>
+public sealed record DavSharesView(bool Enabled, DavShareView[] Shares);
+
+/// <summary><c>vaults</c>: vault name → <c>read</c>, <c>write</c> or <c>maintain</c>. <c>expiresInDays</c>: 30, 90 or
+/// 365; left out or null, the share doesn't expire. A share never publishes.</summary>
+public sealed record CreateDavShareRequest(string Label, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
+
+/// <summary><c>password</c> is shown here once and never again; the username is the share's.</summary>
+public sealed record CreatedDavShareView(string Password, DavShareView Share);
+
 /// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
 /// session, the latest visit (its first request after 30 minutes without one); not the last request. <c>sharedVaults</c>:
-/// how many of their vaults have an active member (a count, never a name).</summary>
+/// how many of their vaults have an active member (a count, never a name). <c>quota</c>: <c>default</c>, <c>unlimited</c> or
+/// <c>custom</c>, the override the admin set (WebDAV design §3.10); <c>limitBytes</c>: the limit that applies, the default's
+/// or the override's, null for none.</summary>
 public sealed record AdminUserView(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults,
+    string Quota, long? LimitBytes);
 
-/// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
-/// acting admin's own.</summary>
-public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null);
+/// <summary>Any of them; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
+/// acting admin's own. <c>quota</c>: <c>"default"</c>, <c>"unlimited"</c> or a number of bytes, 0 or more (0: no write
+/// that adds data).</summary>
+public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null, System.Text.Json.JsonElement? Quota = null);
+
+/// <summary>What the session's own vaults take in the database, in bytes, and the limit that applies to them (null: none).</summary>
+public sealed record AccountStorageView(long Used, long? Limit);
 
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.
 /// <c>sharedVaults</c>: what becomes of her vaults shared with others (collab design §7.3): <c>give-members-7-days</c>
@@ -172,6 +199,11 @@ public static class AccountApi
         account.MapPost("/keys", CreateKeyAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
 
+        // Made and revoked while WebDAV is switched off too: the shares wait for it to be on again.
+        account.MapGet("/dav-shares", ListDavSharesAsync).Errors(401, 403, 503);
+        account.MapPost("/dav-shares", CreateDavShareAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
+        account.MapDelete("/dav-shares/{id}", RevokeDavShareAsync).Errors(401, 403, 404);
+
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404, 429);
         account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404, 429);
@@ -180,13 +212,14 @@ public static class AccountApi
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403, 429);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
+        account.MapGet("/account/storage", StorageAsync).Errors(401, 403);
         account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
         account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -211,7 +244,8 @@ public static class AccountApi
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
-        return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled));
+        return TypedResults.Ok(new SessionView(
+            UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct)));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -271,8 +305,10 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
-    private static Ok<SessionView> Session(RequestCaller caller, IOptions<KumbuOptions> options) =>
-        TypedResults.Ok(new SessionView(UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled));
+    private static async Task<Ok<SessionView>> Session(RequestCaller caller, StorageQuota quota, IOptions<KumbuOptions> options, CancellationToken ct) =>
+        TypedResults.Ok(new SessionView(
+            UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
+            await quota.LimitedAsync(caller.User.Id, ct)));
 
     /// <summary>
     /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No
@@ -397,16 +433,59 @@ public static class AccountApi
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
 
-    private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
+    private static async Task<Ok<DavSharesView>> ListDavSharesAsync(RequestCaller caller, DavShares shares, IOptions<KumbuOptions> options, CancellationToken ct)
+    {
+        var names = await VaultNamesAsync(caller, ct);
+        var list = await shares.ListAsync(caller.User!, caller.UserKey!, ct);
+        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Select(s => DavShareView(s, names))]));
+    }
+
+    private static async Task<Created<CreatedDavShareView>> CreateDavShareAsync(CreateDavShareRequest body, RequestCaller caller, DavShares shares, CancellationToken ct)
+    {
+        var names = await VaultNamesAsync(caller, ct);
+        var vaults = RightsByVaultId(body.Vaults, names);
+        var (_, password, info) = await shares.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Label, vaults, ct, body.ExpiresInDays);
+        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names)));
+    }
+
+    private static async Task<NoContent> RevokeDavShareAsync(string id, RequestCaller caller, DavShares shares, CancellationToken ct) =>
+        await shares.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such WebDAV share that isn't revoked.");
+
+    private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, StorageQuota quota, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults))
+            .Select(u => new AdminUserView(
+                u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults,
+                StorageQuota.Kind(u.Quota), quota.Effective(u.Quota)))
             .ToArray());
 
-    private static async Task<NoContent> UpdateUserAsync(
-        string id, UpdateUserRequest body, HttpContext http, RequestCaller caller, Admin admin, Pairings pairings, UserCatalog users, Sessions sessions,
-        AccountLimits limits, CancellationToken ct)
+    /// <summary>The session's own storage (Settings shows it; the shell's notice asks once a minute, and only when the
+    /// session says a limit applies, <see cref="SessionView"/>): the
+    /// limit as it is now, one document read, and the usage as <c>df</c> has it, counted at most once per
+    /// <see cref="StorageQuota.ShownFor"/>, since a count reads every document of her vaults. Settings shows the usage
+    /// without a limit too, so it is counted then as well.</summary>
+    private static async Task<Ok<AccountStorageView>> StorageAsync(RequestCaller caller, StorageQuota quota, CancellationToken ct)
     {
-        if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
+        var limit = await quota.LimitAsync(caller.User!.Id, ct);
+        var figure = await quota.RecentFigureAsync(caller.User.Id, ct);
+        return TypedResults.Ok(new AccountStorageView(figure.Used, limit));
+    }
+
+    /// <summary>An override as the request gives it: <c>"default"</c> (null), <c>"unlimited"</c>, or whole bytes.</summary>
+    private static long? QuotaOf(System.Text.Json.JsonElement value) => value switch
+    {
+        { ValueKind: System.Text.Json.JsonValueKind.String } when value.GetString() == "default" => null,
+        { ValueKind: System.Text.Json.JsonValueKind.String } when value.GetString() == "unlimited" => StorageQuota.Unlimited,
+        { ValueKind: System.Text.Json.JsonValueKind.Number } when value.TryGetInt64(out var bytes) && bytes >= 0 => bytes,
+        _ => throw ApiErrors.BadRequest("'quota' is \"default\", \"unlimited\" or a number of bytes, 0 or more."),
+    };
+
+    private static async Task<NoContent> UpdateUserAsync(
+        string id, UpdateUserRequest body, HttpContext http, RequestCaller caller, Admin admin, StorageQuota quota, Pairings pairings, UserCatalog users,
+        Sessions sessions, AccountLimits limits, CancellationToken ct)
+    {
+        if (body is { Active: null, Role: null, Quota: null }) throw ApiErrors.BadRequest("Give 'active', 'role', 'quota' or more of them.");
+        // Before anything is written: a quota that doesn't read refuses the whole request.
+        var newQuota = body.Quota is { } given ? QuotaOf(given) : null;
         // Every change to another account needs the window: deactivating or demoting destroys that account's
         // credentials, which a remembered session with its window closed must not do. Making an admin brings the
         // password itself, which opens it.
@@ -414,11 +493,21 @@ public static class AccountApi
         else Security.RequirePasswordWindow(caller);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
-        // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
+        // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set; and the
+        // quota's checks run here too, so the quota, written last, is refused by nothing (not even by an admin who
+        // makes herself a user in the same request).
         if (body.Active is false && id == caller.User!.Id) throw new NotPermittedException("You can't deactivate yourself.");
+        var quotaChange = body.Quota is null ? null : await admin.PrepareQuotaAsync(caller.User!, id, ct) ?? throw NoSuchUser();
         if (body.Role is { } role && !await admin.SetRoleAsync(caller.User!, id, role, ct)) throw NoSuchUser();
         if (body.Active is { } active && !await admin.SetActiveAsync(caller.User!, id, active, ct)) throw NoSuchUser();
         if (body.Active is false) pairings.DropAll(id);
+        if (body.Quota is not null)
+        {
+            if (!await admin.SetQuotaAsync(quotaChange!, newQuota, ct)) throw NoSuchUser();
+            // At once in this process: the next write of hers is checked against the new limit.
+            await quota.RecountAsync(id);
+        }
+
         return TypedResults.NoContent();
 
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
@@ -549,6 +638,18 @@ public static class AccountApi
         info.ExpiresAt,
         info.Kind == ApiKeyKind.Device ? "device" : "agent",
         PublishNames(info.Publish, names));
+
+    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
+    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(
+        info.Id,
+        info.Username,
+        info.Label,
+        info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+        info.CreatedAt,
+        info.LastUsedAt,
+        info.RevokedAt,
+        info.ExpiresAt,
+        [.. info.LostVaults]);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

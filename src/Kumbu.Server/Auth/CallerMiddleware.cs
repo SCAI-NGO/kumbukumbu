@@ -30,17 +30,26 @@ public sealed class BackgroundMetadata
 /// segments case-insensitively, so <c>/MCP</c> reaches <c>MapMcp("/mcp")</c>), also without an endpoint, unless an
 /// anonymous endpoint is mapped there itself (an anonymous fallback doesn't count).</item>
 /// </list>
-/// Everything else (the web app's static files, later) is anonymous. A connection's URL, <c>/mcp/c/{id}</c>, is
-/// answered before all that (<see cref="ConnectionUrlAsync"/>). Runs after routing and before the MCP SDK
-/// sees the request; never logs a key or a cookie.
+/// Everything else (the web app's static files, later) is anonymous. A connection's URL, <c>/mcp/c/{id}</c>, and
+/// everything under <c>/dav</c> are answered before all that (<see cref="ConnectionUrlAsync"/>, <see cref="DavAsync"/>).
+/// Runs after routing and before the MCP SDK sees the request; never logs a key, a share's password or a cookie.
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens, Rekeying rekeying)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment)
 {
     public const string SessionCookie = "kumbu_session";
 
+    /// <summary>What <c>/dav</c> answers without a share's credentials (WebDAV design §3.3). Not ASCII: Kestrel sends this
+    /// header in ISO-8859-1 (Program.cs).</summary>
+    public const string DavChallenge = "Basic realm=\"Kumbu²\", charset=\"UTF-8\"";
+
     private const string Scheme = "Bearer ";
+
+    private const string BasicScheme = "Basic ";
+
+    /// <summary>For a Basic header's credentials: bytes that aren't UTF-8 make the header malformed.</summary>
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly string? _devToken = string.IsNullOrEmpty(options.Value.DevToken) ? null : options.Value.DevToken;
 
@@ -51,6 +60,12 @@ public sealed class CallerMiddleware(
         if (ConnectionIdSegment(context) is { } segment)
         {
             await ConnectionUrlAsync(context, segment);
+            return;
+        }
+
+        if (IsUnder(context, "/dav"))
+        {
+            await DavAsync(context);
             return;
         }
 
@@ -191,6 +206,127 @@ public sealed class CallerMiddleware(
         if (bearer is not null) challenge += ", error=\"invalid_token\"";
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         context.Response.Headers.WWWAuthenticate = challenge;
+    }
+
+    /// <summary>
+    /// Everything under <c>/dav</c> (WebDAV design §3.3): a WebDAV share's username and password in HTTP Basic, nothing
+    /// else (no bearer, no cookie), and only over HTTPS outside Development (after the forwarded headers, when the proxy
+    /// is trusted). <c>OPTIONS</c> goes on without a caller: Windows asks before it authenticates, and the answer is the
+    /// same on every path, so it tells nothing of which vaults exist. A password is checked under the wrong-key limit as
+    /// a bearer key is; a share whose username and password match but that is refused (revoked, expired, its user
+    /// inactive, or opening no vault) isn't a guess and gives its permit back. No response here is cached by a shared
+    /// cache or sets a cookie.
+    /// </summary>
+    private async Task DavAsync(HttpContext context)
+    {
+        var response = context.Response;
+        response.Headers.CacheControl = "private";
+        response.OnStarting(() =>
+        {
+            response.Headers.Remove(Microsoft.Net.Http.Headers.HeaderNames.SetCookie);
+            return Task.CompletedTask;
+        });
+
+        if (!options.Value.Dav.Enabled)
+        {
+            response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (!context.Request.IsHttps && !environment.IsDevelopment())
+        {
+            response.StatusCode = StatusCodes.Status403Forbidden;
+            response.ContentType = "text/plain; charset=utf-8";
+            await response.WriteAsync("WebDAV needs HTTPS.");
+            return;
+        }
+
+        if (HttpMethods.IsOptions(context.Request.Method))
+        {
+            await next(context);
+            return;
+        }
+
+        if (BasicCredentials(context.Request.Headers.Authorization.ToString()) is not var (username, password))
+        {
+            DavUnauthorised(context);
+            return;
+        }
+
+        var ip = WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
+        if (wrongKeys.TryReserve(ip) is { } retryAfter)
+        {
+            await TooManyAsync(context, retryAfter);
+            return;
+        }
+
+        RequestCaller? caller = null;
+        DavShareResolution resolution;
+        try
+        {
+            resolution = await davShares.ResolveAsync(username, password, context.RequestAborted);
+            if (resolution.Share is { } share)
+            {
+                caller = await RequestCaller.ForDavShareAsync(share, DavTokens.Normalise(password)!, catalog, context.RequestAborted);
+            }
+        }
+        catch (VaultBusyException e)
+        {
+            // A known share whose vault can't be opened just now: not a wrong password, and not a fault.
+            wrongKeys.Release(ip);
+            await BusyAsync(context, e);
+            return;
+        }
+        catch
+        {
+            // MongoDB unreachable or the request aborted: not a wrong password.
+            wrongKeys.Release(ip);
+            throw;
+        }
+
+        // A right username and password that open nothing are refused, but weren't guessed.
+        if (resolution.Share is not null || resolution.Known) wrongKeys.Release(ip);
+        else wrongKeys.Failed(ip);
+        if (caller is null)
+        {
+            DavUnauthorised(context);
+            return;
+        }
+
+        context.Features.Set(caller);
+        await next(context);
+    }
+
+    /// <summary>The username and password of an HTTP Basic header (RFC 7617: base64 of UTF-8 <c>username:password</c>,
+    /// split at the first colon), or null for any other header or a malformed one.</summary>
+    private static (string Username, string Password)? BasicCredentials(string header)
+    {
+        if (!header.StartsWith(BasicScheme, StringComparison.OrdinalIgnoreCase)) return null;
+        var encoded = header[BasicScheme.Length..].Trim();
+        var bytes = new byte[encoded.Length];
+        if (!Convert.TryFromBase64String(encoded, bytes, out var length)) return null;
+        string text;
+        try
+        {
+            text = StrictUtf8.GetString(bytes, 0, length);
+        }
+        catch (DecoderFallbackException)
+        {
+            return null;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+
+        var colon = text.IndexOf(':', StringComparison.Ordinal);
+        return colon <= 0 ? null : (text[..colon], text[(colon + 1)..]);
+    }
+
+    private static void DavUnauthorised(HttpContext context)
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers.WWWAuthenticate = DavChallenge;
     }
 
     private static bool NeedsCaller(HttpContext context)

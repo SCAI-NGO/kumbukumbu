@@ -60,6 +60,50 @@ describe("Admin users", () => {
     expect(within(card("Root")).getByText("Primary admin")).toBeInTheDocument();
   });
 
+  it("shows used / limit and sets an override", async () => {
+    const MB = 1024 ** 2;
+    const GB = 1024 ** 3;
+    const patches: unknown[] = [];
+    api(admin, {
+      "GET /api/admin/users": () =>
+        json(200, [
+          row(root, { quota: "default", limitBytes: 2 * GB }),
+          row(admin, { quota: "unlimited", limitBytes: null }),
+          row(plain, { bytesStored: 182 * MB, quota: "default", limitBytes: 2 * GB }),
+        ]),
+      "PATCH /api/admin/users/u2": async (r) => {
+        patches.push(await r.json());
+        return noContent();
+      },
+    });
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    expect(bob.getByText("182 MB / 2 GB")).toBeInTheDocument();
+    const bar = bob.getByRole("meter", { name: "Storage used" });
+    expect(bar).toHaveAttribute("aria-valuenow", "9");
+    // Without a limit, the figure alone and no bar.
+    const ada = within(card("Ada"));
+    expect(ada.getByText("1.5 KB")).toBeInTheDocument();
+    expect(ada.queryByRole("meter")).not.toBeInTheDocument();
+    expect(ada.getByRole("combobox", { name: "Storage limit of Ada" })).toHaveValue("unlimited");
+    // Another admin doesn't set the primary admin's.
+    expect(within(card("Root")).queryByRole("combobox")).not.toBeInTheDocument();
+
+    const limit = bob.getByRole("combobox", { name: "Storage limit of Bob" });
+    expect(limit).toHaveValue("default");
+    expect(bob.getByRole("button", { name: "Set Bob's storage limit" })).toBeDisabled();
+    await userEvent.selectOptions(limit, "custom");
+    const size = bob.getByRole("spinbutton", { name: "Bob's limit in GB" });
+    await userEvent.clear(size);
+    await userEvent.type(size, "5.5");
+    await userEvent.click(bob.getByRole("button", { name: "Set Bob's storage limit" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ quota: 5.5 * GB }]));
+
+    await userEvent.selectOptions(limit, "unlimited");
+    await userEvent.click(bob.getByRole("button", { name: "Set Bob's storage limit" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ quota: 5.5 * GB }, { quota: "unlimited" }]));
+  });
+
   it("gives the primary admin's row no actions", async () => {
     api();
     renderApp("/admin/users");

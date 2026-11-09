@@ -76,7 +76,7 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
-        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or PrimaryAdminExistsException or VaultNameTakenException
+        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or DavShareLabelTakenException or DavShareLimitException or PrimaryAdminExistsException or VaultNameTakenException
             or RotationConflictException or RecoveryConflictException or PasswordConflictException
             or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException or RekeyRunningException)
         {
@@ -97,6 +97,12 @@ public static class ApiErrors
         catch (Kumbu.Server.Vaults.VaultReadOnlyException e)
         {
             return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
+        }
+        // The owner gets the code, which the web app shows her storage's notice for; a member the sentence alone, so she
+        // learns nothing of the owner's figures (WebDAV design §3.10). Sync devices too: the plugin treats 507 as final.
+        catch (Kumbu.Core.Notes.QuotaExceededException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Owner ? Kumbu.Core.Notes.Refusals.Quota : null), statusCode: StatusCodes.Status507InsufficientStorage);
         }
         // Its sentences are the shell's ("…: no such note"), made a sentence of the REST API's.
         catch (Kumbu.Core.Publishing.PublishRefusedException e)

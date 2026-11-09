@@ -81,6 +81,33 @@ export function useVersionPoll(path: string, enabled: boolean, interval = 5_000)
 export const useTrash = (vault: string) =>
   useQuery({ queryKey: ["trash", vault], queryFn: () => call(api.GET("/api/vaults/{vault}/trash", { params: { path: { vault } } })) });
 
+/**
+ * Deletes the vault's trash for good, or the `entries` given, each with its history (WebDAV design §3.11): the owner's
+ * alone. `password()` is read when it runs, so the mutation cache keeps no password; empty, the window must be open.
+ */
+export function usePurgeTrash(vault: string, password: () => string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (entries?: readonly Pick<TrashEntry, "path" | "version">[]) => {
+      const given = password();
+      return call(
+        api.POST("/api/vaults/{vault}/trash/purge", {
+          params: { path: { vault } },
+          body: { ...(given ? { password: given } : {}), ...(entries ? { entries: entries.map(({ path, version }) => ({ path, version })) } : {}) },
+        }),
+      );
+    },
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["trash", vault] }),
+        queryClient.invalidateQueries({ queryKey: ["activity", vault] }),
+        // Less is stored now; a password given opened the window.
+        queryClient.invalidateQueries({ queryKey: ["account", "storage"] }),
+        queryClient.invalidateQueries({ queryKey: ["session"] }),
+      ]),
+  });
+}
+
 export const useCheckpoints = (vault: string) =>
   useQuery({ queryKey: ["checkpoints", vault], queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints", { params: { path: { vault } } })) });
 

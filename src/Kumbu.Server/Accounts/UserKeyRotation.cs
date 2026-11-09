@@ -70,6 +70,9 @@ public sealed record PreparedRotation(
     /// <summary>Her notices of vaults deleted for everyone, their alias keys sealed again under the new user key (collab
     /// design §14).</summary>
     internal IReadOnlyList<Sharing.NoticeReseal> Notices { get; init; } = [];
+
+    /// <summary>Her WebDAV shares' metas, sealed again under the new user key, as <see cref="ApiKeys"/>' are.</summary>
+    public IReadOnlyList<MetaReseal> DavShareMetas { get; init; } = [];
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -105,6 +108,8 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
 
     private IMongoCollection<ConnectionDocument> ConnectionDocs { get; } = db.GetCollection<ConnectionDocument>(Accounts.Connections.CollectionName);
 
+    private IMongoCollection<DavShareDocument> ShareDocs { get; } = db.GetCollection<DavShareDocument>(DavShares.CollectionName);
+
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>For tests: called with <c>"before-apply"</c> (prepared, no transaction yet) and <c>"inside-apply"</c>
@@ -126,6 +131,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         var vaults = await VaultCatalog.PrepareUserSlotsAsync(db, userId, oldUserKey, newUserKey, now, log, ct);
         var keys = await ApiKeys.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
         var connections = await Accounts.Connections.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
+        var shares = await DavShares.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
         var kept = keepSessionSecret is null ? null : await Sessions.PrepareKeepAsync(db, userId, keepSessionSecret, newUserKey, now, ct);
         var passwordUsed = (await UserSlots.Find(s => s.User == userId && s.Kind == UserSlotDocument.Password).FirstOrDefaultAsync(ct))?.Wrapped;
         var (keypair, memberSlots, damaged) = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
@@ -154,6 +160,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             MemberSlots = memberSlots,
             DamagedMemberSlots = damaged,
             Notices = await Sharing.MemberNotices.PrepareResealAsync(db, userId, oldUserKey, newUserKey, ct),
+            DavShareMetas = shares,
         };
     }
 
@@ -226,7 +233,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
     /// <summary>
     /// Writes the prepared rotation inside the caller's transaction, each write only where the document still holds the
     /// value it was prepared from; then checks that no slot under the old lookup is left (but the skipped ones) and
-    /// that the user has exactly the prepared API keys and connections. <see cref="RotationConflictException"/> on any
+    /// that the user has exactly the prepared API keys, connections and WebDAV shares. <see cref="RotationConflictException"/> on any
     /// mismatch: the caller aborts, prepares again and retries. <see cref="CredentialsChangedException"/> if the user
     /// is gone or inactive.
     /// </summary>
@@ -260,6 +267,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         await Sharing.MemberNotices.ApplyResealAsync(db, session, userId, rotation.Notices, ct);
         await ApplyMetasAsync(session, Keys, rotation.ApiKeys, userId, ct);
         await ApplyMetasAsync(session, ConnectionDocs, rotation.Connections, userId, ct);
+        await ApplyMetasAsync(session, ShareDocs, rotation.DavShareMetas, userId, ct);
 
         if (FaultAt is { } fault) await fault("inside-apply");
     }

@@ -7,9 +7,11 @@ namespace Kumbu.Server.Accounts;
 
 /// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.
 /// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).
-/// <c>SharedVaults</c>: how many of their vaults have an active member, for the deletion dialog's choice; a number only.</summary>
+/// <c>SharedVaults</c>: how many of their vaults have an active member, for the deletion dialog's choice; a number only.
+/// <c>Quota</c>: their storage override as stored (<see cref="UserDocument.Quota"/>).</summary>
 public sealed record UserSummary(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults,
+    long? Quota = null);
 
 /// <summary>
 /// The admin's tools (accounts design, "Admin"): the user list, deactivating and reactivating, and roles. Every
@@ -18,7 +20,8 @@ public sealed record UserSummary(
 /// MongoDB holds in the clear (slot owners, document sizes), and no vault is opened.
 /// </summary>
 public sealed class Admin(
-    IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, Sync.SyncHub hub, TimeProvider time, ILogger<Admin> log)
+    IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, DavShares shares, Sync.SyncHub hub, TimeProvider time,
+    ILogger<Admin> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -46,14 +49,14 @@ public sealed class Admin(
             var vaults = vaultsByOwner.GetValueOrDefault(u.Id) ?? [];
             return new UserSummary(
                 u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, vaults.Count, vaults.Sum(v => bytesByVault.GetValueOrDefault(v)),
-                vaults.Count(withMembers.Contains));
+                vaults.Count(withMembers.Contains), u.Quota);
         })];
     }
 
     /// <summary>
     /// Deactivates or reactivates a user; false if there is no such user, true (and nothing done) if they already
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
-    /// and revokes every API key of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
+    /// and revokes every API key and WebDAV share of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
     /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>; deactivating also revokes the user's
     /// open invitations there. Revoking again on reactivation catches a key or a code whose creation raced the
     /// deactivation (its request's session resolved just before it): reactivating revives no key, no app, no session
@@ -67,11 +70,11 @@ public sealed class Admin(
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deactivated.");
         if (!active && target.Id == acting.Id) throw new NotPermittedException("You can't deactivate yourself.");
 
-        (int Keys, int Connections, long Invitations)? revoked;
+        (int Keys, int Connections, long Invitations, int Shares)? revoked;
         using (var session = await catalog.StartSessionAsync(ct))
         {
             // Retried on a write conflict: a key or a connection in use writes its lastUsedAt outside any transaction.
-            revoked = await session.WithTransactionAsync<(int, int, long)?>(
+            revoked = await session.WithTransactionAsync<(int, int, long, int)?>(
                 async (s, token) =>
                 {
                     // The role is checked again in the filter, in case it changed since the read above; the state, so
@@ -86,6 +89,7 @@ public sealed class Admin(
 
                     await sessions.EndAllAsync(s, userId, token);
                     var keyCount = await keys.RevokeAllAsync(s, userId, token);
+                    var shareCount = await shares.RevokeAllAsync(s, userId, token);
                     var connectionCount = await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token);
                     var invitationCount = active ? 0 : await Invitations.RevokeOpenOfAsync(db, s, userId, Now, token);
                     // Her shared vaults become read-only for their members (collab design §7.4): an event for each, which
@@ -98,7 +102,7 @@ public sealed class Admin(
                         }
                     }
 
-                    return (keyCount, connectionCount, invitationCount);
+                    return (keyCount, connectionCount, invitationCount, shareCount);
                 },
                 cancellationToken: ct);
         }
@@ -123,8 +127,8 @@ public sealed class Admin(
         else
         {
             log.LogInformation(
-                "{Admin} deactivated user {Username}; {Count} API keys, the tokens of {Connections} connections and {Invitations} open invitations revoked",
-                acting.Username, target.Username, count.Keys, count.Connections, count.Invitations);
+                "{Admin} deactivated user {Username}; {Count} API keys, {Shares} WebDAV shares, the tokens of {Connections} connections and {Invitations} open invitations revoked",
+                acting.Username, target.Username, count.Keys, count.Shares, count.Connections, count.Invitations);
         }
 
         return true;
@@ -166,8 +170,44 @@ public sealed class Admin(
         return true;
     }
 
-    /// <summary>The BSON size of every document of these vaults, summed per vault: what they take in the database.</summary>
-    private async Task<Dictionary<string, long>> BytesByVaultAsync(IReadOnlyList<string> vaultIds, CancellationToken ct)
+    /// <summary>
+    /// Sets a user's storage override (WebDAV design §3.10): null for the default, <see cref="StorageQuota.Unlimited"/>, or
+    /// a number of bytes (0: no write that adds data); false if there is no such user. Nobody acts on the primary admin
+    /// but the primary admin herself. The caller tells <see cref="StorageQuota"/>, which depends on this class.
+    /// </summary>
+    public async Task<bool> SetQuotaAsync(User actor, string userId, long? quota, CancellationToken ct) =>
+        await PrepareQuotaAsync(actor, userId, ct) is { } change && await SetQuotaAsync(change, quota, ct);
+
+    /// <summary>The checks of <see cref="SetQuotaAsync(User, string, long?, CancellationToken)"/>, before anything is
+    /// written: a request that changes the role or the state as well checks the quota first, so that a refusal applies
+    /// nothing. Null if there is no such user.</summary>
+    internal async Task<QuotaChange?> PrepareQuotaAsync(User actor, string userId, CancellationToken ct)
+    {
+        var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (target is null) return null;
+        if (target.Role == Roles.PrimaryAdmin && target.Id != acting.Id) throw new NotPermittedException("Only the primary admin sets the primary admin's storage.");
+        return new QuotaChange(acting, target);
+    }
+
+    /// <summary>The write of a change <see cref="PrepareQuotaAsync"/> allowed; false if the user is gone meanwhile.</summary>
+    internal async Task<bool> SetQuotaAsync(QuotaChange change, long? quota, CancellationToken ct)
+    {
+        if (quota is < StorageQuota.Unlimited) throw new ArgumentException("A quota is a number of bytes, 0 or more.", nameof(quota));
+        var (acting, target) = (change.Acting, change.Target);
+        var update = quota is { } bytes ? Builders<UserDocument>.Update.Set(u => u.Quota, bytes) : Builders<UserDocument>.Update.Unset(u => u.Quota);
+        // The role again in the filter, in case it changed since the read.
+        var updated = await Users.UpdateOneAsync(u => u.Id == target.Id && (u.Role != Roles.PrimaryAdmin || u.Id == acting.Id), update, cancellationToken: ct);
+        if (updated.MatchedCount == 0) return false;
+        log.LogInformation(
+            "{Admin} set the storage of {Username} to {Quota}", acting.Username, target.Username,
+            quota switch { null => "the default", < 0 => "unlimited", _ => $"{quota} bytes" });
+        return true;
+    }
+
+    /// <summary>The BSON size of every document of these vaults, summed per vault: what they take in the database. The
+    /// user list's figure, and the storage quota's (<see cref="StorageQuota"/>) for one owner's vaults.</summary>
+    internal async Task<Dictionary<string, long>> BytesByVaultAsync(IReadOnlyList<string> vaultIds, CancellationToken ct)
     {
         var bytes = new Dictionary<string, long>();
         if (vaultIds.Count == 0) return bytes;
@@ -190,6 +230,9 @@ public sealed class Admin(
         return bytes;
     }
 }
+
+/// <summary>A storage override an admin may set: who acts, on whom (<see cref="Admin.PrepareQuotaAsync"/>).</summary>
+internal sealed record QuotaChange(UserDocument Acting, UserDocument Target);
 
 /// <summary>The rule every admin action starts with.</summary>
 internal static class AdminRules

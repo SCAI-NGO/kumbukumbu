@@ -56,6 +56,7 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
         {
             vault = await catalog.CreateForUserAsync(Name, user.Id, userKey, token, credentialReadAt);
             if (AfterVaultCreated is { } hook) await hook(vault.Id, token);
+            // Without the storage quota, as the seeder: the server's own sample content at sign-up (WebDAV design §3.10).
             var store = new EncryptedNoteStore(catalog, new UserCredential(user.Id, userKey), index);
             var now = time.GetUtcNow().UtcDateTime;
             var publicUrl = options.Value.PublicUrl;

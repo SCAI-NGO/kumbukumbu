@@ -40,12 +40,13 @@ public sealed record VaultView(
     int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false, DateTime? ClosingAt = null,
     string? OwnerUsername = null);
 
-/// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
-/// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
+/// <summary>Who has access to the owner's vault. <c>apiKeys</c>, <c>connections</c> and <c>shares</c>: what would lose
+/// access if the vault were re-encrypted, the names of her API keys with access to it, of her connected apps that list
+/// it, and the labels of her WebDAV shares with access to it.
 /// <c>deviceKeys</c>: those of <c>apiKeys</c> that are devices, which lose the vault when it is renamed.
 /// <c>members</c>: the people it is shared with or who are invited, oldest first. <c>left</c>: who left it since it was
 /// last re-encrypted, oldest first, for the offer of a re-encryption (collab design §6.4).</summary>
-public sealed record VaultAccessView(string[] ApiKeys, string[] DeviceKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left);
+public sealed record VaultAccessView(string[] ApiKeys, string[] DeviceKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left, string[] Shares);
 
 /// <summary>A member who left the vault: the owner's <c>label</c> for her, and when (<c>leftAt</c>).</summary>
 public sealed record DepartureView(string Label, DateTime LeftAt);
@@ -57,15 +58,15 @@ public sealed record DepartureView(string Label, DateTime LeftAt);
 public sealed record MemberAccessView(
     string Id, string Label, string Role, string Status, bool Confirm, DateTime? AcceptedAt, DateTime? RedeemedAt, DateTime? ExpiresAt, MemberCredentialView[] Credentials);
 
-/// <summary>A member's credential on the vault: its <c>name</c> (the agent's or device's part), <c>kind</c> (<c>key</c>
-/// or <c>connection</c>), and <c>lastUsedAt</c>, its last use on this vault (to the minute), never its use elsewhere.</summary>
+/// <summary>A member's credential on the vault: its <c>name</c> (the agent's or device's part, or a share's label marked
+/// "(dav)"), <c>kind</c> (<c>key</c>, <c>connection</c> or <c>share</c>), and <c>lastUsedAt</c>, its last use on this vault (to the minute), never its use elsewhere.</summary>
 public sealed record MemberCredentialView(string Name, string Kind, DateTime? LastUsedAt);
 
 /// <summary>Re-encrypting one vault: the owner's current password.</summary>
 public sealed record RekeyVaultRequest(string Password);
 
-/// <summary>How many API keys were revoked and apps disconnected because they had the vault.</summary>
-public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps, int WithdrawnInvitations = 0);
+/// <summary>How many API keys and WebDAV shares were revoked and apps disconnected because they had the vault.</summary>
+public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps, int WithdrawnInvitations = 0, int RevokedShares = 0);
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
@@ -199,7 +200,7 @@ public static class NoteApi
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503, 507);
         api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
 
@@ -353,7 +354,7 @@ public static class NoteApi
         return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.DeviceKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
             m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
             [.. m.Credentials.Select(c => new MemberCredentialView(c.Name, c.Kind, c.LastUsedAt))]))],
-            [.. list.Left.Select(d => new DepartureView(d.Label, d.LeftAt))]));
+            [.. list.Left.Select(d => new DepartureView(d.Label, d.LeftAt))], list.Shares));
     }
 
     /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps
@@ -385,7 +386,7 @@ public static class NoteApi
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count, summary.WithdrawnInvitations));
+        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count, summary.WithdrawnInvitations, summary.RevokedShares.Count));
     }
 
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)

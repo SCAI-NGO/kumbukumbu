@@ -207,7 +207,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         await RefusedAsync(
             () => Publications.PublishAsync(access, notes, P(Questions), alice.User.Id, "Claude", WriterRef.ForOwner(WriterRef.Agent, keyId), KumbuAppFactory.PublicUrl, Ct),
             ShellErrorKind.Refused, Refusals.NoPublishRight,
-            "this key may not publish in Work; its owner can allow it (\"May publish\") under API keys or Connections in the web app");
+            "this key may not publish in Work; its owner can allow it (\"May publish\") under Access → API keys or Apps in the web app");
         await RefusedAsync(() => Publications.WithdrawAsync(access, notes, P(Questions), "Claude", WriterRef.ForOwner(WriterRef.Agent, keyId), Ct), ShellErrorKind.Refused, Refusals.NoPublishRight);
         Assert.Equal(0, await CountAsync("publications", vaultId));
 
@@ -216,6 +216,19 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         var (n2, a2) = await OpenAsync(new ApiKeyCredential(allowedId, allowed), "Work");
         var published = await Publications.PublishAsync(a2, n2, P(Questions), alice.User.Id, "Claude", WriterRef.ForOwner(WriterRef.Agent, allowedId), KumbuAppFactory.PublicUrl, Ct);
         Assert.Matches(LinkPattern(), published.Link);
+    }
+
+    /// <summary>A WebDAV share is told it never publishes, not to ask for a right no share can have.</summary>
+    [Fact]
+    public async Task A_dav_share_is_refused_in_its_own_words()
+    {
+        var alice = await AliceWithQuestionsAsync();
+        var dav = await Kumbu.Server.Tests.Dav.DavClient.NewAsync(Api, alice);
+        var (notes, access) = await OpenAsync(new DavShareCredential(dav.Id, DavTokens.Normalise(dav.Password)!), "Work");
+
+        await RefusedAsync(
+            () => Publications.PublishAsync(access, notes, P(Questions), alice.User.Id, "Work PC (dav)", WriterRef.ForOwner(WriterRef.Agent, dav.Id), KumbuAppFactory.PublicUrl, Ct),
+            ShellErrorKind.Refused, Refusals.NoPublishRight, "a WebDAV share never publishes, in Work or any other vault");
     }
 
     [Fact]
@@ -235,7 +248,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         await RefusedAsync(
             () => Publications.PublishAsync(gAccess, gNotes, P("/Gartenarbeit/Beete.md"), alice.User.Id, "Claude", by, KumbuAppFactory.PublicUrl, Ct),
             ShellErrorKind.Refused, Refusals.NoPublishRight,
-            "this key may not publish in Gartenarbeit; its owner can allow it (\"May publish\") under API keys or Connections in the web app");
+            "this key may not publish in Gartenarbeit; its owner can allow it (\"May publish\") under Access → API keys or Apps in the web app");
         Assert.Equal(0, await CountAsync("publications", garten));
 
         var (wNotes, wAccess) = await OpenAsync(credential, "Work");

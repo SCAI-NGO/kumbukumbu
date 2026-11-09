@@ -20,7 +20,11 @@ public sealed class VaultLocks
 /// What a re-keying run did: how many documents of the vault open under the new key, how many open under neither key
 /// and were left as they are, and the API keys revoked and connections disconnected by its start (empty for a resumed run).
 /// </summary>
-public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections, int WithdrawnInvitations = 0);
+public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections, int WithdrawnInvitations = 0)
+{
+    /// <summary>The owner's WebDAV shares the run revoked, as <see cref="RevokedApiKeys"/>.</summary>
+    public IReadOnlyList<string> RevokedShares { get; init; } = [];
+}
 
 /// <summary>
 /// Stage 2 of re-keying (rekeying design §3): a vault gets a new vault key K′, and everything sealed under its key K is
@@ -260,9 +264,9 @@ public sealed partial class VaultCatalog
         await Users.UpdateOneAsync(u => u.Id == userId, Builders<Accounts.UserDocument>.Update.Pull(u => u.RekeyPending, vaultId), cancellationToken: ct);
     }
 
-    /// <summary>What a run of the vault would take access from: the API keys with a slot on it, and the connections
-    /// that list it and aren't revoked.</summary>
-    internal async Task<(IReadOnlyList<string> ApiKeyIds, IReadOnlyList<string> ConnectionIds)> AccessAsync(string vaultId, CancellationToken ct)
+    /// <summary>What a run of the vault would take access from: the API keys and the WebDAV shares with a slot on it,
+    /// and the connections that list it and aren't revoked.</summary>
+    internal async Task<(IReadOnlyList<string> ApiKeyIds, IReadOnlyList<string> ConnectionIds, IReadOnlyList<string> ShareIds)> AccessAsync(string vaultId, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var keys = await (await Slots.DistinctAsync(
@@ -272,7 +276,8 @@ public sealed partial class VaultCatalog
         var connections = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
             .Find(Builders<Accounts.ConnectionDocument>.Filter.AnyEq(c => c.Vaults, vaultId) & Builders<Accounts.ConnectionDocument>.Filter.Eq(c => c.RevokedAt, null))
             .Project(c => c.Id).ToListAsync(ct);
-        return ([.. keys.OfType<string>().Order(StringComparer.Ordinal)], [.. connections.Order(StringComparer.Ordinal)]);
+        var shares = await ShareIdsAsync(null, Builders<SlotDocument>.Filter.Eq(s => s.Vault, vaultId), ct);
+        return ([.. keys.OfType<string>().Order(StringComparer.Ordinal)], [.. connections.Order(StringComparer.Ordinal)], [.. shares.Order(StringComparer.Ordinal)]);
     }
 
     /// <summary>
@@ -313,10 +318,14 @@ public sealed partial class VaultCatalog
     /// <summary>What the start transaction found or made; <c>Members</c> what it did to the vault's memberships.</summary>
     private sealed record RekeyStart(
         byte[] OldKey, byte[] NewKey, ObjectId UserSlotId, byte[] UserSlotWrapped, ObjectId NextSlotId, bool Resumed,
-        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected, Sharing.StartedRekey Members, MembersCredentials MembersRevoked);
+        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected, Sharing.StartedRekey Members, MembersCredentials MembersRevoked)
+    {
+        /// <summary>The owner's WebDAV shares the start revoked, as <see cref="RevokedApiKeys"/>.</summary>
+        public IReadOnlyList<string> RevokedShares { get; init; } = [];
+    }
 
-    /// <summary>The members' API keys and connections a start revoked, since this vault was their last.</summary>
-    private sealed record MembersCredentials(IReadOnlyList<string> ApiKeys, IReadOnlyList<string> Connections);
+    /// <summary>The members' API keys, connections and WebDAV shares a start revoked, since this vault was their last.</summary>
+    private sealed record MembersCredentials(IReadOnlyList<string> ApiKeys, IReadOnlyList<string> Connections, IReadOnlyList<string> Shares);
 
     private async Task<RekeySummary> RunRekeyAsync(string id, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -368,7 +377,9 @@ public sealed partial class VaultCatalog
         foreach (var membershipId in start.Members.Declined) log.LogInformation("The redemption of membership {MembershipId} of vault {VaultId}, which is re-keyed, is declined", membershipId, id);
         foreach (var keyId in start.MembersRevoked.ApiKeys) log.LogInformation("A member's API key {KeyId} has no vault left after vault {VaultId} is re-keyed, and is revoked", keyId, id);
         foreach (var connectionId in start.MembersRevoked.Connections) log.LogInformation("A member's connection {ConnectionId} has no vault left after vault {VaultId} is re-keyed, and is revoked", connectionId, id);
+        foreach (var shareId in start.MembersRevoked.Shares) log.LogInformation("A member's WebDAV share {ShareId} has no vault left after vault {VaultId} is re-keyed, and is revoked", shareId, id);
         foreach (var keyId in start.RevokedApiKeys) log.LogInformation("API key {KeyId} had a slot on vault {VaultId}, which is re-keyed; it is revoked", keyId, id);
+        foreach (var shareId in start.RevokedShares) log.LogInformation("WebDAV share {ShareId} had a slot on vault {VaultId}, which is re-keyed; it is revoked", shareId, id);
         foreach (var connectionId in start.Disconnected) log.LogInformation("Connection {ConnectionId} lists vault {VaultId}, which is re-keyed; it needs a reconnect", connectionId, id);
         log.LogInformation(start.Resumed ? "Resuming the re-keying of vault {VaultId}" : "Re-keying vault {VaultId}", id);
         await FaultAsync("after-start");
@@ -438,7 +449,10 @@ public sealed partial class VaultCatalog
             "Re-keyed vault {VaultId}: {Documents} documents under the new key, {Damaged} damaged, in {Seconds:0.0} s",
             id, documents, damaged, (Now - started).TotalSeconds);
         await FaultAsync("after-finish");
-        return new RekeySummary(documents, damaged, start.RevokedApiKeys, start.Disconnected, start.Members.Withdrawn.Count + start.Members.Declined.Count);
+        return new RekeySummary(documents, damaged, start.RevokedApiKeys, start.Disconnected, start.Members.Withdrawn.Count + start.Members.Declined.Count)
+        {
+            RevokedShares = start.RevokedShares,
+        };
     }
 
     private Task FaultAsync(string point) => RekeyFaultAt?.Invoke(point) ?? Task.CompletedTask;
@@ -482,7 +496,7 @@ public sealed partial class VaultCatalog
 
     /// <summary>
     /// The start transaction: a new key in a <c>user-next</c> slot, <c>rekeyStartedAt</c> on the vault, every API key
-    /// of the owner with a slot on it revoked whole, every connection of hers listing it disconnected
+    /// and WebDAV share of the owner with a slot on it revoked whole, every connection of hers listing it disconnected
     /// (<see cref="Accounts.ConnectionReasons.Rekeyed"/>), and the vault pending for her. Of a shared vault (collab
     /// design §7.1) the members' slots stay, for the finish to wrap again; invitations are withdrawn and unconfirmed
     /// redemptions declined (<see cref="Sharing.Memberships.StartRekeyAsync"/>); the members' own keys and connections
@@ -539,21 +553,12 @@ public sealed partial class VaultCatalog
         await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, Now), cancellationToken: ct);
 
         // The server can't wrap K′ for an API key without the key (Ruling 20): each one of the owner's with a slot here
-        // goes whole, as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted. The
-        // members' slots here went above.
-        var keyIds = (await (await Slots.DistinctAsync(
-            s, sl => sl.KeyId, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Eq(sl => sl.Vault, id) & f.Exists(sl => sl.KeyId) & f.Eq(sl => sl.GrantedVia, null),
-            cancellationToken: ct)).ToListAsync(ct))
-            .OfType<string>().ToList();
-        var keys = db.GetCollection<Accounts.ApiKeyDocument>(Accounts.ApiKeys.CollectionName);
-        var revoked = keyIds.Count == 0 ? [] : await keys.Find(s, k => keyIds.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
-        if (revoked.Count > 0)
-        {
-            await keys.UpdateManyAsync(
-                s, Builders<Accounts.ApiKeyDocument>.Filter.In(k => k.Id, revoked), Builders<Accounts.ApiKeyDocument>.Update.Set(k => k.RevokedAt, Now).Unset(k => k.NameId), cancellationToken: ct);
-        }
-
-        if (keyIds.Count > 0) await Slots.DeleteManyAsync(s, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.In(sl => sl.KeyId, keyIds), cancellationToken: ct);
+        // goes whole, as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted; her
+        // WebDAV shares likewise, as K′ can't be sealed without a share's password either. The members' slots here
+        // went above.
+        var owners = f.Eq(sl => sl.Vault, id) & f.Eq(sl => sl.GrantedVia, null);
+        var revoked = await RevokeWholeAsync(s, KeyCredentials, await CredentialIdsAsync(s, KeyCredentials, owners, ct), ct);
+        var revokedShares = await RevokeWholeAsync(s, ShareCredentials, await CredentialIdsAsync(s, ShareCredentials, owners, ct), ct);
 
         // Its tokens become tombstones, so a revoked token stays recognised (Ruling 12); the app reconnects.
         var connections = db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName);
@@ -570,13 +575,16 @@ public sealed partial class VaultCatalog
         if (others.DeletedCount > 0) log.LogWarning("Vault {VaultId} had {Count} more slots besides its owner's and members'; they were deleted with its re-keying", id, others.DeletedCount);
 
         return new RekeyStart(
-            oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)], members, membersRevoked);
+            oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)], members, membersRevoked)
+        {
+            RevokedShares = [.. revokedShares.Order(StringComparer.Ordinal)],
+        };
     }
 
     /// <summary>
-    /// Inside the start transaction, the members' keys and connections on the vault (collab design §7.1, §13 L9): only
-    /// their slots on this vault (<c>grantedVia</c>) go, an API key left with no vault is revoked, and a connection
-    /// loses the vault, revoked if it was its last. The owner's re-key doesn't reach into the members' own vaults; they
+    /// Inside the start transaction, the members' keys, shares and connections on the vault (collab design §7.1, §13 L9):
+    /// only their slots on this vault (<c>grantedVia</c>) go, an API key or WebDAV share left with no vault is revoked,
+    /// and a connection loses the vault, revoked if it was its last. The owner's re-key doesn't reach into the members' own vaults; they
     /// give their agents this vault again.
     /// </summary>
     private async Task<MembersCredentials> EndMembersCredentialsAsync(IClientSessionHandle s, string id, string ownerId, CancellationToken ct)
@@ -584,10 +592,12 @@ public sealed partial class VaultCatalog
         var f = Builders<SlotDocument>.Filter;
         var derived = f.Eq(sl => sl.Vault, id) & f.Ne(sl => sl.GrantedVia, null);
         var keyIds = await (await Slots.DistinctAsync(s, sl => sl.KeyId, derived & f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct);
+        var shareIds = await ShareIdsAsync(s, derived, ct);
         // Also through keys already expired or revoked: such a member is told once more than she needs to be, which is harmless.
         var via = await (await Slots.DistinctAsync(s, sl => sl.GrantedVia, derived, cancellationToken: ct)).ToListAsync(ct);
         await Slots.DeleteManyAsync(s, derived, cancellationToken: ct);
         var keys = await RevokeKeysWithoutVaultsAsync(s, keyIds, ct);
+        var shares = await RevokeSharesWithoutVaultsAsync(s, shareIds, ct);
 
         var c = Builders<Accounts.ConnectionDocument>.Filter;
         var theirs = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
@@ -603,12 +613,12 @@ public sealed partial class VaultCatalog
         }
 
         // Each is told at its next tool call once the run is done, if it still has a vault to call with (§8.4).
-        var ended = keyIds.OfType<string>().Concat(theirs.Select(x => x.Id)).ToList();
+        var ended = keyIds.OfType<string>().Concat(shareIds.Select(Accounts.DavShares.CredentialId)).Concat(theirs.Select(x => x.Id)).ToList();
         if (ended.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEnded, ended), cancellationToken: ct);
         // Their memberships, for the finish's notices; kept as the ids are, so that a resumed run still knows them.
         var endedMembers = via.OfType<string>().Distinct(StringComparer.Ordinal).ToList();
         if (endedMembers.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEndedMembers, endedMembers), cancellationToken: ct);
-        return new MembersCredentials(keys, connections);
+        return new MembersCredentials(keys, connections, shares);
     }
 
     /// <summary>

@@ -49,6 +49,12 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// stays in the vault's events (an event whose entry is gone reads as a publication that changed).</summary>
     internal const int LogLimit = 500;
 
+    /// <summary>How long a kept removal of the same note by the same writer is folded into the last one recorded
+    /// (<see cref="RecordKeptAsync"/>): the log keeps only its newest <see cref="LogLimit"/> entries, and a share that
+    /// deletes a published note over and over mustn't push the owner's history out of it. An hour still tells her of a
+    /// client that keeps at it, without one entry a minute.</summary>
+    internal static readonly TimeSpan KeptFold = TimeSpan.FromHours(1);
+
     // A record that changes under each attempt is a vault being worked on hard; then the caller tries again.
     private const int Attempts = 3;
 
@@ -153,6 +159,50 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         }
     }
 
+    /// <summary>
+    /// A caller that may not withdraw the publication of <paramref name="note"/> tried to remove the note, which stays
+    /// where it is (WebDAV design §3.6 case 6: a share's <c>DELETE</c>, held and not carried out): the attempt in the log,
+    /// and the owner's vault event for it, in one transaction; the publication is as it was. Nothing if the note isn't
+    /// published (any longer). No check of who may publish: it changes nothing that is out, and it only tells the owner.
+    /// A share that tries again and again (a client retrying its sync) is recorded once per note per <see cref="KeptFold"/>.
+    /// </summary>
+    public async Task RecordKeptAsync(VaultAccess access, VaultPath note, string by, WriterRef byRef, CancellationToken ct)
+    {
+        var stored = access.ToVault(note);
+        var reference = Ref(byRef);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
+            if (Find(record, stored) is null) return;
+            var now = Now;
+            // The last attempt on this note by this writer, not the last of all: alternating between notes mustn't defeat
+            // the fold.
+            if (record.Log.LastOrDefault(l => l.Kind == PublishingKinds.Kept && l.Note == stored.Value && l.By == by && l.ByRef == reference) is { } last
+                && now - last.At < KeptFold)
+            {
+                return;
+            }
+
+            var next = record with { Log = Appended(record.Log, LogEntry(PublishingKinds.Kept, stored, now, by, byRef, null)) };
+            var written = await WriteAsync(access, attempt, async session =>
+            {
+                await EventAsync(session, access, next.Log[^1], ct);
+                await store.WriteAsync(session, access.Vault, doc, next, ct);
+            }, ct);
+            if (written) return;
+        }
+    }
+
+    /// <summary>The published notes at or below <paramref name="under"/>, in the caller's view: what a caller that may
+    /// not withdraw them leaves where they are when it removes a folder (WebDAV design §3.6 case 6). A member learns no
+    /// more of them than that they are published (publish spec §3.10).</summary>
+    public async Task<IReadOnlyList<VaultPath>> PublishedUnderAsync(VaultAccess access, VaultPath under, CancellationToken ct)
+    {
+        var scope = access.ToVault(under).Value;
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        return [.. record.Publications.Where(p => Covered([scope], p.Note)).Select(p => access.ToCaller(Parse(p.Note)))];
+    }
+
     /// <summary>The vault's unpublishable marks, in the caller's view; none for a member.</summary>
     public async Task<IReadOnlyList<VaultPath>> MarksAsync(VaultAccess access, CancellationToken ct) =>
         IsOwner(access) ? [.. (await store.ReadAsync(null, access.Vault, ct)).Record.Unpublishable.Select(m => access.ToCaller(Parse(m)))] : [];
@@ -251,7 +301,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var shown = access.ToCaller(Parse(withdrawn[0].Entry.Note));
             throw new PublishedNoteException(access.Membership is not null
                 ? $"{shown} is published by the vault's owner; only the owner can remove it or move it into an unpublishable folder"
-                : $"{shown} is published, and this key may not publish in {access.Name}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
+                : $"{shown} is published, and {(access.ViaShare ? "a WebDAV share never publishes" : $"this key may not publish in {access.Name}")}, so it can't withdraw it either; withdraw it first with a key that may publish (publish rm) or in the web app");
         }
 
         if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)) return;
@@ -331,6 +381,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     {
         PublishingKinds.Published => VaultEvents.NotePublished,
         PublishingKinds.Updated => VaultEvents.PublicationUpdated,
+        PublishingKinds.Kept => VaultEvents.PublishedNoteKept,
         _ => VaultEvents.PublicationWithdrawn,
     };
 
@@ -399,7 +450,9 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         {
             throw Refused(
                 Refusals.NoPublishRight,
-                $"this key may not publish in {access.Name}; its owner can allow it (\"May publish\") under API keys or Connections in the web app");
+                access.ViaShare
+                    ? $"a WebDAV share never publishes, in {access.Name} or any other vault"
+                    : $"this key may not publish in {access.Name}; its owner can allow it (\"May publish\") under Access → API keys or Apps in the web app");
         }
     }
 
