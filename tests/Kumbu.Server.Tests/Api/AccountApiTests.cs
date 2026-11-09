@@ -118,6 +118,19 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         return (username, recoveryKey, session, [.. keys]);
     }
 
+    /// <summary>Waits until the user has no vault pending re-keying and none of <paramref name="vaultIds"/> is in its
+    /// two-key period.</summary>
+    private async Task RekeyedAsync(string username, IReadOnlyCollection<string> vaultIds)
+    {
+        var until = DateTime.UtcNow.AddSeconds(30);
+        while ((await app.Database.GetCollection<UserDocument>("users").Find(u => u.Username == username).SingleAsync(Ct)).RekeyPending is { Count: > 0 }
+            || await app.Database.GetCollection<VaultDocument>("vaults").Find(v => vaultIds.Contains(v.Id) && v.RekeyStartedAt != null).AnyAsync(Ct))
+        {
+            Assert.True(DateTime.UtcNow < until, "The vaults were not re-keyed in time.");
+            await Task.Delay(50, Ct);
+        }
+    }
+
     /// <summary>What an API key gets on the REST API and on <c>/mcp</c>.</summary>
     private async Task<(HttpStatusCode Api, HttpStatusCode Mcp)> KeyStatusAsync(string key)
     {
@@ -999,6 +1012,8 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         var secondKey = json["recoveryKey"]!.GetValue<string>();
         Assert.True(RecoveryKey.TryParse(secondKey, out _));
         Assert.NotEqual(firstKey, secondKey);
+        var rotated = (await app.Database.GetCollection<UserDocument>("users").Find(u => u.Username == username).SingleAsync(Ct)).RekeyPending ?? [];
+        Assert.NotEmpty(rotated);
         foreach (var key in keys) Assert.Equal((HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized), await KeyStatusAsync(key));
         foreach (var old in new[] { session, other })
         {
@@ -1012,6 +1027,8 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.DoesNotContain("recoveryKey", await again.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
         using var list = await SendAsync(HttpMethod.Get, "/api/keys", session: await SignInAsync(username, NewPassword));
         Assert.All((await JsonAsync(list)).AsArray(), k => Assert.NotNull(k!["revokedAt"]));
+        // The first recovery's vaults are re-keyed in the background; a rotation meanwhile would conflict with it (409).
+        await RekeyedAsync(username, rotated);
         using var withNew = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = secondKey, newPassword = Password }, ip: NewIp());
         Assert.Equal(HttpStatusCode.OK, withNew.StatusCode);
         await SignInAsync(username, Password);
