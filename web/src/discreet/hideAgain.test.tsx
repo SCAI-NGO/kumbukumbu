@@ -84,7 +84,7 @@ function server(until: string | null, extra: Parameters<typeof fakeApi>[0] = {},
     },
     ...extra,
   }));
-  return { fetch, log, net, told, hidden: () => (hidden = true), requests: (method: string, path: string) => fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === method && new URL(r.url).pathname === path) };
+  return { fetch, log, net, told, hidden: () => (hidden = true), shownAgain: () => (hidden = false), requests: (method: string, path: string) => fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === method && new URL(r.url).pathname === path) };
 }
 
 /** The open note's editor, as far as hiding sees it: it saves (or fails to) and says what is left. */
@@ -255,7 +255,7 @@ describe("hiding the discreet vaults again", () => {
   });
 
   it("tells the server which discreet note is open, and that none is once an ordinary one is", async () => {
-    const { log, told, router, requests } = await openDiary(inMinutes(10));
+    const { log, told, router, requests, shownAgain } = await openDiary(inMinutes(10));
     await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }]));
     await act(() => router.navigate("/notes/Work/a.md"));
     await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }, { vault: null }]));
@@ -269,6 +269,12 @@ describe("hiding the discreet vaults again", () => {
     await act(() => router.navigate("/notes/Work/a.md"));
     expect(told).toHaveLength(3);
     expect(requests("PUT", "/api/account/discreet/open-note")).toHaveLength(3);
+    // Shown again, the same note is told again: the server forgot it with the hide.
+    shownAgain();
+    act(() => useDiscreet.setState({ revealed: true, until: inMinutes(10), names: new Set(["Tagebuch"]) }));
+    await act(() => router.navigate("/notes/Tagebuch/a.md"));
+    await waitFor(() => expect(told).toHaveLength(4));
+    expect(told[3]).toEqual({ vault: "Tagebuch", path: "a.md" });
   });
 
   it("tells nothing while they are hidden, nor for an ordinary note while they are shown", async () => {
