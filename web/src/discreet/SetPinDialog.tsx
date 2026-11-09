@@ -15,12 +15,14 @@ function PinField({ label, value, onChange, hint, invalid }: { label: string; va
       <label htmlFor={id} className={labelClass}>
         {label}
       </label>
-      {/* As the PIN dialog's: a password field so that the digits aren't shown, which password managers leave alone. */}
+      {/* As the PIN dialog's: a masked text field, so that next to the current password the form doesn't look like a
+          password change the browser offers to save. */}
       <input
         id={id}
-        type="password"
+        type="text"
         inputMode="numeric"
-        autoComplete="off"
+        autoComplete="one-time-code"
+        spellCheck={false}
         maxLength={6}
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
@@ -29,7 +31,7 @@ function PinField({ label, value, onChange, hint, invalid }: { label: string; va
         data-bwignore="true"
         data-1p-ignore="true"
         data-lpignore="true"
-        className={`${inputClass} font-mono tracking-[0.3em]`}
+        className={`${inputClass} k-pin font-mono tracking-[0.3em]`}
       />
       {hint && (
         <p id={`${id}-hint`} className="text-sm text-muted">

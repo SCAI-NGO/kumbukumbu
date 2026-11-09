@@ -53,13 +53,14 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
             <label htmlFor={`${id}-pin`} className={labelClass}>
               PIN
             </label>
-            {/* A password field so that the digits aren't shown; the data-* attributes tell password managers to leave it alone, as it is no password. */}
+            {/* A text field masked by k-pin, not a password field, which a browser would offer to save as the account's password; the data-* attributes tell password managers to leave it alone. */}
             <input
               ref={field}
               id={`${id}-pin`}
-              type="password"
+              type="text"
               inputMode="numeric"
-              autoComplete="off"
+              autoComplete="one-time-code"
+              spellCheck={false}
               maxLength={6}
               aria-describedby={`${id}-hint`}
               aria-invalid={reveal.isError || undefined}
@@ -72,7 +73,7 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
               data-bwignore="true"
               data-1p-ignore="true"
               data-lpignore="true"
-              className={`${inputClass} font-mono tracking-[0.3em]`}
+              className={`${inputClass} k-pin font-mono tracking-[0.3em]`}
             />
             <p id={`${id}-hint`} className="text-sm text-muted">
               4 to 6 digits

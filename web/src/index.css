@@ -377,6 +377,19 @@ html {
   line-height: 1.6;
 }
 
+/* A PIN field: a text field, so that no browser offers to save the PIN as a password, with its digits masked. Where
+   -webkit-text-security is missing, the digits are blurred instead. */
+.k-pin {
+  -webkit-text-security: disc;
+}
+@supports not (-webkit-text-security: disc) {
+  .k-pin {
+    color: transparent;
+    caret-color: var(--text);
+    text-shadow: 0 0 0.5em var(--text);
+  }
+}
+
 /* The drawer slides in from x−28 px, a sheet from y+24 px (MOBILE_EDITOR §6). */
 .k-drawer {
   animation: k-in-left 0.18s ease-out;

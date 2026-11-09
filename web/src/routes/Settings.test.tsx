@@ -719,12 +719,19 @@ describe("Settings: discreet vaults", () => {
     await userEvent.click(within(region).getByRole("button", { name: "Set or change PIN" }));
     const dialog = screen.getByRole("dialog", { name: "Set or change PIN" });
     const pin = within(dialog).getByLabelText("New PIN");
-    expect(pin).toHaveAttribute("type", "password");
-    expect(pin).toHaveAttribute("inputmode", "numeric");
+    // Masked, but no password field: a password manager would offer to store the PIN as the account's password.
+    for (const field of [pin, within(dialog).getByLabelText("New PIN again")]) {
+      expect(field).toHaveAttribute("type", "text");
+      expect(field).toHaveClass("k-pin");
+      expect(field).toHaveAttribute("inputmode", "numeric");
+      expect(field).toHaveAttribute("autocomplete", "one-time-code");
+    }
     expect(pin).toHaveAccessibleDescription("4 to 6 digits");
     await userEvent.type(within(dialog).getByLabelText("Current password"), "my password");
     await userEvent.type(pin, "4711");
     await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4712");
+    const passwords = [...dialog.querySelectorAll<HTMLInputElement>('input[type="password"]')];
+    expect(passwords.map((p) => p.value)).toEqual(["my password"]);
     await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("The two PINs differ.");
     expect(within(dialog).getByLabelText("New PIN again")).toHaveAttribute("aria-invalid", "true");

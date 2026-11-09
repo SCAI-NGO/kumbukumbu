@@ -56,13 +56,15 @@ async function enter(dialog: HTMLElement, pin: string) {
 }
 
 describe("PinDialog", () => {
-  it("asks for the PIN and how long, in a field no manager fills", () => {
+  it("asks for the PIN and how long, in a masked field no password manager takes for a password", () => {
     const { dialog } = renderDialog();
     expect(within(dialog).getByRole("heading")).toHaveTextContent("More vaults");
     const field = within(dialog).getByLabelText("PIN");
-    expect(field).toHaveAttribute("type", "password");
+    expect(field).toHaveAttribute("type", "text");
+    expect(field).toHaveClass("k-pin");
     expect(field).toHaveAttribute("inputmode", "numeric");
-    expect(field).toHaveAttribute("autocomplete", "off");
+    expect(field).toHaveAttribute("autocomplete", "one-time-code");
+    expect(dialog.querySelector('input[type="password"]')).toBeNull();
     expect(field).toHaveAttribute("maxlength", "6");
     expect(field).toHaveFocus();
     const group = within(dialog).getByRole("group", { name: "Hide again after" });
