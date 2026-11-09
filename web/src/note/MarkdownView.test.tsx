@@ -2,7 +2,9 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fakeApi, json } from "../test/app";
 import type { LinkView } from "./wikiLinks";
 import { useEditor } from "../state/editor";
 import MarkdownView from "./MarkdownView";
@@ -709,5 +711,104 @@ describe("Maths", () => {
     show("text\n\n$$\nx^2\n$$", [], {}, { lines: new Set([4]), writer: "Bob" });
     await typeset();
     expect(document.querySelector("[data-changed] .katex-display")).not.toBeNull();
+  });
+});
+
+describe("Footnotes", () => {
+  const scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled.length = 0;
+    // jsdom has no scrollIntoView.
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+    vi.unstubAllGlobals();
+  });
+
+  const reference = () => screen.getByRole("link", { name: "1" });
+  const backLink = () => screen.getByRole("link", { name: /Back to reference 1/ });
+  /** Clicks as a user would, and says whether the view kept the browser from following the link. */
+  const prevented = (element: Element) => !element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  const ids = () => [...document.querySelectorAll("[id]")].map((e) => e.id);
+
+  it("renders the reference and its definition with a back link", () => {
+    show("Sow the carrots[^1].\n\n[^1]: After the last frost.");
+    expect(reference().closest("sup")).not.toBeNull();
+    expect(reference().getAttribute("href")).toMatch(/^#user-content-.*fn-1$/);
+    const footnotes = document.querySelector<HTMLElement>("section[data-footnotes]")!;
+    expect(footnotes).toHaveTextContent("After the last frost.");
+    expect(within(footnotes).getByRole("link", { name: /Back to reference 1/ })).toBeInTheDocument();
+  });
+
+  it("keeps the generated Footnotes heading hidden", () => {
+    show("Text[^1]\n\n[^1]: The note.");
+    expect(screen.getByRole("heading", { level: 2, name: "Footnotes" })).toHaveClass("sr-only");
+  });
+
+  it("jumps from the reference to its definition and back, without following the link", () => {
+    function Where() {
+      const location = useLocation();
+      return <p data-testid="where">{location.pathname + location.hash}</p>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/notes/Work/plan.md"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
+        <Where />
+      </MemoryRouter>,
+    );
+    const hash = window.location.hash;
+
+    expect(prevented(reference())).toBe(true);
+    expect(scrolled).toEqual([document.querySelector("section[data-footnotes] li")]);
+    expect(prevented(backLink())).toBe(true);
+    expect(scrolled.at(-1)).toBe(reference());
+
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/notes\/Work\/plan\.md$/);
+    expect(window.location.hash).toBe(hash);
+  });
+
+  it("gives two views of the same footnotes ids of their own", () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
+        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(ids().length).toBeGreaterThan(0);
+    expect(new Set(ids()).size).toBe(ids().length);
+  });
+
+  it("keeps an embedded note's footnotes apart from the note's, and jumps within the embed", async () => {
+    const ROADMAP = "/Work/roadmap.md";
+    fakeApi({
+      [`GET /api/notes${ROADMAP}`]: () =>
+        json(200, { path: ROADMAP, content: "Plant kale[^1].\n\n[^1]: In March.", version: "r1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      [`GET /api/links${ROADMAP}`]: () => json(200, []),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <MarkdownView
+            source={"Sow the carrots[^1].\n\n![[roadmap]]\n\n[^1]: After the last frost."}
+            links={[link(3, "![[roadmap]]", "note", ROADMAP)]}
+            tasksDisabled={false}
+            onToggleTask={vi.fn()}
+            onCreateMissing={vi.fn()}
+            path="/Work/plan.md"
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const embed = await screen.findByRole("region", { name: "Embedded: roadmap" });
+    await within(embed).findByText("In March.");
+
+    expect(new Set(ids()).size).toBe(ids().length);
+    expect(prevented(within(embed).getByRole("link", { name: "1" }))).toBe(true);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toHaveTextContent("In March.");
+    expect(embed).toContainElement(scrolled[0] as HTMLElement);
   });
 });

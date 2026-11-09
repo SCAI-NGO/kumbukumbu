@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
 import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
-import { createContext, memo, useContext, useEffect, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ComponentPropsWithoutRef, type MouseEvent, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -280,6 +280,51 @@ function InlineTag({ tag }: { tag: string }) {
   return <TagChip tag={tag} still={!!checkpointLink} />;
 }
 
+/**
+ * Each view's footnote ids start with its own prefix (an embedded note's `fn-1` is not the note's), and a jump looks
+ * for its target inside the view's own root.
+ */
+const FootnoteContext = createContext<{ prefix: string; root: RefObject<HTMLDivElement> }>({ prefix: "user-content-", root: { current: null } });
+
+// The heading of the footnotes always gets this id from remark-rehype, whatever the prefix.
+const footnoteLabel = "footnote-label";
+
+/**
+ * A link. One to a fragment (a footnote and its way back) scrolls to its target within the note's scroller and
+ * leaves the address alone: the browser would scroll the window, and the router would see a new location.
+ */
+function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef<"a"> & { footnote: boolean }) {
+  const { prefix, root } = useContext(FootnoteContext);
+  const jump = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    // remark-rehype writes a footnote's href and its target's id from the same encoded label.
+    const id = href!.slice(1);
+    const target = [...(root.current?.querySelectorAll<HTMLElement>("[id]") ?? [])].find((e) => e.id === id);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    if (target.matches("a[href], button, [tabindex]")) target.focus({ preventScroll: true });
+  };
+  const describedBy = props["aria-describedby"] === footnoteLabel ? prefix + footnoteLabel : props["aria-describedby"];
+  return (
+    <a
+      href={href}
+      {...props}
+      aria-describedby={describedBy}
+      {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      {...(href?.startsWith("#") ? { onClick: jump } : {})}
+      className={footnote ? "px-0.5 text-accent-text no-underline" : "text-accent-text underline decoration-accent/45 underline-offset-[3px]"}
+    >
+      {children}
+    </a>
+  );
+}
+
+/** The footnotes' heading, with the view's own id; the other `h2`s keep theirs (none). */
+function useHeadingId(id: string | undefined) {
+  const { prefix } = useContext(FootnoteContext);
+  return id === footnoteLabel ? prefix + footnoteLabel : id;
+}
+
 /** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
 function useLine(node: HastNode | undefined) {
   const { nested } = useContext(NoteContext);
@@ -336,7 +381,7 @@ const components: Components = {
   ),
   h1: ({ node, ...props }) => <h1 data-line={useLine(node)} tabIndex={-1} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0 focus:outline-none" {...props} />,
   h2: ({ node, ...props }) => (
-    <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
+    <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} id={useHeadingId(props.id)} />
   ),
   h3: ({ node, ...props }) => <h3 data-line={useLine(node)} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
   h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
@@ -397,16 +442,18 @@ const components: Components = {
     </div>
   ),
   // react-markdown's default urlTransform already drops dangerous protocols (javascript: and the like).
-  a: ({ node: _, href, children, ...props }) => (
-    <a
-      href={href}
-      {...props}
-      {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-      className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
-    >
+  a: ({ node, children, ...props }) => (
+    <Anchor footnote={node?.properties.dataFootnoteRef !== undefined || node?.properties.dataFootnoteBackref !== undefined} {...props}>
       {children}
-    </a>
+    </Anchor>
   ),
+  // The footnotes remark-gfm gathers at the end; their "Footnotes" heading is only for screen readers (sr-only).
+  section: ({ node, ...props }) =>
+    node?.properties.dataFootnotes !== undefined ? (
+      <section {...props} className="mt-8 border-t border-line pt-3 text-[14px] text-muted [&_li]:my-0.5 [&_p]:my-1" />
+    ) : (
+      <section {...props} />
+    ),
   // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when. One of the vault's
   // own (`![](/Screenshots/shot.png)`) is an attachment chip instead (`remarkWikiLinks`).
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
@@ -477,13 +524,21 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
     [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink],
   );
 
+  // Every view, an embedded note's and History's too, gets ids of its own: the same note shown twice repeats none.
+  const prefix = `user-content-${useId().toLowerCase().replace(/[^a-z0-9-]/g, "")}-`;
+  const root = useRef<HTMLDivElement>(null);
+  const footnotes = useMemo(() => ({ prefix, root }), [prefix]);
+  const rehypeOptions = useMemo(() => ({ clobberPrefix: prefix }), [prefix]);
+
   return (
     <NoteContext.Provider value={context}>
-      <div className="text-[16px] leading-[1.6] break-words text-text-body">
-        <ReactMarkdown remarkPlugins={remarkPlugins as never} rehypePlugins={math?.rehypePlugins} components={components}>
-          {math ? prepared.source : source}
-        </ReactMarkdown>
-      </div>
+      <FootnoteContext.Provider value={footnotes}>
+        <div ref={root} className="text-[16px] leading-[1.6] break-words text-text-body">
+          <ReactMarkdown remarkPlugins={remarkPlugins as never} rehypePlugins={math?.rehypePlugins} remarkRehypeOptions={rehypeOptions} components={components}>
+            {math ? prepared.source : source}
+          </ReactMarkdown>
+        </div>
+      </FootnoteContext.Provider>
     </NoteContext.Provider>
   );
 }
