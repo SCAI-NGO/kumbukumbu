@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
-import { useDiscreet } from "./discreet/state";
+import { followVaults, useDiscreet } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -58,6 +58,9 @@ function Root() {
 function RequireSession({ children }: { children?: ReactNode }) {
   const session = useQuery({ queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) });
   const signedIn = useSession((s) => s.signedIn);
+  const queryClient = useQueryClient();
+
+  useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
     if (!session.data) return;

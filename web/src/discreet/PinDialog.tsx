@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { errorText } from "../api/error-text";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -18,6 +18,7 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const [pin, setPin] = useState("");
+  const field = useRef<HTMLInputElement>(null);
   const [choice, setChoice] = useState(readTimeout);
   const reveal = useReveal(pin);
   const complete = /^[0-9]{4,6}$/.test(pin);
@@ -26,7 +27,13 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
     e.preventDefault();
     if (!complete || reveal.isPending) return;
     writeTimeout(choice);
-    reveal.mutate(minutesOf(choice), { onSuccess: onClose, onError: () => setPin("") });
+    reveal.mutate(minutesOf(choice), {
+      onSuccess: onClose,
+      onError: () => {
+        setPin("");
+        field.current?.focus();
+      },
+    });
   };
 
   return (
@@ -46,13 +53,16 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
             <label htmlFor={`${id}-pin`} className={labelClass}>
               PIN
             </label>
-            {/* A password field so that the digits aren't shown; the managers are told to leave it alone, as it is no password. */}
+            {/* A password field so that the digits aren't shown; the data-* attributes tell password managers to leave it alone, as it is no password. */}
             <input
+              ref={field}
               id={`${id}-pin`}
               type="password"
               inputMode="numeric"
               autoComplete="off"
               maxLength={6}
+              aria-describedby={`${id}-hint`}
+              aria-invalid={reveal.isError || undefined}
               value={pin}
               onChange={(e) => {
                 setPin(e.target.value.replace(/\D/g, "").slice(0, 6));
@@ -64,6 +74,9 @@ export default function PinDialog({ onClose }: { onClose(): void }) {
               data-lpignore="true"
               className={`${inputClass} font-mono tracking-[0.3em]`}
             />
+            <p id={`${id}-hint`} className="text-sm text-muted">
+              4 to 6 digits
+            </p>
             {reveal.isError && <FormError>{errorText(reveal.error)}</FormError>}
           </div>
           <fieldset className="flex min-w-0 flex-col gap-1">

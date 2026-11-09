@@ -42,9 +42,9 @@ function Action({ icon, onSelect, children }: { icon: ReactNode; onSelect(): voi
 /**
  * The vaults' popout: the user's own first, then those shared with her, each owner's together under the owner's name;
  * then a new vault, the overview of all of them, and More vaults… last, always (discreet spec §3.6): whether or not
- * she has a PIN or discreet vaults, so its presence tells nothing. A sheet from the bottom on a phone; from `md` on, a panel above
- * the switcher, wider than a narrow sidebar so that names fit. A modal dialog either way: Escape or a tap beside it
- * closes it, and the focus goes back to the switcher.
+ * she has a PIN or discreet vaults, so its presence tells nothing. A sheet from the bottom on a phone; from `md` on, a
+ * panel above the switcher, wider than a narrow sidebar so that names fit. A modal dialog either way: Escape or a tap
+ * beside it closes it, and the focus goes back to the switcher.
  */
 function Popout({ onClose, onNewVault, onRename, onMoreVaults }: { onClose(): void; onNewVault(): void; onRename?(): void; onMoreVaults(): void }) {
   const id = useId();

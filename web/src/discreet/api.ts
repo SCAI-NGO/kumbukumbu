@@ -16,6 +16,8 @@ export function useReveal(pin: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (minutes: number | null) => call(api.POST("/api/account/discreet/reveal", { body: { pin, minutes } })),
+    // The mutation's closure holds the PIN: nothing of it stays in the cache once the dialog is gone.
+    gcTime: 0,
     onSuccess: (view) => {
       useDiscreet.getState().setFromSession(view);
       return shownChanged(queryClient);
@@ -36,6 +38,7 @@ export function useHide() {
 export function useSetPin(password: string, pin: string) {
   return useMutation({
     mutationFn: () => call(api.POST("/api/account/discreet/pin", { body: { password, pin } })),
+    gcTime: 0,
   });
 }
 

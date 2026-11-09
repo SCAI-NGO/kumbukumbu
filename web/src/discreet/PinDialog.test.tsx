@@ -7,19 +7,15 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import PinDialog from "./PinDialog";
-import { useDiscreet } from "./state";
+import { followVaults, useDiscreet } from "./state";
 
 const storageKey = "kumbu.discreetTimeout";
 const wrongPin = "You have no discreet vaults.";
 const tooMany = "Too many attempts; try again in a minute.";
 
 beforeEach(() => {
-  try {
-    localStorage.clear();
-    sessionStorage.clear();
-  } catch {
-    // Some runs have no storage; the tests that need it set it up.
-  }
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -32,6 +28,8 @@ afterEach(() => {
 });
 
 const revealed = (until: string | null) => json(200, { revealed: true, until });
+/** A time `minutes` from now, as the server writes it. */
+const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 
 function renderDialog(onClose = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -70,6 +68,8 @@ describe("PinDialog", () => {
     const group = within(dialog).getByRole("group", { name: "Hide again after" });
     expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent)).toEqual(["5 min", "10 min", "30 min", "60 min", "Never"]);
     expect(within(dialog).getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(field).toHaveAccessibleDescription("4 to 6 digits");
+    expect(field).not.toHaveAttribute("aria-invalid");
   });
 
   it("preselects this device's last choice", () => {
@@ -101,7 +101,8 @@ describe("PinDialog", () => {
 
   it("Open sends the PIN and the minutes, stores the choice and nothing else, and closes", async () => {
     const local = vi.spyOn(Storage.prototype, "setItem");
-    const fetch = fakeApi({ "POST /api/account/discreet/reveal": () => revealed("2026-11-09T10:30:00Z") });
+    const until = inMinutes(30);
+    const fetch = fakeApi({ "POST /api/account/discreet/reveal": () => revealed(until) });
     const { dialog, onClose } = renderDialog();
     await userEvent.click(within(dialog).getByRole("radio", { name: "30 min" }));
     await enter(dialog, "482916");
@@ -112,7 +113,7 @@ describe("PinDialog", () => {
     expect(local.mock.calls).toEqual([[storageKey, "30"]]);
     expect(local.mock.contexts).toEqual([localStorage]);
     expect(sessionStorage.length).toBe(0);
-    expect(useDiscreet.getState()).toMatchObject({ revealed: true, until: "2026-11-09T10:30:00Z" });
+    expect(useDiscreet.getState()).toMatchObject({ revealed: true, until });
   });
 
   it("Never sends no minutes", async () => {
@@ -143,12 +144,17 @@ describe("PinDialog", () => {
     const { dialog, onClose } = renderDialog();
     await enter(dialog, "0000");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(wrongPin);
-    expect(within(dialog).getByLabelText("PIN")).toHaveValue("");
+    const field = within(dialog).getByLabelText("PIN");
+    expect(field).toHaveValue("");
+    // Ready for the next try, and marked as wrong until then.
+    expect(field).toHaveFocus();
+    expect(field).toHaveAttribute("aria-invalid", "true");
     expect(onClose).not.toHaveBeenCalled();
     expect(useDiscreet.getState().revealed).toBe(false);
     // Typing again takes the sentence away.
     await userEvent.type(within(dialog).getByLabelText("PIN"), "1");
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    expect(field).not.toHaveAttribute("aria-invalid");
     expect(local.mock.calls.every(([key]) => key === storageKey)).toBe(true);
     expect(sessionStorage.length).toBe(0);
   });
@@ -170,14 +176,65 @@ describe("PinDialog", () => {
   });
 });
 
+describe("the store", () => {
+  it("follows the vault list wherever it comes from, and forgets it with the list", () => {
+    const queryClient = new QueryClient();
+    const stop = followVaults(queryClient);
+    queryClient.setQueryData(["vaults"], [{ name: "Work" }, { name: "Tagebuch", discreet: true }]);
+    expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]);
+    // The same names keep the same set: nothing subscribed renders again.
+    const names = useDiscreet.getState().names;
+    queryClient.setQueryData(["vaults"], [{ name: "Work", notes: 2 }, { name: "Tagebuch", discreet: true }]);
+    expect(useDiscreet.getState().names).toBe(names);
+    // Another query naming vaults isn't the list.
+    queryClient.setQueryData(["vaults", "other"], []);
+    expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]);
+    queryClient.removeQueries({ queryKey: ["vaults"], exact: true });
+    expect(useDiscreet.getState().names.size).toBe(0);
+    queryClient.setQueryData(["vaults"], [{ name: "Familie", discreet: true }]);
+    queryClient.clear();
+    expect(useDiscreet.getState().names.size).toBe(0);
+    stop();
+    queryClient.setQueryData(["vaults"], [{ name: "Familie", discreet: true }]);
+    expect(useDiscreet.getState().names.size).toBe(0);
+  });
+
+  it("is forgotten when the session ends, she signs out or another user signs in", () => {
+    const shown = () => useDiscreet.setState({ revealed: true, until: null, names: new Set(["Tagebuch"]) });
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    shown();
+    useSession.getState().end();
+    expect(useDiscreet.getState()).toMatchObject({ revealed: false, until: null });
+    expect(useDiscreet.getState().names.size).toBe(0);
+
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    shown();
+    useSession.getState().signOut();
+    expect(useDiscreet.getState().revealed).toBe(false);
+
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    shown();
+    useSession.getState().signedIn({ user: { ...user, id: "u2", username: "bob" }, previousSignInAt: null });
+    expect(useDiscreet.getState().revealed).toBe(false);
+    expect(useDiscreet.getState().names.size).toBe(0);
+
+    // The same user's session read again keeps it.
+    shown();
+    useSession.getState().signedIn({ user: { ...user, id: "u2", username: "bob" }, previousSignInAt: null });
+    expect(useDiscreet.getState().revealed).toBe(true);
+  });
+});
+
 describe("More vaults… in the shell", () => {
   const vault = (name: string, discreet = false) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false, discreet });
 
   it("opens the dialog from the vault menu; the right PIN shows the discreet vaults", async () => {
+    const local = vi.spyOn(Storage.prototype, "setItem");
+    const until = inMinutes(10);
     let shown = false;
     const tree = (name: string) => json(200, { damaged: 0, root: { name, path: `/${name}`, folders: [], notes: [] } });
     const fetch = fakeApi({
-      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown, until: shown ? "2026-11-09T10:10:00Z" : null } }),
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown, until: shown ? until : null } }),
       "GET /api/vaults": () => json(200, shown ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
       "GET /api/embeddings": () => json(200, []),
       "GET /api/vaults/Work/tree": () => tree("Work"),
@@ -187,7 +244,7 @@ describe("More vaults… in the shell", () => {
         const body = (await r.clone().json()) as { pin: string };
         if (body.pin !== "2468") return json(400, { error: wrongPin });
         shown = true;
-        return revealed("2026-11-09T10:10:00Z");
+        return revealed(until);
       },
     });
     renderApp("/notes/Work");
@@ -204,7 +261,13 @@ describe("More vaults… in the shell", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "More vaults" })).not.toBeInTheDocument());
     // The session and the vault list are asked again, and the store follows them.
     await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
-    expect(useDiscreet.getState()).toMatchObject({ revealed: true, until: "2026-11-09T10:10:00Z" });
+    expect(useDiscreet.getState()).toMatchObject({ revealed: true, until });
     expect(fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/api/session").length).toBeGreaterThan(1);
+    // Of all of it, only the time-out choice reaches browser storage: no PIN, no vault name.
+    expect(local.mock.calls.map(([key]) => key)).toEqual(local.mock.calls.map(() => storageKey));
+    expect(local.mock.contexts.every((c) => c === localStorage)).toBe(true);
+    expect(sessionStorage.length).toBe(0);
+    const stored = Array.from({ length: localStorage.length }, (_, i) => `${localStorage.key(i)}=${localStorage.getItem(localStorage.key(i)!)}`);
+    expect(stored.join("\n")).not.toContain("Tagebuch");
   });
 });
