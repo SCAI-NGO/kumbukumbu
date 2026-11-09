@@ -8,6 +8,9 @@ using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 
 namespace Kumbu.Server.Tests.Discreet;
 
@@ -38,12 +41,23 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
     private async Task<ConnectionInfo> StoredAsync(HiddenWorld world, string id) =>
         (await Api.Services.GetRequiredService<Connections>().ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Id == id);
 
+    /// <summary>Authorises the connection as Alice and returns the access token.</summary>
+    private async Task<string> ConnectAsync(HiddenWorld world, string id)
+    {
+        var flow = await OAuthFlow.StartAsync(Api, world.Alice, id, await OAuthFlow.RegisterAsync(Api, Callback), Callback);
+        await flow.AllowAsync();
+        using var token = await flow.TokenAsync();
+        Assert.Equal(HttpStatusCode.OK, token.StatusCode);
+        return (await RestClient.JsonAsync(token))["access_token"]!.GetValue<string>();
+    }
+
     [Fact]
     public async Task An_edit_keeps_the_grant_on_a_hidden_vault_with_its_publish_right()
     {
         var world = await HiddenWorld.NewAsync(Api);
         var workId = await world.In("Work").VaultIdAsync();
         var id = await CreateAsync(world, new() { ["Work"] = "write", ["Tagebuch"] = "read" }, ["Tagebuch"]);
+        var access = await ConnectAsync(world, id);
         await world.HideAsync();
 
         using var edited = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Work"] = "read" } });
@@ -57,6 +71,49 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
             new Dictionary<string, KeyRight> { [workId] = KeyRight.Read, [world.TagebuchId] = KeyRight.Read },
             stored.Vaults.ToDictionary(v => v.Key, v => v.Value));
         Assert.Equal([world.TagebuchId], stored.Publish);
+
+        // The rights changed, so the old token is gone; the agent reconnects and reads the hidden vault as before.
+        Assert.Equal(HttpStatusCode.Unauthorized, await InitializeAsync(id, access));
+        await world.RevealAsync();
+        Assert.Contains(HiddenWorld.TagebuchWord, await CatAsync(id, await ConnectAsync(world, id), "/Tagebuch/geheim.md"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_edit_after_a_hidden_vault_is_deleted_keeps_only_the_rest()
+    {
+        var world = await HiddenWorld.NewAsync(Api);
+        var workId = await world.In("Work").VaultIdAsync();
+        var id = await CreateAsync(world, new() { ["Work"] = "write", ["Tagebuch"] = "read" });
+        await world.HideAsync();
+        Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(
+            world.Alice.User, world.Alice.UserKey, "Tagebuch", RestClient.Password, "Tagebuch", null, Ct));
+
+        using var edited = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Work"] = "read" } });
+
+        Assert.Equal(HttpStatusCode.OK, edited.StatusCode);
+        var stored = await StoredAsync(world, id);
+        Assert.Equal(new Dictionary<string, KeyRight> { [workId] = KeyRight.Read }, stored.Vaults.ToDictionary(v => v.Key, v => v.Value));
+    }
+
+    [Fact]
+    public async Task An_empty_edit_of_no_such_connection_answers_as_for_a_user_without_discreet_vaults()
+    {
+        var world = await HiddenWorld.NewAsync(Api);
+        await world.HideAsync();
+        var plain = await RestClient.NewAsync(Api, vault: "Work");
+        const string madeUp = "aaaaaaaaaaaaaaaa";
+
+        var hidden = await EditAsync(world.Alice, madeUp);
+        var without = await EditAsync(plain, madeUp);
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.Status);
+        Assert.Equal(without, hidden);
+
+        static async Task<(HttpStatusCode Status, string Body)> EditAsync(RestClient user, string id)
+        {
+            using var response = await user.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string>() });
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        }
     }
 
     [Fact]
@@ -65,6 +122,7 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
         var world = await HiddenWorld.NewAsync(Api);
         var workId = await world.In("Work").VaultIdAsync();
         var id = await CreateAsync(world, new() { ["Tagebuch"] = "read" }, ["Tagebuch"]);
+        var access = await ConnectAsync(world, id);
         await world.HideAsync();
 
         using var empty = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string>() });
@@ -75,6 +133,8 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
         Assert.Equal([world.TagebuchId], stored.Vaults.Keys);
         Assert.Equal(KeyRight.Read, stored.Vaults[world.TagebuchId]);
         Assert.Equal([world.TagebuchId], stored.Publish);
+        // Nothing changed, so the agent keeps its token.
+        Assert.Contains(HiddenWorld.TagebuchWord, await CatAsync(id, access, "/Tagebuch/geheim.md"), StringComparison.Ordinal);
 
         using var beside = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Work"] = "write" } });
 
@@ -104,14 +164,7 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
     {
         var world = await HiddenWorld.NewAsync(Api);
         var id = await CreateAsync(world, new() { ["Work"] = "write", ["Tagebuch"] = "write" });
-        var flow = await OAuthFlow.StartAsync(Api, world.Alice, id, await OAuthFlow.RegisterAsync(Api, Callback), Callback);
-        await flow.AllowAsync();
-        string access;
-        using (var token = await flow.TokenAsync())
-        {
-            Assert.Equal(HttpStatusCode.OK, token.StatusCode);
-            access = (await RestClient.JsonAsync(token))["access_token"]!.GetValue<string>();
-        }
+        var access = await ConnectAsync(world, id);
 
         await world.HideAsync();
         Assert.Equal(HttpStatusCode.OK, await InitializeAsync(id, access));
@@ -135,5 +188,27 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
         using var client = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(KumbuAppFactory.PublicUrl) });
         using var response = await client.SendAsync(request, Ct);
         return response.StatusCode;
+    }
+
+    /// <summary>What <c>cat <paramref name="path"/></c> answers over MCP on the connection's URL with <paramref name="access"/>.</summary>
+    private async Task<string> CatAsync(string connectionId, string access, string path)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(OAuthFlow.ResourceOf(connectionId)),
+                AdditionalHeaders = new Dictionary<string, string>
+                {
+                    ["Authorization"] = $"Bearer {access}",
+                    ["X-Forwarded-For"] = $"198.27.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}",
+                },
+            },
+            Api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: Ct);
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = $"cat {path}" }, cancellationToken: Ct);
+        Assert.NotEqual(true, result.IsError);
+        return Assert.IsType<TextContentBlock>(result.Content[0]).Text;
     }
 }

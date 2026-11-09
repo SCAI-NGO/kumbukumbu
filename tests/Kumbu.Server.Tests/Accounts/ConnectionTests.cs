@@ -350,6 +350,23 @@ public sealed class ConnectionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Setting_vaults_keeps_the_stored_right_on_a_kept_vault_whatever_the_edit_names()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
+        var created = await Connections().CreateAsync(
+            user, userKey, JustRead, "phone", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct);
+
+        var changed = await Connections().SetVaultsAsync(
+            user, userKey, JustRead, created.Id, new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Read, [vaults["Diary"]] = KeyRight.Write }, Ct,
+            keep: new HashSet<string> { vaults["Diary"] });
+
+        Assert.Equal(KeyRight.Read, changed!.Vaults[vaults["Diary"]]);
+        var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
+        Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Work"]]);
+        Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Diary"]]);
+    }
+
+    [Fact]
     public async Task Changing_the_rights_of_an_authorised_connection_needs_a_reconnect()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");

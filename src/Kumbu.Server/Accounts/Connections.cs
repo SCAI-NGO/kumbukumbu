@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -244,8 +245,9 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// revoked nor expired. <see cref="CredentialsChangedException"/>, as at creation, if the user is inactive, their
     /// credentials changed at or after <paramref name="credentialReadAt"/>, or the user key isn't the one in force.
     /// "May publish" becomes <paramref name="publish"/>: without it, the connection may publish nowhere.
-    /// The stored grants on the vaults of <paramref name="keep"/> (those a web session hides, Decision 9), right and
-    /// "May publish", stay as they are beside the new ones; the connection needs at least one vault in the merged set.
+    /// The stored grants on the vaults of <paramref name="keep"/> (those a web session hides, discreet design §4), with
+    /// their right and "May publish", stay as stored; the connection needs at least one vault in the merged set. An edit
+    /// that leaves the rights and "May publish" as stored writes nothing and leaves the tokens alone.
     /// </summary>
     public async Task<ConnectionInfo?> SetVaultsAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
@@ -255,11 +257,13 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         if (vaults.Count == 0 && keep.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
         publish ??= new HashSet<string>();
         await EnsureReadyAsync(ct);
-        if (!await IsLiveAsync(user.Id, id, ct)) return null;
+        // An empty edit of no live connection answers as without hidden vaults: nothing tells whether the user has any.
+        if (!await IsLiveAsync(user.Id, id, ct)) return vaults.Count == 0 ? throw new ArgumentException(NeedsAVault, nameof(vaults)) : null;
         await CheckVaultsAsync(user, userKey, vaults, publish, ct);
 
         bool changed;
         var count = 0;
+        ConnectionInfo? unchanged = null;
         using (var session = await catalog.StartSessionAsync(ct))
         {
             changed = await session.WithTransactionAsync(
@@ -268,19 +272,32 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     // Read in the transaction: a concurrent re-seal of the meta (the client, at consent) conflicts, and
                     // the retry starts from it rather than overwriting it.
                     var now = Now;
+                    unchanged = null;
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
                     var (merged, mergedPublish) = Merged(doc, meta, vaults, publish, keep);
                     if (merged.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
+                    var keyId = UserCatalog.KeyId(userKey, user.Id);
+                    Expression<Func<UserDocument, bool>> fresh =
+                        u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId;
+                    var stored = VaultsOf(doc, meta);
+                    if (merged.Count == stored.Count && merged.All(v => stored.TryGetValue(v.Key, out var right) && right == v.Value)
+                        && mergedPublish.SetEquals(PublishOf(doc, meta)))
+                    {
+                        // Nothing changes: no write, so the agent keeps its tokens; a stale session is still refused.
+                        if (!await Users.Find(s, fresh).AnyAsync(token)) throw new CredentialsChangedException();
+                        unchanged = Info(doc, meta, now);
+                        return false;
+                    }
+
                     count = merged.Count;
                     var next = meta with { Vaults = merged.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion, Publish = PublishField(mergedPublish) };
                     // As at creation: the user document is checked and written here, so a credentials change, a
                     // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
                     // above is seen here, or its deletion conflicts on the user document.
-                    var keyId = UserCatalog.KeyId(userKey, user.Id);
                     var owner = await Users.UpdateOneAsync(
                         s,
-                        u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
+                        fresh,
                         Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1),
                         cancellationToken: token);
                     if (owner.MatchedCount == 0) throw new CredentialsChangedException();
@@ -296,6 +313,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                 cancellationToken: ct);
         }
 
+        if (unchanged is not null) return unchanged;
         if (!changed) return null;
         log.LogInformation("User {Username} changed the rights of connection {ConnectionId} to {Count} vaults", user.Username, id, count);
         var updated = await FindAsync(id, ct);
@@ -477,7 +495,6 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     {
         var merged = vaults.Where(v => !keep.Contains(v.Key)).ToDictionary(StringComparer.Ordinal);
         var mergedPublish = publish.Where(v => !keep.Contains(v)).ToHashSet(StringComparer.Ordinal);
-        if (keep.Count == 0) return (merged, mergedPublish);
         foreach (var (vault, right) in VaultsOf(doc, meta))
         {
             if (keep.Contains(vault)) merged[vault] = right;

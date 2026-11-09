@@ -227,7 +227,7 @@ public static class ConnectionApi
         var open = await caller.OpenVaultsAsync(ct);
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        // The grants on vaults the session hides can't be named here; they stay as stored (Decision 9).
+        // The grants on vaults the session hides can't be named here; they stay as stored (discreet design §4).
         var info = await connections.SetVaultsAsync(
                 caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)),
                 await caller.HiddenIdsAsync(ct))
