@@ -1,6 +1,6 @@
 # Structural chunking: sections that stay whole, tables included
 
-Date: 2026-11-09. Status: draft, waiting for the maintainer's approval. Target: 0.4.0 (release planned for Sunday 2026-11-15). Builds on `master` with ingesting attachments (#176, the cherry-pick of #174).
+Date: 2026-11-09. Status: approved by the maintainer on 2026-11-09. Target: 0.4.0 (release planned for Sunday 2026-11-15). Builds on `master` with ingesting attachments (#176, the cherry-pick of #174).
 
 ## 1. Why
 
@@ -55,11 +55,12 @@ The embedding model reads at most 512 tokens. Word counts decide where the struc
 
 **Where the tokenizer comes from (maintainer, 2026-11-09):** download it. Today `tokenizer.json` (about 17 MB) only arrives with the model download (`ModelFiles`), so it is missing with `KUMBU_SEARCH=false` and an external provider, and before the first download has finished. From now on:
 
-- The server always downloads the tokenizer on its own, whether or not the internal model is used, pinned by SHA-256.
+- The server downloads the tokenizer on its own, pinned by SHA-256, **whenever any embedding provider is active**, internal or external, whether or not the internal model is used (maintainer, 2026-11-09). A server with no provider at all needs no tokenizer: without search by meaning, the fallback bound below suffices, and such a server keeps working offline as the README says.
+- Tests and CI point the server at a file fetched beforehand, through an environment variable. This is for tests and CI only, not a new setting for admins. Test hosts never download.
 - CI fetches the same file, pinned by the same hash, and caches it, so the token-ceiling tests run on every pull request instead of skipping.
-- Until the tokenizer is there, a conservative bound without a tokenizer applies (*Claude's call*, e.g. a word and character bound that keeps even dense text under 512 tokens).
+- Until the tokenizer is there, a conservative bound without a tokenizer applies (*Claude's call*, e.g. a word and character bound that keeps even dense text under 512 tokens). With a provider active, the indexer **waits for the tokenizer** (as it waits for the model today) and uses the fallback only after the download has failed. That way notes aren't chunked twice on every start, and an external provider isn't sent the same text twice.
 - The chunking's scheme version (§4) includes which bound produced the boundaries: tokenizer by hash, or the fallback. When that changes, notes are chunked anew instead of their chunk keys drifting silently.
-- Search-time callers of `Chunker` (`SectionSearch`, `EarlierSearch`, `NoteApi`, `Semsearch`) use the same tokenizer as indexing, so the boundaries are identical on both sides. Hits are matched back to chunks by start line (`SectionSearch.Locate`).
+- Search-time chunking (`SectionSearch`, `EarlierSearch`, and through them `NoteApi` and `Semsearch`) uses the same bound as the stored chunks, so the boundaries are identical on both sides. Hits are matched back to chunks by start line (`SectionSearch.Locate`). A note stored under another scheme counts as pending until it is re-chunked, rather than having its hits attached to the wrong chunks.
 
 Why a download and not the file in the repository: 17 MB doesn't belong in Git. A separate repository for all downloaded files may come later. The maintainer will decide that after 0.5.0.
 
@@ -89,11 +90,59 @@ The maintainer asked what helps the AI most. Claude's answer:
 - **`-C`:** additionally prints the pre-roll and post-roll around each core, marked so they can't be mistaken for the core. The name follows `rg -C`.
 - **`-l`:** compact, one line per hit (address, lines, score), for an overview of many hits.
 
+- **The output limit (maintainer, 2026-11-09):** `sh` cuts every output at `OutputLimit.MaxChars` (24,000 characters). Whole cores are printed while they fit in that budget, with room kept for the footer. The remaining hits fall back to the one-line form, with a note that `-n` or `cat` shows more. The footer is always printed, as `pdf` keeps its room with `Reserve`.
+- `-C` takes no value. A number right after it is refused with the usage line, so that `semsearch -C 3 query` doesn't quietly search for "3 query".
+
 The footer, the notices and `-n`, `--words`, `--meaning` and `--tag` stay as they are. `help semsearch` is rewritten accordingly.
 
 ### 3.8 Ships in 0.4.0 (maintainer)
 
 Together with ingesting attachments, so that the feature is complete when it ships.
+
+### 3.9 Example, end to end
+
+A note `/Work/Pump/Manual.md`:
+
+```markdown
+# Pump P-200
+## Safety
+Wear gloves. Disconnect power before opening the housing.
+## Error codes
+| Code | Meaning | Remedy |
+|------|---------|--------|
+| E01  | Dry run | Fill the inlet and restart |
+… 240 more rows …
+| E241 | Sensor drift | Recalibrate in the service menu |
+## Maintenance
+### Weekly
+Check the seal for drips.
+### Monthly
+Clean the filter.
+```
+
+What chunking gives (word counts illustrative):
+
+- *Safety* is short, and so are *Weekly* and *Monthly*. *Safety* stands alone, because *Error codes* follows it and is too big to merge with. *Weekly* and *Monthly* share the parent *Maintenance* and are merged into one chunk with the address `#Pump P-200#Maintenance` and lines 250-254.
+- *Error codes* is far over the maximum. It is split into groups of whole rows, about 300 words each. Every group's core starts with the header row `| Code | Meaning | Remedy |` and the separator row, and its line range covers only its own rows. The context is `Manual > Pump P-200 > Error codes` for every group.
+- The rolls of the second table group are the last rows of the first group and the first rows of the third (the enclosing section is too long to take whole). They are shown, not embedded.
+
+`semsearch sensor drift recalibrate /Work` then prints the last group:
+
+```
+1. /Work/Pump/Manual.md#Pump P-200#Error codes  lines 230-247  score 0.71
+   | Code | Meaning | Remedy |
+   |------|---------|--------|
+   | E224 | … |
+   …
+   | E241 | Sensor drift | Recalibrate in the service menu |
+(ranked by words and meaning; cat "path#Section" reads one)
+```
+
+With `-C`, rows before line 230 and the *Maintenance* heading after line 247 appear around the core, marked as context. With `-l`, only the first line is printed. A PDF hit prints as `/Work/Pump/P-200.pdf p12  score 0.64`, followed by the core of page 12's best chunk.
+
+### 3.10 Security boundary
+
+Not touched: encryption (embeddings, including the changed chunk records, stay inside the sealed payload as today), accounts, sessions, sharing and roles, OAuth, pairing, WebDAV, Obsidian sync, the export, publishing, the PDF sidecar. The one new outside access is the tokenizer download, pinned and verified exactly as the model files are (`ModelFiles`).
 
 ## 4. Claude's calls (the maintainer can override them)
 
