@@ -30,6 +30,16 @@ describe("outline", () => {
     expect(outline("# A %%c%%")).toEqual([{ level: 1, text: "A", line: 1 }]);
     expect(outline("```\n%%\n```\n# Kept\n%%\n```\n%%\n```\n# Gone").map((h) => h.text)).toEqual(["Kept"]);
   });
+
+  it("counts no %% in inline or indented code", () => {
+    expect(outline("Use `%%` for comments.\n\n## Later").map((h) => h.text)).toEqual(["Later"]);
+    expect(outline("# a `%%` b\n# c").map((h) => h.text)).toEqual(["a %% b", "c"]);
+    expect(outline("text\n\n    %% code\n\n# After").map((h) => h.text)).toEqual(["After"]);
+  });
+
+  it("shows a highlight's text without its marks, and a comparison as written", () => {
+    expect(outline("# ==Key== point\n## a == b").map((h) => h.text)).toEqual(["Key point", "a == b"]);
+  });
 });
 
 describe("section", () => {

@@ -342,7 +342,8 @@ const components: Components = {
   h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
   h5: ({ node, ...props }) => <h5 data-line={useLine(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
   h6: ({ node, ...props }) => <h6 data-line={useLine(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
-  // Find's matches take the accent, `==highlights==` (highlights.ts) a highlighter's yellow; the first match is 0.
+  // Find's matches take the accent, `==highlights==` (highlights.ts) a highlighter's yellow. dataFind is a number
+  // from 0, so test for presence.
   mark: ({ node, ...props }) =>
     node?.properties.dataFind !== undefined ? (
       <mark className={`rounded-[3px] ${node.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
@@ -460,8 +461,8 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
         remarkTags,
         [remarkWikiLinks, { links: links ?? [] }],
         // After the links and tags, which find theirs by the text's positions; before find, which counts no hidden text.
-        remarkHighlights,
         remarkComments,
+        remarkHighlights,
         [remarkFind, { query, current }],
         // Before the agent's highlights, which land on the `div` a display gets.
         ...(math ? [math.remarkDisplayParagraph, math.remarkMathBlocks] : []),

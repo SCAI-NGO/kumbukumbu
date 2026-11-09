@@ -434,6 +434,48 @@ describe("tags in the text", () => {
 describe("highlights and comments", () => {
   const marks = () => [...document.querySelectorAll<HTMLElement>("mark[data-highlight]")];
 
+  it("hides comments before it looks for highlights", () => {
+    show("%%==%% text ==x==");
+    expect(marks().map((m) => m.textContent)).toEqual(["x"]);
+    expect(screen.getByText(/text/).tagName).toBe("P");
+  });
+
+  it("matches a long line of openers without a closer in linear time", () => {
+    const started = performance.now();
+    show("==a ".repeat(20000));
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("leaves %% and == in a bare URL alone", () => {
+    show("See https://x.com/a%%20b and more\n\nAnd https://x.com/?a==b== too");
+    expect(screen.getByRole("link", { name: "https://x.com/a%%20b" })).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("and more");
+    expect(screen.getByRole("link", { name: "https://x.com/?a==b==" })).toBeInTheDocument();
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("keeps escaped delimiters as written", () => {
+    show("\\==x== and \\=\\=y\\=\\=\n\n\\%%a\\%% and \\%\\%b\\%\\%\n\n\\\\==z==");
+    expect(document.body).toHaveTextContent("==x== and ==y==");
+    expect(document.body).toHaveTextContent("%%a%% and %%b%%");
+    // An escaped backslash escapes no delimiter.
+    expect(marks().map((m) => m.textContent)).toEqual(["z"]);
+  });
+
+  it("drops an empty item inside a comment, and keeps one outside", () => {
+    show("%%\n\n- \n- one\n\n%%\n\n- \n- kept");
+    expect(screen.getAllByRole("listitem").map((li) => li.textContent?.trim())).toEqual(["", "kept"]);
+  });
+
+  it("hides a task whose whole text is a comment, as any block a comment empties; and keeps ====x==== as written", () => {
+    show("- [ ] %%todo%%\n- [ ] buy %%soon%%\n\n====x====");
+    expect(screen.getAllByRole("checkbox").map((c) => c.getAttribute("aria-label"))).toEqual(["buy"]);
+    expect(document.body).not.toHaveTextContent(/todo|soon/);
+    expect(marks()).toHaveLength(0);
+    expect(screen.getByText("====x====")).toBeInTheDocument();
+  });
+
   it("renders ==text== as a highlight and hides %%text%%", () => {
     show("- ==Tomaten== %%die gelben%%");
     expect(marks().map((m) => m.textContent)).toEqual(["Tomaten"]);
