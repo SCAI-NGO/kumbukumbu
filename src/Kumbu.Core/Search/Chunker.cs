@@ -23,6 +23,10 @@ public sealed record Chunk(VaultPath Path, string Address, int StartLine, int En
     /// <summary>0, unless one line is split into pieces: then 0, 1, … in order, all on the same lines.</summary>
     public int Part { get; init; }
 
+    /// <summary>For a table part whose <see cref="Text"/> starts with the table's header and separator rows: the line of
+    /// the header row (before <see cref="StartLine"/>); -1 otherwise.</summary>
+    public int RepeatedHeader { get; init; } = -1;
+
     /// <summary>What gets embedded: the context, then the text (concept §6: the heading path as context).</summary>
     public string EmbeddingText => Context + "\n" + Text;
 
@@ -95,6 +99,9 @@ public static class Chunker
         Splits.AddOrUpdate(note.Content, new Splitting(note.Path, bound.Id, [.. chunks]));
         return chunks;
     }
+
+    /// <summary>A PDF's name without ".pdf": what its pages' context starts with.</summary>
+    public static string PdfTitle(VaultPath pdf) => pdf.Name[..^".pdf".Length];
 
     /// <summary>
     /// A page of a PDF in chunks, in order; none if it has no text. A page has no Markdown structure: its lines are
@@ -175,17 +182,7 @@ public static class Chunker
         var (start, end) = parent is null ? (Outline.FrontmatterEnd(lines), lines.Count) : (parent.Line, parent.End);
         (start, end) = (Math.Min(start, chunk.StartLine), Math.Max(end, chunk.EndLine));
 
-        // A table part's text starts with the header rows it repeats; they lie before its lines.
-        var header = -1;
-        var core = Lines.Split(chunk.Text);
-        if (core.Count == chunk.EndLine - chunk.StartLine + 2)
-        {
-            for (var i = chunk.StartLine - 2; i >= start && header < 0; i--)
-            {
-                if (lines[i] == core[0] && lines[i + 1] == core[1]) header = i;
-            }
-        }
-
+        var header = chunk.RepeatedHeader;
         var from = chunk.StartLine;
         foreach (var block in Blocks.Parse(lines, start, chunk.StartLine, code).Reverse())
         {
@@ -219,7 +216,8 @@ public static class Chunker
         string Text(int first, int last)
         {
             (first, last) = ChunkSplitter.Trimmed(lines, first, last);
-            return string.Join('\n', Enumerable.Range(first, last - first).Where(i => header < 0 || (i != header && i != header + 1)).Select(i => lines[i]));
+            var kept = Enumerable.Range(first, last - first).Where(i => header < 0 || (i != header && i != header + 1));
+            return string.Join('\n', kept.Select(i => lines[i]));
         }
     }
 

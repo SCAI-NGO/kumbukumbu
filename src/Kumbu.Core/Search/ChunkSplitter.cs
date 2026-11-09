@@ -335,7 +335,7 @@ internal sealed class ChunkSplitter
     {
         if (_start < 0) return;
         var (start, end) = Trimmed(_start, _end);
-        if (start < end) _chunks.Add(new Chunk(_note.Path, _address, start, end, Text(_header, start, end), _context.Text));
+        if (start < end) _chunks.Add(new Chunk(_note.Path, _address, start, end, Text(_header, start, end), _context.Text) { RepeatedHeader = _header });
         (_start, _header) = (-1, -1);
     }
 

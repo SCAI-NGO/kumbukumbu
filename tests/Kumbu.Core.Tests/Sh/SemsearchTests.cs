@@ -21,24 +21,41 @@ public class SemsearchTests
         public ChunkBound Bound => bound;
     }
 
-    private sealed class FakePixels(string page) : IAttachmentPixels
+    /// <summary>Pixels whose every page has the text <paramref name="text"/> gives: null when it can't be read, or a throw.</summary>
+    private sealed class FakePixels(Func<string?> text) : IAttachmentPixels
     {
-        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new NotSupportedException();
-
-        public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct) => throw new NotSupportedException();
-
-        public Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct) => throw new NotSupportedException();
+        public FakePixels(string page)
+            : this(() => page)
+        {
+        }
 
         public Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(_ => page)]);
+            Task.FromResult<IReadOnlyList<string>?>(text() is { } page ? [.. Enumerable.Range(first, last - first + 1).Select(_ => page)] : null);
 
-        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Picture> ImageAsync(
+            VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct) =>
+            throw new NotSupportedException();
 
-        public Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Picture> PageAsync(
+            VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct) =>
+            throw new NotSupportedException();
 
-        public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct) => throw new NotSupportedException();
+        public Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct) =>
+            throw new NotSupportedException();
 
-        public Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(
+            VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<Picture> PdfRegionAsync(
+            VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) =>
+            throw new NotSupportedException();
 
         public void Count(AttachmentUse use)
         {
@@ -68,7 +85,8 @@ public class SemsearchTests
 
     private static IEnumerable<string> Core(string text) => text.Split('\n').Select(l => l.Length == 0 ? "" : "   " + l);
 
-    private static IEnumerable<string> Roll(string text) => text.Length == 0 ? [] : text.Split('\n').Select(l => l.Length == 0 ? "   ┊" : "   ┊ " + l);
+    private static IEnumerable<string> Roll(string text) =>
+        text.Length == 0 ? [] : text.Split('\n').Select(l => l.Length == 0 ? "   ┊" : "   ┊ " + l);
 
     [Fact]
     public async Task Prints_the_whole_core_of_each_hit()
@@ -76,7 +94,8 @@ public class SemsearchTests
         var part = SecondTablePart();
         var gate = new Note(P("/Work/gate.md"), "# Gate\nThe service checks rules.\n\nAnna and Ben.\n");
         var store = new InMemoryNoteStore((Pump.Path.Value, Pump.Content), (gate.Path.Value, gate.Content));
-        var sh = ShellOf(store, new FakeIndex(ChunkBound.Fallback, new SemanticHit(Pump.Path, part.StartLine, 0.71), new SemanticHit(gate.Path, 0, 0.5)));
+        var index = new FakeIndex(ChunkBound.Fallback, new SemanticHit(Pump.Path, part.StartLine, 0.71), new SemanticHit(gate.Path, 0, 0.5));
+        var sh = ShellOf(store, index);
 
         var output = (await sh.RunAsync("semsearch --meaning sensor drift /Work", Ct)).Output;
 
@@ -103,7 +122,9 @@ public class SemsearchTests
         Assert.NotEmpty(before);
         Assert.NotEmpty(after);
 
-        var output = (await PumpShell(new SemanticHit(Pump.Path, part.StartLine, 0.71)).RunAsync("semsearch -C --meaning sensor drift /Work", Ct)).Output;
+        var sh = PumpShell(new SemanticHit(Pump.Path, part.StartLine, 0.71));
+
+        var output = (await sh.RunAsync("semsearch -C --meaning sensor drift /Work", Ct)).Output;
 
         Assert.Equal(
             string.Join('\n', [
@@ -135,7 +156,8 @@ public class SemsearchTests
         Assert.Equal(output, (await sh.RunAsync("semsearch --list --meaning sensor drift /Work", Ct)).Output);
 
         // The search as typed again with --archive keeps -l.
-        var archived = ShellOf(new InMemoryNoteStore(("/V/_archive/a.md", "pumps of old\n"), ("/V/b.md", "other\n")), new FakeIndex(ChunkBound.Fallback));
+        var store = new InMemoryNoteStore(("/V/_archive/a.md", "pumps of old\n"), ("/V/b.md", "other\n"));
+        var archived = ShellOf(store, new FakeIndex(ChunkBound.Fallback));
         Assert.StartsWith(
             "(nothing found for 'pumps' below /V outside the archive; semsearch --archive -l --words pumps /V searches it)",
             (await archived.RunAsync("semsearch -l --words pumps /V", Ct)).Output);
@@ -150,8 +172,10 @@ public class SemsearchTests
         var result = await PumpShell().RunAsync(line, Ct);
 
         Assert.True(result.IsError);
-        Assert.Contains("semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path]", result.Output);
-        Assert.Contains("-C", result.Output);
+        Assert.Equal(
+            "semsearch: -C takes no number; to search for one, put it after --: semsearch -C -- 2025 budget "
+            + "(semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path])",
+            result.Output);
         // After "--" a number is the query's.
         Assert.False((await PumpShell().RunAsync("semsearch --words -C -- 3 pump", Ct)).IsError);
     }
@@ -162,6 +186,8 @@ public class SemsearchTests
         Assert.Equal(ShellResult.Error("semsearch: -C and -l exclude each other"), await PumpShell().RunAsync("semsearch -C -l pump", Ct));
         Assert.Equal(ShellResult.Error("semsearch: -C and -l exclude each other"), await PumpShell().RunAsync("semsearch -lC pump", Ct));
     }
+
+    private const string Read = "to fit the output; cat \"path#Section\" or pdf path N reads one";
 
     [Fact]
     public async Task Cores_that_do_not_fit_fall_back_to_one_line()
@@ -185,7 +211,7 @@ public class SemsearchTests
         Assert.InRange(withText, 5, 15);
         Assert.All(headers.Take(withText), h => Assert.StartsWith("   # Note ", lines[h + 1]));
         Assert.All(headers.Skip(withText), h => Assert.False(lines[h + 1].StartsWith("   ", StringComparison.Ordinal), lines[h + 1]));
-        Assert.Equal($"(hits {withText + 1}-30 without their text, to fit the output; cat \"path#Section\" or pdf path N reads one)", lines[^2]);
+        Assert.Equal($"(hits {withText + 1}-30 without their text, {Read})", lines[^2]);
         Assert.StartsWith("30. /V/n29.md#Note 29  lines 1-2", lines[^3]);
     }
 
@@ -207,35 +233,88 @@ public class SemsearchTests
     }
 
     [Fact]
+    public async Task The_notice_above_the_hits_counts_towards_the_limit()
+    {
+        // A shared vault whose notes another user wrote last, with long names: the notice names every one printed.
+        var store = new InMemoryNoteStore();
+        var paths = Enumerable.Range(0, 120).Select(i => P($"/Garten/{new string('b', 120)}-{i:000}.md")).ToList();
+        var text = "# Beet\n" + string.Join(' ', Enumerable.Range(0, 100).Select(w => $"Wort{w:0000}")) + "\n";
+        foreach (var path in paths)
+        {
+            store.Put(new StoredNote(path, text, 1, "", InMemoryNoteStore.Seeded, [], text, Ref: WriterRef.ForMember("w-carol")));
+        }
+
+        store.Infos["Garten"] = new VaultInfo(null, AccessLevel.Owner, true);
+        var index = new FakeIndex(ChunkBound.Unbounded, [.. paths.Select((p, i) => new SemanticHit(p, 0, 0.9 - i * 0.001))]);
+
+        foreach (var options in new[] { "", "-l " })
+        {
+            var output = (await ShellOf(store, index).RunAsync($"semsearch {options}-n 120 --meaning beet /Garten", Ct)).Output;
+
+            Assert.True(output.Length <= OutputLimit.MaxChars, $"{output.Length} characters");
+            Assert.DoesNotContain("[truncated", output);
+            var lines = output.Split('\n');
+            Assert.StartsWith($"[{WriterMarks.Mark}: /Garten/", lines[0]);
+            Assert.Equal("(ranked by meaning; cat \"path#Section\" reads one)", lines[^1]);
+            var shown = lines.Count(l => l.Contains(".md#Beet  lines", StringComparison.Ordinal));
+            Assert.InRange(shown, 10, 119);
+            Assert.Equal($"(hits {shown + 1}-120 left out, to fit the output)", lines[^2]);
+            // The notice names the notes of the lines printed, and no other.
+            Assert.Equal(paths.Take(shown).Select(p => p.Value), lines[0][(WriterMarks.Mark.Length + 3)..^1].Split(", "));
+        }
+    }
+
+    private static async Task<InMemoryNoteStore> StoreWithPdfAsync()
+    {
+        var store = new InMemoryNoteStore((Pump.Path.Value, Pump.Content));
+        var time = new FakeTimeProvider(new DateTime(2026, 11, 9, 11, 0, 0, DateTimeKind.Utc));
+        var writer = new AttachmentWriter(store, store, time, new FixedCaller(Writers.Dev));
+        var written = await writer.WriteAsync("/Work/Pump/P-200.pdf", "%PDF-1.7"u8.ToArray(), null, null, Ct);
+        Assert.False(written.Result.IsError, written.Result.Output);
+        return store;
+    }
+
+    private static FakeIndex PageHit(int part) => new(ChunkBound.Fallback, new SemanticHit(P("/Work/Pump/P-200.pdf"), 12, 0.64) { Part = part });
+
+    private const string PagesFooter = "(ranked by meaning; cat \"path#Section\" reads a section, pdf path N a page)";
+
+    [Fact]
     public async Task A_PDF_hit_prints_its_best_part()
     {
         var page = string.Join('\n', Enumerable.Range(0, 94).Select(i => $"Line {i:00} of the page " + new string((char)('a' + i % 26), 76)));
         Assert.InRange(page.Length, 9_000, 9_200);
         var chunks = Chunker.SplitPage("P-200", 12, page, ChunkBound.Fallback);
         Assert.True(chunks.Count > 3, $"{chunks.Count} chunks");
-        var store = new InMemoryNoteStore((Pump.Path.Value, Pump.Content));
-        var time = new FakeTimeProvider(new DateTime(2026, 11, 9, 11, 0, 0, DateTimeKind.Utc));
-        var written = await new AttachmentWriter(store, store, time, new FixedCaller(Writers.Dev)).WriteAsync("/Work/Pump/P-200.pdf", "%PDF-1.7"u8.ToArray(), null, null, Ct);
-        Assert.False(written.Result.IsError, written.Result.Output);
-        var hits = new[] { new SemanticHit(P("/Work/Pump/P-200.pdf"), 12, 0.64) { Part = 2 } };
-        var sh = ShellOf(store, new FakeIndex(ChunkBound.Fallback, hits), new FakePixels(page));
+        var store = await StoreWithPdfAsync();
+        var sh = ShellOf(store, PageHit(2), new FakePixels(page));
 
         var output = (await sh.RunAsync("semsearch --meaning seal /Work/Pump/P-200.pdf", Ct)).Output;
         var context = (await sh.RunAsync("semsearch -C --meaning seal /Work/Pump/P-200.pdf", Ct)).Output;
 
-        Assert.Equal(
-            string.Join('\n', ["1. /Work/Pump/P-200.pdf p12  score 0.64", .. Core(chunks[2].Core), "(ranked by meaning; cat \"path#Section\" reads a section, pdf path N a page)"]),
-            output);
+        Assert.Equal(string.Join('\n', ["1. /Work/Pump/P-200.pdf p12  score 0.64", .. Core(chunks[2].Core), PagesFooter]), output);
         Assert.Equal(
             string.Join('\n', [
                 "1. /Work/Pump/P-200.pdf p12  score 0.64", .. Roll(chunks[2].PreRoll), .. Core(chunks[2].Core), .. Roll(chunks[2].PostRoll),
-                "(ranked by meaning; cat \"path#Section\" reads a section, pdf path N a page)",
+                PagesFooter,
             ]),
             context);
 
         // A part the page no longer has shows the first.
-        var gone = ShellOf(store, new FakeIndex(ChunkBound.Fallback, new SemanticHit(P("/Work/Pump/P-200.pdf"), 12, 0.64) { Part = 99 }), new FakePixels(page));
+        var gone = ShellOf(store, PageHit(99), new FakePixels(page));
         Assert.Contains(string.Join('\n', Core(chunks[0].Core)), (await gone.RunAsync("semsearch --meaning seal /Work/Pump/P-200.pdf", Ct)).Output);
+    }
+
+    [Fact]
+    public async Task A_page_whose_text_cant_be_read_says_so()
+    {
+        var store = await StoreWithPdfAsync();
+        const string Expected = "1. /Work/Pump/P-200.pdf p12  score 0.64\n   (the text of this page can't be read right now)\n" + PagesFooter;
+
+        FakePixels[] unreadable = [new(() => null), new(() => throw new PixelsUnavailableException("the PDF service is down"))];
+        foreach (var pixels in unreadable)
+        {
+            Assert.Equal(Expected, (await ShellOf(store, PageHit(0), pixels).RunAsync("semsearch --meaning seal /Work/Pump/P-200.pdf", Ct)).Output);
+        }
     }
 
     [Fact]
@@ -244,10 +323,14 @@ public class SemsearchTests
         var help = (await PumpShell().RunAsync("help semsearch", Ct)).Output;
 
         Assert.StartsWith("semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path]\n", help);
-        Assert.Contains("\n  -C        also print the text around each hit, its lines marked with ┊; context, not part of the match\n", help);
-        Assert.Contains("\n  -l        one line per hit: path, lines and score\n", help);
+        Assert.Contains("\n  -C         also print the text around each hit, its lines marked with ┊; context, not part of the match\n", help);
+        Assert.Contains("\n  -l         one line per hit: path, lines and score\n", help);
+        Assert.Contains("\n  --words    rank by words only", help);
         Assert.Contains("then the\n  section's whole text.", help);
         Assert.Contains("path#Section then names that parent, and the lines are exact.", help);
         Assert.DoesNotContain("the start of", help);
+        // No line wider than the option lines that were there before.
+        var widest = "  --archive  search a vault's archive (_archive/) too: its notes and PDF pages; a path inside it always is".Length;
+        Assert.All(help.Split('\n'), l => Assert.True(l.Length <= widest, l));
     }
 }

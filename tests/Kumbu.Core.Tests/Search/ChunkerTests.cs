@@ -138,6 +138,8 @@ public partial class ChunkerTests
 
         // The second part's range starts at its own first row; the header rows it repeats lie before it.
         Assert.True(parts[1].StartLine > ChunkerFixtures.FirstRowLine);
+        Assert.Equal(-1, parts[0].RepeatedHeader);
+        Assert.All(parts.Skip(1), p => Assert.Equal(ChunkerFixtures.FirstRowLine - 2, p.RepeatedHeader));
         Assert.Equal(lines[parts[1].StartLine], parts[1].Text.Split('\n')[2]);
         for (var row = ChunkerFixtures.FirstRowLine; row < ChunkerFixtures.FirstRowLine + ChunkerFixtures.TableRows; row++)
         {
@@ -641,6 +643,22 @@ public partial class ChunkerTests
         Assert.Equal((intro, "# Team\n" + team), Chunker.Rolls(top, gate));
     }
 
+    [Fact]
+    public void Rolls_find_a_heading_that_shares_its_text_with_a_sibling()
+    {
+        // The second Day is #Log#Day[2]: its rolls are the rest of Log, not of the note.
+        string Words(string word, int count) => string.Join(' ', Enumerable.Range(0, count).Select(i => $"{word}{i}"));
+        var note = Manual(
+            $"# Intro\nNot in the roll.\n# Log\n## Day\n{Words("first", 45)}\n## Day\n{Words("second", 300)}\n## End\n{Words("end", 50)}\n# Next\nNot either.\n");
+
+        var day = Assert.Single(Chunker.Split(note, ChunkBound.Unbounded), c => c.Text.Contains("second0"));
+        var (before, after) = Chunker.Rolls(note, day);
+
+        Assert.Equal("#Log#Day[2]", day.Address);
+        Assert.Equal($"# Log\n## Day\n{Words("first", 45)}", before);
+        Assert.Equal($"## End\n{Words("end", 50)}", after);
+    }
+
     [Theory]
     [InlineData("fallback")]
     [InlineData("tokenizer")]
@@ -686,7 +704,7 @@ public partial class ChunkerTests
             }
 
             // The rolls are the lines right before and after the core's own, never the core's.
-            var header = core.Count == chunk.EndLine - chunk.StartLine + 2 ? lines.FindLastIndex(chunk.StartLine - 1, l => l == core[0]) : -1;
+            var header = chunk.RepeatedHeader;
             var above = lines.Take(chunk.StartLine).Where((_, i) => header < 0 || (i != header && i != header + 1)).Reverse().SkipWhile(string.IsNullOrWhiteSpace).Reverse();
             Assert.EndsWith(before, string.Join('\n', above));
             Assert.StartsWith(after, string.Join('\n', lines.Skip(chunk.EndLine).SkipWhile(string.IsNullOrWhiteSpace)));

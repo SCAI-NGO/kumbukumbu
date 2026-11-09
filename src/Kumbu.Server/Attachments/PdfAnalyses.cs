@@ -64,6 +64,9 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     /// <summary>For tests: called with the number of each text part read.</summary>
     internal Action<int>? TextPartRead { get; set; }
 
+    /// <summary>For tests: each text part's segments in another order before it is sealed, as a store may have written them.</summary>
+    internal Func<List<SegmentRecord>, IEnumerable<SegmentRecord>>? ArrangeSegments { get; set; }
+
     /// <summary>For tests: awaited at <c>"after-text"</c>, once a store's text parts are in; a throw there is a crash.</summary>
     internal Func<string, Task>? StoreFaultAt { get; set; }
 
@@ -83,8 +86,10 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             p.Number, p.Width, p.Height, p.Rotation, p.Type, p.Chars, p.TextCoverage, p.ImageCoverage, p.VectorCoverage, p.Images,
             [.. p.Regions.Take(MaxRegions).Select(r => new RegionRecord(r.Kind, r.X, r.Y, r.Width, r.Height))])).ToList();
         var texts = Chunk(analysis.PageTexts);
+        if (ArrangeSegments is { } arrange) texts = [.. texts.Select(t => new TextRecord([.. arrange(t.Segments)]))];
+        // The pages a part holds from its lowest to its highest, whatever the order of its segments.
         var header = new HeaderRecord(a.Analyser, a.PageCount, a.AnalysedPages, a.Title, a.Author, pages,
-            [.. texts.Select((t, i) => new PartRecord(i + 1, t.Segments[0].Page, t.Segments[^1].Page))], null, requested);
+            [.. texts.Select((t, i) => new PartRecord(i + 1, t.Segments.Min(s => s.Page), t.Segments.Max(s => s.Page)))], null, requested);
         var now = catalog.Now;
         var head = Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), now);
         var parts = texts.Select((t, i) => Doc(vault, blobId, i + 1, vault.SealPdfAnalysis(blobId, i + 1, t), now)).ToList();
@@ -145,7 +150,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
                 return Missing();
             }
 
-            foreach (var s in text.Segments.Where(s => s.Page >= first && s.Page <= last)) pages[s.Page - first].Append(s.Text);
+            foreach (var s in PageSegments(text, first, last)) pages[s.Page - first].Append(s.Text);
         }
 
         return [.. pages.Select(p => p.ToString())];
@@ -195,7 +200,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
                     return null;
                 }
 
-                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length))
+                foreach (var s in PageSegments(text, 1, pages.Length))
                 {
                     if (s.Page - 1 != at)
                     {
@@ -223,6 +228,14 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             page.Clear();
         }
     }
+
+    /// <summary>
+    /// The segments of pages <paramref name="first"/> to <paramref name="last"/> in a part: a page's text is its segments'
+    /// text in the order stored, by part and then within a part, for <see cref="TextAsync"/> and
+    /// <see cref="SearchTextAsync"/> alike, so that <c>semsearch</c> shows the very text the index split.
+    /// </summary>
+    private static IEnumerable<SegmentRecord> PageSegments(TextRecord text, int first, int last) =>
+        text.Segments.Where(s => s.Page >= first && s.Page <= last);
 
     /// <summary>
     /// Queues the blobs for analysis (collection <c>pdf_jobs</c>, durable, no content), once per blob, leaving out

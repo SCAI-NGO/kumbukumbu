@@ -23,7 +23,11 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
     /// <summary>Room kept for the footer and its notes, as <c>pdf</c> keeps it.</summary>
     private const int Reserve = 1_000;
 
-    private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true), new(null, "archive"), new('C', "context"), new('l', "list")];
+    private static readonly Option[] Spec =
+    [
+        new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true), new(null, "archive"),
+        new('C', "context"), new('l', "list"),
+    ];
 
     public string Name => "semsearch";
 
@@ -46,8 +50,8 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
           best, and pdf path 7 reads the page; a PDF as the path ranks its own pages.
           Pages without a text layer (scans) and images are not searched.
           The query is the words before the path; quoting it is optional.
-          -C        also print the text around each hit, its lines marked with ┊; context, not part of the match
-          -l        one line per hit: path, lines and score
+          -C         also print the text around each hit, its lines marked with ┊; context, not part of the match
+          -l         one line per hit: path, lines and score
           --words    rank by words only        --meaning  rank by meaning only
           --tag T    only notes that carry #T (nested too, ignoring case; 'help tags'); repeat
                      for notes with all of them. The ranking is the same, over fewer notes.
@@ -63,11 +67,9 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        // "-C 3" would otherwise search for "3 …": -C takes no number, unlike rg's.
-        for (var i = 0; i < args.Count && args[i] != "--"; i++)
+        if (NumberAfterC(args))
         {
-            var number = args[i] == "-C" ? i + 1 < args.Count ? args[i + 1] : "" : args[i].StartsWith("-C", StringComparison.Ordinal) ? args[i][2..] : "";
-            if (number.Length > 0 && number.All(char.IsAsciiDigit)) return ShellResult.Error($"semsearch: -C takes no number ({Usage})");
+            return ShellResult.Error($"semsearch: -C takes no number; to search for one, put it after --: semsearch -C -- 2025 budget ({Usage})");
         }
 
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
@@ -153,27 +155,63 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
                 : $"(nothing found for '{query}'{below})");
         }
 
-        // Every hit's line first (as many as fit), then whole cores while they fit in the room the lines leave.
-        var (withRolls, textless) = (options.Has("context"), options.Has("list"));
-        var room = OutputLimit.MaxChars - Reserve - lines.Sum(l => l.Length + 1);
-        var headers = new List<string>();
-        foreach (var (hit, i) in listed.Select((h, i) => (h, i)))
+        var (shown, notice) = await HitsAsync(listed, lines.Sum(l => l.Length + 1), options, byPath, bound, ct);
+        lines.AddRange(shown);
+        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0, listed.Any(h => h.Page is not null)));
+        return ShellResult.Ok(Lines.Join(lines)) with { Notice = notice };
+    }
+
+    /// <summary>
+    /// Whether a number follows -C (<c>-C 3</c>, <c>-C3</c>) before any "--": with rg's -C in mind, <c>semsearch -C 3
+    /// query</c> would otherwise search for "3 query".
+    /// </summary>
+    private static bool NumberAfterC(IReadOnlyList<string> args)
+    {
+        for (var i = 0; i < args.Count && args[i] != "--"; i++)
         {
-            var shown = hit.Score is { } s ? string.Create(CultureInfo.InvariantCulture, $"  score {s:0.00}") : "";
-            var c = hit.Chunk;
-            var header = hit.Page is { } page ? $"{i + 1}. {c.Path.Value} p{page}{shown}" : $"{i + 1}. {c.Path.Value}{c.Address}  lines {c.StartLine + 1}-{c.EndLine}{shown}";
-            if (header.Length + 1 > room) break;
-            headers.Add(header);
-            room -= header.Length + 1;
+            string? number = null;
+            if (args[i] == "-C") number = i + 1 < args.Count ? args[i + 1] : null;
+            else if (args[i].StartsWith("-C", StringComparison.Ordinal)) number = args[i][2..];
+            if (number is { Length: > 0 } && number.All(char.IsAsciiDigit)) return true;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// The hits as printed within the output limit, after <paramref name="taken"/> characters, and the notice the shell
+    /// puts above them for the notes another user wrote last. Every hit's line comes first, as many as fit with the
+    /// notice for their notes; then whole texts in order while they fit in the room left; from the first that doesn't,
+    /// the hits go without theirs.
+    /// </summary>
+    private async Task<(List<string> Lines, string? Notice)> HitsAsync(
+        IReadOnlyList<SectionHit> listed, int taken, Options options, Dictionary<VaultPath, Note> byPath, ChunkBound bound, CancellationToken ct)
+    {
+        var headers = listed.Select(Header).ToList();
+        var room = OutputLimit.MaxChars - Reserve - taken;
+        var count = Fitting(room);
+        string? notice;
+        while (true)
+        {
+            notice = marks is null ? null : await marks.NoticeAsync(listed.Take(count).Where(h => h.Page is null).Select(h => h.Chunk.Path), ct);
+            // The notice names only the notes of the lines printed, so fewer lines never need a longer one.
+            var fitting = Fitting(room - (notice?.Length + 1 ?? 0));
+            if (fitting >= count) break;
+            count = fitting;
+        }
+
+        room -= (notice?.Length + 1 ?? 0) + headers.Take(count).Sum(h => h.Length + 1);
+        var (withRolls, textless) = (options.Has("context"), options.Has("list"));
+        var lines = new List<string>();
         int? bare = null;
-        for (var i = 0; i < headers.Count; i++)
+        for (var i = 0; i < count; i++)
         {
             lines.Add(headers[i]);
             if (textless || bare is not null) continue;
             var (hit, c) = (listed[i], listed[i].Chunk);
-            var text = hit.Page is { } p ? await PageTextAsync(c.Path, p, hit.PagePart ?? 0, bound, withRolls, ct) : NoteText(byPath.GetValueOrDefault(c.Path), c, withRolls);
+            var text = hit.Page is { } page
+                ? await PageTextAsync(c.Path, page, hit.PagePart ?? 0, bound, withRolls, ct)
+                : NoteText(byPath.GetValueOrDefault(c.Path), c, withRolls);
             var size = text.Sum(l => l.Length + 1);
             if (size > room)
             {
@@ -185,15 +223,30 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
             room -= size;
         }
 
-        if (bare is { } k) lines.Add(k + 1 == headers.Count ? $"(hit {k + 1} without its text, to fit the output; cat \"path#Section\" or pdf path N reads one)" : $"(hits {k + 1}-{headers.Count} without their text, to fit the output; cat \"path#Section\" or pdf path N reads one)");
-        if (headers.Count < listed.Count)
-        {
-            lines.Add(headers.Count + 1 == listed.Count ? $"(hit {listed.Count} left out, to fit the output)" : $"(hits {headers.Count + 1}-{listed.Count} left out, to fit the output)");
-        }
+        const string Read = "to fit the output; cat \"path#Section\" or pdf path N reads one";
+        if (bare == count - 1) lines.Add($"(hit {count} without its text, {Read})");
+        else if (bare is { } k) lines.Add($"(hits {k + 1}-{count} without their text, {Read})");
+        if (count + 1 == listed.Count) lines.Add($"(hit {listed.Count} left out, to fit the output)");
+        else if (count < listed.Count) lines.Add($"(hits {count + 1}-{listed.Count} left out, to fit the output)");
 
-        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0, listed.Any(h => h.Page is not null)));
-        var notice = marks is null ? null : await marks.NoticeAsync(listed.Where(h => h.Page is null).Select(h => h.Chunk.Path), ct);
-        return ShellResult.Ok(Lines.Join(lines)) with { Notice = notice };
+        return (lines, notice);
+
+        // How many of the first lines fit in `space`.
+        int Fitting(int space)
+        {
+            var n = 0;
+            while (n < headers.Count && headers[n].Length + 1 <= space) space -= headers[n++].Length + 1;
+            return n;
+        }
+    }
+
+    private static string Header(SectionHit hit, int i)
+    {
+        var score = hit.Score is { } s ? string.Create(CultureInfo.InvariantCulture, $"  score {s:0.00}") : "";
+        var c = hit.Chunk;
+        return hit.Page is { } page
+            ? $"{i + 1}. {c.Path.Value} p{page}{score}"
+            : $"{i + 1}. {c.Path.Value}{c.Address}  lines {c.StartLine + 1}-{c.EndLine}{score}";
     }
 
     /// <summary>A note's chunk as printed: its core indented, with <paramref name="withRolls"/> its rolls around it.</summary>
@@ -222,8 +275,8 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         }
 
         if (text is not [var only]) return unavailable;
-        // The PDF's name as indexing gives it, so that the chunks are the same.
-        var chunks = Chunker.SplitPage(path.Name[..^".pdf".Length], page, only, bound);
+        // The title indexing gives it, so that the chunks are the same.
+        var chunks = Chunker.SplitPage(Chunker.PdfTitle(path), page, only, bound);
         if (chunks.Count == 0) return unavailable;
         var chunk = part < chunks.Count ? chunks[part] : chunks[0];
         return withRolls ? Shown(chunk.PreRoll, chunk.Core, chunk.PostRoll) : Shown("", chunk.Core, "");
