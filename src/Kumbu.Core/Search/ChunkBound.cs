@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Collections.Concurrent;
-
 namespace Kumbu.Core.Search;
 
 /// <summary>
@@ -21,17 +19,10 @@ public sealed class ChunkBound
     /// </summary>
     public const int FallbackMaxChars = 500;
 
-    private const int MemoLimit = 100_000;
-
-    /// <summary>Longer pieces are counted each time: they are rare, and would fill the memo with text.</summary>
-    private const int MemoMaxLength = 4_000;
-
     private enum Kind { Tokens, Characters, None }
 
     private readonly Kind _kind;
     private readonly UnigramTokenizer? _tokenizer;
-    private readonly ConcurrentDictionary<string, int> _costs = new(StringComparer.Ordinal);
-    private int _memoised;
 
     private ChunkBound(string id, Kind kind, UnigramTokenizer? tokenizer)
     {
@@ -65,30 +56,27 @@ public sealed class ChunkBound
     /// <summary>
     /// The cost of a piece of an embedding text, a line or a space-separated part of one: its tokens without
     /// &lt;s&gt; and &lt;/s&gt;, or its length plus one for the fallback. With arctic-m the costs of the pieces add
-    /// up to the text's exactly: it splits words at whitespace, and a line break is a grapheme of its own.
+    /// up to the text's exactly: it splits words at whitespace, and a line break is a grapheme of its own. The
+    /// tokenizer memoises by word (<see cref="UnigramTokenizer.Count"/>), and the chunks of a note are kept by
+    /// <see cref="Chunker.Split"/>, so a memo of pieces here would only hold the same again.
     /// </summary>
-    public int Cost(string piece)
+    public int Cost(string piece) => _kind switch
     {
-        switch (_kind)
-        {
-            case Kind.Tokens:
-                if (piece.Length > MemoMaxLength) return _tokenizer!.Count(piece) - 2;
-                if (_costs.TryGetValue(piece, out var cost)) return cost;
-                cost = _tokenizer!.Count(piece) - 2;
-                if (Interlocked.Increment(ref _memoised) >= MemoLimit)
-                {
-                    _costs.Clear();
-                    Interlocked.Exchange(ref _memoised, 0);
-                }
+        Kind.Tokens => _tokenizer!.Count(piece) - 2,
+        Kind.Characters => piece.Length + 1,
+        _ => 0,
+    };
 
-                _costs[piece] = cost;
-                return cost;
-            case Kind.Characters:
-                return piece.Length + 1;
-            default:
-                return 0;
-        }
-    }
+    /// <summary>
+    /// At least <see cref="Cost"/>, and cheap: for the tokenizer, the normalised length plus one, since every piece of
+    /// a word covers a character of "▁" and the word (<see cref="UnigramTokenizer.CountCeiling"/>).
+    /// </summary>
+    public int Ceiling(string piece) => _kind switch
+    {
+        Kind.Tokens => _tokenizer!.CountCeiling(piece) - 2,
+        Kind.Characters => piece.Length + 1,
+        _ => 0,
+    };
 
     /// <summary>Whether the whole embedding text fits, counted afresh rather than from the pieces' costs.</summary>
     public bool Fits(string embeddingText) => _kind switch

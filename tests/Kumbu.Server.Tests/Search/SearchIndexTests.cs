@@ -57,6 +57,25 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_notes_of_an_unlocked_vault_are_split_ahead_of_the_first_search()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\n## Rules\nThe service checks rules at the entrance.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
+        await IdleAsync(s);
+
+        // After a restart nothing is embedded again, so only the warm-up splits the notes.
+        var later = await StartAsync(s.World);
+        await IdleAsync(later);
+        await later.Index.Warming.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal(0, later.Embedder.Embedded);
+        var notes = await later.Store.ReadNotesUnderAsync(P("/Work"), Ct);
+        Assert.Equal(2, notes.Count);
+        Assert.All(notes, n => Assert.True(Chunker.IsSplit(n, later.Index.Bound), n.Path.Value));
+    }
+
+    [Fact]
     public async Task Embeddings_are_sealed_and_survive_a_restart_without_embedding_again()
     {
         var s = await StartAsync();

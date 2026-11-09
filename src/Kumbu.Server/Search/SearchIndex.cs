@@ -35,6 +35,9 @@ public sealed class SearchIndex : BackgroundService
     private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
     private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
     private int _busy;
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly SemaphoreSlim _warming = new(1, 1);
+    private Task _warm = Task.CompletedTask;
 
     /// <param name="analyses">Where the text of PDFs is read from; without it, PDFs aren't indexed.</param>
     /// <param name="tokenizer">What bounds the chunks; without it, the fallback bound.</param>
@@ -77,6 +80,7 @@ public sealed class SearchIndex : BackgroundService
     /// also while no sidecar is configured.</summary>
     public void CatchUp(UnlockedVault vault)
     {
+        Warm(vault);
         if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
         {
             _log.LogWarning("Vault {VaultId} uses the embedding provider {Provider}, which isn't configured; it isn't indexed", vault.Id, vault.EmbeddingProvider);
@@ -98,6 +102,49 @@ public sealed class SearchIndex : BackgroundService
         Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note.Version, provider.Driver)).Select(n => n.Key)
             .Concat(pdfs.Where(p => !IsCurrent(embeddings.GetValueOrDefault(p.Key), p.Value, provider.Driver)).Select(p => p.Key))
             .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p) && !pdfs.ContainsKey(p))));
+    }
+
+    /// <summary>The latest warm-up, for tests.</summary>
+    public Task Warming => Volatile.Read(ref _warm);
+
+    /// <summary>
+    /// Splits every note of the vault in the background, one after the other, so that the first search after the unlock
+    /// finds the chunks at hand (<see cref="Chunker.Split"/> keeps them by content). Only once the bound has settled:
+    /// <see cref="ExecuteAsync"/> catches up every open vault again then. One vault at a time, stopped with the index.
+    /// </summary>
+    private void Warm(UnlockedVault vault)
+    {
+        if (!TokenizerSettled) return;
+        var bound = Bound;
+        var token = _stopping.Token;
+        var warm = Task.Run(async () =>
+        {
+            await _warming.WaitAsync(token);
+            try
+            {
+                foreach (var (path, entry) in vault.Notes)
+                {
+                    // A vault that was locked, deleted or re-keyed meanwhile isn't searched any more.
+                    if (token.IsCancellationRequested || !ReferenceEquals(_catalog.Current(vault.Id), vault)) return;
+                    var note = new Note(path, entry.Note.Content);
+                    if (!Chunker.IsSplit(note, bound)) Chunker.Split(note, bound);
+                    await Task.Yield();
+                }
+            }
+            finally
+            {
+                _warming.Release();
+            }
+        }, token);
+        _ = warm.ContinueWith(t => _log.LogWarning("Splitting the notes of vault {VaultId} ahead of a search failed: {Message}", vault.Id, t.Exception!.GetBaseException().Message),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        Volatile.Write(ref _warm, warm);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync();
+        await base.StopAsync(cancellationToken);
     }
 
     /// <summary>The paths whose current state is a PDF, if PDFs are indexed.</summary>
@@ -327,6 +374,8 @@ public sealed class SearchIndex : BackgroundService
     {
         _catalog.Unlocked -= CatchUp;
         if (_analyses is not null) _analyses.Stored -= OnAnalysed;
+        // Not disposed: a warm-up may still look at its token.
+        _stopping.Cancel();
         base.Dispose();
     }
 }

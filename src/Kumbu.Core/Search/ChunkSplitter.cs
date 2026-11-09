@@ -23,6 +23,9 @@ internal sealed class ChunkSplitter
 
     // Prefix sums over the lines: [i] is the sum of the lines before line i.
     private readonly int[] _words;
+    private readonly int[] _ceilings;
+
+    // Each line's cost once counted (-1 before): only a candidate whose ceiling doesn't fit is counted.
     private readonly int[] _costs;
     private readonly Dictionary<Heading, (string Text, int Cost)> _contexts = new(ReferenceEqualityComparer.Instance);
     private (string Text, int Cost)? _noteContext;
@@ -40,11 +43,13 @@ internal sealed class ChunkSplitter
         _code = Outline.CodeLines(_lines);
         _title = Title(note.Path);
         _words = new int[_lines.Count + 1];
-        _costs = new int[_lines.Count + 1];
+        _ceilings = new int[_lines.Count + 1];
+        _costs = new int[_lines.Count];
+        Array.Fill(_costs, -1);
         for (var i = 0; i < _lines.Count; i++)
         {
             _words[i + 1] = _words[i] + Words(_lines[i]);
-            _costs[i + 1] = _costs[i] + bound.Cost(_lines[i]);
+            _ceilings[i + 1] = _ceilings[i] + bound.Ceiling(_lines[i]);
         }
     }
 
@@ -101,11 +106,30 @@ internal sealed class ChunkSplitter
 
     private int WordsOf(int start, int end) => _words[end] - _words[start];
 
-    private int CostOf(int start, int end) => _costs[end] - _costs[start];
+    private int CostOf(int start, int end)
+    {
+        var sum = 0;
+        for (var i = start; i < end; i++) sum += _costs[i] >= 0 ? _costs[i] : _costs[i] = _bound.Cost(_lines[i]);
+        return sum;
+    }
 
     private bool Within(int context, int cost, int words) => words <= MaxWords && context + cost <= _bound.Budget;
 
-    private bool Whole(Section section) => Within(Context(section.Heading).Cost, CostOf(section.Start, section.End), WordsOf(section.Start, section.End));
+    /// <summary>
+    /// Whether the lines [start, end), after the header rows at <paramref name="header"/> if not -1, fit with the context:
+    /// within <see cref="Chunker.MaxWords"/> and the budget. A candidate whose <see cref="ChunkBound.Ceiling"/> fits
+    /// isn't counted: the decision is the same, and most short sections are never tokenised.
+    /// </summary>
+    private bool LinesWithin(int context, int start, int end, int header = -1)
+    {
+        var words = WordsOf(start, end) + (header >= 0 ? WordsOf(header, header + 2) : 0);
+        if (words > MaxWords) return false;
+        var room = _bound.Budget - context;
+        if (_ceilings[end] - _ceilings[start] + (header >= 0 ? _ceilings[header + 2] - _ceilings[header] : 0) <= room) return true;
+        return CostOf(start, end) + (header >= 0 ? CostOf(header, header + 2) : 0) <= room;
+    }
+
+    private bool Whole(Section section) => LinesWithin(Context(section.Heading).Cost, section.Start, section.End);
 
     // ---- Merging whole sections ----
 
@@ -116,7 +140,7 @@ internal sealed class ChunkSplitter
         if (Common([.. group, next]) is not (true, var shared)) return false;
         var first = group[0];
         var words = WordsOf(first.Start, next.End);
-        if (!Within(Context(shared).Cost, CostOf(first.Start, next.End), words)) return false;
+        if (!LinesWithin(Context(shared).Cost, first.Start, next.End)) return false;
         if (words <= TargetWords) return true;
         var groupWords = WordsOf(first.Start, group[^1].End);
         var nextWords = WordsOf(next.Start, next.End);
@@ -126,7 +150,7 @@ internal sealed class ChunkSplitter
     /// <summary>Whether a group that starts with the small <paramref name="section"/> would take in <paramref name="after"/>.</summary>
     private bool TakesIn(Section section, Section? after) =>
         after is not null && !after.HasChildren && Whole(after) && Common([section, after]) is (true, var shared)
-        && Within(Context(shared).Cost, CostOf(section.Start, after.End), WordsOf(section.Start, after.End));
+        && LinesWithin(Context(shared).Cost, section.Start, after.End);
 
     /// <summary>
     /// The deepest heading that is an ancestor-or-self of every section (null for the note itself), and whether the
@@ -302,9 +326,7 @@ internal sealed class ChunkSplitter
 
     private bool Fits(int header, int start, int end)
     {
-        var (cost, words) = (CostOf(start, end), WordsOf(start, end));
-        if (header >= 0) (cost, words) = (cost + CostOf(header, header + 2), words + WordsOf(header, header + 2));
-        return Within(_context.Cost, cost, words);
+        return LinesWithin(_context.Cost, start, end, header);
     }
 
     private void Close()

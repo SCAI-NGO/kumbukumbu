@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -18,14 +19,25 @@ public sealed partial class UnigramTokenizer
     private const char Space = '▁';
     private const double UnkPenalty = 10.0;
 
-    private readonly Dictionary<string, (int Id, double Score)> _pieces;
-    private readonly Dictionary<string, (int Id, double Score)>.AlternateLookup<ReadOnlySpan<char>> _lookup;
-    private readonly int _maxPieceLength;
+    // The pieces as a trie, walked a character at a time: the child of a node by a character (the node in the high
+    // bits, the character in the low 16), and the piece that ends at a node (-1 for none) with its score.
+    private readonly Dictionary<long, int> _children;
+    private readonly int[] _pieceAt;
+    private readonly double[] _scores;
     private readonly double _unkScore;
     private readonly int _unkId;
     private readonly PrecompiledNormalizer? _normalizer;
     private readonly bool _collapseSpaces;
     private readonly bool _metaspaceOnly;
+
+    /// <summary>The pieces of a word (without its "▁") as <see cref="EncodeWord"/> gives them, and whether the first
+    /// and the last are &lt;unk&gt; (consecutive unknowns across words become one).</summary>
+    private readonly ConcurrentDictionary<string, (int Count, bool UnkFirst, bool UnkLast)> _wordCounts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (int Count, bool UnkFirst, bool UnkLast)>.AlternateLookup<ReadOnlySpan<char>> _wordLookup;
+    private int _wordsMemoised;
+
+    /// <summary>More distinct words than notes ordinarily hold; the memo starts afresh when it is full.</summary>
+    private const int WordMemoLimit = 200_000;
 
     /// <param name="collapseSpaces">The Replace normalizer " {2,}" to " ", applied after the precompiled map.</param>
     /// <param name="metaspaceOnly">Metaspace without WhitespaceSplit: only spaces separate words, and a trailing
@@ -33,15 +45,35 @@ public sealed partial class UnigramTokenizer
     public UnigramTokenizer(IReadOnlyList<(string Piece, double Score)> vocab, int unkId, byte[]? precompiledCharsMap,
         bool collapseSpaces = false, bool metaspaceOnly = false)
     {
-        _pieces = new Dictionary<string, (int, double)>(vocab.Count, StringComparer.Ordinal);
-        for (var id = 0; id < vocab.Count; id++) _pieces.TryAdd(vocab[id].Piece, (id, vocab[id].Score));
-        _lookup = _pieces.GetAlternateLookup<ReadOnlySpan<char>>();
-        _maxPieceLength = vocab.Max(v => v.Piece.Length);
+        _children = new Dictionary<long, int>(vocab.Count * 2);
+        var pieceAt = new List<int> { -1 };
+        _scores = new double[vocab.Count];
+        for (var id = 0; id < vocab.Count; id++)
+        {
+            var node = 0;
+            foreach (var c in vocab[id].Piece)
+            {
+                if (!_children.TryGetValue(Edge(node, c), out var child))
+                {
+                    _children[Edge(node, c)] = child = pieceAt.Count;
+                    pieceAt.Add(-1);
+                }
+
+                node = child;
+            }
+
+            // The first of two equal pieces counts, as a dictionary's TryAdd keeps it.
+            if (node > 0 && pieceAt[node] < 0) pieceAt[node] = id;
+            _scores[id] = vocab[id].Score;
+        }
+
+        _pieceAt = [.. pieceAt];
         _unkScore = vocab.Min(v => v.Score) - UnkPenalty;
         _unkId = unkId;
         _normalizer = precompiledCharsMap is null ? null : new PrecompiledNormalizer(precompiledCharsMap);
         _collapseSpaces = collapseSpaces;
         _metaspaceOnly = metaspaceOnly;
+        _wordLookup = _wordCounts.GetAlternateLookup<ReadOnlySpan<char>>();
     }
 
     public const int BosId = 0;
@@ -124,8 +156,63 @@ public sealed partial class UnigramTokenizer
         return ids;
     }
 
-    /// <summary>How many ids <see cref="Encode"/> gives for <paramref name="text"/> without a cut, &lt;s&gt; and &lt;/s&gt; included.</summary>
-    public int Count(string text) => Encode(text, int.MaxValue).Count;
+    /// <summary>
+    /// How many ids <see cref="Encode"/> gives for <paramref name="text"/> without a cut, &lt;s&gt; and &lt;/s&gt;
+    /// included. With the whitespace split the words are encoded on their own, so the count is the sum of the words'
+    /// (memoised by word, after the whole text's normalisation), less one where an &lt;unk&gt; ends a word and the
+    /// next starts with one. Metaspace alone counts by <see cref="Encode"/>.
+    /// </summary>
+    public int Count(string text)
+    {
+        if (_metaspaceOnly) return Encode(text, int.MaxValue).Count;
+        var normalized = _normalizer?.Normalize(text) ?? text;
+        if (_collapseSpaces) normalized = SpaceRuns().Replace(normalized, " ");
+        var count = 2;
+        var unkLast = false;
+        var start = -1;
+        for (var i = 0; i <= normalized.Length; i++)
+        {
+            if (i < normalized.Length && !char.IsWhiteSpace(normalized[i]))
+            {
+                if (start < 0) start = i;
+                continue;
+            }
+
+            if (start < 0) continue;
+            var word = WordCount(normalized.AsSpan(start, i - start));
+            count += word.Count - (unkLast && word.UnkFirst ? 1 : 0);
+            unkLast = word.UnkLast;
+            start = -1;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// At least <see cref="Count"/>: the normalised length plus three. Each word's pieces cover "▁" and its characters, a
+    /// character or more each, and there are no more words than runs of whitespace plus one; &lt;s&gt; and &lt;/s&gt;
+    /// add two. The text isn't normalised for it (<see cref="PrecompiledNormalizer.LengthCeiling"/>).
+    /// </summary>
+    public int CountCeiling(string text) => (_normalizer?.LengthCeiling(text) ?? text.Length) + 3;
+
+    /// <summary>The precompiled map's normalisation, by the ASCII fast path where it applies or grapheme by grapheme
+    /// throughout (for tests: the two must agree).</summary>
+    internal string Normalized(string text, bool graphemesOnly) =>
+        _normalizer is null ? text : graphemesOnly ? _normalizer.Graphemes(text) : _normalizer.Normalize(text);
+
+    private (int Count, bool UnkFirst, bool UnkLast) WordCount(ReadOnlySpan<char> word)
+    {
+        if (_wordLookup.TryGetValue(word, out var known)) return known;
+        known = CountWord(word);
+        if (Interlocked.Increment(ref _wordsMemoised) >= WordMemoLimit)
+        {
+            _wordCounts.Clear();
+            Interlocked.Exchange(ref _wordsMemoised, 0);
+        }
+
+        _wordLookup.TryAdd(word, known);
+        return known;
+    }
 
     /// <summary>WhitespaceSplit: words between runs of whitespace (Rust's char::is_whitespace, the Unicode
     /// White_Space property, which .NET's char.IsWhiteSpace matches).</summary>
@@ -181,12 +268,13 @@ public sealed partial class UnigramTokenizer
             if (from[start] < 0) continue;
             var charLength = Next(word, start) - start;
             var single = false;
-            for (var length = 1; length <= _maxPieceLength && start + length <= n; length++)
+            for (var (length, node) = (1, 0); start + length <= n; length++)
             {
-                if (!_lookup.TryGetValue(word.AsSpan(start, length), out var piece)) continue;
+                if (!_children.TryGetValue(Edge(node, word[start + length - 1]), out node)) break;
+                if (_pieceAt[node] is not (>= 0 and var piece)) continue;
                 var end = start + length;
-                var candidate = score[start] + piece.Score;
-                if (from[end] < 0 || candidate > score[end]) (score[end], from[end], id[end]) = (candidate, start, piece.Id);
+                var candidate = score[start] + _scores[piece];
+                if (from[end] < 0 || candidate > score[end]) (score[end], from[end], id[end]) = (candidate, start, piece);
                 if (length == charLength) single = true;
             }
 
@@ -208,6 +296,75 @@ public sealed partial class UnigramTokenizer
         }
     }
 
+    /// <summary>
+    /// <see cref="EncodeWord"/> of "▁" and <paramref name="bare"/>, counted: the same Viterbi without allocating (most
+    /// words fit on the stack), the pieces of the best path with consecutive unknowns as one.
+    /// </summary>
+    private (int Count, bool UnkFirst, bool UnkLast) CountWord(ReadOnlySpan<char> bare)
+    {
+        var n = bare.Length + 1;
+        const int StackLimit = 128;
+        var rented = n + 1 > StackLimit ? System.Buffers.ArrayPool<char>.Shared.Rent(n) : null;
+        var rentedScores = n + 1 > StackLimit ? System.Buffers.ArrayPool<double>.Shared.Rent(n + 1) : null;
+        var rentedInts = n + 1 > StackLimit ? System.Buffers.ArrayPool<int>.Shared.Rent(2 * (n + 1)) : null;
+        try
+        {
+            var word = rented is null ? stackalloc char[n] : rented.AsSpan(0, n);
+            var score = rentedScores is null ? stackalloc double[n + 1] : rentedScores.AsSpan(0, n + 1);
+            var ints = rentedInts is null ? stackalloc int[2 * (n + 1)] : rentedInts.AsSpan(0, 2 * (n + 1));
+            var from = ints[..(n + 1)];
+            var id = ints[(n + 1)..];
+            word[0] = Space;
+            bare.CopyTo(word[1..]);
+            score.Clear();
+            from.Fill(-1);
+            from[0] = 0;
+            for (var start = 0; start < n; start = Next(word, start))
+            {
+                if (from[start] < 0) continue;
+                var charLength = Next(word, start) - start;
+                var single = false;
+                for (var (length, node) = (1, 0); start + length <= n; length++)
+                {
+                    if (!_children.TryGetValue(Edge(node, word[start + length - 1]), out node)) break;
+                    if (_pieceAt[node] is not (>= 0 and var piece)) continue;
+                    var end = start + length;
+                    var candidate = score[start] + _scores[piece];
+                    if (from[end] < 0 || candidate > score[end]) (score[end], from[end], id[end]) = (candidate, start, piece);
+                    if (length == charLength) single = true;
+                }
+
+                if (!single)
+                {
+                    var end = start + charLength;
+                    var candidate = score[start] + _unkScore;
+                    if (from[end] < 0 || candidate > score[end]) (score[end], from[end], id[end]) = (candidate, start, _unkId);
+                }
+            }
+
+            // Backwards over the path: the last piece first; an unknown right before an unknown doesn't count.
+            var (count, first, last) = (0, false, n > 0 && id[n] == _unkId);
+            for (var at = n; at > 0; at = from[at])
+            {
+                var unk = id[at] == _unkId;
+                if (!(unk && from[at] > 0 && id[from[at]] == _unkId)) count++;
+                first = unk;
+            }
+
+            return (count, first, last);
+        }
+        finally
+        {
+            if (rented is not null) System.Buffers.ArrayPool<char>.Shared.Return(rented);
+            if (rentedScores is not null) System.Buffers.ArrayPool<double>.Shared.Return(rentedScores);
+            if (rentedInts is not null) System.Buffers.ArrayPool<int>.Shared.Return(rentedInts);
+        }
+    }
+
+    private static long Edge(int node, char c) => ((long)node << 16) | c;
+
+    private static int Next(ReadOnlySpan<char> s, int i) => char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]) ? i + 2 : i + 1;
+
     private static int Next(string s, int i) => char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]) ? i + 2 : i + 1;
 
     /// <summary>
@@ -219,15 +376,95 @@ public sealed partial class UnigramTokenizer
         private readonly uint[] _units;
         private readonly byte[] _normalized;
 
+        /// <summary>What each ASCII character but CR becomes, if the map leaves every printable one as it is; else null.</summary>
+        private readonly string[]? _ascii;
+
+        /// <summary>The normalised runs around non-ASCII characters ("för", "ü"): few, and met again and again.</summary>
+        private readonly ConcurrentDictionary<string, string> _segments = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string>.AlternateLookup<ReadOnlySpan<char>> _segmentLookup;
+        private int _segmentsMemoised;
+
+        /// <summary>The most characters one replacement of the map has.</summary>
+        private readonly int _longestReplacement;
+        private const int SegmentMemoLimit = 50_000;
+
         public PrecompiledNormalizer(byte[] blob)
         {
             var trieSize = (int)BitConverter.ToUInt32(blob, 0);
             _units = new uint[trieSize / 4];
             Buffer.BlockCopy(blob, 4, _units, 0, trieSize);
             _normalized = blob[(4 + trieSize)..];
+
+            // Checked against the map itself: another tokenizer may well map some ASCII.
+            var ascii = new string[128];
+            for (var c = 0; c < 128; c++) ascii[c] = Transform(((char)c).ToString()) ?? ((char)c).ToString();
+            if (Enumerable.Range(0x20, 0x7F - 0x20).All(c => ascii[c] == ((char)c).ToString())) _ascii = ascii;
+            _segmentLookup = _segments.GetAlternateLookup<ReadOnlySpan<char>>();
+            _longestReplacement = Math.Max(2, Encoding.UTF8.GetString(_normalized).Split('\0').Max(r => r.Length));
         }
 
+        /// <summary>
+        /// The normalised text. With the ASCII table, runs of ASCII are mapped character by character and only the rest
+        /// goes grapheme by grapheme: between two ASCII characters other than CR there is always a grapheme boundary
+        /// (none of them extends, prepends or joins), so the two ways give the same text.
+        /// </summary>
         public string Normalize(string text)
+        {
+            if (_ascii is null) return Graphemes(text);
+            var result = (StringBuilder?)null;
+            var i = 0;
+            while (i < text.Length)
+            {
+                if (Plain(text, i) && (i + 1 == text.Length || Plain(text, i + 1)))
+                {
+                    var mapped = _ascii[text[i]];
+                    if (result is null && (mapped.Length != 1 || mapped[0] != text[i])) result = new StringBuilder(text.Length).Append(text, 0, i);
+                    result?.Append(mapped);
+                    i++;
+                    continue;
+                }
+
+                var end = i + 1;
+                while (end < text.Length && !(Plain(text, end - 1) && Plain(text, end))) end++;
+                result ??= new StringBuilder(text.Length).Append(text, 0, i);
+                result.Append(Segment(text.AsSpan(i, end - i)));
+                i = end;
+            }
+
+            return result?.ToString() ?? text;
+        }
+
+        private string Segment(ReadOnlySpan<char> segment)
+        {
+            if (_segmentLookup.TryGetValue(segment, out var known)) return known;
+            known = Graphemes(segment.ToString());
+            if (segment.Length > 64) return known;
+            if (Interlocked.Increment(ref _segmentsMemoised) >= SegmentMemoLimit)
+            {
+                _segments.Clear();
+                Interlocked.Exchange(ref _segmentsMemoised, 0);
+            }
+
+            _segmentLookup.TryAdd(segment, known);
+            return known;
+        }
+
+        /// <summary>
+        /// At least the length of <see cref="Normalize"/>'s result, without normalising: an ASCII character but CR
+        /// becomes what the table says, and any other character at most the longest replacement the map holds (a
+        /// grapheme replaced whole gets one replacement for all its characters).
+        /// </summary>
+        public int LengthCeiling(string text)
+        {
+            if (_ascii is null) return Normalize(text).Length;
+            var length = 0;
+            foreach (var c in text) length += c < 128 && c != '\r' ? _ascii[c].Length : _longestReplacement;
+            return length;
+        }
+
+        private static bool Plain(string text, int i) => text[i] < 128 && text[i] != '\r';
+
+        public string Graphemes(string text)
         {
             var result = new StringBuilder(text.Length);
             var graphemes = StringInfo.GetTextElementEnumerator(text);

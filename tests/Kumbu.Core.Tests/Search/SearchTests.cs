@@ -27,6 +27,11 @@ public class SearchTests
         var merged = new Chunk(P("/Demo/gate.md"), "", 0, 4, "# Gate\nThe service checks rules.\n# Team\nAlice and Bob.", "gate");
         Assert.Equal("The service checks rules. Alice and Bob.", SectionSearch.Snippet(merged));
         Assert.Equal("Alice and Bob.", SectionSearch.Snippet(merged, "team alice"));
+
+        // A comment in fenced code is no heading.
+        var script = new Chunk(P("/Demo/run.md"), "#Run", 0, 5, "# Run\n```sh\n# start the pump\npump start\n```", "run > Run");
+        Assert.Equal("```sh # start the pump pump start ```", SectionSearch.Snippet(script));
+        Assert.Equal("# start the pump", SectionSearch.Snippet(script, "pump"));
     }
 
     [Fact]

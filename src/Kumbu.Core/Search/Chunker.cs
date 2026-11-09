@@ -62,6 +62,10 @@ public static class Chunker
 
     private sealed record Splitting(VaultPath Path, string Bound, Chunk[] Chunks);
 
+    /// <summary>Whether <see cref="Split"/> has the chunks of this very content string at hand for the path and bound.</summary>
+    public static bool IsSplit(Note note, ChunkBound bound) =>
+        Splits.TryGetValue(note.Content, out var known) && known.Path == note.Path && known.Bound == bound.Id;
+
     /// <summary>The note's chunks within <paramref name="bound"/>, in line order.</summary>
     public static List<Chunk> Split(Note note, ChunkBound bound)
     {

@@ -74,5 +74,75 @@ public class UnigramTokenizerTests
         foreach (var c in cases) Assert.Equal(c.ids, tokenizer.Encode(c.text));
     }
 
+    /// <summary>Texts of every kind: the fixtures, the reference texts, and lines of seeded random words mixed with
+    /// characters the normaliser maps, joins or splits (decomposed accents, ligatures, CR LF, odd spaces, emoji).</summary>
+    private static IEnumerable<string> Texts()
+    {
+        foreach (var (_, text) in DenseFixtures.Dense) yield return text;
+        yield return DenseFixtures.GermanProse;
+        yield return DenseFixtures.NumericTable;
+        yield return DenseFixtures.Code;
+        yield return DenseFixtures.Urls;
+        foreach (var text in ChunkerFixtures.All.Values) yield return text;
+        foreach (var reference in new[] { "tokenizer-reference.json", "tokenizer-reference-arctic-l.json" })
+        {
+            foreach (var c in JsonSerializer.Deserialize<List<Case>>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Search", reference)))!) yield return c.text;
+        }
+
+        // Characters NFKC expands into several, in runs: their count may well exceed their length.
+        yield return string.Concat(Enumerable.Repeat("ﷺ", 40));
+        yield return string.Concat(Enumerable.Repeat("㎏㎒ﬃ", 30));
+
+        string[] odd = ["e\u0301", " \u0301x", "ﬁ", "㎏", "\r\n", "\r", "\u00A0", "\u3000", "\u200B", "\u0600a", "ﷺ", "👩‍👩‍👧", "🇩🇪🇫🇷", "\t", "Ⅻ", "ＡＢＣ", "ß", "Ä", "…", "\u00AD", "\uFEFF", "\u0007", "\u007F", "→∑", "x\u20DD", "̈a"];
+        var words = (DenseFixtures.GermanProse + " " + ChunkerFixtures.NestedFlowers + " " + DenseFixtures.Code).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray();
+        var random = new Random(11);
+        for (var line = 0; line < 3_000; line++)
+        {
+            var text = new StringBuilder();
+            for (var w = random.Next(1, 16); w > 0; w--)
+            {
+                text.Append(random.Next(6) == 0 ? odd[random.Next(odd.Length)] : "");
+                text.Append(words[random.Next(words.Length)]);
+                text.Append(random.Next(8) == 0 ? odd[random.Next(odd.Length)] : random.Next(10) == 0 ? "  " : " ");
+            }
+
+            yield return text.ToString();
+        }
+    }
+
+    private static UnigramTokenizer? Named(string name)
+    {
+        if (name == "tiny") return Tiny;
+        // Without "▁" a word can start with an unknown, which joins the unknown that ends the word before.
+        if (name == "tiny-without-mark") return new UnigramTokenizer([("<s>", 0), ("<pad>", 0), ("</s>", 0), ("<unk>", 0), ("▁he", -3), ("llo", -3), ("e", -5)], unkId: 3, precompiledCharsMap: null);
+        if (name == "arctic-m") return TestTokenizer.Load();
+        var dir = Environment.GetEnvironmentVariable("KUMBU_MODEL_DIR");
+        var file = dir is null ? null : Path.Combine(dir, name, "tokenizer.json");
+        if (file is null || !File.Exists(file)) return null;
+        using var stream = File.OpenRead(file);
+        return UnigramTokenizer.Load(stream);
+    }
+
+    [Theory]
+    [InlineData("tiny")]
+    [InlineData("tiny-without-mark")]
+    [InlineData("arctic-m")]
+    [InlineData("arctic-l")]
+    public void Count_is_the_length_of_the_encoding_for_every_kind_of_text(string name)
+    {
+        var tokenizer = Named(name);
+        Assert.SkipUnless(tokenizer is not null, name == "arctic-m" ? TestTokenizer.SkipReason : $"KUMBU_MODEL_DIR with {name}/tokenizer.json not set");
+
+        foreach (var text in Texts())
+        {
+            var expected = tokenizer!.Encode(text, int.MaxValue).Count;
+            Assert.Equal(expected, tokenizer.Count(text));
+            Assert.True(tokenizer.CountCeiling(text) >= expected, $"ceiling {tokenizer.CountCeiling(text)} < {expected}");
+            // Again, from the memo of words.
+            Assert.Equal(expected, tokenizer.Count(text));
+            Assert.Equal(tokenizer.Normalized(text, graphemesOnly: true), tokenizer.Normalized(text, graphemesOnly: false));
+        }
+    }
+
     private sealed record Case(string text, List<int> ids);
 }

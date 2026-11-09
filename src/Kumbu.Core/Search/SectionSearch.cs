@@ -148,9 +148,13 @@ public static class SectionSearch
     }
 
     /// <summary>The non-blank lines of a chunk that aren't headings (a merged chunk holds several; a table part starts
-    /// with its header row instead).</summary>
-    private static IEnumerable<string> Body(Chunk chunk) =>
-        chunk.Text.Split('\n').Where(l => l.Trim().Length > 0 && !Outline.HeadingRegex().IsMatch(l));
+    /// with its header row instead). A "# comment" in fenced code is no heading.</summary>
+    private static IEnumerable<string> Body(Chunk chunk)
+    {
+        var lines = chunk.Text.Split('\n');
+        var code = Outline.CodeLines(lines);
+        return lines.Where((l, i) => l.Trim().Length > 0 && (code[i] || !Outline.HeadingRegex().IsMatch(l)));
+    }
 
     /// <summary>At most the length of a snippet, with an ellipsis if cut.</summary>
     public static string Shorten(string text) => text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";
@@ -214,8 +218,7 @@ public static class SectionSearch
 
     private static bool IsHeadingOnly(Chunk chunk)
     {
-        var text = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        return text.Count > 0 && text.All(l => Outline.HeadingRegex().IsMatch(l));
+        return chunk.Text.Trim().Length > 0 && !Body(chunk).Any();
     }
 
     /// <summary>The current chunk for a hit: the same start line and part (a hit is on part 0 for now), or the chunk
