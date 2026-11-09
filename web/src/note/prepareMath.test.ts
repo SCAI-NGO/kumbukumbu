@@ -66,6 +66,7 @@ describe("prepareMath", () => {
     it("a long table of amounts", () => quick("| a | b |\n|---|---|\n" + "| $5 | $6 |\n".repeat(8000)));
     it("long prose with links and amounts", () =>
       quick("Alice paid $5 for [seeds](/Home/Garden/seeds.md) and `code` <https://x/$1> then $x$ and $3 [[plan]] #veg ".repeat(4000)));
+    it("many formulas in one paragraph", () => quick("$x$ and ".repeat(100000)));
     it("unclosed $$ fences on every line", () => quick("$$ x\n".repeat(70000)));
     it("unclosed code spans", () => quick("a ` b $5 ".repeat(40000)));
   });
