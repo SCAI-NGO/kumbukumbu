@@ -3,6 +3,8 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Tests.Api;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -24,11 +26,29 @@ public sealed class LateSaveTests(KumbuAppFactory app)
     /// <summary>The real time, in whole seconds: MongoDB's TTL monitor sweeps slots made at a past fake time.</summary>
     private readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
 
+    /// <summary>Run as each answer starts, before what the server runs then itself (see <see cref="Watch"/>).</summary>
+    private Func<Task>? _onStarting;
+
     private WebApplicationFactory<Program> Timed() => app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
     {
         s.RemoveAll<TimeProvider>();
         s.AddSingleton<TimeProvider>(_time);
+        s.AddSingleton<IStartupFilter>(new Watch(() => _onStarting));
     }));
+
+    /// <summary>Outside every middleware of the server, so its callback, registered first, runs last as an answer starts.</summary>
+    private sealed class Watch(Func<Func<Task>?> onStarting) : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => builder =>
+        {
+            builder.Use(async (context, inner) =>
+            {
+                if (onStarting() is { } callback) context.Response.OnStarting(callback);
+                await inner(context);
+            });
+            next(builder);
+        };
+    }
 
     /// <summary>Alice's world with <c>Tagebuch</c> and <c>Familie</c> discreet, shown for five minutes, and
     /// <c>Tagebuch/geheim.md</c>'s version.</summary>
@@ -205,6 +225,24 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Conflict, conflict.Status);
         Assert.Equal(HttpStatusCode.OK, retry.Status);
         Assert.Equal(HttpStatusCode.NotFound, again.Status);
+    }
+
+    [Fact]
+    public async Task A_failed_late_save_puts_the_marker_back_before_it_answers()
+    {
+        await using var api = Timed();
+        var (w, _) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        bool? backAtAnswer = null;
+        _onStarting = async () => backAtAnswer = (await SlotAsync(w)).LateSave is not null;
+        var conflict = await SaveAsync(w, "geheim.md", "# Geheim\n\nFalsche Basis\n", "not-the-version");
+        _onStarting = null;
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.Status);
+        Assert.True(backAtAnswer);
     }
 
     [Fact]

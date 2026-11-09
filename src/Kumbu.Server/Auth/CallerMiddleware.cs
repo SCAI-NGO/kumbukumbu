@@ -36,8 +36,7 @@ public sealed class BackgroundMetadata
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment, TimeProvider time,
-    ILogger<CallerMiddleware> log)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment, ILogger<CallerMiddleware> log)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -196,7 +195,7 @@ public sealed class CallerMiddleware(
         HttpContext context, string secret, string userId, byte[] userKey, SessionDiscreet discreet)
     {
         if (discreet is not { Revealed: false, LateSave: { } sealedMarker, RevealUntil: { } until }) return null;
-        if (time.GetUtcNow().UtcDateTime >= until + Api.LateSave.Grace)
+        if (sessions.Now >= until + Api.LateSave.Grace)
         {
             await sessions.ForgetLateSaveAsync(secret, sealedMarker, context.RequestAborted);
             return null;

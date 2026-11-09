@@ -49,7 +49,8 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 
     private IMongoCollection<UserSlotDocument> Slots { get; } = db.GetCollection<UserSlotDocument>("user_slots");
 
-    private DateTime Now => time.GetUtcNow().UtcDateTime;
+    /// <summary>Now, by this service's clock (the late save's grace in <see cref="Auth.CallerMiddleware"/> reads it too).</summary>
+    internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>
     /// Starts a session for a user just signed in and returns its secret (Base64Url) for the cookie.
