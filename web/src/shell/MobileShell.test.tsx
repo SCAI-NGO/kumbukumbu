@@ -184,20 +184,22 @@ describe("the shell", () => {
     const fetch = signedInApi({
       "PUT /api/notes/Work/projects/Untitled%202.md": async (request) => {
         body = await request.json();
-        return json(201, { path: "/Work/projects/Untitled 2.md", content: "", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" });
+        return json(201, { path: "/Work/projects/Untitled 2.md", content: "# ", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" });
       },
     });
     const router = renderApp("/notes/Work/inbox.md");
     await openDrawer();
     await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for projects" }));
+    const trees = () => fetch.mock.calls.filter(([r]) => r.url.endsWith("/api/vaults/Work/tree")).length;
+    const before = trees();
     await userEvent.click(screen.getByRole("menuitem", { name: "New note here" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/Untitled%202.md"));
-    expect(body).toEqual({ content: "" });
+    expect(body).toEqual({ content: "# " });
     expect(useEditor.getState().mode).toBe("write");
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
     // The tree is asked again, so the new note shows up.
-    await waitFor(() => expect(fetch.mock.calls.filter(([r]) => r.url.endsWith("/api/vaults/Work/tree"))).toHaveLength(2));
+    await waitFor(() => expect(trees()).toBe(before + 1));
   });
 
   it("offers no choice of search by meaning while the server has no external provider", async () => {
@@ -593,6 +595,38 @@ describe("the shell", () => {
     expect(switcher).toHaveFocus();
   });
 
+  it("copies the note's file path, its link and its Markdown link from the note's menu, and says so", async () => {
+    signedInApi();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    renderApp("/notes/Home/garden.md");
+    await screen.findByRole("heading", { name: "garden" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items.slice(items.indexOf("History") + 1, items.indexOf("History") + 4)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
+    expect(writeText).toHaveBeenCalledWith("[[garden]]");
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy markdown link" }));
+    expect(writeText).toHaveBeenLastCalledWith("[garden](/garden.md)");
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy file path" }));
+    expect(writeText).toHaveBeenLastCalledWith("/Home/garden.md");
+  });
+
+  it("says so when a copy fails", async () => {
+    signedInApi();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    renderApp("/notes/Home/garden.md");
+    await screen.findByRole("heading", { name: "garden" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy file path" }));
+    expect(await screen.findByText("Couldn't copy. Copy it by hand.")).toBeInTheDocument();
+  });
+
   it("stays in Write mode when the open note's vault is renamed in another tab", async () => {
     // The vault list read again after the rename hangs: until it is in, the new name isn't in the list.
     let reads = 0;
@@ -700,7 +734,8 @@ describe("vaults shared with the user", () => {
     expect(screen.getByText("You can only read Rezepte.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
+    // Copying writes nothing: the three copy items stay.
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "New" }));
     for (const item of screen.getAllByRole("menuitem")) expect(item).toBeDisabled();
@@ -711,7 +746,7 @@ describe("vaults shared with the user", () => {
     // Reading, the trash, activity, checkpoints, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
     expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
-    expect(within(drawer()).queryByRole("button", { name: "Actions for soup" })).not.toBeInTheDocument();
+    expect(await menuItems("Actions for soup")).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
   });
 
   it("shows Board.md read-only below maintain", async () => {
@@ -724,15 +759,16 @@ describe("vaults shared with the user", () => {
     expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
     expect(screen.getByText(sentence)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
 
     await openDrawer();
     await within(drawer()).findByRole("button", { name: "Board" });
-    // A note beside it can be changed; the board's definition and its folder can't.
-    expect(await menuItems("Actions for plan")).toEqual(["Rename or move", "Delete note"]);
-    expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(1);
+    // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
+    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
+    expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
     expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
+    expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
     expect(await menuItems("Actions for garten")).toEqual(
       expect.arrayContaining(["New note here", "New folder…", "Upload here", "Trash", "Board", "Export as ZIP…"]),
     );
@@ -809,7 +845,7 @@ describe("vaults shared with the user", () => {
     await within(drawer()).findByRole("button", { name: "Board" });
     // The folder's menu, then the note's.
     expect(await menuItems("Actions for Board")).toContain("Rename or move");
-    expect(await menuItems("Actions for Board", 1)).toEqual(["Rename or move", "Delete note"]);
+    expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
     const items = await menuItems("Actions for Beete");
     expect(items).toContain("Board");
     // A member may pair her own device; sharing and the embedding provider stay the owner's.

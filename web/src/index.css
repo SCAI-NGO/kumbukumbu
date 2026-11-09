@@ -25,6 +25,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5c4a0c;
 }
 
 [data-scheme="catppuccin-mocha"] {
@@ -45,6 +46,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5a4a1c;
 }
 
 [data-scheme="catppuccin-latte"] {
@@ -65,6 +67,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #fbe68f;
 }
 
 [data-scheme="tokyo-night"] {
@@ -85,6 +88,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5c4a1c;
 }
 
 [data-scheme="tokyo-night-day"] {
@@ -105,6 +109,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #f5e283;
 }
 
 [data-scheme="gruvbox-dark"] {
@@ -125,6 +130,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #6b5212;
 }
 
 [data-scheme="gruvbox-light"] {
@@ -145,6 +151,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #f9dc6c;
 }
 
 [data-scheme="nord"] {
@@ -165,6 +172,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #635533;
 }
 
 [data-scheme="dracula"] {
@@ -185,6 +193,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5e5318;
 }
 
 [data-scheme="solarized-dark"] {
@@ -205,6 +214,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5b4a00;
 }
 
 [data-scheme="solarized-light"] {
@@ -225,6 +235,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #f6dd75;
 }
 
 [data-scheme="everforest-dark"] {
@@ -245,6 +256,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5e5130;
 }
 
 [data-scheme="everforest-light"] {
@@ -265,6 +277,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #f7e38c;
 }
 
 [data-scheme="rose-pine"] {
@@ -285,6 +298,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5e4a22;
 }
 
 [data-scheme="rose-pine-dawn"] {
@@ -305,6 +319,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #fbe39c;
 }
 
 [data-scheme="one-dark"] {
@@ -325,6 +340,7 @@
   --discreet: #ffd27f;
   --discreet-line: #ffd27f;
   --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
+  --highlight: #5f4c1e;
 }
 
 [data-scheme="one-light"] {
@@ -345,6 +361,7 @@
   --discreet: #643b00;
   --discreet-line: #a05800;
   --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
+  --highlight: #fff09a;
 }
 
 @theme inline {
@@ -365,6 +382,7 @@
   --color-discreet: var(--discreet);
   --color-discreet-line: var(--discreet-line);
   --color-discreet-soft: var(--discreet-soft);
+  --color-highlight: var(--highlight);
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }

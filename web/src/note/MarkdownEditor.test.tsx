@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { routerFuture, routes } from "../router";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { presenceKey, useSyncStatus } from "../state/sync";
+import { resetRenames } from "./nameFromHeading";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
@@ -570,5 +575,444 @@ describe("[[ completion", () => {
     expect(screen.getByRole("listbox", { name: "Notes to link" })).toBeInTheDocument();
     await u.keyboard("{Tab}");
     expect(editorBox().value).toBe(`${source} [[roadmap]]`);
+  });
+});
+
+describe("Named from its heading", () => {
+  const UNTITLED = "/Home/Garden/Untitled.md";
+  const untitledUrl = "/notes/Home/Garden/Untitled.md";
+  const BEET = "/Home/Garden/Beet.md";
+  type Move = { from: string; to: string; keepLinks: boolean; exact: boolean };
+
+  // Unmounted first, as above: the store's change would otherwise reach a mounted shell outside act().
+  afterEach(() => {
+    cleanup();
+    resetRenames();
+    useSyncStatus.setState({ editors: {} });
+  });
+
+  /** The vault Home with its notes; PUTs and moves change them, and every PUT and move is logged in order. */
+  function gardenApi({
+    notes = { [UNTITLED]: "# ", [BEET]: "Beet text." },
+    move,
+    tree: treeHook,
+    extra = {},
+  }: {
+    notes?: Record<string, string>;
+    move?: (body: Move) => Response | Promise<Response>;
+    /** Runs before each tree answer; what it awaits holds that answer. */
+    tree?: () => void | Promise<void>;
+    extra?: Parameters<typeof fakeApi>[0];
+  } = {}) {
+    const access = { level: "owner" };
+    const store = new Map(Object.entries(notes).map(([p, content]) => [p, { content, version: "v1" }]));
+    const log: string[] = [];
+    const puts: { path: string; content: string }[] = [];
+    const moves: Move[] = [];
+    const pathOf = (r: Request) => decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+    const tree = () => ({
+      damaged: 0,
+      root: {
+        name: "Home",
+        path: "/Home",
+        notes: [],
+        folders: [{ name: "Garden", path: "/Home/Garden", folders: [], notes: [...store.keys()].map((p) => ({ name: p.slice(p.lastIndexOf("/") + 1), path: p, size: 1 })) }],
+      },
+    });
+    const fetch = fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, [{ name: "Home", notes: store.size, level: access.level }]),
+      "GET /api/vaults/Home/tree": async () => {
+        log.push("GET tree");
+        await treeHook?.();
+        return json(200, tree());
+      },
+      "GET /api/notes/*": (r) => {
+        const note = store.get(pathOf(r));
+        return note ? json(200, noteView(pathOf(r), note.content, note.version)) : json(404, { error: "Not found." });
+      },
+      "PUT /api/notes/*": async (r) => {
+        const path = pathOf(r);
+        const { content } = (await r.json()) as { content: string };
+        log.push(`PUT ${path}`);
+        puts.push({ path, content });
+        const old = store.get(path);
+        const version = old ? `v${Number(old.version.slice(1)) + 1}` : "v1";
+        store.set(path, { content, version });
+        return json(old ? 200 : 201, noteView(path, content, version));
+      },
+      "POST /api/move": async (r) => {
+        const body = (await r.json()) as Move;
+        moves.push(body);
+        log.push(`MOVE ${body.from} → ${body.to}`);
+        const answer = move && (await move(body));
+        if (answer && !answer.ok) return answer;
+        const note = store.get(body.from);
+        if (!note) return json(404, { error: `There is no note at ${body.from}.` });
+        store.delete(body.from);
+        store.set(body.to, note);
+        return json(200, { message: `Moved ${body.from} to ${body.to}`, path: body.to, version: note.version });
+      },
+      "GET /api/links/*": () => json(200, []),
+      "GET /api/backlinks/*": () => json(200, []),
+      "GET /api/changes": () => json(200, []),
+      "GET /api/member-notices": () => json(200, []),
+      ...extra,
+    });
+    return { fetch, log, puts, moves, store, access };
+  }
+
+  async function writeIn(url: string, queryClient?: QueryClient) {
+    const u = typist();
+    const router = renderApp(url, queryClient);
+    await u.click(await screen.findByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    return { u, router };
+  }
+  const read = (u: ReturnType<typeof typist>) => u.click(screen.getByRole("button", { name: "Read" }));
+  // Exact: a folder of that name appearing meanwhile can't take the note in.
+  const named = (to: string, from = UNTITLED): Move => ({ from, to, keepLinks: false, exact: true });
+  const openInTree = async (u: ReturnType<typeof typist>, name: string) => {
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name }));
+  };
+  const menuItems = async (u: ReturnType<typeof typist>, label: string) => {
+    await u.click(screen.getByRole("button", { name: label }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await u.keyboard("{Escape}");
+    return items;
+  };
+
+  it("starts a new note with `# ` and the caret after it", async () => {
+    const { puts } = gardenApi({ notes: { [BEET]: "Beet text." } });
+    const u = typist();
+    const router = renderApp("/notes/Home/Garden/Beet.md");
+    await screen.findByText("Beet text.");
+    await u.click(screen.getByRole("button", { name: "New" }));
+    await u.click(screen.getByRole("menuitem", { name: "New note" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(untitledUrl));
+    expect(puts).toEqual([{ path: UNTITLED, content: "# " }]);
+    await waitFor(() => expect(editorBox()).toHaveValue("# "));
+    expect(editorBox()).toHaveFocus();
+    expect([editorBox().selectionStart, editorBox().selectionEnd]).toEqual([2, 2]);
+  });
+
+  it("names the note on Read, after its last save, and the URL follows", async () => {
+    const { log, moves, store } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+    expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md")]);
+    expect(log.filter((l) => !l.startsWith("GET")).at(-1)).toBe(`MOVE ${UNTITLED} → /Home/Garden/Einkaufsliste.md`);
+    expect(store.get("/Home/Garden/Einkaufsliste.md")?.content).toBe("# Einkaufsliste");
+    expect(useEditor.getState().currentPath).toBe("/Home/Garden/Einkaufsliste.md");
+    // Found, not held on to: the note is read again after the move, which may render the heading anew.
+    await screen.findByRole("heading", { level: 1, name: "Einkaufsliste" });
+  });
+
+  it("leaves highlight and maths marks out of the name", async () => {
+    const { moves } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "==Tomaten== $x$");
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Tomaten%20x.md"));
+    expect(moves).toEqual([named("/Home/Garden/Tomaten x.md")]);
+  });
+
+  it("keeps text typed just before Read", async () => {
+    const { log, puts, store } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste{Enter}{Enter}- Tomaten");
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+    const writes = log.filter((l) => !l.startsWith("GET"));
+    expect(writes.at(-1)).toBe(`MOVE ${UNTITLED} → /Home/Garden/Einkaufsliste.md`);
+    expect(writes.slice(0, -1).every((l) => l === `PUT ${UNTITLED}`)).toBe(true);
+    expect(puts.at(-1)?.content).toBe("# Einkaufsliste\n\n- Tomaten");
+    expect(store.get("/Home/Garden/Einkaufsliste.md")?.content).toBe("# Einkaufsliste\n\n- Tomaten");
+  });
+
+  it("names it when another note opens, and stays on that note", async () => {
+    const { moves } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "Beet" }));
+    await waitFor(() => expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md")]));
+    await wait(50);
+    expect(router.state.location.pathname).toBe("/notes/Home/Garden/Beet.md");
+    expect(useEditor.getState().currentPath).toBe(BEET);
+    expect(useEditor.getState().recentPaths.slice(0, 2)).toEqual([BEET, "/Home/Garden/Einkaufsliste.md"]);
+    expect(useEditor.getState().recentPaths).not.toContain(UNTITLED);
+    await screen.findByText("Beet text.");
+  });
+
+  it("names it when leaving the notes for Settings", async () => {
+    const { moves } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await act(() => router.navigate("/settings"));
+    await waitFor(() => expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md")]));
+    await wait(50);
+    expect(router.state.location.pathname).toBe("/settings");
+    expect(useEditor.getState().recentPaths[0]).toBe("/Home/Garden/Einkaufsliste.md");
+    expect(useEditor.getState().recentPaths).not.toContain(UNTITLED);
+  });
+
+  it("leaves a named note alone", async () => {
+    const { moves, puts } = gardenApi({ notes: { "/Home/Garden/Markt.md": "# Einkaufsliste Samstag" } });
+    const { u } = await writeIn("/notes/Home/Garden/Markt.md");
+    await u.type(editorBox(), "!");
+    await read(u);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await wait(50);
+    expect(puts).toEqual([{ path: "/Home/Garden/Markt.md", content: "# Einkaufsliste Samstag!" }]);
+    expect(moves).toEqual([]);
+  });
+
+  it("renames an Obsidian `Untitled 1.md`", async () => {
+    const { moves } = gardenApi({ notes: { "/Home/Garden/Untitled 1.md": "" } });
+    const { u, router } = await writeIn("/notes/Home/Garden/Untitled%201.md");
+    await u.type(editorBox(), "# Beet");
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Beet.md"));
+    expect(moves).toEqual([named(BEET, "/Home/Garden/Untitled 1.md")]);
+  });
+
+  it("skips while someone else edits the note", async () => {
+    const { moves } = gardenApi();
+    const { u } = await writeIn(untitledUrl);
+    act(() => useSyncStatus.setState({ editors: { [presenceKey("Home", "Garden/Untitled.md")]: ["Bob"] } }));
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await wait(50);
+    expect(moves).toEqual([]);
+  });
+
+  it("sends no move while text is unsaved", async () => {
+    const { moves, puts } = gardenApi({ notes: { [UNTITLED]: "# Einkaufsliste" } });
+    const { u } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "{Enter}- Tomaten");
+    // Write mode ended under the editor, without its guard (a role lowered meanwhile): what was typed is sent as it
+    // goes, and a move now could overtake that save.
+    act(() => useEditor.getState().setMode("read"));
+    await wait(50);
+    await waitFor(() => expect(puts.at(-1)).toEqual({ path: UNTITLED, content: "# Einkaufsliste\n- Tomaten" }));
+    expect(moves).toEqual([]);
+  });
+
+  it("says so when the move fails, once", async () => {
+    const { moves, store } = gardenApi({ move: () => json(409, { error: "There is a note named Einkaufsliste.md there already." }) });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't name the note from its heading: There is a note named Einkaufsliste.md there already.");
+    expect(router.state.location.pathname).toBe(untitledUrl);
+    expect(store.get(UNTITLED)?.content).toBe("# Einkaufsliste");
+
+    // Said for that note only; coming back to it without a new Write session sends nothing again.
+    await openInTree(u, "Beet");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Beet.md"));
+    expect(screen.queryByText(/Couldn't name the note/)).not.toBeInTheDocument();
+    await openInTree(u, "Untitled");
+    await waitFor(() => expect(router.state.location.pathname).toBe(untitledUrl));
+    await screen.findByText(/Couldn't name the note/);
+    await wait(50);
+    expect(moves).toHaveLength(1);
+  });
+
+  it("gives up after 15 s without an answer, says so, and lets Write mode start again", async () => {
+    const { moves } = gardenApi({ move: () => new Promise<Response>(() => {}) });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Write" })).toBeDisabled();
+    await wait(15_000);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't name the note from its heading: The server didn't answer in time.");
+    expect(screen.getByRole("button", { name: "Write" })).toBeEnabled();
+    expect(router.state.location.pathname).toBe(untitledUrl);
+  });
+
+  it("leaves a note alone that was moved by hand from Write mode", async () => {
+    const { moves } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "Actions for Untitled" }));
+    await u.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+    const dialog = await screen.findByRole("dialog", { name: /Rename or move/ });
+    await u.clear(within(dialog).getByLabelText("Name"));
+    await u.type(within(dialog).getByLabelText("Name"), "Markt");
+    await u.click(within(dialog).getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Markt.md"));
+    await wait(100);
+    expect(moves).toEqual([{ from: UNTITLED, to: "/Home/Garden/Markt.md", keepLinks: false, exact: false }]);
+    expect(screen.queryByText(/Couldn't name the note/)).not.toBeInTheDocument();
+  });
+
+  it("names two untitled notes left one after the other, each by a fresh look at the folder", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { moves } = gardenApi({
+      notes: { [UNTITLED]: "# ", "/Home/Garden/Untitled 2.md": "# ", [BEET]: "Beet text." },
+      move: (body) => (body.from === UNTITLED ? gate.then(() => json(200, {})) : json(200, {})),
+    });
+    const { u } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(moves).toHaveLength(1));
+
+    await openInTree(u, "Untitled 2");
+    await u.click(await screen.findByRole("button", { name: "Write" }));
+    await u.type(await screen.findByRole("textbox", { name: "Markdown source" }), "Einkaufsliste");
+    await openInTree(u, "Beet");
+    await screen.findByText("Beet text.");
+    await wait(50);
+    expect(moves).toHaveLength(1);
+
+    await act(async () => release());
+    await waitFor(() => expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md"), named("/Home/Garden/Einkaufsliste 2.md", "/Home/Garden/Untitled 2.md")]));
+  });
+
+  it("offers no Rename or move for the note while it is being named", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { moves } = gardenApi({ move: () => gate.then(() => json(200, {})) });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(await menuItems(u, "Note actions")).not.toContain("Rename or move");
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    expect(await menuItems(u, "Actions for Untitled")).not.toContain("Rename or move");
+    expect(await menuItems(u, "Actions for Beet")).toContain("Rename or move");
+
+    await act(async () => release());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+    await screen.findByRole("button", { name: "Actions for Einkaufsliste" });
+    expect(await menuItems(u, "Actions for Einkaufsliste")).toContain("Rename or move");
+  });
+
+  it("leaves it alone once the vault is only read", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { moves, puts, access } = gardenApi();
+    const { u } = await writeIn(untitledUrl, queryClient);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await waitFor(() => expect(puts.at(-1)?.content).toBe("# Einkaufsliste"));
+    // The role was lowered: the vault list read again says so, and Write mode ends.
+    access.level = "read";
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await wait(100);
+    expect(moves).toEqual([]);
+  });
+
+  it("stops when the session ends while it looks at the folder", async () => {
+    let holding = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { moves } = gardenApi({ tree: () => (holding ? gate : undefined) });
+    const { u } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    holding = true;
+    await read(u);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await wait(50);
+    act(() => useSession.getState().reset());
+    await act(async () => release());
+    await wait(100);
+    expect(moves).toEqual([]);
+    expect(screen.queryByText(/Couldn't name the note/)).not.toBeInTheDocument();
+  });
+
+  it("sends no move when the user signs out from Write mode", async () => {
+    const { moves, puts } = gardenApi({ extra: { "DELETE /api/session": () => noContent() } });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    await act(async () => void fireEvent.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "Sign out" })));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    await wait(100);
+    expect(puts.at(-1)?.content).toBe("# Einkaufsliste");
+    expect(moves).toEqual([]);
+  });
+
+  it("doesn't enter Write while the move is in flight, and saves nothing to the old path after it", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { log, moves } = gardenApi({ move: () => gate.then(() => json(200, {})) });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(moves).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Write" })).toBeDisabled();
+    act(() => useEditor.getState().setMode("write"));
+    expect(useEditor.getState().mode).toBe("read");
+    act(() => useEditor.getState().openNote(UNTITLED, "write"));
+    expect(useEditor.getState().mode).toBe("read");
+
+    await act(async () => release());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+    await wait(1000);
+    expect(log.slice(log.indexOf(`MOVE ${UNTITLED} → /Home/Garden/Einkaufsliste.md`))).not.toContain(`PUT ${UNTITLED}`);
+  });
+
+  it("opens a second new note and stays on it", async () => {
+    const { puts } = gardenApi();
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+
+    await u.click(screen.getByRole("button", { name: "New" }));
+    await u.click(screen.getByRole("menuitem", { name: "New note" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(untitledUrl));
+    expect(puts.at(-1)).toEqual({ path: UNTITLED, content: "# " });
+    await waitFor(() => expect(editorBox()).toHaveValue("# "));
+    await wait(100);
+    expect(router.state.location.pathname).toBe(untitledUrl);
+    expect(useEditor.getState()).toMatchObject({ currentPath: UNTITLED, mode: "write" });
+  });
+
+  it("sends nothing for an untitled note without a heading", async () => {
+    const { log, moves } = gardenApi();
+    const { u } = await writeIn(untitledUrl);
+    await wait(50);
+    const before = log.length;
+    await read(u);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await wait(50);
+    expect(log.slice(before)).not.toContain("GET tree");
+    expect(moves).toEqual([]);
+  });
+
+  it("moves once under StrictMode, when Write mode really ends", async () => {
+    const { moves } = gardenApi({ notes: { [UNTITLED]: "# Beet" } });
+    const u = typist();
+    const router = createMemoryRouter(routes, { initialEntries: [untitledUrl], future: routerFuture });
+    render(
+      <StrictMode>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    await u.click(await screen.findByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    await wait(100);
+    expect(moves).toEqual([]);
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Beet.md"));
+    await wait(100);
+    expect(moves).toEqual([named(BEET)]);
   });
 });

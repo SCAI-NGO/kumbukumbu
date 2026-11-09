@@ -11,6 +11,7 @@ import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
+import { cancelRename, scheduleRename } from "./nameFromHeading";
 import { useAutosave } from "./useAutosave";
 
 /**
@@ -51,7 +52,7 @@ export default function MarkdownEditor({
         : Promise.reject(new Error("Signed out")),
     draft,
   );
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved, savedText } = autosave;
   const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [initialScroll] = useState(() => takeScrollTop?.());
@@ -62,6 +63,8 @@ export default function MarkdownEditor({
   // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
   const [dismissed, setDismissed] = useState<string | null>(null);
   const gone = !!elsewhere?.gone;
+  const goneRef = useRef(gone);
+  goneRef.current = gone;
   const newer = gone ? null : elsewhere?.change;
   useEffect(() => {
     if (gone) stop();
@@ -100,7 +103,10 @@ export default function MarkdownEditor({
 
   // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
   useLayoutEffect(() => {
-    textarea.current?.focus({ preventScroll: true });
+    const area = textarea.current;
+    area?.focus({ preventScroll: true });
+    // A new note: the caret after its `# `, where the title goes (a focus by script leaves it at the start in Chrome).
+    if (area?.value === "# ") area.setSelectionRange(2, 2);
   }, []);
 
   useEffect(() => {
@@ -117,6 +123,16 @@ export default function MarkdownEditor({
       if (!user && previousUser && text) useEditor.getState().setDraft({ username: previousUser, path, ...text });
     };
   }, [path, unsaved]);
+
+  useEffect(() => {
+    // Mounted again at once (StrictMode): that was no leaving Write mode.
+    cancelRename(path);
+    return () => {
+      // Write mode ended (Read, another note, another page) with everything saved: an untitled note takes its name
+      // from the heading it was saved with. Never with text unsaved: the move would leave it behind.
+      if (!unresolved() && !goneRef.current) scheduleRename(queryClient, path, savedText());
+    };
+  }, [path, unresolved, savedText, queryClient]);
 
   useEffect(() => {
     useEditor.getState().setBeforeRead(async ({ reread = true } = {}) => {

@@ -50,6 +50,11 @@ describe("colour schemes", () => {
       expect(contrast(scheme.tokens.success, scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
     });
 
+    // `==highlighted==` text in the note view.
+    it("text on highlight is at least 4.5:1", () => {
+      expect(contrast(scheme.tokens.text, scheme.tokens.highlight)).toBeGreaterThanOrEqual(4.5);
+    });
+
     it("on-accent on accent is at least 4.5:1", () => {
       expect(contrast(scheme.tokens.onAccent, scheme.tokens.accent)).toBeGreaterThanOrEqual(4.5);
     });

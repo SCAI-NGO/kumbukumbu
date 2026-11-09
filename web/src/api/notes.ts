@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useDiscreet } from "../discreet/state";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
 import { isVaultBusy } from "./error-text";
-import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
+import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
 
@@ -154,6 +154,9 @@ export const useTree = (vault: string | null) =>
     refetchInterval: whileBusy,
   });
 
+/** What a tree entry is: an image, PDF or text file the vault keeps, or a note. */
+export const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
+
 /** The folder at `path` (`/Work/projects`) in a vault's tree, if it is there. */
 export function findFolder(root: TreeFolder, path: string): TreeFolder | undefined {
   if (root.path === path) return root;
@@ -182,7 +185,8 @@ export function useCreateUntitled() {
       // In the board's folder a note is a card: one made as a plain note would only be a problem on the board.
       if (folder === `/${vault}/Board` && at?.notes.some((n) => n.name === "Board.md")) return addToFirstColumn(queryClient, vault, name.slice(0, -".md".length));
       const path = [...rest, name].join("/");
-      const note = await call(api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault, path } }, body: { content: "" } }));
+      // Typing the title comes first; the heading then names the note (note/nameFromHeading.ts).
+      const note = await call(api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault, path } }, body: { content: "# " } }));
       return note.path;
     },
     onSettled: (_, __, folder) => {
@@ -291,22 +295,25 @@ export function useSaveNote(path: string) {
   });
 }
 
+export type MoveResult = components["schemas"]["MovedView"];
+
 /**
  * Moves (or renames) a note, or a folder with every note below it (`from` ending in `/`), within its vault. The
  * server rewrites the links the move would break, in one batch with the move, and says so in `message`.
  */
+export async function moveNote(queryClient: QueryClient, from: string, to: string, { exact = false, signal }: { exact?: boolean; signal?: AbortSignal } = {}): Promise<MoveResult> {
+  const result = await call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact }, signal }));
+  const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
+  for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
+  // Rewritten links changed other notes' text: every note, link and backlink is asked again.
+  // Marks and publications move with their notes and folders.
+  for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search", "publications", "publication"]) void queryClient.invalidateQueries({ queryKey: [key] });
+  return result;
+}
+
 export function useMove() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ from, to }: { from: string; to: string }) => call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact: false } })),
-    onSuccess: (_, { from }) => {
-      const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
-      for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
-      // Rewritten links changed other notes' text: every note, link and backlink is asked again.
-      // Marks and publications move with their notes and folders.
-      for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search", "publications", "publication"]) void queryClient.invalidateQueries({ queryKey: [key] });
-    },
-  });
+  return useMutation({ mutationFn: ({ from, to }: { from: string; to: string }) => moveNote(queryClient, from, to) });
 }
 
 /**

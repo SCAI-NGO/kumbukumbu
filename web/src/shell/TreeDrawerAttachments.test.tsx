@@ -108,6 +108,41 @@ describe("attachments in the tree", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete report.pdf?" })).toBeNull());
   });
 
+  it("offers an attachment Copy file path only, and says inside the drawer it was copied", async () => {
+    await openDrawer();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for report.pdf" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items[0]).toBe("Copy file path");
+    expect(items).not.toContain("Copy link");
+    expect(items).not.toContain("Copy markdown link");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy file path" }));
+    expect(writeText).toHaveBeenCalledWith("/Work/report.pdf");
+    expect(await within(drawer()).findByText("Copied")).toBeInTheDocument();
+  });
+
+  it("says inside the drawer when a copy fails", async () => {
+    await openDrawer();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
+    expect(await within(drawer()).findByText("Couldn't copy. Copy it by hand.")).toBeInTheDocument();
+  });
+
+  it("gives a note of a read-only vault a menu with the three copy items and nothing that writes", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    await openDrawer({
+      "GET /api/vaults": () =>
+        json(200, [{ name: "Work", notes: 4, embeddings: "internal", pending: false, canWrite: false, level: "read", shared: true, owner: '"Alice"', membership: "m1" }]),
+    });
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Copy markdown link" }));
+    expect(writeText).toHaveBeenCalledWith("[plan](/plan.md)");
+  });
+
   it("deletes a note from its menu in the tree and stays on the open note when that is another", async () => {
     const deleted: string[] = [];
     const router = await openDrawer(

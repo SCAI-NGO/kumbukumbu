@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useTree, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
@@ -25,6 +25,7 @@ import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
+import { copyItems, noteNames } from "./copyItems";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -35,6 +36,7 @@ import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { publishingItems } from "./publishingItems";
+import { useCopied } from "./useCopied";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -138,6 +140,11 @@ export default function MobileShell() {
   const dockLevel = useLevel(activeVault);
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
+  // The note's vault's tree, which says whether its bare name is unique for Copy link. The drawer reads the same
+  // query; read here it is also there before the drawer was first opened, so Copy link gives the same form either way.
+  const noteTree = useTree(path ? vaultOf(path) : null);
+  const noteNamesInVault = useMemo(() => noteTree.data && noteNames(noteTree.data.root), [noteTree.data]);
+  const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   useSyncSocket();
@@ -203,6 +210,21 @@ export default function MobileShell() {
   useEffect(() => {
     if (path && path !== useEditor.getState().currentPath && !useDiscreet.getState().hiding) useEditor.getState().openNote(path);
   }, [path]);
+
+  // A note named from its heading: the URL goes along, unless the user has gone on to another note meanwhile.
+  const shownPath = useRef(path);
+  shownPath.current = path;
+  useEffect(() => {
+    const follow = (from: string, to: string) => {
+      if (shownPath.current === from) navigate(noteUrl(to), { replace: true });
+    };
+    useEditor.getState().setFollow(follow);
+    return () => {
+      if (useEditor.getState().follow === follow) useEditor.getState().setFollow(null);
+    };
+  }, [navigate]);
+  const renaming = useEditor((s) => !!path && s.renaming.includes(path));
+  const renameProblem = useEditor((s) => (s.renameProblem && s.renameProblem.path === s.currentPath ? s.renameProblem.text : null));
 
   // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field), and
   // Rename or move finds its dialog loaded.
@@ -270,7 +292,8 @@ export default function MobileShell() {
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {framed && <DiscreetFrame />}
-      <TopBar path={path} writable={!readOnlyNote} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      {/* No Write mode while the note is being named: a save would make it again at its old path. */}
+      <TopBar path={path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       {framed && (
         <div className="flex-none px-3 pt-2">
           <DiscreetPill />
@@ -294,11 +317,17 @@ export default function MobileShell() {
               {errorText(createUntitled.error)}
             </p>
           )}
+          {renameProblem && (
+            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+              {renameProblem}
+            </p>
+          )}
           {marking.error && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
               {errorText(marking.error)}
             </p>
           )}
+          {copied.status}
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
@@ -310,10 +339,12 @@ export default function MobileShell() {
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
+                      ...copyItems(path, noteNamesInVault, true, copied.copy),
                       ...publishingActions,
                       ...(noteChanges
                         ? [
-                            { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                            // Not while it is being named from its heading: a name given by hand must not lose that race.
+                            ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
                           ]
                         : []),

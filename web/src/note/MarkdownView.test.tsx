@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { fakeApi, json } from "../test/app";
 import type { LinkView } from "./wikiLinks";
 import { useEditor } from "../state/editor";
 import MarkdownView from "./MarkdownView";
@@ -30,6 +32,7 @@ function show(
   links: LinkView[] = [],
   handlers: Partial<{ onToggleTask(line: number): void; onCreateMissing(target: string): void }> = {},
   highlight: { lines: Set<number> | "all"; writer: string } | null = null,
+  find: { query: string; current: number } | null = null,
 ) {
   render(
     <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -40,6 +43,7 @@ function show(
         onToggleTask={handlers.onToggleTask ?? vi.fn()}
         onCreateMissing={handlers.onCreateMissing ?? vi.fn()}
         highlight={highlight}
+        find={find}
       />
     </MemoryRouter>,
   );
@@ -269,10 +273,11 @@ describe("MarkdownView", () => {
     show("Text.[^Grüße]\n\n[^Grüße]: The note.");
     const ref = screen.getByRole("link", { name: "1" });
     expect(fireEvent.click(ref)).toBe(false);
-    expect(scrolled).toEqual(["user-content-fn-gr%C3%BCsse"]);
+    // Each view prefixes its footnote ids of its own (`user-content-r0-`).
+    expect(scrolled).toEqual([expect.stringMatching(/^user-content-.*fn-gr%C3%BCsse$/)]);
     const back = screen.getByRole("link", { name: /back to reference/i });
     expect(fireEvent.click(back)).toBe(false);
-    expect(scrolled).toEqual(["user-content-fn-gr%C3%BCsse", "user-content-fnref-gr%C3%BCsse"]);
+    expect(scrolled).toEqual([expect.stringMatching(/fn-gr%C3%BCsse$/), expect.stringMatching(/^user-content-.*fnref-gr%C3%BCsse$/)]);
   });
 
   it("does not load images; it names them instead", () => {
@@ -442,5 +447,395 @@ describe("tags in the text", () => {
     expect(screen.queryByRole("button", { name: /^Notes tagged/ })).not.toBeInTheDocument();
     expect(screen.getByText("#code")).toBeInTheDocument();
     expect(screen.getByText("#fenced")).toBeInTheDocument();
+  });
+});
+
+describe("highlights and comments", () => {
+  const marks = () => [...document.querySelectorAll<HTMLElement>("mark[data-highlight]")];
+
+  it("hides comments before it looks for highlights", () => {
+    show("%%==%% text ==x==");
+    expect(marks().map((m) => m.textContent)).toEqual(["x"]);
+    expect(screen.getByText(/text/).tagName).toBe("P");
+  });
+
+  it("matches a long line of openers without a closer in linear time", () => {
+    const started = performance.now();
+    show("==a ".repeat(20000));
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("leaves %% and == in a bare URL alone", () => {
+    show("See https://x.com/a%%20b and more\n\nAnd https://x.com/?a==b== too");
+    expect(screen.getByRole("link", { name: "https://x.com/a%%20b" })).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("and more");
+    expect(screen.getByRole("link", { name: "https://x.com/?a==b==" })).toBeInTheDocument();
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("keeps escaped delimiters as written", () => {
+    show("\\==x== and \\=\\=y\\=\\=\n\n\\%%a\\%% and \\%\\%b\\%\\%\n\n\\\\==z==");
+    expect(document.body).toHaveTextContent("==x== and ==y==");
+    expect(document.body).toHaveTextContent("%%a%% and %%b%%");
+    // An escaped backslash escapes no delimiter.
+    expect(marks().map((m) => m.textContent)).toEqual(["z"]);
+  });
+
+  it("drops an empty item inside a comment, and keeps one outside", () => {
+    show("%%\n\n- \n- one\n\n%%\n\n- \n- kept");
+    expect(screen.getAllByRole("listitem").map((li) => li.textContent?.trim())).toEqual(["", "kept"]);
+  });
+
+  it("hides a task whose whole text is a comment, as any block a comment empties; and keeps ====x==== as written", () => {
+    show("- [ ] %%todo%%\n- [ ] buy %%soon%%\n\n====x====");
+    expect(screen.getAllByRole("checkbox").map((c) => c.getAttribute("aria-label"))).toEqual(["buy"]);
+    expect(document.body).not.toHaveTextContent(/todo|soon/);
+    expect(marks()).toHaveLength(0);
+    expect(screen.getByText("====x====")).toBeInTheDocument();
+  });
+
+  it("renders ==text== as a highlight and hides %%text%%", () => {
+    show("- ==Tomaten== %%die gelben%%");
+    expect(marks().map((m) => m.textContent)).toEqual(["Tomaten"]);
+    expect(marks()[0]).toHaveClass("bg-highlight");
+    expect(screen.queryByText(/die gelben/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("%%");
+  });
+
+  it("leaves comparisons and code as written", () => {
+    show("a == b and c == d\n\n`==x==`\n\n```\n==x== %%y%%\n```");
+    expect(marks()).toHaveLength(0);
+    expect(screen.getByText("a == b and c == d")).toBeInTheDocument();
+    expect(screen.getByText("==x==").tagName).toBe("CODE");
+    expect(screen.getByText("==x== %%y%%").tagName).toBe("CODE");
+  });
+
+  it("holds emphasis, links and tags inside one highlight", () => {
+    show("==a *b* [[c]]==\n\n==[[c]]==\n\n==#tag==\n\n==a #tag==", [link(1, "[[c]]", "note", "/W/c.md"), link(3, "[[c]]", "note", "/W/c.md")]);
+    const [first, second, third, fourth] = marks();
+    expect(marks()).toHaveLength(4);
+    expect(first).toHaveTextContent("a b c");
+    expect(within(first).getByText("b").tagName).toBe("EM");
+    expect(within(first).getByRole("link", { name: "c" })).toHaveAttribute("href", "/notes/W/c.md");
+    expect(within(second).getByRole("link", { name: "c" })).toHaveAttribute("href", "/notes/W/c.md");
+    // A tag needs whitespace before its `#`, as on the server.
+    expect(third).toHaveTextContent("#tag");
+    expect(within(third).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(fourth).getByRole("button", { name: "Notes tagged #tag" })).toBeInTheDocument();
+  });
+
+  it("never highlights across lines", () => {
+    show("==a\nb==");
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("works inside a callout", () => {
+    show("> [!note] T\n> ==x== %%y%%");
+    const box = document.querySelector("[data-callout]")!;
+    expect(box.querySelector("mark[data-highlight]")).toHaveTextContent("x");
+    expect(box).not.toHaveTextContent("y");
+  });
+
+  it("hides a comment over several blocks, and an unclosed one to the end", () => {
+    show("%%\n# Hidden\n\nmore\n%%\nShown");
+    expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
+    expect(screen.queryByText(/more/)).not.toBeInTheDocument();
+    expect(screen.getByText("Shown")).toBeInTheDocument();
+    expect(document.querySelector("[data-line]")).toBeNull();
+    cleanup();
+
+    // A `%%` in code ends no comment; the code goes with it.
+    show("%%\n```\n%% code\n```\nhidden %%shown");
+    expect(document.body).not.toHaveTextContent(/code|hidden/);
+    expect(screen.getByText("shown")).toBeInTheDocument();
+  });
+
+  it("keeps a table's cells where a comment is in it, and hides a table inside one", () => {
+    show("| a %%x%% | b |\n|---|---|\n| %%c | d%% |\n| e | f |");
+    expect([...document.querySelectorAll("th, td")].map((c) => c.textContent?.trim())).toEqual(["a", "b", "", "", "e", "f"]);
+    cleanup();
+
+    show("%%\n\n| a | b |\n|---|---|\n| c | d |\n\n%%\n\nafter");
+    expect(document.querySelector("table")).toBeNull();
+    expect(screen.getByText("after")).toBeInTheDocument();
+  });
+
+  it("hides the rest of the note after a %% without its pair", () => {
+    show("Before %%after\n\n- one\n- two\n\n## Gone");
+    expect(screen.getByText(/Before/)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/after|one|two|Gone/);
+  });
+
+  it("finds no hidden text, and marks a match inside a highlight as found", () => {
+    const source = "- ==Tomaten== %%die gelben%%";
+    show(source, [], {}, null, { query: "gelben", current: 0 });
+    expect(document.querySelector("mark[data-find]")).toBeNull();
+    cleanup();
+
+    // Hidden matches aren't counted: the first one shown is the first.
+    show("%%gelben%% gelben", [], {}, null, { query: "gelben", current: 0 });
+    expect([...document.querySelectorAll("mark[data-find]")].map((m) => [m.getAttribute("data-find"), m.hasAttribute("data-current")])).toEqual([["0", true]]);
+    cleanup();
+
+    show(source, [], {}, null, { query: "Tomaten", current: 0 });
+    const found = document.querySelector<HTMLElement>("mark[data-find]")!;
+    expect(found).toHaveAttribute("data-find", "0");
+    expect(found.parentElement).toHaveAttribute("data-highlight");
+    expect(found).toHaveClass("bg-accent");
+    expect(found).not.toHaveClass("bg-highlight");
+  });
+
+  it("keeps the agent's highlight on a highlighted line", () => {
+    show("==x==", [], {}, { lines: new Set([1]), writer: "Bob" });
+    expect(document.querySelector("[data-changed]")).toHaveTextContent("x");
+    expect(marks()).toHaveLength(1);
+  });
+});
+
+describe("Maths", () => {
+  const rich = [
+    "# Garden",
+    "",
+    "## Beds",
+    "",
+    "- [ ] Sow the carrots, see [[plan]]",
+    "- [x] Water the ==tomatoes== %%every day%%",
+    "  - with #rain water",
+    "",
+    "> [!tip] Soil",
+    "> Mix in compost, [the guide](/Work/plan.md).",
+    "",
+    "| Bed | Plants |",
+    "|---|---|",
+    "| *north* | `kale` |",
+    "",
+    "```js",
+    "const area = width * height;",
+    "```",
+    "",
+    "> Alice: keep the paths clear.",
+  ].join("\n");
+
+  /** Waits for KaTeX, which loads on its own once a note has maths. */
+  const typeset = () => waitFor(() => expect(document.querySelector(".katex")).not.toBeNull());
+
+  it("renders a note without $ the same with the maths plugins as without them", async () => {
+    const links = [link(5, "[[plan]]", "note", "/Work/plan.md"), mdLink(10, "[the guide](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")];
+    const highlight = { lines: new Set([5, 17]), writer: "Bob" };
+    const html = () => document.body.innerHTML.trim();
+    show(rich, links, {}, highlight);
+    const without = html();
+    cleanup();
+
+    // The same note with a formula after it: maths loaded, the plugins run over all of it.
+    show(`${rich}\n\n$x$`, links, {}, highlight);
+    await typeset();
+    document.querySelector(".katex")!.closest("p")!.remove();
+    expect(html().replace(/\s+(<\/div><\/div>)$/, "$1")).toBe(without);
+  });
+
+  it("typesets inline maths and keeps the text around it", async () => {
+    show("Bed area: $A = \\pi r^2$");
+    await typeset();
+    expect(screen.getByText(/Bed area:/)).toBeInTheDocument();
+    expect(document.querySelector(".katex-display")).toBeNull();
+  });
+
+  it("keeps currency as text", async () => {
+    show("Price per kilo: $3\n\nIt costs $5 and $10.\n\nBed area: $A$");
+    await typeset();
+    expect(screen.getByText("Price per kilo: $3")).toBeInTheDocument();
+    expect(screen.getByText("It costs $5 and $10.")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("\\");
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+  });
+
+  it("typesets a $$ block, aligned environments included", async () => {
+    show("$$\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n$$");
+    await typeset();
+    expect(document.querySelector(".katex-display")).not.toBeNull();
+    expect(document.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("shows a one-line $$x$$ alone in its paragraph as a display", async () => {
+    show("$$x^2$$");
+    await typeset();
+    expect(document.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("keeps $x$ and $$y$$ inside a sentence inline", async () => {
+    show("$x$ in $$y$$ text");
+    await typeset();
+    expect(document.querySelectorAll(".katex")).toHaveLength(2);
+    expect(document.querySelector(".katex-display")).toBeNull();
+  });
+
+  it("leaves maths-like text in code alone", async () => {
+    show("`$x$` and $y$\n\n```math\n\\sqrt{2}\n```");
+    await typeset();
+    expect(screen.getByText("$x$").tagName).toBe("CODE");
+    expect(screen.getByText("\\sqrt{2}").closest("pre")).not.toBeNull();
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+  });
+
+  it("keeps a link's address, and finds links whose text holds a $", async () => {
+    show("[a](https://x/?p=$5) and [$5 plan](/Work/plan.md) and $y$", [mdLink(1, "[$5 plan](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")]);
+    await typeset();
+    expect(screen.getByRole("link", { name: "a" })).toHaveAttribute("href", "https://x/?p=$5");
+    expect(screen.getByRole("link", { name: "$5 plan" })).toHaveAttribute("href", "/notes/Work/plan.md");
+  });
+
+  it("hands KaTeX the formula with its $ signs", async () => {
+    show("$$\na$b\n$$\n\nand $a $ b$");
+    await waitFor(() => expect(document.querySelectorAll(".katex-error")).toHaveLength(2));
+    expect([...document.querySelectorAll(".katex-error")].map((e) => e.textContent)).toEqual(["a$b", "a $ b"]);
+  });
+
+  it("shows a formula it can't read as its source, quietly, and runs nothing", async () => {
+    const warn = vi.spyOn(console, "warn");
+    const error = vi.spyOn(console, "error");
+    try {
+      show("Broken: $\\frac{1}{$\n\nLink: $\\href{javascript:alert(1)}{x}$\n\nÄ: $ä$");
+      await waitFor(() => expect(document.querySelector(".katex-error")).not.toBeNull());
+      expect(document.querySelector(".katex-error")).toHaveTextContent("\\frac{1}{");
+      expect(document.querySelector("a")).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("never takes a $ in a wiki link or a tag for maths", async () => {
+    show("[[A$B]] and [[C$D]] and [[Plan$x$]]\n\n#a$b and #c$d\n\nArea: $y$", [
+      link(1, "[[A$B]]", "note", "/Work/A$B.md"),
+      link(1, "[[C$D]]", "note", "/Work/C$D.md"),
+      link(1, "[[Plan$x$]]", "note", "/Work/Plan$x$.md"),
+    ]);
+    await typeset();
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "A$B" })).toHaveAttribute("href", "/notes/Work/A%24B.md");
+    expect(screen.getByRole("link", { name: "C$D" })).toHaveAttribute("href", "/notes/Work/C%24D.md");
+    expect(screen.getByRole("link", { name: "Plan$x$" })).toHaveAttribute("href", "/notes/Work/Plan%24x%24.md");
+    expect(screen.getByRole("button", { name: "Notes tagged #a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notes tagged #c" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notes tagged #a" }).parentElement).toHaveTextContent("#a$b and #c$d");
+  });
+
+  it("keeps the agent's highlight on a maths block", async () => {
+    show("text\n\n$$\nx^2\n$$", [], {}, { lines: new Set([4]), writer: "Bob" });
+    await typeset();
+    expect(document.querySelector("[data-changed] .katex-display")).not.toBeNull();
+  });
+});
+
+describe("Footnotes", () => {
+  const scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled.length = 0;
+    // jsdom has no scrollIntoView.
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+    vi.unstubAllGlobals();
+  });
+
+  const reference = () => screen.getByRole("link", { name: "1" });
+  const backLink = () => screen.getByRole("link", { name: /Back to reference 1/ });
+  /** Clicks as a user would, and says whether the view kept the browser from following the link. */
+  const prevented = (element: Element) => !element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  const ids = () => [...document.querySelectorAll("[id]")].map((e) => e.id);
+
+  it("renders the reference and its definition with a back link", () => {
+    show("Sow the carrots[^1].\n\n[^1]: After the last frost.");
+    expect(reference().closest("sup")).not.toBeNull();
+    expect(reference().getAttribute("href")).toMatch(/^#user-content-.*fn-1$/);
+    const footnotes = document.querySelector<HTMLElement>("section[data-footnotes]")!;
+    expect(footnotes).toHaveTextContent("After the last frost.");
+    expect(within(footnotes).getByRole("link", { name: /Back to reference 1/ })).toBeInTheDocument();
+  });
+
+  it("keeps the generated Footnotes heading hidden", () => {
+    show("Text[^1]\n\n[^1]: The note.");
+    expect(screen.getByRole("heading", { level: 2, name: "Footnotes" })).toHaveClass("sr-only");
+  });
+
+  it("jumps from the reference to its definition and back, without following the link, and takes the focus along", () => {
+    show("Text[^1]\n\n[^1]: The note.");
+    const hash = window.location.hash;
+    const definition = document.querySelector("section[data-footnotes] li")!;
+
+    expect(prevented(reference())).toBe(true);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toBe(definition);
+    expect(document.activeElement).toBe(definition);
+
+    expect(prevented(backLink())).toBe(true);
+    expect(scrolled).toHaveLength(2);
+    expect(scrolled[1]).toBe(reference());
+    expect(document.activeElement).toBe(reference());
+
+    expect(window.location.hash).toBe(hash);
+  });
+
+  // `[x](#goals)` is the server's to resolve (remarkWikiLinks); a reference-style link reaches the `a` as written.
+  // It leaves the URL alone too (a hash would show a discreet note's real path), and finds no target: headings have no id.
+  it("keeps the URL for other fragment links too", () => {
+    show("[Goals][g] and [top][t]\n\n## Goals\n\n[g]: #goals\n[t]: #");
+    expect(prevented(screen.getByRole("link", { name: "Goals" }))).toBe(true);
+    expect(prevented(screen.getByRole("link", { name: "top" }))).toBe(true);
+    expect(scrolled).toHaveLength(0);
+  });
+
+  it("shows the back link as a text arrow, not a colour emoji", () => {
+    show("Text[^1]\n\n[^1]: The note.");
+    expect(backLink()).toHaveTextContent("↩︎");
+  });
+
+  it("gives two views of the same footnotes ids of their own", () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
+        <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(ids().length).toBeGreaterThan(0);
+    expect(new Set(ids()).size).toBe(ids().length);
+  });
+
+  it("keeps an embedded note's footnotes apart from the note's, and jumps within the embed", async () => {
+    const ROADMAP = "/Work/roadmap.md";
+    fakeApi({
+      [`GET /api/notes${ROADMAP}`]: () =>
+        json(200, { path: ROADMAP, content: "Plant kale[^1].\n\n[^1]: In March.", version: "r1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      [`GET /api/links${ROADMAP}`]: () => json(200, []),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <MarkdownView
+            source={"Sow the carrots[^1].\n\n![[roadmap]]\n\n[^1]: After the last frost."}
+            links={[link(3, "![[roadmap]]", "note", ROADMAP)]}
+            tasksDisabled={false}
+            onToggleTask={vi.fn()}
+            onCreateMissing={vi.fn()}
+            path="/Work/plan.md"
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const embed = await screen.findByRole("region", { name: "Embedded: roadmap" });
+    await within(embed).findByText("In March.");
+
+    expect(new Set(ids()).size).toBe(ids().length);
+    expect(prevented(within(embed).getByRole("link", { name: "1" }))).toBe(true);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toHaveTextContent("In March.");
+    expect(embed).toContainElement(scrolled[0] as HTMLElement);
   });
 });

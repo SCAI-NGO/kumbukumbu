@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
+import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
@@ -26,6 +26,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import { useMarking } from "./ConfirmMark";
+import { copyItems, noteNames, type NoteNames } from "./copyItems";
 import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
@@ -33,6 +34,7 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
+import { useCopied } from "./useCopied";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -45,7 +47,6 @@ export type Row =
   | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
-const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
@@ -196,27 +197,34 @@ export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment
 export type VaultSheet = { kind: "trash" | "activity" | "checkpoints" | "archive"; vault: string };
 
 /**
- * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
- * server's deletion needs, can't be deleted from here.
+ * The menu of a note or attachment, which copying gives entries at any level. An attachment moves as one (its extension
+ * kept); one without a version, which the server's deletion needs, can't be deleted from here.
  */
 function FileMenu({
   row,
+  names,
   level,
   publishing,
+  copy,
   onMove,
   onDelete,
 }: {
   row: Extract<Row, { kind: "note" }>;
+  names: NoteNames | undefined;
   level: Level;
   publishing: Publishing | null;
+  copy(text: string): void;
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
   const changes = mayChange(level, path);
+  // Not while the note is being named from its heading: a name given by hand must not lose that race.
+  const renaming = useEditor((s) => s.renaming.includes(path));
   const items: MenuItem[] = [
-    ...(changes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
+    ...copyItems(path, names, note, copy),
+    ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
     ...entriesOf(publishing, path, note),
     ...(!changes
@@ -225,7 +233,6 @@ function FileMenu({
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
   ];
-  if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />
@@ -462,6 +469,10 @@ export default function TreeDrawer(props: {
   const publications = usePublications(activeVault ?? "", ownVault && !!activeVault);
   const published = publications.data?.publications.map((p) => p.path);
   const marking = useMarking(published);
+  // Said here, not over the note: the drawer covers that on a phone.
+  const copied = useCopied("mx-[18px] mb-2.5");
+  // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
+  const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
   const publishingActions: Publishing | null = ownVault
     ? {
@@ -566,6 +577,7 @@ export default function TreeDrawer(props: {
           <FormError>{errorText(marking.error)}</FormError>
         </div>
       )}
+      {copied.status}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -594,7 +606,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} level={level} publishing={publishingActions} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>
