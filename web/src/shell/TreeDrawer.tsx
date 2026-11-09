@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -20,6 +20,7 @@ import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
 import { exportUrl } from "../data/exportUrl";
 import ExportConfirm from "../data/ExportConfirm";
+import { useMarkDiscreet } from "../discreet/api";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import PinDialog from "../discreet/PinDialog";
 import { useEditor } from "../state/editor";
@@ -515,6 +516,9 @@ export default function TreeDrawer(props: {
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose. Like pairing a
   // device with a vault shared with her, which comes later, it is the owner's alone; making a board wants `maintain`.
   const owner = level === "owner";
+  // While the discreet vaults are shown, an amber frame around the sidebar (spec §3.7), and the mark in the vault's menu.
+  const revealed = useRevealed();
+  const markDiscreet = useMarkDiscreet();
   const vaultItems: MenuItem[] = [
     ...(activeVault
       ? [
@@ -542,6 +546,20 @@ export default function TreeDrawer(props: {
         ]
       : []),
     ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
+    // Only in the mode, as the switch in Settings: outside it the menu tells nothing. The icon says what selecting does.
+    ...(revealed && active && active.kind !== "skills"
+      ? [
+          {
+            label: active.discreet ? "Not discreet" : "Discreet",
+            icon: active.discreet ? Eye : EyeOff,
+            disabled: markDiscreet.isPending,
+            onSelect: () => {
+              const next = !active.discreet;
+              markDiscreet.mutate({ vault: active.name, discreet: next }, { onSuccess: () => copied.say(next ? "Marked as discreet" : "No longer discreet") });
+            },
+          },
+        ]
+      : []),
     // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
     ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
     // A member's way out, last for the same reason. Held as chosen: leaving forgets the active vault before the dialog closes.
@@ -549,8 +567,6 @@ export default function TreeDrawer(props: {
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
-  // While the discreet vaults are shown, an amber frame around the sidebar (spec §3.7).
-  const revealed = useRevealed();
   const className = `relative flex h-full flex-col border-r border-line bg-surface ${resizing ? "select-none" : ""}`;
   // `data-autofocus` is for the drawer, a dialog that takes the focus in; the docked sidebar is a landmark beside the note.
   const panel = (
@@ -575,6 +591,11 @@ export default function TreeDrawer(props: {
       {marking.error && (
         <div className="flex-none px-[18px] pb-2.5">
           <FormError>{errorText(marking.error)}</FormError>
+        </div>
+      )}
+      {markDiscreet.isError && (
+        <div className="flex-none px-[18px] pb-2.5">
+          <FormError>{errorText(markDiscreet.error)}</FormError>
         </div>
       )}
       {copied.status}
