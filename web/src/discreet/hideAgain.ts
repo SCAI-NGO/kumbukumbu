@@ -130,8 +130,8 @@ let running: Promise<void> | null = null;
 /**
  * Hides the discreet vaults again in this tab (spec §3.8): the open discreet note saves first, then (`tell`) the
  * server hears of it; the tab closes the discreet vaults' views, drops every cached answer but the session (asked again
- * then), the console's scrollback and who edits what, forgets them in the editor's state and goes back to the last
- * ordinary vault. ✕ and the end of the time tell the server; a `hidden` frame or a session read as hidden don't need to.
+ * then), the console's scrollback and who edits what, and forgets them in the editor's state; a discreet view on screen
+ * gives way to the last ordinary note the tab showed, or to the vault overview. ✕ and the end of the time tell the server; a `hidden` frame or a session read as hidden don't need to.
  * One at a time: a second call meanwhile joins the first.
  */
 export function hideAgain(queryClient: QueryClient, navigate: NavigateFunction, { tell, pathname }: { tell: boolean; pathname: string }): Promise<void> {
