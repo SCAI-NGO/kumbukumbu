@@ -59,7 +59,8 @@ public sealed class RevealTests(MongoFixture fixture)
         var discreet = await DiscreetAsync(secret);
 
         Assert.False(discreet.Revealed);
-        Assert.Null(discreet.Until);
+        Assert.Null(discreet.RevealUntil);
+        Assert.Null(discreet.ShownUntil);
         Assert.Null(discreet.LateSave);
     }
 
@@ -69,18 +70,55 @@ public sealed class RevealTests(MongoFixture fixture)
         var secret = await SessionAsync();
         var start = Now;
 
-        var until = await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct);
+        Assert.Equal((true, (DateTime?)start.AddMinutes(5)), await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct));
 
-        Assert.Equal(start.AddMinutes(5), until);
         var revealed = await DiscreetAsync(secret);
         Assert.True(revealed.Revealed);
-        Assert.Equal(start.AddMinutes(5), revealed.Until);
+        Assert.Equal(start.AddMinutes(5), revealed.RevealUntil);
+        Assert.Equal(start.AddMinutes(5), revealed.ShownUntil);
 
         _time.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1));
         Assert.True((await DiscreetAsync(secret)).Revealed);
 
         _time.Advance(TimeSpan.FromSeconds(1));
-        Assert.False((await DiscreetAsync(secret)).Revealed);
+        var expired = await DiscreetAsync(secret);
+        Assert.False(expired.Revealed);
+        Assert.Null(expired.ShownUntil);
+        // Kept for the late save, which reads when the reveal ended.
+        Assert.Equal(start.AddMinutes(5), expired.RevealUntil);
+    }
+
+    [Fact]
+    public async Task A_reveal_answers_the_end_it_stored_to_the_millisecond()
+    {
+        var secret = await SessionAsync();
+        _time.Advance(TimeSpan.FromTicks(1_234_567));
+
+        var (revealed, until) = await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct);
+
+        Assert.True(revealed);
+        Assert.Equal(until, (await DiscreetAsync(secret)).RevealUntil);
+    }
+
+    [Fact]
+    public async Task A_reveal_of_an_ended_session_answers_not_revealed()
+    {
+        var secret = await SessionAsync();
+        await Sessions().EndAsync(secret, Ct);
+
+        Assert.False((await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct)).Revealed);
+        Assert.False((await Sessions().RevealAsync(secret, null, Ct)).Revealed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_reveal_of_a_session_idle_too_long_answers_not_revealed(bool remember)
+    {
+        var secret = await SessionAsync(remember);
+        _time.Advance((remember ? Kumbu.Server.Accounts.Sessions.RememberedIdleTimeout : Kumbu.Server.Accounts.Sessions.IdleTimeout) + TimeSpan.FromSeconds(1));
+
+        Assert.False((await Sessions().RevealAsync(secret, null, Ct)).Revealed);
     }
 
     [Fact]
@@ -89,12 +127,13 @@ public sealed class RevealTests(MongoFixture fixture)
         // Remembered, so the session outlives eleven idle hours (a normal one would end after 30 minutes).
         var secret = await SessionAsync(remember: true);
 
-        Assert.Null(await Sessions().RevealAsync(secret, null, Ct));
+        Assert.Equal((true, (DateTime?)null), await Sessions().RevealAsync(secret, null, Ct));
         _time.Advance(TimeSpan.FromHours(11));
 
         var discreet = await DiscreetAsync(secret);
         Assert.True(discreet.Revealed);
-        Assert.Null(discreet.Until);
+        Assert.Null(discreet.RevealUntil);
+        Assert.Null(discreet.ShownUntil);
 
         await Sessions().HideAsync(secret, Ct);
         Assert.False((await DiscreetAsync(secret)).Revealed);
@@ -110,7 +149,20 @@ public sealed class RevealTests(MongoFixture fixture)
 
         var discreet = await DiscreetAsync(secret);
         Assert.False(discreet.Revealed);
-        Assert.Null(discreet.Until);
+        Assert.Null(discreet.RevealUntil);
+    }
+
+    [Fact]
+    public async Task Ending_a_session_revealed_for_ever_shows_nothing_any_more()
+    {
+        var secret = await SessionAsync();
+        var subject = Kumbu.Server.Accounts.Sessions.SubjectOf(secret)!;
+        await Sessions().RevealAsync(secret, null, Ct);
+
+        await Sessions().EndAsync(secret, Ct);
+
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+        Assert.Equal(((string?)null, false), await Sessions().SocketStateAsync(subject, Ct));
     }
 
     [Fact]
@@ -145,6 +197,29 @@ public sealed class RevealTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task An_entry_after_the_tenth_reports_the_session_ended_too()
+    {
+        var secret = await SessionAsync();
+        for (var i = 0; i < 10; i++) await Sessions().PinEnteredAsync(secret, Ct);
+
+        Assert.Equal((true, (string?)null), await Sessions().PinEnteredAsync(secret, Ct));
+    }
+
+    [Fact]
+    public async Task Of_concurrent_pin_entries_the_ones_from_the_tenth_on_end_the_session_and_one_names_its_user()
+    {
+        var secret = await SessionAsync();
+        var userId = (await Sessions().ResolveAsync(secret, Ct))!.Value.User.Id;
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 15).Select(_ => Task.Run(() => Sessions().PinEnteredAsync(secret, Ct), Ct)));
+
+        Assert.Equal(Kumbu.Server.Accounts.Sessions.PinEntryLimit - 1, results.Count(r => !r.Ended));
+        Assert.Single(results, r => r.Ended && r.UserId == userId);
+        Assert.All(results, r => Assert.True(r.UserId is null || r.UserId == userId));
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+    }
+
+    [Fact]
     public async Task A_reveal_does_not_reset_the_count_of_pin_entries()
     {
         var secret = await SessionAsync();
@@ -157,9 +232,9 @@ public sealed class RevealTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task Pin_entries_for_an_unknown_session_end_nothing()
+    public async Task A_pin_entry_for_a_session_gone_reports_it_ended_and_names_nobody()
     {
-        Assert.Equal((false, null), await Sessions().PinEnteredAsync(new string('A', 43), Ct));
+        Assert.Equal((true, null), await Sessions().PinEnteredAsync(new string('A', 43), Ct));
     }
 
     [Fact]
