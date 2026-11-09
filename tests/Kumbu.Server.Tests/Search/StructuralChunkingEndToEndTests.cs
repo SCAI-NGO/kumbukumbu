@@ -145,8 +145,8 @@ public sealed class StructuralChunkingEndToEndTests(KumbuAppFactory app)
     private static async Task<(RestClient User, UnlockedVault Vault, string Key)> PdfAsync(WebApplicationFactory<Program> host)
     {
         var (user, vault, key) = await UserAsync(host);
-        await user.CreateFileAsync("Pump/P-200.pdf", Pdf("the pump's manual"));
-        await EmbeddedAsync(host, vault, "/Work/Pump/P-200.pdf");
+        var version = await user.CreateFileAsync("Pump/P-200.pdf", Pdf("the pump's manual"));
+        await EmbeddedAsync(host, vault, "/Work/Pump/P-200.pdf", version);
         return (user, vault, key);
     }
 
@@ -155,8 +155,12 @@ public sealed class StructuralChunkingEndToEndTests(KumbuAppFactory app)
         [.. Regex.Split(output, @"^(?=\d+\. /)", RegexOptions.Multiline).Where(h => h.Length > 0 && char.IsDigit(h[0]))];
 
     /// <summary>The best hit on <paramref name="path"/>, without its number.</summary>
-    private static string Hit(string output, string path) =>
-        Hits(output).Select(h => h[(h.IndexOf(' ') + 1)..]).First(h => h.StartsWith(path + " ", StringComparison.Ordinal) || h.StartsWith(path + "#", StringComparison.Ordinal));
+    private static string Hit(string output, string path)
+    {
+        var hit = Hits(output).Select(h => h[(h.IndexOf(' ') + 1)..]).FirstOrDefault(h => h.StartsWith(path + " ", StringComparison.Ordinal) || h.StartsWith(path + "#", StringComparison.Ordinal));
+        Assert.True(hit is not null, $"No hit on {path} in:\n{output}");
+        return hit;
+    }
 
     private static void TableRowFound(string output)
     {
@@ -183,7 +187,7 @@ public sealed class StructuralChunkingEndToEndTests(KumbuAppFactory app)
         Assert.Contains("\n   " + Flowers + "\n", note);
     }
 
-    /// <summary>As the ingest skill does: the page's text written into a note, beside the PDF.</summary>
+    /// <summary>As the ingest skill does: the page's text written into a note.</summary>
     private static async Task NoteAsync(WebApplicationFactory<Program> host, RestClient user, UnlockedVault vault)
     {
         var version = await user.CreateAsync("Notes/Pump page.md", "# P-200, page 1\n\n" + DensePage);
@@ -219,7 +223,7 @@ public sealed class StructuralChunkingEndToEndTests(KumbuAppFactory app)
     public async Task The_same_content_written_into_a_note_is_found()
     {
         await using var host = Host(real: false);
-        var (user, vault, key) = await PdfAsync(host);
+        var (user, vault, key) = await UserAsync(host);
         await NoteAsync(host, user, vault);
 
         var (isError, output) = await user.ShAsync("semsearch cowslips poppies cornflowers meadow /Work/Notes", key);
