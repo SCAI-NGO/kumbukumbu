@@ -257,8 +257,9 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
     /// <summary>
     /// Writes the prepared rotation inside the caller's transaction, each write only where the document still holds the
     /// value it was prepared from; then checks that no slot under the old lookup is left (but the skipped ones) and
-    /// that the user has exactly the prepared API keys, connections and WebDAV shares. <see cref="RotationConflictException"/> on any
-    /// mismatch: the caller aborts, prepares again and retries. <see cref="CredentialsChangedException"/> if the user
+    /// that the user has exactly the prepared API keys, connections and WebDAV shares, and still the list of discreet
+    /// vaults it was prepared from. <see cref="RotationConflictException"/> on any mismatch: the caller aborts, prepares
+    /// again and retries. <see cref="CredentialsChangedException"/> if the user
     /// is gone or inactive.
     /// </summary>
     public async Task ApplyAsync(IClientSessionHandle session, PreparedRotation rotation, CancellationToken ct)
@@ -285,9 +286,20 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             cancellationToken: ct));
         // The list of discreet vaults, only over the one prepared from: a mark meanwhile, under the old key, would be lost.
         var list = rotation.DiscreetList;
-        var unchanged = users.Eq(u => u.Id, userId) & users.Eq(u => u.DiscreetVaults, list.Old);
-        if (list.New is { } resealed) Require(await Users.UpdateOneAsync(session, unchanged, Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, resealed), cancellationToken: ct));
-        else if (!await Users.Find(session, unchanged).AnyAsync(ct)) throw new RotationConflictException();
+        var unchanged = users.Eq(u => u.Id, userId) & (list.Old is { } old ? users.Eq(u => u.DiscreetVaults, old) : users.Exists(u => u.DiscreetVaults, false));
+        if (list.New is { } resealed)
+        {
+            Require(await Users.UpdateOneAsync(
+                session,
+                unchanged,
+                Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, resealed),
+                cancellationToken: ct));
+        }
+        else if (!await Users.Find(session, unchanged).AnyAsync(ct))
+        {
+            // None prepared: nothing to write, but there must still be none.
+            throw new RotationConflictException();
+        }
 
         await ApplyUserSlotsAsync(session, rotation, stamp, ct);
         // The lookups first, then the member slots' wrapping: the lookup's update is conditional on the old wrapping.

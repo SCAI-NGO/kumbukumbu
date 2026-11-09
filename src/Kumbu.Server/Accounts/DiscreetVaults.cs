@@ -94,7 +94,7 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
             if (ids is null)
             {
                 log.LogWarning(
-                    "The discreet vaults of user {UserId} could not be read: {Reason}; every vault but Skills counts as discreet", userId, failure);
+                    "The discreet vaults of user {UserId} do not open: {Reason}; every vault but Skills counts as discreet", userId, failure);
                 ids = allIds.ToHashSet(StringComparer.Ordinal);
             }
 
