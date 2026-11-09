@@ -650,6 +650,34 @@ describe("the shell", () => {
   });
 });
 
+describe("the first vault", () => {
+  const skills = { name: "Skills", notes: 1, embeddings: "internal", kind: "skills" };
+  const welcome = { name: "Welcome", notes: 1, embeddings: "internal" };
+  const tree = (name: string) => () => json(200, { damaged: 0, root: { name, path: `/${name}`, folders: [], notes: [] } });
+  const vaultsApi = (vaults: object[]) =>
+    signedInApi({ "GET /api/vaults": () => json(200, vaults), "GET /api/vaults/Welcome/tree": tree("Welcome"), "GET /api/vaults/Skills/tree": tree("Skills") });
+
+  it("is the first vault that isn't the Skills vault, though Skills sorts first", async () => {
+    vaultsApi([skills, welcome]);
+    renderApp("/");
+    await waitFor(() => expect(useEditor.getState().activeVault).toBe("Welcome"));
+  });
+
+  it("is the Skills vault when there is no other", async () => {
+    vaultsApi([skills]);
+    renderApp("/");
+    await waitFor(() => expect(useEditor.getState().activeVault).toBe("Skills"));
+  });
+
+  it("leaves a vault the user chose", async () => {
+    vaultsApi([skills, welcome]);
+    useEditor.getState().setActiveVault("Skills");
+    renderApp("/");
+    await screen.findByRole("button", { name: /^Welcome/ });
+    expect(useEditor.getState().activeVault).toBe("Skills");
+  });
+});
+
 describe("vaults shared with the user", () => {
   const vault = (name: string, extra: Record<string, unknown> = {}) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false, ...extra });
   const sharedVaults = [
