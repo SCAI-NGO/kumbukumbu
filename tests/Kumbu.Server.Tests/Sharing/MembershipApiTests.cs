@@ -627,15 +627,15 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
             var (failed, text) = await bob.ShAsync("cat /Garten/plan.md", key);
             Assert.False(failed, text);
             used = await UsedAtAsync(slot, null);
+            // The update can be visible before its profiler entry is: wait for the entry rather than a fixed delay.
+            for (var i = 0; i < 50 && await UsedAtUpdatesAsync() == 0; i++) await Task.Delay(100, Ct);
+            Assert.Equal(1, await UsedAtUpdatesAsync());
             // A second use within the minute writes nothing.
             _time.Advance(TimeSpan.FromSeconds(30));
             (failed, text) = await bob.ShAsync("cat /Garten/plan.md", key);
             Assert.False(failed, text);
             await Task.Delay(300, Ct);
-            Assert.Equal(1, await app.Database.GetCollection<BsonDocument>("system.profile").CountDocumentsAsync(
-                Builders<BsonDocument>.Filter.Eq("ns", $"{app.Database.DatabaseNamespace.DatabaseName}.slots") & Builders<BsonDocument>.Filter.Eq("op", "update")
-                & Builders<BsonDocument>.Filter.Exists("command.u.$set.usedAt"),
-                cancellationToken: Ct));
+            Assert.Equal(1, await UsedAtUpdatesAsync());
         }
         finally
         {
@@ -654,6 +654,11 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         var credential = (await AccessListAsync(alice))["members"]!.AsArray().Single()!["credentials"]!.AsArray().Single()!;
         Assert.Equal(used, credential["lastUsedAt"]!.GetValue<DateTime>().ToUniversalTime());
     }
+
+    private Task<long> UsedAtUpdatesAsync() => app.Database.GetCollection<BsonDocument>("system.profile").CountDocumentsAsync(
+        Builders<BsonDocument>.Filter.Eq("ns", $"{app.Database.DatabaseNamespace.DatabaseName}.slots") & Builders<BsonDocument>.Filter.Eq("op", "update")
+        & Builders<BsonDocument>.Filter.Exists("command.u.$set.usedAt"),
+        cancellationToken: Ct);
 
     /// <summary>The slot's <c>usedAt</c> once it is other than <paramref name="before"/> (it is written beside the request).</summary>
     private async Task<DateTime> UsedAtAsync(FilterDefinition<SlotDocument> slot, DateTime? before)
