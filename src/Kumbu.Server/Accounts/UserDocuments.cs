@@ -224,4 +224,22 @@ public sealed class UserSlotDocument
     /// <summary>A remembered session: every wrong password given through it, which a right one doesn't reset.</summary>
     [BsonElement("wrongPasswordsTotal"), BsonIgnoreIfDefault]
     public int WrongPasswordsTotal { get; set; }
+
+    /// <summary>Sessions only: when the PIN last showed the discreet vaults (<see cref="Sessions.RevealAsync"/>); null
+    /// while they are hidden.</summary>
+    [BsonElement("revealedAt"), BsonIgnoreIfNull]
+    public DateTime? RevealedAt { get; set; }
+
+    /// <summary>Sessions only: when that reveal ends; null with <see cref="RevealedAt"/> set means until the session ends
+    /// or they are hidden again.</summary>
+    [BsonElement("revealUntil"), BsonIgnoreIfNull]
+    public DateTime? RevealUntil { get; set; }
+
+    /// <summary>Sessions only: every PIN entered through it, right or wrong (<see cref="Sessions.PinEnteredAsync"/>).</summary>
+    [BsonElement("pinEntries"), BsonIgnoreIfDefault]
+    public int PinEntries { get; set; }
+
+    /// <summary>Sessions only: the discreet note open while revealed, sealed, which one late save may still reach.</summary>
+    [BsonElement("lateSave"), BsonIgnoreIfNull]
+    public byte[]? LateSave { get; set; }
 }

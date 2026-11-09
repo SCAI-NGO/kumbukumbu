@@ -114,7 +114,7 @@ public sealed class CallerMiddleware(
             // tools/call with the user's session.
             if (context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
                 && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
-                    is var (user, userKey, readAt, windowOpen))
+                    is var (user, userKey, readAt, windowOpen, _))
             {
                 caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog);
                 // A remembered session may see no sign-in for 30 days, so its first request in this process resumes
