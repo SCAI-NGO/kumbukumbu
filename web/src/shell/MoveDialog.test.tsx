@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +28,7 @@ const tree = {
   },
 };
 
-function api(move: (body: unknown) => Response) {
+function api(move: (body: unknown) => Response, extra: Parameters<typeof fakeApi>[0] = {}) {
   const moves: unknown[] = [];
   const fetch = fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
@@ -43,6 +44,7 @@ function api(move: (body: unknown) => Response) {
       moves.push(body);
       return move(body);
     },
+    ...extra,
   });
   return { moves, fetch };
 }
@@ -113,6 +115,31 @@ describe("Rename or move", () => {
     expect(useEditor.getState().recentPaths[0]).toBe("/Work/archive/todo.md");
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("dialog", { name: /Rename or move/ })).not.toBeInTheDocument();
+  });
+
+  it("asks nothing more for the open note's old name once it is renamed", async () => {
+    const { fetch } = api(() => json(200, { message: "moved /Work/inbox.md to /Work/todo.md; no links needed rewriting", path: "/Work/todo.md", version: "v2" }), {
+      "GET /api/publications/*": () => json(404, { error: "Not found." }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move inbox" });
+    await userEvent.clear(within(dialog).getByLabelText("Name"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "todo");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/todo.md"));
+    await screen.findByText("Text.");
+    await new Promise((r) => setTimeout(r, 100));
+
+    const sent = fetch.mock.calls.map(([r]) => `${r.method} ${decodeURIComponent(new URL(r.url).pathname)}`);
+    const after = sent.slice(sent.indexOf("POST /api/move") + 1);
+    expect(after.filter((r) => r.includes("inbox.md"))).toEqual([]);
+    expect(after).toContain("GET /api/notes/Work/todo.md");
+    // Gone once nothing shows it: a new note at the old name later doesn't show this one's text.
+    cleanup();
+    expect(queryClient.getQueryData(["note", "/Work/inbox.md"])).toBeUndefined();
   });
 
   it("moves a folder from the tree, never into itself, and the open note below it follows", async () => {

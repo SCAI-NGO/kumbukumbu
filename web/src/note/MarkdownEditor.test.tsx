@@ -712,6 +712,25 @@ describe("Named from its heading", () => {
     await screen.findByRole("heading", { level: 1, name: "Einkaufsliste" });
   });
 
+  it("asks nothing more for the old name once the note is named", async () => {
+    const { fetch } = gardenApi({ extra: { "GET /api/publications/*": () => json(404, { error: "Not found." }) } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { u, router } = await writeIn(untitledUrl, queryClient);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await read(u);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Einkaufsliste.md"));
+    await screen.findByRole("heading", { level: 1, name: "Einkaufsliste" });
+    await wait(100);
+    const sent = fetch.mock.calls.map(([r]) => `${r.method} ${decodeURIComponent(new URL(r.url).pathname)}`);
+    const after = sent.slice(sent.indexOf("POST /api/move") + 1);
+    expect(after.filter((r) => r.includes("Untitled.md"))).toEqual([]);
+    expect(after).toContain("GET /api/notes/Home/Garden/Einkaufsliste.md");
+    // Gone once nothing shows it: a new note at the old name later doesn't show this one's text.
+    cleanup();
+    expect(queryClient.getQueryData(["note", UNTITLED])).toBeUndefined();
+  });
+
   it("leaves highlight and maths marks out of the name", async () => {
     const { moves } = gardenApi();
     const { u, router } = await writeIn(untitledUrl);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useDiscreet } from "../discreet/state";
 import { api, call, type RefusalCode } from "./client";
@@ -304,11 +304,36 @@ export type MoveResult = components["schemas"]["MovedView"];
 export async function moveNote(queryClient: QueryClient, from: string, to: string, { exact = false, signal }: { exact?: boolean; signal?: AbortSignal } = {}): Promise<MoveResult> {
   const result = await call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact }, signal }));
   const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
-  for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
+  const old = (q: Query) => ["note", "links", "backlinks", "history", "publication"].includes(q.queryKey[0] as string) && gone(q.queryKey);
+  // The old path's views stay mounted until the caller has moved on: asked again, or removed under them (which builds
+  // the query anew and fetches it), they would ask the server for a note that is no longer there.
+  void queryClient.cancelQueries({ predicate: old });
+  dropWhenUnwatched(queryClient, old);
   // Rewritten links changed other notes' text: every note, link and backlink is asked again.
   // Marks and publications move with their notes and folders.
-  for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search", "publications", "publication"]) void queryClient.invalidateQueries({ queryKey: [key] });
+  for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search", "publications", "publication"])
+    void queryClient.invalidateQueries({ queryKey: [key], predicate: (q) => !old(q) });
   return result;
+}
+
+/** Removes the matching queries once nothing watches them: a new note at the old path later mustn't show the old one. */
+function dropWhenUnwatched(queryClient: QueryClient, which: (q: Query) => boolean) {
+  const cache = queryClient.getQueryCache();
+  const watched = new Set<Query>();
+  for (const q of cache.findAll({ predicate: which })) {
+    if (q.getObserversCount()) watched.add(q);
+    else cache.remove(q);
+  }
+  if (!watched.size) return;
+  const stop = cache.subscribe((event) => {
+    if (!watched.has(event.query)) return;
+    if (event.type === "removed") watched.delete(event.query);
+    else if (event.type === "observerRemoved" && !event.query.getObserversCount()) {
+      watched.delete(event.query);
+      cache.remove(event.query);
+    }
+    if (!watched.size) stop();
+  });
 }
 
 export function useMove() {
