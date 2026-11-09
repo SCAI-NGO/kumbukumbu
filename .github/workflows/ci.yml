@@ -10,9 +10,31 @@ permissions:
 
 jobs:
   build:
+    name: build (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    # The tests alone took 13.7 minutes on master; the chunking tests added more, so 15 cut the job off.
-    timeout-minutes: 25
+    # The server tests share one app fixture and run one after another: 13.7 minutes in one job. Split by namespace
+    # across runners, each with its own MongoDB, they take a few minutes each without more load on any machine.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            filter: --filter-namespace Kumbu.Server.Tests.Api --filter-namespace Kumbu.Server.Tests.Mcp --filter-namespace Kumbu.Server.Tests.Auth --filter-namespace Kumbu.Server.Tests.Net
+          - shard: accounts
+            filter: --filter-namespace Kumbu.Server.Tests.Accounts --filter-namespace Kumbu.Server.Tests.Sharing --filter-namespace Kumbu.Server.Tests.Welcome
+          - shard: vaults
+            filter: --filter-namespace Kumbu.Server.Tests.Vaults --filter-namespace Kumbu.Server.Tests.Skills --filter-namespace Kumbu.Server.Tests.Search --filter-namespace Kumbu.Server.Tests.Metrics
+          # Everything the shards above don't name, so a new namespace is never left out; and the core tests.
+          - shard: rest
+            core: true
+            filter: >-
+              --filter-not-namespace Kumbu.Server.Tests.Api --filter-not-namespace Kumbu.Server.Tests.Mcp
+              --filter-not-namespace Kumbu.Server.Tests.Auth --filter-not-namespace Kumbu.Server.Tests.Net
+              --filter-not-namespace Kumbu.Server.Tests.Accounts --filter-not-namespace Kumbu.Server.Tests.Sharing
+              --filter-not-namespace Kumbu.Server.Tests.Welcome --filter-not-namespace Kumbu.Server.Tests.Vaults
+              --filter-not-namespace Kumbu.Server.Tests.Skills --filter-not-namespace Kumbu.Server.Tests.Search
+              --filter-not-namespace Kumbu.Server.Tests.Metrics
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -34,7 +56,9 @@ jobs:
           fi
           echo "f1cc44ad7faaeec47241864835473fd5403f2da94673f3f764a77ebcb0a803ec  $HOME/.cache/kumbu/tokenizer.json" | sha256sum -c -
           echo "KUMBU_TOKENIZER=$HOME/.cache/kumbu/tokenizer.json" >> "$GITHUB_ENV"
-      - run: dotnet test --configuration Release --no-build
+      - if: matrix.core
+        run: dotnet test --project tests/Kumbu.Core.Tests --configuration Release --no-build
+      - run: dotnet test --project tests/Kumbu.Server.Tests --configuration Release --no-build -- ${{ matrix.filter }}
 
   pdf:
     name: PDF sidecar
