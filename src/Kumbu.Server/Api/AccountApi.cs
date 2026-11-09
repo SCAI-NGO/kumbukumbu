@@ -242,7 +242,8 @@ public static class AccountApi
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, Skills.SkillsVaults skills, DiscreetVaults discreet, VaultCatalog catalog, IOptions<KumbuOptions> options, ILoggerFactory logs,
+        CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -269,9 +270,12 @@ public static class AccountApi
         rekeying.ResumePending(user, userKey);
         // Never fails the sign-in, and not cancellable by the client, as at the join.
         await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
+        // The new session hides the discreet vaults, so its notice of the vault Skills is judged as its requests' will be.
+        var session = RequestCaller.ForSession(
+            user, userKey, readAt, windowOpen: true, catalog, new SessionDiscreet(false, null, await discreet.SealedListAsync(user.Id, ct), null), Log(logs));
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
-            DiscreetView.Hidden, SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
+            DiscreetView.Hidden, await SkillsNoticeAsync(session, skills, ct)));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -339,7 +343,17 @@ public static class AccountApi
         await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
+            await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), await SkillsNoticeAsync(caller, skills, ct)));
+    }
+
+    /// <summary>The notice of the vault Skills, left out while the name it gives is that of a vault or alias the session
+    /// hides (Decision 13), compared as vault names are.</summary>
+    private static async Task<SkillsNoticeView?> SkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
+    {
+        if (await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is not { } notice) return null;
+        await caller.HiddenIdsAsync(ct);
+        var name = VaultCatalog.NormaliseVaultName(notice.NewName);
+        return caller.Session?.Hidden.Any(a => VaultCatalog.NormaliseVaultName(a.Name) == name) == true ? null : SkillsNoticeView.From(notice);
     }
 
     /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>

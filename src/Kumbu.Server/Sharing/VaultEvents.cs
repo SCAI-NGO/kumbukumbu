@@ -171,13 +171,16 @@ public static class VaultEvents
     /// <summary>
     /// A member's own events across every vault shared with her, now or before, newest first: also those of a
     /// membership she no longer has (removed, left), which no vault of hers shows any more. A vault she still reaches is
-    /// named by her alias (<paramref name="aliases"/>, by vault id), any other as "a vault shared with you".
+    /// named by her alias (<paramref name="aliases"/>, by vault id), any other as "a vault shared with you". Nothing of a
+    /// vault in <paramref name="hidden"/> (those her session hides, a vault she no longer reaches included).
     /// </summary>
     internal static async Task<IReadOnlyList<(VaultEventDocument Event, string? Vault, string Text)>> OfMemberEverywhereAsync(
-        IMongoDatabase db, string memberId, IReadOnlyDictionary<string, string> aliases, Func<string, CancellationToken, Task<string?>> displayName, CancellationToken ct)
+        IMongoDatabase db, string memberId, IReadOnlyDictionary<string, string> aliases, IReadOnlySet<string> hidden,
+        Func<string, CancellationToken, Task<string?>> displayName, CancellationToken ct)
     {
-        var mine = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-            .Find(m => m.Member == memberId).Project(m => new { m.Id, m.Vault, m.Owner, m.Status, m.AcceptedAt, m.CreatedAt }).ToListAsync(ct);
+        var mine = (await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .Find(m => m.Member == memberId).Project(m => new { m.Id, m.Vault, m.Owner, m.Status, m.AcceptedAt, m.CreatedAt }).ToListAsync(ct))
+            .Where(m => !hidden.Contains(m.Vault)).ToList();
         if (mine.Count == 0) return [];
         var f = Builders<VaultEventDocument>.Filter;
         // A vault's own events only while she is a member, and only since she joined it (as OfMemberAsync).

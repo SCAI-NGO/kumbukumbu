@@ -229,7 +229,7 @@ public static class SharingApi
         RequestCaller caller, Vaults.EncryptedNoteStore store, Memberships memberships, MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
     {
         var aliases = (await store.UnlockedVaultsAsync(ct)).Where(a => a.Membership is not null).ToDictionary(a => a.Id, a => a.Name, StringComparer.Ordinal);
-        var events = await VaultEvents.OfMemberEverywhereAsync(db, caller.User!.Id, aliases, memberships.DisplayNameAsync, ct);
+        var events = await VaultEvents.OfMemberEverywhereAsync(db, caller.User!.Id, aliases, await caller.HiddenIdsAsync(ct), memberships.DisplayNameAsync, ct);
         return TypedResults.Ok(events.Select(e => new VaultEventView(e.Event.Kind, e.Event.At, e.Text, e.Event.Role, e.Vault)).ToArray());
     }
 
@@ -304,12 +304,15 @@ public static class SharingApi
 
     /// <summary>The caller's notices of shared vaults, newest first, each naming the vault by her alias, opened with her
     /// user key. One of a vault deleted for everyone never names the owner; one of a re-encryption is listed only while
-    /// her membership is active, and names the owner as she is now, read through it: the notice itself names nobody.</summary>
+    /// her membership is active, and names the owner as she is now, read through it: the notice itself names nobody.
+    /// None of a vault her session hides, also once it is gone.</summary>
     private static async Task<Ok<MemberNoticeView[]>> NoticesAsync(
         RequestCaller caller, Memberships memberships, MongoDB.Driver.IMongoDatabase db, TimeProvider time, CancellationToken ct)
     {
         await memberships.EnsureReadyAsync(ct);
-        var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        var notices = (await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct))
+            .Where(n => !hidden.Contains(n.Notice.Vault)).ToList();
         var active = await MemberNotices.ActiveOwnersAsync(
             db, caller.User.Id, [.. notices.Where(n => n.Notice.Kind == MemberNoticeDocument.VaultRekeyed).Select(n => n.Notice.Membership)], ct);
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -330,9 +333,10 @@ public static class SharingApi
         return TypedResults.Ok(result.ToArray());
     }
 
-    /// <summary>Dismissing one of her own notices; any other id answers 404.</summary>
+    /// <summary>Dismissing one of her own notices; any other id answers 404, as does one of a vault her session hides.</summary>
     private static async Task<NoContent> DismissNoticeAsync(string id, RequestCaller caller, MongoDB.Driver.IMongoDatabase db, CancellationToken ct) =>
-        await MemberNotices.DismissAsync(db, caller.User!.Id, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such notice.");
+        await MemberNotices.DismissAsync(db, caller.User!.Id, id, await caller.HiddenIdsAsync(ct), ct)
+            ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such notice.");
 
     /// <summary>Withdrawing an open invitation needs no password window either.</summary>
     private static async Task<NoContent> WithdrawAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct)

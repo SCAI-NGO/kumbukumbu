@@ -75,6 +75,10 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
             JsonSerializer.SerializeToUtf8Bytes(ids.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()),
             ListContext(userId));
 
+    /// <summary>The user's sealed list as it is stored; null until she marks a vault.</summary>
+    internal Task<byte[]?> SealedListAsync(string userId, CancellationToken ct) =>
+        Users.Find(u => u.Id == userId).Project(u => u.DiscreetVaults).FirstOrDefaultAsync(ct);
+
     /// <summary>
     /// Marks the vault <paramref name="vaultId"/> discreet or not. The write is conditional on the list read (so a
     /// concurrent mark is never lost: tried again up to three times, then <see cref="DiscreetListConflictException"/>) and on
