@@ -19,13 +19,13 @@ An API key or a connection opens exactly the vaults, with exactly the rights, th
 
 ## Discreet vaults
 
-For when Kumbu² is open at a family table, at work or on the train, and even a vault's name would say too much: a discreet vault isn't there in the web app until a PIN shows it.
+A discreet vault isn't there in the web app until a PIN shows it: for when Kumbu² is open at a family table, at work or on the train, and even a vault's name would say too much.
 
 1. Set a PIN in Settings → **Discreet vaults**: 4 to 6 digits, separate from your password.
-2. Open **More vaults…**, the last entry of the vault menu, and enter the PIN, with how long the vaults stay shown. An amber frame and a **Discreet** pill show that they are; ✕ on the pill hides them again.
+2. Open **More vaults…**, the last entry of the vault menu, and enter the PIN, with how long the vaults stay shown. An amber frame and a **Discreet** pill show that discreet mode is on; ✕ on the pill hides them again.
 3. While the amber frame is shown, mark a vault: the vault's ⋯ menu → **Discreet** (or **Not discreet**), or its switch in Settings.
 
-The PIN hides vaults from the web app's screen; it doesn't encrypt them. Agents, synced devices, WebDAV, keys and connections see them as before.
+The PIN hides vaults in the web app; it doesn't encrypt them. Agents, synced devices, WebDAV, keys and connections see them as before.
 
 ## The honest limits
 
