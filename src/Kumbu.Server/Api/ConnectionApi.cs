@@ -227,7 +227,10 @@ public static class ConnectionApi
         var open = await caller.OpenVaultsAsync(ct);
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)))
+        // The grants on vaults the session hides can't be named here; they stay as stored (Decision 9).
+        var info = await connections.SetVaultsAsync(
+                caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)),
+                await caller.HiddenIdsAsync(ct))
             ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
