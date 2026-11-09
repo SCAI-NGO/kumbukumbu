@@ -55,6 +55,39 @@ public class SearchTests
     }
 
     [Fact]
+    public async Task A_hit_maps_only_to_its_own_note()
+    {
+        // A PDF's page and a note that isn't searched (gone, or out of scope) have no chunk here, whatever their lines.
+        var note = new Note(P("/Work/a.md"), "# A\nalpha\nbeta\n");
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Work/a.pdf"), 1, 0.9), new(P("/Work/gone.md"), 1, 0.8)], 0));
+
+        Assert.Empty((await SectionSearch.RankAsync([note], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None)).Hits);
+        var withPages = await SectionSearch.RankAsync([note], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None, pages: true);
+        Assert.Equal([("/Work/a.pdf", (int?)1)], withPages.Hits.Select(h => (h.Chunk.Path.Value, h.Page)));
+
+        // Not even under the PDF's own path: a page is looked up as a page, never among the chunks.
+        var named = new Note(P("/Work/a.pdf"), "# A\nalpha\nbeta\n");
+        Assert.Empty((await SectionSearch.RankAsync([named], VaultPath.Root, "alpha", SearchMode.Meaning, 10, index, CancellationToken.None)).Hits);
+    }
+
+    [Fact]
+    public async Task Every_part_of_a_long_code_block_of_comments_is_listed()
+    {
+        // Each line of the block looks like a heading; only the note's fence says it is code, also in parts without it.
+        var comments = Enumerable.Range(0, 150).Select(i => $"# kettle step {i} boils the water slowly and then pours it out");
+        var note = new Note(P("/Work/script.md"), "# Script\n```python\n" + string.Join('\n', comments) + "\n```\n");
+        var chunks = Chunker.Split(note, ChunkBound.Fallback);
+        Assert.True(chunks.Count > 2);
+        Assert.Contains(chunks, c => !c.Text.Contains("```"));
+
+        var result = await SectionSearch.RankAsync([note], VaultPath.Root, "kettle", SearchMode.Words, 100, new FakeIndex(new SemanticResult(SemanticState.Ready, [], 0)), CancellationToken.None);
+
+        Assert.Equal(chunks.Select(c => c.StartLine).Order(), result.Hits.Select(h => h.Chunk.StartLine).Order());
+        Assert.All(chunks, c => Assert.Contains("# kettle step", SectionSearch.Snippet(c)));
+        Assert.All(chunks, c => Assert.StartsWith("# kettle step", SectionSearch.Snippet(c, "kettle")));
+    }
+
+    [Fact]
     public async Task One_hit_per_PDF_page_with_its_best_part()
     {
         var pdf = P("/Work/manual.pdf");

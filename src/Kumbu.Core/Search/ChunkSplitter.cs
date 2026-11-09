@@ -19,6 +19,7 @@ internal sealed class ChunkSplitter
     private readonly ChunkBound _bound;
     private readonly IReadOnlyList<string> _lines;
     private readonly bool[] _code;
+    private readonly string?[] _open;
     private readonly string _title;
 
     // Prefix sums over the lines: [i] is the sum of the lines before line i.
@@ -40,7 +41,7 @@ internal sealed class ChunkSplitter
     {
         (_note, _bound) = (note, bound);
         _lines = Lines.Split(note.Content);
-        _code = Outline.CodeLines(_lines);
+        (_code, _open) = Outline.Fences(_lines);
         _title = Title(note.Path);
         _words = new int[_lines.Count + 1];
         _ceilings = new int[_lines.Count + 1];
@@ -179,7 +180,7 @@ internal sealed class ChunkSplitter
         if (group.Count == 0) return;
         var shared = Common(group).Shared;
         var context = Context(shared);
-        _chunks.Add(new Chunk(_note.Path, shared?.Address ?? "", group[0].Start, group[^1].End, Text(-1, group[0].Start, group[^1].End), context.Text));
+        _chunks.Add(new Chunk(_note.Path, shared?.Address ?? "", group[0].Start, group[^1].End, Text(-1, group[0].Start, group[^1].End), context.Text) { Fence = _open[group[0].Start] });
         group.Clear();
     }
 
@@ -335,7 +336,7 @@ internal sealed class ChunkSplitter
     {
         if (_start < 0) return;
         var (start, end) = Trimmed(_start, _end);
-        if (start < end) _chunks.Add(new Chunk(_note.Path, _address, start, end, Text(_header, start, end), _context.Text) { RepeatedHeader = _header });
+        if (start < end) _chunks.Add(new Chunk(_note.Path, _address, start, end, Text(_header, start, end), _context.Text) { RepeatedHeader = _header, Fence = _header >= 0 ? null : _open[start] });
         (_start, _header) = (-1, -1);
     }
 
@@ -359,7 +360,7 @@ internal sealed class ChunkSplitter
         var part = 0;
         foreach (var piece in Pieces(_lines[line], _context, _bound))
         {
-            _chunks.Add(new Chunk(_note.Path, _address, line, line + 1, piece, _context.Text) { Part = part++ });
+            _chunks.Add(new Chunk(_note.Path, _address, line, line + 1, piece, _context.Text) { Part = part++, Fence = _open[line] });
         }
     }
 

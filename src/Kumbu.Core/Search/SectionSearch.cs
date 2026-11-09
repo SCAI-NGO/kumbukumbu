@@ -156,11 +156,12 @@ public static class SectionSearch
     }
 
     /// <summary>The non-blank lines of a chunk that aren't headings (a merged chunk holds several; a table part starts
-    /// with its header row instead). A "# comment" in fenced code is no heading.</summary>
+    /// with its header row instead). A "# comment" in fenced code is no heading, also in a part of a code block that
+    /// starts after its fence (<see cref="Chunk.Fence"/>).</summary>
     private static IEnumerable<string> Body(Chunk chunk)
     {
         var lines = chunk.Text.Split('\n');
-        var code = Outline.CodeLines(lines);
+        var code = chunk.Fence is null ? Outline.CodeLines(lines) : Outline.CodeLines([chunk.Fence, .. lines])[1..];
         return lines.Where((l, i) => l.Trim().Length > 0 && (code[i] || !Outline.HeadingRegex().IsMatch(l)));
     }
 
@@ -174,11 +175,12 @@ public static class SectionSearch
     {
         var byKey = new Dictionary<(VaultPath, int, int), Chunk>();
         foreach (var chunk in chunks) byKey.TryAdd(chunk.Key, chunk);
+        var byPath = chunks.GroupBy(c => c.Path).ToDictionary(g => g.Key, g => g.ToList());
         var terms = meaningOnly ? [] : Bm25.QueryTerms(query);
         var cosines = new Dictionary<(VaultPath, int, int), double>();
         foreach (var hit in semantic.Hits)
         {
-            if (Locate(hit, chunks, byKey) is not { } key) continue;
+            if (Locate(hit, byPath, byKey) is not { } key) continue;
             cosines[key] = Math.Max(cosines.GetValueOrDefault(key, double.MinValue), hit.Score);
         }
 
@@ -232,10 +234,11 @@ public static class SectionSearch
     }
 
     /// <summary>The current chunk for a hit: the same start line and part, or the chunk that now contains it (the index
-    /// may lag behind a write by a moment).</summary>
-    private static (VaultPath, int, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int, int), Chunk> byKey)
+    /// may lag behind a write by a moment), looked for among the note's own chunks. A PDF's page is no note's.</summary>
+    private static (VaultPath, int, int)? Locate(SemanticHit hit, Dictionary<VaultPath, List<Chunk>> byPath, Dictionary<(VaultPath, int, int), Chunk> byKey)
     {
+        if (AttachmentFormat.IsPdf(hit.Path)) return null;
         if (byKey.ContainsKey((hit.Path, hit.StartLine, hit.Part))) return (hit.Path, hit.StartLine, hit.Part);
-        return chunks.FirstOrDefault(c => c.Path == hit.Path && c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
+        return byPath.GetValueOrDefault(hit.Path)?.FirstOrDefault(c => c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
     }
 }

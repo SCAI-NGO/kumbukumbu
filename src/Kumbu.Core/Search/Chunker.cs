@@ -27,6 +27,10 @@ public sealed record Chunk(VaultPath Path, string Address, int StartLine, int En
     /// the header row (before <see cref="StartLine"/>); -1 otherwise.</summary>
     public int RepeatedHeader { get; init; } = -1;
 
+    /// <summary>For a chunk that starts inside fenced code (a part of a long code block): the fence that opened the
+    /// block, as in the note; null otherwise. Without it, a part's "# comment" lines would read as headings.</summary>
+    public string? Fence { get; init; }
+
     /// <summary>What gets embedded: the context, then the text (concept §6: the heading path as context).</summary>
     public string EmbeddingText => Context + "\n" + Text;
 
@@ -76,7 +80,8 @@ public static class Chunker
     /// <summary>A roll holds at most this many characters on each side.</summary>
     public const int RollChars = 1_000;
 
-    /// <summary>About 512 tokens (concept §6); a token is roughly 4 characters of prose. <see cref="Sections"/>' limit.</summary>
+    /// <summary>The limit of <see cref="Sections"/> only (<c>rg</c>, <see cref="EarlierSearch"/>): about 512 tokens at
+    /// roughly 4 characters of prose. The chunks that are embedded are bounded by their <see cref="ChunkBound"/>.</summary>
     public const int MaxChars = 2000;
 
     /// <summary>
