@@ -291,6 +291,7 @@ app.MapDiscovery();
 app.MapOAuthEndpoints();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
+app.MapDiscreetApi();
 app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();

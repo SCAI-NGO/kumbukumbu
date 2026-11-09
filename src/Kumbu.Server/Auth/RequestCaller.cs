@@ -32,9 +32,10 @@ public sealed class RequestCaller : ICaller
 
     private RequestCaller(
         CallerKind kind, User? user, string writer, WriterRef reference, ICredential credential, VaultCatalog catalog, byte[]? userKey = null,
-        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false)
+        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false, SessionDiscreet? discreet = null)
     {
         Kind = kind;
+        Discreet = discreet;
         _human = kind is CallerKind.Session or CallerKind.DavShare || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
@@ -96,6 +97,10 @@ public sealed class RequestCaller : ICaller
     /// given go ahead (keep-me-signed-in design); always open for a normal session. False for every other kind of
     /// caller: fails closed.</summary>
     internal bool PasswordWindowOpen { get; }
+
+    /// <summary>For a session only: its reveal of the discreet vaults as it was resolved for this request; null for every
+    /// other caller, and for a session built without it (nothing hidden, nothing shown).</summary>
+    internal SessionDiscreet? Discreet { get; }
 
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
@@ -189,7 +194,7 @@ public sealed class RequestCaller : ICaller
         }
 
         return new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey, filter), catalog, userKey,
-            credentialReadAt, passwordWindowOpen: windowOpen);
+            credentialReadAt, passwordWindowOpen: windowOpen, discreet: discreet);
     }
 
     /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>

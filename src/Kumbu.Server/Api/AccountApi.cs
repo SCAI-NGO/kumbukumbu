@@ -25,9 +25,13 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
 /// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
 /// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
-/// the shell's notice asks for the storage only then. <c>skillsNotice</c>: the vault or alias renamed to make room for
-/// the vault Skills, until she dismisses it (<c>DELETE /api/account/skills-notice</c>); null when there is none.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, SkillsNoticeView? SkillsNotice = null);
+/// the shell's notice asks for the storage only then. <c>discreet</c>: whether the session shows the discreet vaults now,
+/// and until when (null: until it ends or hides them); never revealed in the sign-in's answer. <c>skillsNotice</c>: the
+/// vault or alias renamed to make room for the vault Skills, until she dismisses it (<c>DELETE
+/// /api/account/skills-notice</c>); null when there is none.</summary>
+public sealed record SessionView(
+    UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, DiscreetView Discreet,
+    SkillsNoticeView? SkillsNotice = null);
 
 /// <summary><c>renamed</c>: the name the vault (or, with <c>alias</c>, the vault shared with her) has now.</summary>
 public sealed record SkillsNoticeView(string Renamed, bool Alias)
@@ -267,7 +271,7 @@ public static class AccountApi
         await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
-            SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
+            DiscreetView.Hidden, SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -335,7 +339,7 @@ public static class AccountApi
         await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
+            await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
     }
 
     /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>
@@ -743,7 +747,7 @@ public static class AccountApi
         http.Response.Cookies.Append(CallerMiddleware.SessionCookie, secret, options);
     }
 
-    private static void ClearSessionCookie(HttpContext http) => http.Response.Cookies.Delete(CallerMiddleware.SessionCookie, SessionCookieOptions());
+    internal static void ClearSessionCookie(HttpContext http) => http.Response.Cookies.Delete(CallerMiddleware.SessionCookie, SessionCookieOptions());
 
     private static async Task<Ok<PreferencesView>> PreferencesAsync(RequestCaller caller, UserCatalog users, CancellationToken ct) =>
         TypedResults.Ok(new PreferencesView(await users.AsksPasswordForDownloadsAsync(caller.User!.Id, ct)));

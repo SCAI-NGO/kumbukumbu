@@ -248,6 +248,21 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         await RefreshAsync(c => vaultIds.Any(c.Has), ct);
     }
 
+    /// <summary>The session <paramref name="subject"/> (<see cref="Sessions.SubjectOf"/>) hid its discreet vaults again
+    /// (discreet vaults design, Decision 8). Nothing yet: its sockets keep what they hold.</summary>
+    public Task DiscreetHiddenAsync(string subject, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>The session <paramref name="subject"/> showed its discreet vaults (Decision 8). Nothing yet.</summary>
+    public void DiscreetRevealed(string subject)
+    {
+    }
+
+    /// <summary>The user <paramref name="userId"/> marked the vault <paramref name="vaultId"/> discreet or not (Decision
+    /// 8). Nothing yet.</summary>
+    public void DiscreetChanged(string userId, string vaultId)
+    {
+    }
+
     /// <summary>A member renamed her vault (collab design §2.3): her connections that hold it through
     /// <paramref name="membershipId"/> name it so in their hints and presence from now on.</summary>
     public void AliasRenamed(string memberId, string membershipId, string alias)

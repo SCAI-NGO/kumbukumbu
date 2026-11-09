@@ -331,6 +331,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _signInByUsername = Limiter(SignInsPerUsername);
     private readonly PartitionedRateLimiter<string> _signInByAddress = Limiter(SignInsPerAddress);
     private readonly PartitionedRateLimiter<string> _passwordCheckByUsername = Limiter(SignInsPerUsername);
+    private readonly PartitionedRateLimiter<string> _pinCheckByUser;
     private readonly PartitionedRateLimiter<string> _joinByAddress = Limiter(JoinsPerAddress);
     private readonly PartitionedRateLimiter<string> _recoveryByAddress = Limiter(RecoveriesPerAddress);
     private readonly PartitionedRateLimiter<string> _redeemByAddress = Limiter(RedeemsPerAddress);
@@ -358,14 +359,16 @@ public sealed class AccountLimits : IDisposable
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks, on renames and on readers, so that
+    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks, on renames, on readers and on PIN entries, so that
     /// one can be reached in a few requests, or not at all.</summary>
     internal AccountLimits(
         int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
         int aliasRenamesPerUser = AliasRenamesPerUser, int readerReadsPerAddress = ReaderReadsPerAddress, int readerFailuresPerNetwork = ReaderFailuresPerNetwork,
         int readerFailuresPerServer = ReaderFailuresPerServer, int readerFilesPerAddress = ReaderFilesPerAddress, int readerReadsPerNetwork = ReaderReadsPerNetwork,
-        int readerReadsPerServer = ReaderReadsPerServer, int readerFilesPerNetwork = ReaderFilesPerNetwork, int readerFilesPerServer = ReaderFilesPerServer)
+        int readerReadsPerServer = ReaderReadsPerServer, int readerFilesPerNetwork = ReaderFilesPerNetwork, int readerFilesPerServer = ReaderFilesPerServer,
+        int pinChecksPerUser = SignInsPerUsername)
     {
+        _pinCheckByUser = Limiter(pinChecksPerUser);
         _readerReadByAddress = Limiter(readerReadsPerAddress);
         _readerReadByNetwork = Limiter(readerReadsPerNetwork);
         _readerReads = Limiter(readerReadsPerServer);
@@ -390,6 +393,10 @@ public sealed class AccountLimits : IDisposable
     /// sign-ins (but apart from them, so changing the password doesn't use up the sign-in that follows), so that a
     /// stolen session can't be used to guess the password faster than signing in could.</summary>
     public TimeSpan? PasswordCheck(string username) => Take(_passwordCheckByUsername, UsernameKey(username));
+
+    /// <summary>A PIN entered to show the discreet vaults, counted per user across her sessions, as many a minute as a
+    /// username's sign-ins: every user is limited alike, with a PIN or without.</summary>
+    public TimeSpan? PinCheck(string userId) => Take(_pinCheckByUser, userId);
 
     public TimeSpan? Join(HttpContext context) => Take(_joinByAddress, Address(context));
 
@@ -507,6 +514,7 @@ public sealed class AccountLimits : IDisposable
         _signInByUsername.Dispose();
         _signInByAddress.Dispose();
         _passwordCheckByUsername.Dispose();
+        _pinCheckByUser.Dispose();
         _joinByAddress.Dispose();
         _recoveryByAddress.Dispose();
         _redeemByAddress.Dispose();

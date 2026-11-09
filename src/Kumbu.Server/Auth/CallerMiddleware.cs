@@ -40,6 +40,9 @@ public sealed class CallerMiddleware(
 {
     public const string SessionCookie = "kumbu_session";
 
+    /// <summary>What <c>/api</c> answers, with a 401, a request without a caller: also a session ended meanwhile.</summary>
+    internal const string SignInSentence = "Sign in, or send an API key.";
+
     /// <summary>What <c>/dav</c> answers without a share's credentials (WebDAV design §3.3). Not ASCII: Kestrel sends this
     /// header in ISO-8859-1 (Program.cs).</summary>
     public const string DavChallenge = "Basic realm=\"Kumbu²\", charset=\"UTF-8\"";
@@ -376,7 +379,7 @@ public sealed class CallerMiddleware(
     private static Task UnauthorisedAsync(HttpContext context)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        if (IsUnder(context, "/api")) return context.Response.WriteAsJsonAsync(new { error = "Sign in, or send an API key." });
+        if (IsUnder(context, "/api")) return context.Response.WriteAsJsonAsync(new { error = SignInSentence });
         context.Response.Headers.WWWAuthenticate = "Bearer";
         return Task.CompletedTask;
     }
