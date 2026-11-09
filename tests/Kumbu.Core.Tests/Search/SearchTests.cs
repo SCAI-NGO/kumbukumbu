@@ -13,28 +13,38 @@ public class SearchTests
     private static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
 
     [Fact]
-    public void ChunksAreSectionsWithTheirHeadingPath()
+    public void Snippet_of_a_table_part_keeps_its_header_row()
     {
-        var chunks = Chunker.Split(new Note(P("/Demo/plan.md"), "---\ntags: x\n---\nIntro text.\n\n# Plan\nTop.\n## Goals\nShip it.\n\n## Risks\n\n"));
+        var part = new Chunk(P("/Work/Pump/Manual.md"), "#Pump P-200#Error codes", 120, 140,
+            "| Code | Meaning | Remedy |\n|------|---------|--------|\n| E115 | Dry run | Fill the inlet and restart |", "Manual > Pump P-200 > Error codes");
+        var first = part with { Text = "## Error codes\n" + part.Text };
 
-        Assert.Equal(
-            [("", 3, 4, "Intro text.", "plan"), ("#Plan", 5, 7, "# Plan\nTop.", "plan > Plan"), ("#Plan#Goals", 7, 9, "## Goals\nShip it.", "plan > Plan > Goals"), ("#Plan#Risks", 10, 11, "## Risks", "plan > Plan > Risks")],
-            chunks.Select(c => (c.Address, c.StartLine, c.EndLine, c.Text, c.Context)));
-        Assert.Equal("plan > Plan > Goals\n## Goals\nShip it.", chunks[2].EmbeddingText);
+        Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(part));
+        Assert.StartsWith("| Code | Meaning | Remedy |", SectionSearch.Snippet(first));
+        Assert.Equal("| E115 | Dry run | Fill the inlet and restart |", SectionSearch.Snippet(part, "inlet"));
     }
 
     [Fact]
-    public void ALongSectionIsSplitBetweenParagraphs()
+    public async Task Locate_finds_a_piece_by_its_part()
     {
-        var paragraph = string.Join(' ', Enumerable.Repeat("word", 150));
-        var content = "# Long\n" + string.Join("\n\n", Enumerable.Range(0, 6).Select(_ => paragraph)) + "\n";
+        // A line too long for one chunk is split into pieces on the same start line; until hits carry their part,
+        // the hit goes to the first piece.
+        var note = new Note(P("/Work/log.md"), "# Log\n" + string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"reading{i}")) + "\n");
+        Assert.True(Chunker.Split(note, ChunkBound.Fallback).Count(c => c.StartLine == 1) > 1);
+        var index = new BoundIndex(new SemanticResult(SemanticState.Ready, [new(note.Path, 1, 0.7), new(note.Path, 1, 0.6)], 0), ChunkBound.Fallback);
 
-        var chunks = Chunker.Split(new Note(P("/Demo/long.md"), content));
+        var result = await SectionSearch.RankAsync([note], VaultPath.Root, "reading5", SearchMode.Meaning, 10, index, CancellationToken.None);
 
-        Assert.True(chunks.Count >= 3);
-        Assert.All(chunks, c => Assert.True(c.Text.Length <= Chunker.MaxChars));
-        Assert.All(chunks, c => Assert.Equal("#Long", c.Address));
-        Assert.All(chunks.Skip(1), c => Assert.False(string.IsNullOrWhiteSpace(c.Text.Split('\n')[0])));
+        var hit = Assert.Single(result.Hits);
+        Assert.Equal((1, 0), (hit.Chunk.StartLine, hit.Chunk.Part));
+        Assert.Equal(0.7, hit.Score!.Value, 2);
+    }
+
+    private sealed class BoundIndex(SemanticResult result, ChunkBound bound) : ISearchIndex
+    {
+        public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) => Task.FromResult(result);
+
+        public ChunkBound Bound => bound;
     }
 
     [Fact]
@@ -138,8 +148,8 @@ public class SearchTests
             """
             1. /Demo/farm.md#Animals  lines 1-2  score 0.80
                Cats, dogs, hens and ducks live together.
-            2. /Demo/gate.md#Gate  lines 1-2  score 0.55
-               The service checks rules at the entrance.
+            2. /Demo/gate.md  lines 1-4  score 0.55
+               The service checks rules at the entrance. # Team Anna and Ben.
             (ranked by words and meaning; cat "path#Section" reads one)
             """,
             result.Output);
@@ -157,8 +167,8 @@ public class SearchTests
             """
             1. /Ideas/x.md  lines 1-1
                rules elsewhere
-            2. /Demo/gate.md#Gate  lines 1-2
-               The service checks rules at the entrance.
+            2. /Demo/gate.md  lines 1-4
+               The service checks rules at the entrance. # Team Anna and Ben.
             (ranked by words only: the embedding model is still being downloaded; cat "path#Section" reads one)
             """,
             result.Output);
@@ -245,8 +255,8 @@ public class SearchTests
 
         Assert.Equal(
             """
-            1. /Demo/gate.md#Gate  lines 1-2
-               The service checks rules at the entrance.
+            1. /Demo/gate.md  lines 1-4
+               The service checks rules at the entrance. # Team Anna and Ben.
             (ranked by words only: 2 notes aren't indexed yet; cat "path#Section" reads one)
             """,
             (await Run("semsearch rules /Demo", index)).Output);
@@ -277,7 +287,7 @@ public class SearchTests
 
         var result = await Run("semsearch der die das /Demo", index);
 
-        Assert.StartsWith("1. /Demo/gate.md#Gate  lines 1-2  score 0.60\n", result.Output);
+        Assert.StartsWith("1. /Demo/gate.md  lines 1-4  score 0.60\n", result.Output);
         Assert.Contains("2. /Demo/farm.md#Animals  lines 1-2  score 0.30\n", result.Output);
     }
 
@@ -293,8 +303,9 @@ public class SearchTests
     [Fact]
     public async Task HeadingOnlySectionsAreLeftOut()
     {
-        var store = new InMemoryNoteStore(("/Demo/diary.md", "# Diary\n## Februar 2026\n## März 2026\nWir waren im Zoo.\n"));
-        var index = Cosines(("/Demo/diary.md", 1, 0.90), ("/Demo/diary.md", 2, 0.50));
+        // März is too long to merge with, so the parent and Februar form a chunk of headings alone.
+        var store = new InMemoryNoteStore(("/Demo/diary.md", "# Diary\n## Februar 2026\n## März 2026\nWir waren im Zoo.\n\n" + string.Join(' ', Enumerable.Repeat("Elefanten", 400)) + "\n"));
+        var index = Cosines(("/Demo/diary.md", 0, 0.90), ("/Demo/diary.md", 2, 0.50));
 
         var result = await Run("semsearch -n 1 --meaning Zoo /Demo", index, store);
 

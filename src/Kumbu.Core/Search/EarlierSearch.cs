@@ -40,7 +40,7 @@ public static class EarlierSearch
             {
                 var entry = note.History[i];
                 if (!words.All(w => entry.Content.Contains(w, StringComparison.OrdinalIgnoreCase))) continue;
-                foreach (var chunk in Chunker.Split(new Note(note.Path, entry.Content)))
+                foreach (var chunk in Chunker.Sections(new Note(note.Path, entry.Content)))
                 {
                     if (!words.All(w => chunk.Text.Contains(w, StringComparison.OrdinalIgnoreCase))) continue;
                     if (note.Content.Contains(chunk.Text, StringComparison.Ordinal) || !seen.Add(chunk.Text)) continue;

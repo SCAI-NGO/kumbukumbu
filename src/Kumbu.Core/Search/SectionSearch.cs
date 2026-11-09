@@ -56,7 +56,9 @@ public static class SectionSearch
         IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false,
         bool archive = false)
     {
-        var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
+        // The same bound as the stored chunks, so that the boundaries match theirs.
+        var bound = index.Bound;
+        var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(n => Chunker.Split(n, bound)).ToList();
 
         // Every chunk with a cosine takes part, so the bonus can lift a section from anywhere in the scope.
         SemanticResult? semantic = null;
@@ -91,7 +93,7 @@ public static class SectionSearch
             else ranked = RankByWords(chunks, query);
         }
 
-        // A heading with nothing below it says little; it still ranks, but the next section takes its place.
+        // Headings with nothing below them say little; they still rank, but the next section takes their place.
         var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max)
             .Select(r => new SectionHit(r.Chunk, r.Score) { Page = pageChunks.TryGetValue(r.Chunk, out var page) ? page : null }).ToList();
         return new SectionSearchResult(listed, semantic, fellBack);
@@ -111,7 +113,7 @@ public static class SectionSearch
             var lines = Lines.Split(note.Content);
             var matches = Enumerable.Range(0, lines.Count).Where(i => regex.IsMatch(lines[i])).ToList();
             if (matches.Count == 0) continue;
-            foreach (var chunk in Chunker.Split(note))
+            foreach (var chunk in Chunker.Sections(note))
             {
                 var first = matches.FirstOrDefault(m => m >= chunk.StartLine && m < chunk.EndLine, -1);
                 if (first < 0) continue;
@@ -126,10 +128,8 @@ public static class SectionSearch
     /// <summary>The start of a section's text, without its heading, on one line.</summary>
     public static string Snippet(Chunk chunk)
     {
-        var text = string.Join(' ', chunk.Text.Split('\n')
-            .Where(l => l.Trim().Length > 0)
-            .Skip(chunk.Address.Length > 0 && chunk.Text.Split('\n').Length > 1 ? 1 : 0)
-            .Select(l => l.Trim()));
+        var lines = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        var text = string.Join(' ', lines.Skip(SkipsHeading(lines) ? 1 : 0).Select(l => l.Trim()));
         if (text.Length == 0) text = chunk.Text.Trim();
         return Shorten(text);
     }
@@ -141,13 +141,16 @@ public static class SectionSearch
     public static string Snippet(Chunk chunk, string query)
     {
         var terms = Bm25.QueryTerms(query);
-        var lines = chunk.Text.Split('\n');
-        var first = lines.Skip(chunk.Address.Length > 0 && lines.Length > 1 ? 1 : 0)
+        var lines = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        var first = lines.Skip(SkipsHeading(lines) ? 1 : 0)
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.Length > 0
                 && (l.Contains(query, StringComparison.OrdinalIgnoreCase) || Bm25.Terms(l).Any(t => terms.Contains(t))));
         return first is null ? Snippet(chunk) : Shorten(first);
     }
+
+    /// <summary>Whether the first line is a heading with more below it (a table part starts with its header row instead).</summary>
+    private static bool SkipsHeading(List<string> lines) => lines.Count > 1 && Outline.HeadingRegex().IsMatch(lines[0]);
 
     /// <summary>At most the length of a snippet, with an ellipsis if cut.</summary>
     public static string Shorten(string text) => text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";
@@ -157,9 +160,10 @@ public static class SectionSearch
 
     private static List<(Chunk, double?)> RankByMeaning(List<Chunk> chunks, SemanticResult semantic, string query, bool meaningOnly)
     {
-        var byKey = chunks.ToDictionary(c => c.Key);
+        var byKey = new Dictionary<(VaultPath, int, int), Chunk>();
+        foreach (var chunk in chunks) byKey.TryAdd(chunk.Key, chunk);
         var terms = meaningOnly ? [] : Bm25.QueryTerms(query);
-        var cosines = new Dictionary<(VaultPath, int), double>();
+        var cosines = new Dictionary<(VaultPath, int, int), double>();
         foreach (var hit in semantic.Hits)
         {
             if (Locate(hit, chunks, byKey) is not { } key) continue;
@@ -211,14 +215,14 @@ public static class SectionSearch
     private static bool IsHeadingOnly(Chunk chunk)
     {
         var text = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        return text.Count == 1 && Outline.HeadingRegex().IsMatch(text[0]);
+        return text.Count > 0 && text.All(l => Outline.HeadingRegex().IsMatch(l));
     }
 
-    /// <summary>The current chunk for a hit: the same start line, or the chunk that now contains it (the
-    /// index may lag behind a write by a moment).</summary>
-    private static (VaultPath, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int), Chunk> byKey)
+    /// <summary>The current chunk for a hit: the same start line and part (a hit is on part 0 for now), or the chunk
+    /// that now contains it (the index may lag behind a write by a moment).</summary>
+    private static (VaultPath, int, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int, int), Chunk> byKey)
     {
-        if (byKey.ContainsKey((hit.Path, hit.StartLine))) return (hit.Path, hit.StartLine);
+        if (byKey.ContainsKey((hit.Path, hit.StartLine, 0))) return (hit.Path, hit.StartLine, 0);
         return chunks.FirstOrDefault(c => c.Path == hit.Path && c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
     }
 }

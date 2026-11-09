@@ -21,9 +21,6 @@ public sealed class ChunkBound
     /// </summary>
     public const int FallbackMaxChars = 500;
 
-    /// <summary>The version of the chunking, the first part of <see cref="Scheme"/>.</summary>
-    private const int SchemeVersion = 2;
-
     private const int MemoLimit = 100_000;
 
     /// <summary>Longer pieces are counted each time: they are rare, and would fill the memo with text.</summary>
@@ -58,7 +55,8 @@ public sealed class ChunkBound
 
     public string Id { get; }
 
-    public string Scheme => $"{SchemeVersion}/{Id}";
+    /// <summary>The chunking's <see cref="Chunker.SchemeVersion"/> and this bound's <see cref="Id"/>.</summary>
+    public string Scheme => $"{Chunker.SchemeVersion}/{Id}";
 
     /// <summary>What the <see cref="Cost"/>s of a chunk's pieces may add up to: the tokens between &lt;s&gt; and
     /// &lt;/s&gt;, or the characters plus one for the fallback (each piece pays for its separator).</summary>

@@ -195,7 +195,7 @@ public sealed class SearchIndex : BackgroundService
 
             var note = entry.Note;
             if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note.Version, driver)) return;
-            await EmbedAsync(vault, path, filter, configured, note.Version, [.. Chunker.Split(new Note(path, note.Content)).Select(c => (c.StartLine, c.EmbeddingText))], ct);
+            await EmbedAsync(vault, path, filter, configured, note.Version, [.. Chunker.Split(new Note(path, note.Content), Bound).Select(c => (c.StartLine, c.EmbeddingText))], ct);
         }
         finally
         {

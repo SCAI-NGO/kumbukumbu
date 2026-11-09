@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Kumbu.Server.Tests.Api;
@@ -380,9 +381,10 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal(0, hybrid["notIndexed"]!.GetValue<int>());
         var best = hybrid["results"]![0]!;
         Assert.Equal("/Arbeit/garden.md", best["path"]!.GetValue<string>());
-        Assert.Equal("#Garden", best["address"]!.GetValue<string>());
+        // Garden and Tools are short siblings: one chunk under the note, its lines both sections'.
+        Assert.Equal("", best["address"]!.GetValue<string>());
         Assert.Equal(1, best["startLine"]!.GetValue<int>());
-        Assert.Equal(3, best["endLine"]!.GetValue<int>());
+        Assert.Equal(7, best["endLine"]!.GetValue<int>());
         Assert.Equal("Tomatoes grow in the greenhouse.", best["snippet"]!.GetValue<string>());
         Assert.Equal("all words", best["reason"]!.GetValue<string>());
         Assert.True(best["score"]!.GetValue<double>() > 0);
@@ -407,11 +409,32 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Pieces_of_one_line_list_once()
+    {
+        // A line of 4,000 words is split into pieces on the same start line, by which the web app tells results apart.
+        // Ranked by words (no search by meaning here), every piece holds the query.
+        await using var host = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<Kumbu.Core.Search.ISearchIndex>();
+            s.AddScoped<Kumbu.Core.Search.ISearchIndex>(_ => new Kumbu.Core.Search.NoSearchIndex());
+        }));
+        var user = await RestClient.NewAsync(host, "Arbeit");
+        await user.CreateAsync("log.md", "# Log\n" + string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"pump{i % 7} seal")) + "\n");
+
+        using var response = await user.GetAsync("/api/search?q=seal&mode=hybrid&n=50&path=/Arbeit");
+
+        var results = (await JsonAsync(response))["results"]!.AsArray();
+        Assert.Equal((2, 2), Assert.Single(results.Select(r => (r!["startLine"]!.GetValue<int>(), r["endLine"]!.GetValue<int>()))));
+    }
+
+    [Fact]
     public async Task Each_result_says_why_it_was_found_and_shows_the_line_with_a_word_of_the_query()
     {
         var user = await UserAsync();
         await user.CreateAsync("greenhouse.md", "# Shelves\n\nWooden boards.\n");
-        await user.CreateAsync("garden.md", "# Beds\n\nThe soil is dark.\nRipe tomatoes grow here.\n\n# Tools\n\nA rake and a spade.\n");
+        // Two notes: as two sections of one, Beds and Tools would merge into one chunk.
+        await user.CreateAsync("garden.md", "# Beds\n\nThe soil is dark.\nRipe tomatoes grow here.\n");
+        await user.CreateAsync("tools.md", "# Tools\n\nA rake and a spade.\n");
         await Api.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
 
         async Task<JsonNode> BestAsync(string query, string address)

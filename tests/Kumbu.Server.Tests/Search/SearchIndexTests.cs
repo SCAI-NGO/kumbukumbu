@@ -44,7 +44,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Written_notes_are_found_by_meaning_section_by_section()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\nThe service checks rules at the entrance.\n# Team\nAnna and Ben.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\n## Rules\nThe service checks rules at the entrance.\n# Team\n## People\nAnna and Ben.\n"), Ct);
         await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
         await IdleAsync(s);
 
@@ -82,13 +82,13 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Only_changed_sections_are_embedded_again_and_removed_notes_leave()
     {
         var s = await StartAsync();
-        var note = New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n");
+        var note = New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n");
         await s.Store.TryCreateAsync(note, Ct);
         await IdleAsync(s);
         Assert.Equal(3, s.Embedder.Embedded);
 
         var current = (await s.Store.GetAsync(note.Path, Ct))!;
-        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\n## A1\nalpha\n# B\n## B1\nbeta changed\n# C\n## C1\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
         await IdleAsync(s);
         Assert.Equal(4, s.Embedder.Embedded);
 
@@ -165,7 +165,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task SwitchingTheModelReEmbedsOnUnlock()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n"), Ct);
         await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats and dogs.\n"), Ct);
         await IdleAsync(s);
         Assert.Equal(3, s.Embedder.Embedded);
@@ -206,7 +206,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task SwitchingBackDoesNotReuseVectorsOfTheOtherModel()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n"), Ct);
         await IdleAsync(s);
 
         var large = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"));
@@ -372,7 +372,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
             remote.BeforeEmbed = null;
             await s.Catalog.SetEmbeddingProviderAsync(priv, EmbeddingProviders.Internal, Ct);
         };
-        await s.Store.TryCreateAsync(New("/Private/long.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Private/long.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n"), Ct);
         await IdleAsync(s);
 
         Assert.Single(remote.Seen);
@@ -437,7 +437,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task A_note_with_more_sections_than_a_batch_holds_is_embedded_in_several_calls()
     {
         var s = await StartAsync(embedder: new FakeEmbedder { MaxBatch = 2 });
-        await s.Store.TryCreateAsync(New("/Work/long.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n# D\ndelta\n# E\nepsilon\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/long.md", "# A\n## A1\nalpha\n# B\n## B1\nbeta\n# C\n## C1\ngamma\n# D\n## D1\ndelta\n# E\n## E1\nepsilon\n"), Ct);
         await IdleAsync(s);
 
         Assert.Equal(5, s.Embedder.Embedded);
