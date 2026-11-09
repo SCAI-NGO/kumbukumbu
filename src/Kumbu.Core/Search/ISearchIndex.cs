@@ -34,6 +34,9 @@ public sealed record SemanticResult(SemanticState State, IReadOnlyList<SemanticH
 public interface ISearchIndex
 {
     Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct);
+
+    /// <summary>The bound the stored chunks were made with; search-time chunking uses the same.</summary>
+    ChunkBound Bound => ChunkBound.Fallback;
 }
 
 public sealed class NoSearchIndex : ISearchIndex

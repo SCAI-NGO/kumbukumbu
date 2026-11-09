@@ -124,6 +124,9 @@ public sealed partial class UnigramTokenizer
         return ids;
     }
 
+    /// <summary>How many ids <see cref="Encode"/> gives for <paramref name="text"/> without a cut, &lt;s&gt; and &lt;/s&gt; included.</summary>
+    public int Count(string text) => Encode(text, int.MaxValue).Count;
+
     /// <summary>WhitespaceSplit: words between runs of whitespace (Rust's char::is_whitespace, the Unicode
     /// White_Space property, which .NET's char.IsWhiteSpace matches).</summary>
     private static IEnumerable<string> Words(string text)

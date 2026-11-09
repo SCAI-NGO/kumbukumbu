@@ -543,6 +543,9 @@ public sealed class EncryptedNoteStore(
         }
     }
 
+    /// <summary>The bound the index chunks with, for search-time chunking.</summary>
+    public Kumbu.Core.Search.ChunkBound Bound => index?.Bound ?? Kumbu.Core.Search.ChunkBound.Fallback;
+
     /// <summary>
     /// Search by meaning over the embeddings of the credential's vaults: the query's vector against every chunk's, in
     /// memory. Each vault is searched with its own provider's model, so the query is embedded once per provider in the
@@ -581,6 +584,10 @@ public sealed class EncryptedNoteStore(
             if (driver.State != Kumbu.Core.Search.SemanticState.Ready) return new(driver.State, [], 0, driver.Reason);
             return new(Kumbu.Core.Search.SemanticState.Ready, [], 0);
         }
+
+        // Chunks are matched by the bound they were made with; until it has settled, nothing compares.
+        if (groups.Count > 0 && !index.TokenizerSettled)
+            return new(Kumbu.Core.Search.SemanticState.Preparing, [], 0, "search by meaning is getting ready (the tokenizer is loading)");
 
         var hits = new List<Kumbu.Core.Search.SemanticHit>();
         var pending = 0;

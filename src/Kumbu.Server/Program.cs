@@ -91,6 +91,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
     sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
     sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
+// The tokenizer chunks are bounded by, before the index that waits for it.
+builder.Services.AddHttpClient(ChunkTokenizer.HttpClientName);
+builder.Services.AddSingleton<ChunkTokenizer>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChunkTokenizer>());
 builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();

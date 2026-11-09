@@ -20,6 +20,19 @@ jobs:
       # Locked: a project whose packages differ from its packages.lock.json fails here.
       - run: dotnet restore --locked-mode
       - run: dotnet build --configuration Release --no-restore
+      # arctic-m's tokenizer, pinned by its SHA-256, so the token-bound tests run instead of skipping.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/kumbu
+          key: tokenizer-f1cc44ad7faaeec47241864835473fd5403f2da94673f3f764a77ebcb0a803ec
+      - name: Fetch the tokenizer
+        run: |
+          mkdir -p "$HOME/.cache/kumbu"
+          if [ ! -f "$HOME/.cache/kumbu/tokenizer.json" ]; then
+            curl -fsSL -o "$HOME/.cache/kumbu/tokenizer.json" https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json
+          fi
+          echo "f1cc44ad7faaeec47241864835473fd5403f2da94673f3f764a77ebcb0a803ec  $HOME/.cache/kumbu/tokenizer.json" | sha256sum -c -
+          echo "KUMBU_TOKENIZER=$HOME/.cache/kumbu/tokenizer.json" >> "$GITHUB_ENV"
       - run: dotnet test --configuration Release --no-build
 
   pdf:

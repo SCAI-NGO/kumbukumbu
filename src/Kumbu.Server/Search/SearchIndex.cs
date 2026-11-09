@@ -31,14 +31,16 @@ public sealed class SearchIndex : BackgroundService
     private readonly EmbeddingProviders _providers;
     private readonly ILogger<SearchIndex> _log;
     private readonly PdfAnalyses? _analyses;
+    private readonly ChunkTokenizer? _tokenizer;
     private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
     private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
     private int _busy;
 
     /// <param name="analyses">Where the text of PDFs is read from; without it, PDFs aren't indexed.</param>
-    public SearchIndex(VaultCatalog catalog, EmbeddingProviders providers, ILogger<SearchIndex> log, PdfAnalyses? analyses = null)
+    /// <param name="tokenizer">What bounds the chunks; without it, the fallback bound.</param>
+    public SearchIndex(VaultCatalog catalog, EmbeddingProviders providers, ILogger<SearchIndex> log, PdfAnalyses? analyses = null, ChunkTokenizer? tokenizer = null)
     {
-        (_catalog, _providers, _log, _analyses) = (catalog, providers, log, analyses);
+        (_catalog, _providers, _log, _analyses, _tokenizer) = (catalog, providers, log, analyses, tokenizer);
         // A queue per provider: one that is down or still loading holds up its own vaults only.
         _queues = providers.All.ToDictionary(p => p.Name, _ => Channel.CreateUnbounded<(UnlockedVault, VaultPath)>(), StringComparer.Ordinal);
         catalog.Unlocked += CatchUp;
@@ -46,6 +48,12 @@ public sealed class SearchIndex : BackgroundService
     }
 
     public EmbeddingProviders Providers => _providers;
+
+    /// <summary>The bound chunks are made with (<see cref="ChunkTokenizer.Bound"/>).</summary>
+    public ChunkBound Bound => _tokenizer?.Bound ?? ChunkBound.Fallback;
+
+    /// <summary>Whether the bound is final; until then, a search by meaning is getting ready.</summary>
+    public bool TokenizerSettled => _tokenizer?.Settled ?? true;
 
     /// <summary>How many notes and PDFs wait to be indexed or are being indexed, in all vaults.</summary>
     public int Queued => _queued.Count + Volatile.Read(ref _busy);
@@ -113,8 +121,17 @@ public sealed class SearchIndex : BackgroundService
     /// <summary>A length of 0 is a remote model that hasn't answered yet: then any length fits.</summary>
     private static bool FitsLength(EmbeddedChunk chunk, IEmbeddingDriver driver) => driver.Dimensions == 0 || chunk.Vector.Length == driver.Dimensions;
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (_tokenizer is not null)
+        {
+            // A vault unlocked before the bound settled was compared with the unsettled one.
+            await _tokenizer.WhenSettledAsync(stoppingToken);
+            foreach (var vault in _catalog.OpenVaults) CatchUp(vault);
+        }
+
+        await Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+    }
 
     private async Task RunAsync(EmbeddingProvider provider, ChannelReader<(UnlockedVault Vault, VaultPath Path)> queue, CancellationToken stoppingToken)
     {

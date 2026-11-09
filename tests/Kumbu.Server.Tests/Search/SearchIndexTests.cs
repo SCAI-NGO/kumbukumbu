@@ -27,12 +27,12 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     /// <summary>A server on <paramref name="world"/>'s database; with <paramref name="start"/> false the index
     /// never runs, so whatever the unlock queues stays queued.</summary>
-    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null)
+    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null, ChunkTokenizer? tokenizer = null)
     {
         world ??= new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
         embedder ??= new FakeEmbedder();
-        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), NullLogger<SearchIndex>.Instance);
+        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), NullLogger<SearchIndex>.Instance, tokenizer: tokenizer);
         if (start) await index.StartAsync(Ct);
         if ((await catalog.OpenAsync(Token, Ct)).Count == 0) await catalog.CreateAsync("Work", Token, null, Ct);
         return new Setup(world, catalog, index, new EncryptedNoteStore(catalog, new FixedCredential(Token), index), embedder);
@@ -96,6 +96,35 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         await IdleAsync(s);
         Assert.Empty((await s.Store.SearchAsync(P("/Work"), "beta", 10, Ct)).Hits);
         Assert.Equal(0, await s.World.Db.GetCollection<BsonDocument>("embeddings").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Until_the_tokenizer_settles_search_is_getting_ready_and_nothing_is_embedded()
+    {
+        var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
+        try
+        {
+            var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { Enabled = false, ModelPath = models } });
+            var tokenizer = new ChunkTokenizer(options, new NoHttp(), NullLogger<ChunkTokenizer>.Instance);
+            var s = await StartAsync(tokenizer: tokenizer);
+            await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+            await Task.Delay(200, Ct);
+
+            var waiting = await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+            Assert.Equal((SemanticState.Preparing, "search by meaning is getting ready (the tokenizer is loading)"), (waiting.State, waiting.Reason));
+            Assert.Equal(0, s.Embedder.Embedded);
+            Assert.Same(ChunkBound.Fallback, s.Store.Bound);
+
+            await tokenizer.StartAsync(Ct);
+            await tokenizer.WhenSettledAsync(Ct);
+            await IdleAsync(s);
+            Assert.Same(ChunkBound.Unbounded, s.Store.Bound);
+            Assert.Equal(P("/Work/a.md"), Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).Hits).Path);
+        }
+        finally
+        {
+            Directory.Delete(models, recursive: true);
+        }
     }
 
     [Fact]
