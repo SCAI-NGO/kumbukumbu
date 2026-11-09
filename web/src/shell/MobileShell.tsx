@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
@@ -203,6 +203,18 @@ export default function MobileShell() {
     if (path && path !== useEditor.getState().currentPath) useEditor.getState().openNote(path);
   }, [path]);
 
+  // A note named from its heading: the URL goes along, unless the user has gone on to another note meanwhile.
+  const shownPath = useRef(path);
+  shownPath.current = path;
+  useEffect(() => {
+    useEditor.getState().setFollow((from, to) => {
+      if (shownPath.current === from) navigate(noteUrl(to), { replace: true });
+    });
+    return () => useEditor.getState().setFollow(null);
+  }, [navigate]);
+  const renaming = useEditor((s) => s.renaming);
+  const renameProblem = useEditor((s) => s.renameProblem);
+
   // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field), and
   // Rename or move finds its dialog loaded.
   useEffect(() => {
@@ -266,7 +278,8 @@ export default function MobileShell() {
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
-      <TopBar path={path} writable={!readOnlyNote} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      {/* No Write mode while the note is being named: a save would make it again at its old path. */}
+      <TopBar path={path} writable={!readOnlyNote && renaming !== path} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />
@@ -283,6 +296,11 @@ export default function MobileShell() {
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
               {errorText(createUntitled.error)}
+            </p>
+          )}
+          {renameProblem && (
+            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+              {renameProblem}
             </p>
           )}
           {marking.error && (

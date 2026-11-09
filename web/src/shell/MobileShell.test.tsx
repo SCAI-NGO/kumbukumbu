@@ -183,7 +183,7 @@ describe("the shell", () => {
     const fetch = signedInApi({
       "PUT /api/notes/Work/projects/Untitled%202.md": async (request) => {
         body = await request.json();
-        return json(201, { path: "/Work/projects/Untitled 2.md", content: "", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" });
+        return json(201, { path: "/Work/projects/Untitled 2.md", content: "# ", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" });
       },
     });
     const router = renderApp("/notes/Work/inbox.md");
@@ -194,7 +194,7 @@ describe("the shell", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "New note here" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/Untitled%202.md"));
-    expect(body).toEqual({ content: "" });
+    expect(body).toEqual({ content: "# " });
     expect(useEditor.getState().mode).toBe("write");
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
     // The tree is asked again, so the new note shows up.

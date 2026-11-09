@@ -3,6 +3,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
+import { startsWithH1 } from "./NoteView";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -154,6 +155,17 @@ describe("the note view", () => {
     await screen.findByRole("heading", { level: 2, name: "Goals" });
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Plan");
+  });
+
+  it("takes an empty H1 for none: a new note's `# ` shows the file name's title", async () => {
+    expect(startsWithH1("# ")).toBe(false);
+    expect(startsWithH1("#\n\ntext")).toBe(false);
+    expect(startsWithH1("# #")).toBe(false);
+    expect(startsWithH1("# A")).toBe(true);
+    expect(startsWithH1("# A #")).toBe(true);
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "# ")) });
+    renderApp(planUrl);
+    expect(await screen.findByRole("heading", { level: 1, name: "plan" })).toBeInTheDocument();
   });
 
   it("keeps the file name's title when the first line is an indented code block, not a heading", async () => {

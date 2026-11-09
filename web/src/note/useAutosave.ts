@@ -191,6 +191,9 @@ export function useAutosave(
   /** The text and the version it goes on, while any of it isn't saved. */
   const unsaved = useCallback(() => (s.conflict || s.text !== s.saved ? { text: s.text, version: s.version } : null), [s]);
 
+  /** What the server holds, as far as this editor knows: the text it last saved (or was given). */
+  const savedText = useCallback(() => s.saved, [s]);
+
   useEffect(() => {
     if (s.text !== s.saved) void run();
   }, [s, run]);
@@ -207,5 +210,5 @@ export function useAutosave(
     [s],
   );
 
-  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved };
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved, savedText };
 }

@@ -11,7 +11,11 @@ import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
+import { renameFromHeading } from "./nameFromHeading";
 import { useAutosave } from "./useAutosave";
+
+/** The editors mounted per note path: StrictMode mounts one again at once, which is no leaving Write mode. */
+const mounted = new Map<string, number>();
 
 /**
  * Write mode (MOBILE_EDITOR §4, §7): the raw Markdown in a plain textarea (16 px, so iOS doesn't zoom), saved as
@@ -51,7 +55,7 @@ export default function MarkdownEditor({
         : Promise.reject(new Error("Signed out")),
     draft,
   );
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved, savedText } = autosave;
   const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [initialScroll] = useState(() => takeScrollTop?.());
@@ -62,6 +66,8 @@ export default function MarkdownEditor({
   // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
   const [dismissed, setDismissed] = useState<string | null>(null);
   const gone = !!elsewhere?.gone;
+  const goneRef = useRef(gone);
+  goneRef.current = gone;
   const newer = gone ? null : elsewhere?.change;
   useEffect(() => {
     if (gone) stop();
@@ -100,7 +106,10 @@ export default function MarkdownEditor({
 
   // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
   useLayoutEffect(() => {
-    textarea.current?.focus({ preventScroll: true });
+    const area = textarea.current;
+    area?.focus({ preventScroll: true });
+    // A new note: the caret after its `# `, where the title goes (a focus by script leaves it at the start in Chrome).
+    if (area?.value === "# ") area.setSelectionRange(2, 2);
   }, []);
 
   useEffect(() => {
@@ -117,6 +126,22 @@ export default function MarkdownEditor({
       if (!user && previousUser && text) useEditor.getState().setDraft({ username: previousUser, path, ...text });
     };
   }, [path, unsaved]);
+
+  useEffect(() => {
+    mounted.set(path, (mounted.get(path) ?? 0) + 1);
+    return () => {
+      const left = mounted.get(path)! - 1;
+      if (left) mounted.set(path, left);
+      else mounted.delete(path);
+      // Write mode ended (Read, another note, another page) with everything saved: an untitled note takes its name
+      // from the heading it was saved with. Never with text unsaved: the move would leave it behind.
+      const saved = !unresolved() && !goneRef.current ? savedText() : null;
+      if (saved === null) return;
+      setTimeout(() => {
+        if (!mounted.has(path)) void renameFromHeading(queryClient, path, saved);
+      }, 0);
+    };
+  }, [path, unresolved, savedText, queryClient]);
 
   useEffect(() => {
     useEditor.getState().setBeforeRead(async ({ reread = true } = {}) => {

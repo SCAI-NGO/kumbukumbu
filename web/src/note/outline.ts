@@ -5,7 +5,7 @@ import { linkLabel } from "./wikiLinks";
 export type Heading = { level: number; text: string; line: number };
 
 /** A heading's Markdown as it reads: wiki links by their label, emphasis and code marks and links' URLs gone. */
-const plain = (md: string) =>
+export const headingText = (md: string) =>
   md
     .replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -35,12 +35,12 @@ export function outline(body: string): Heading[] {
     if (fence !== null) return;
     const setext = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
     if (setext && para) {
-      headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: plain(para.text.join(" ")), line: para.start + 1 });
+      headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: headingText(para.text.join(" ")), line: para.start + 1 });
       para = null;
       return;
     }
     const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
-    if (m && m[2]) headings.push({ level: m[1].length, text: plain(m[2]), line: i + 1 });
+    if (m && m[2]) headings.push({ level: m[1].length, text: headingText(m[2]), line: i + 1 });
     if (m || !paragraphLine(line)) para = null;
     else if (para) para.text.push(line.trim());
     else para = { start: i, text: [line.trim()] };
