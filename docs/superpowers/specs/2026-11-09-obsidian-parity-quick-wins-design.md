@@ -26,6 +26,14 @@ Anti-goals, which make this a failure even if it works:
 - **A rename per keystroke.** Every rename reaches the Obsidian sync clients and WebDAV and rewrites links, so §2 renames once, not while the heading is being typed.
 - **Maths that breaks the page.** A malformed formula shows as its source, never as an error that takes the note down.
 
+### An example from end to end
+
+Alice opens `/Home/Garden` in the web app and taps **New note**. `Untitled.md` appears in the tree and opens in Write mode with `# ` and the cursor after it. She types `# Einkaufsliste`, a blank line, `- ==Tomaten== %%die gelben%%`, then, each as a paragraph of its own, `Price per kilo: $3` and `Bed area: $A = \pi r^2$`. She switches to Read: the note is now `/Home/Garden/Einkaufsliste.md`, the tree and the URL say so, "Tomaten" is highlighted, "die gelben" is not shown, "$3" is plain text and the area formula is typeset. From the ⋯ menu she taps **Copy link** and pastes `[[Einkaufsliste]]` into another note, which leads back here; **Copy file path** gives `/Home/Garden/Einkaufsliste.md`. Later she renames the note to `Markt.md` by hand and changes its heading to `# Einkaufsliste Samstag`: the file stays `Markt.md`.
+
+### Security boundary
+
+Web app only. Not touched: the server, its API and CSP, encryption, accounts, sharing and roles, publishing, WebDAV, sync. The rename of §2 goes through the existing move endpoint, which validates names and permissions as it does for a manual rename; the client's cleaning of the name is convenience, not a check. KaTeX runs with `trust: false` (its default: no `\href`, `\url`, `\htmlClass` and the like) and its default size and expansion limits; note text never reaches `dangerouslySetInnerHTML` other than as KaTeX's own output.
+
 ## 2. The first heading names a new note
 
 Today "New note" creates `Untitled.md` (`Untitled 2.md`, … : `untitledName`, `web/src/api/paths.ts:120`) through `useCreateUntitled` (`web/src/api/notes.ts:161`) and opens it in Write mode (`web/src/shell/MobileShell.tsx:248`). The maintainer then renames it by hand every time, which annoys him as a user. Obsidian names the file from the title.
@@ -68,7 +76,7 @@ Claude's calls:
 
 Both are everyday Obsidian syntax and show as raw text today.
 
-- `==text==` renders as `<mark>`, styled from the theme's accent (light and dark). Not inside code; not across lines.
+- `==text==` renders as `<mark>` in a warm yellow like Obsidian's, the classic highlighter colour, in light and dark mode. Decided by the maintainer; why: find-in-note's matches already use the accent (`MarkdownView.tsx:343`), and the two must look different. Not inside code; not across lines.
 - `%%text%%`, inline or as a block over several lines, is hidden in the reading view. It stays in the source and in Write mode. Not inside code.
 - Both are remark plugins next to the existing ones (`remarkCallouts`, `remarkTags`, `remarkWikiLinks` in `MarkdownView.tsx`), so they also apply inside embedded notes and callouts. The agent highlight (`remarkChanged`) and find-in-note (`remarkFind`) keep working on such text.
 
@@ -77,7 +85,7 @@ Both are everyday Obsidian syntax and show as raw text today.
 `$…$` inline and `$$…$$` as a block render as maths in the note view.
 
 - Chatsundere (`../chatsundere`, the maintainer's other project) has already solved many of the formatting problems: read its spec `superpowers/specs/2026-06-01-message-rendering-design.md` and `apps/user-client` (its `preprocess-math.ts`) first, and take over what fits: `remark-math` + `rehype-katex` + `katex`, `throwOnError: false`, the handling of whitespace-bounded inline maths, and leaving maths-like text inside code alone. Chatsundere's `\( … \)` and `\[ … \]` conversion is for model output; Obsidian notes use `$` only, so it is left out unless it costs nothing.
-- **Currency stays text.** "costs $5 and $10" must not turn into maths; remark-math's rule for that is kept.
+- **Currency stays text.** "costs $5 and $10" must not turn into maths. remark-math has no rule for this (it pairs any two `$`, even across lines), so the rule Obsidian and Pandoc use is applied before parsing: an opening `$` is followed by a non-space, a closing `$` follows a non-space and is not followed by a digit, and no pair spans a blank line; a `$` that can't pair stays text.
 - KaTeX and its CSS and fonts load only when a note has maths (a dynamic import), so the app's first load doesn't grow. Fonts come from the app's own origin; the app's CSP (`src/Kumbu.Server/Api/Security.cs:59`) is not loosened.
 - A formula KaTeX can't parse shows as its source, marked as such.
 
