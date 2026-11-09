@@ -19,6 +19,8 @@ export function useReveal(pin: string) {
     // The mutation's closure holds the PIN: nothing of it stays in the cache once the dialog is gone.
     gcTime: 0,
     onSuccess: (view) => {
+      // Shown again on purpose: a hide that didn't reach the server is overtaken.
+      useDiscreet.setState({ unsent: false });
       useDiscreet.getState().setFromSession(view);
       return shownChanged(queryClient);
     },

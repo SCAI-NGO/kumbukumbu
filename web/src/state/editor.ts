@@ -11,6 +11,8 @@ export type SearchMode = "hybrid" | "meaning" | "exact";
 export type NoteTool = "outline" | "find" | null;
 export type Find = { query: string; index: number; count: number };
 export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
+/** The open editor's text and the version it goes on, while any of it isn't saved. */
+export type Unsaved = () => { text: string; version: string } | null;
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -49,6 +51,8 @@ interface EditorState {
    * session's end and answer 401.
    */
   beforeRead: BeforeRead | null;
+  /** Set by the open editor with `beforeRead`: what a save that failed left, for hiding discreet vaults again. */
+  unsaved: Unsaved | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
@@ -61,7 +65,7 @@ interface EditorState {
   /** Ends Write mode (Done, the Read toggle): only once the editor has saved everything. */
   endWrite(): Promise<void>;
   setScrollTarget(target: { path: string; line: number } | null): void;
-  setBeforeRead(guard: BeforeRead | null): void;
+  setBeforeRead(guard: BeforeRead | null, unsaved?: Unsaved | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
   refused: { path: string; code: RefusalCode; at: number } | null;
@@ -105,6 +109,7 @@ const initial = {
   showAgentHighlights: false,
   recentPaths: [],
   beforeRead: null,
+  unsaved: null as Unsaved | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
   scrollTarget: null,
@@ -140,7 +145,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     const guard = get().beforeRead;
     if (!guard || (await guard())) set({ mode: "read" });
   },
-  setBeforeRead: (beforeRead) => set({ beforeRead }),
+  setBeforeRead: (beforeRead, unsaved = null) => set({ beforeRead, unsaved }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),

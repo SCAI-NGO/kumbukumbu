@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { schemes, type Tokens } from "./schemes";
+import { discreet, schemes, type Tokens } from "./schemes";
 
 function luminance(hex: string): number {
   const [r, g, b] = [1, 3, 5].map((i) => {
@@ -53,6 +53,18 @@ describe("colour schemes", () => {
     it("on-accent on accent is at least 4.5:1", () => {
       expect(contrast(scheme.tokens.onAccent, scheme.tokens.accent)).toBeGreaterThanOrEqual(4.5);
     });
+  });
+
+  /** `color` over `ground` at `alpha`, as the pill's tint lies over the drawer. */
+  const over = (color: string, ground: string, alpha: number) =>
+    "#" + [1, 3, 5].map((i) => Math.round(parseInt(color.slice(i, i + 2), 16) * alpha + parseInt(ground.slice(i, i + 2), 16) * (1 - alpha)).toString(16).padStart(2, "0")).join("");
+
+  it.each(schemes)("the discreet amber reads at 4.5:1 on $name's grounds and on its tint", (scheme) => {
+    const amber = scheme.light ? discreet.light : discreet.dark;
+    for (const ground of grounds) {
+      expect(contrast(amber, scheme.tokens[ground])).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(amber, over(amber, scheme.tokens[ground], 0.14))).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it("has a checker that notices a failing pair", () => {

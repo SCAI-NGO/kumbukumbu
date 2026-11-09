@@ -125,9 +125,9 @@ export default function MarkdownEditor({
       // older version: asked again, Read mode shows what was saved.
       if (done && reread) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
       return done;
-    });
+    }, unsaved);
     return () => useEditor.getState().setBeforeRead(null);
-  }, [flush, queryClient, path]);
+  }, [flush, queryClient, path, unsaved]);
 
   useEffect(() => {
     // Mobile browsers rarely fire beforeunload (iOS Safari never): hidden and pagehide are the last moments to

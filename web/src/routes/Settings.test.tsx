@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -654,5 +655,95 @@ describe("Settings", () => {
     await waitFor(() => expect(box).toBeChecked());
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(bodies.at(-1)).toEqual({ askPasswordForDownloads: true });
+  });
+});
+
+describe("Settings: discreet vaults", () => {
+  const discreetVaults = [
+    { name: "Work", notes: 3, kind: "notes", discreet: false },
+    { name: "Tagebuch", notes: 1, kind: "notes", discreet: true },
+    { name: "Skills", notes: 2, kind: "skills", discreet: false },
+  ];
+  const session = (revealed: boolean) => () => json(200, { user, previousSignInAt: null, discreet: { revealed, until: null } });
+
+  afterEach(() => useDiscreet.getState().reset());
+
+  it("looks the same for everyone while hidden: Set or change PIN, no switches", async () => {
+    // Whatever the server holds, the hidden session's answers are the same: so is the section.
+    const texts: string[] = [];
+    for (const vaults of [[{ name: "Work", notes: 3 }], [{ name: "Work", notes: 3 }, { name: "Garten", notes: 1 }]]) {
+      api({ "GET /api/session": session(false), "GET /api/vaults": () => json(200, vaults) });
+      renderApp("/settings");
+      const region = await screen.findByRole("region", { name: "Discreet vaults" });
+      expect(within(region).getByRole("button", { name: "Set or change PIN" })).toBeInTheDocument();
+      expect(within(region).queryAllByRole("switch")).toEqual([]);
+      texts.push(region.textContent ?? "");
+      cleanup();
+    }
+    expect(texts[0]).toBe(texts[1]);
+    expect(texts[0]).not.toContain("Garten");
+  });
+
+  it("comes after the password", async () => {
+    api({ "GET /api/session": session(false) });
+    renderApp("/settings");
+    await screen.findByRole("region", { name: "Discreet vaults" });
+    const names = screen.getAllByRole("region").map((r) => r.getAttribute("aria-labelledby") && document.getElementById(r.getAttribute("aria-labelledby")!)?.textContent);
+    expect(names.indexOf("Discreet vaults")).toBe(names.indexOf("Password") + 1);
+  });
+
+  it("while shown, has a Discreet switch per vault, none for Skills, and marks one", async () => {
+    const marks: unknown[] = [];
+    api({
+      "GET /api/session": session(true),
+      "GET /api/vaults": () => json(200, discreetVaults),
+      "PUT /api/account/discreet/vaults/Work": async (r) => (marks.push(await r.json()), noContent()),
+    });
+    renderApp("/settings");
+    const region = await screen.findByRole("region", { name: "Discreet vaults" });
+    const switches = await within(region).findAllByRole("switch");
+    expect(switches.map((s) => s.getAttribute("aria-label"))).toEqual(["Discreet: Work", "Discreet: Tagebuch"]);
+    expect(within(region).getByRole("switch", { name: "Discreet: Tagebuch" })).toBeChecked();
+    expect(within(region).getByRole("switch", { name: "Discreet: Work" })).not.toBeChecked();
+    await userEvent.click(within(region).getByRole("switch", { name: "Discreet: Work" }));
+    await waitFor(() => expect(marks).toEqual([{ discreet: true }]));
+  });
+
+  it("sets the PIN with the current password, and says so the same way every time", async () => {
+    const bodies: unknown[] = [];
+    api({ "GET /api/session": session(false), "POST /api/account/discreet/pin": async (r) => (bodies.push(await r.json()), noContent()) });
+    renderApp("/settings");
+    const region = await screen.findByRole("region", { name: "Discreet vaults" });
+    await userEvent.click(within(region).getByRole("button", { name: "Set or change PIN" }));
+    const dialog = screen.getByRole("dialog", { name: "Set or change PIN" });
+    const pin = within(dialog).getByLabelText("New PIN");
+    expect(pin).toHaveAttribute("type", "password");
+    expect(pin).toHaveAttribute("inputmode", "numeric");
+    expect(pin).toHaveAccessibleDescription("4 to 6 digits");
+    await userEvent.type(within(dialog).getByLabelText("Current password"), "my password");
+    await userEvent.type(pin, "4711");
+    await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4712");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("The two PINs differ.");
+    expect(bodies).toEqual([]);
+    await userEvent.clear(within(dialog).getByLabelText("New PIN again"));
+    await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4711");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Set or change PIN" })).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ password: "my password", pin: "4711" }]);
+    expect(within(region).getByRole("status")).toHaveTextContent("The PIN is set.");
+  });
+
+  it("shows the server's sentence for a wrong password", async () => {
+    api({ "GET /api/session": session(false), "POST /api/account/discreet/pin": () => json(400, { error: "The password is wrong." }) });
+    renderApp("/settings");
+    const region = await screen.findByRole("region", { name: "Discreet vaults" });
+    await userEvent.click(within(region).getByRole("button", { name: "Set or change PIN" }));
+    const dialog = screen.getByRole("dialog", { name: "Set or change PIN" });
+    await userEvent.type(within(dialog).getByLabelText("Current password"), "wrong");
+    await userEvent.type(within(dialog).getByLabelText("New PIN"), "4711");
+    await userEvent.type(within(dialog).getByLabelText("New PIN again"), "4711");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Set PIN" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The password is wrong.");
   });
 });

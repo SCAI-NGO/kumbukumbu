@@ -20,6 +20,7 @@ import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
 import { exportUrl } from "../data/exportUrl";
 import ExportConfirm from "../data/ExportConfirm";
+import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import PinDialog from "../discreet/PinDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -537,6 +538,8 @@ export default function TreeDrawer(props: {
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
+  // While the discreet vaults are shown, an amber frame around the sidebar (spec §3.7).
+  const revealed = useRevealed();
   const className = `relative flex h-full flex-col border-r border-line bg-surface ${resizing ? "select-none" : ""}`;
   // `data-autofocus` is for the drawer, a dialog that takes the focus in; the docked sidebar is a landmark beside the note.
   const panel = (
@@ -612,9 +615,11 @@ export default function TreeDrawer(props: {
       </div>
 
       <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
+        {revealed && <DiscreetPill />}
         <VaultSwitcher onNewVault={onNewVault} onRename={() => setMember(true)} onMoreVaults={() => setAskingPin(true)} />
         <AccountRow />
       </div>
+      {revealed && <DiscreetFrame />}
       {/* Last in the tab order: the tree and its controls come first. */}
       <ResizeHandle sidebar={sidebar} onDragging={setResizing} />
     </>

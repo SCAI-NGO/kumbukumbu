@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyScheme, storedScheme } from "./apply";
-import { schemes } from "./schemes";
+import { discreet, schemes } from "./schemes";
 
 function mockSystem(dark: boolean) {
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: dark && q.includes("dark"), addEventListener() {} }));
@@ -52,5 +52,10 @@ describe("index.css", () => {
     for (const [token, value] of Object.entries(scheme.tokens)) {
       expect(block).toContain(`--${kebab(token)}: ${value};`);
     }
+  });
+
+  it("has the discreet amber of schemes.ts, light and dark", () => {
+    expect(css).toContain(`--color-discreet: light-dark(${discreet.light}, ${discreet.dark});`);
+    expect(css).toContain(`--color-discreet-soft: color-mix(in srgb, light-dark(${discreet.light}, ${discreet.dark}) 14%, transparent);`);
   });
 });

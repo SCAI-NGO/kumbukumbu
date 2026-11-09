@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
-import { followVaults, useDiscreet } from "./discreet/state";
+import { followSession, useDiscreetMode } from "./discreet/hideAgain";
+import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -59,14 +60,20 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const session = useQuery({ queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) });
   const signedIn = useSession((s) => s.signedIn);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const at = useRef(pathname);
+  at.current = pathname;
+  useDiscreetMode();
 
   useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
     if (!session.data) return;
     signedIn(session.data);
-    useDiscreet.getState().setFromSession(session.data.discreet);
-  }, [session.data, signedIn]);
+    followSession(queryClient, navigate, at.current, session.data.discreet);
+    // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).
+  }, [session.data, session.dataUpdatedAt, signedIn, queryClient, navigate]);
 
   if (session.isPending) return null;
   // A 401 has already sent the app to sign-in; anything else is shown.

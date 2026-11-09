@@ -15,6 +15,8 @@ import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
+import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
+import { useDiscreet } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -155,6 +157,7 @@ export default function MobileShell() {
 
   // From the desktop breakpoint on, the tree is docked beside the note: collapsed or expanded, never an overlay.
   const docked = useDesktop();
+  const discreetShown = useRevealed();
   const [collapsed, setCollapsed] = useSidebarCollapsed();
   const [revealed, setRevealed] = useState(0);
   const toggleSidebar = useCallback(() => {
@@ -194,8 +197,9 @@ export default function MobileShell() {
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
   // Only then: after signing out, the store is empty while this URL is still shown for a moment.
+  // Nor while the discreet vaults are being hidden: the note's URL is on its way out.
   useEffect(() => {
-    if (path && path !== useEditor.getState().currentPath) useEditor.getState().openNote(path);
+    if (path && path !== useEditor.getState().currentPath && !useDiscreet.getState().hiding) useEditor.getState().openNote(path);
   }, [path]);
 
   // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field), and
@@ -257,11 +261,19 @@ export default function MobileShell() {
   // Below `write` the dock makes nothing, and the note can't be changed; the board's definition wants `maintain`.
   const dockWrites = !!dockFolder && atLeast(dockLevel, "write");
   const noteChanges = !!path && mayChange(noteLevel, path);
+  // On a phone the tree is a drawer: the frame and the pill go around and under the top bar instead (spec §3.7).
+  const framed = discreetShown && !docked;
   const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
+      {framed && <DiscreetFrame />}
       <TopBar path={path} writable={!readOnlyNote} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      {framed && (
+        <div className="flex-none px-3 pt-2">
+          <DiscreetPill />
+        </div>
+      )}
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />

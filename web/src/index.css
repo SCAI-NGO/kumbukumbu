@@ -310,6 +310,9 @@
   --color-on-accent: var(--on-accent);
   --color-warning: var(--warning);
   --color-success: var(--success);
+  /* The discreet mode's amber, the same in every scheme of a kind (schemes.ts, `discreet`). */
+  --color-discreet: light-dark(#643b00, #ffd27f);
+  --color-discreet-soft: color-mix(in srgb, light-dark(#643b00, #ffd27f) 14%, transparent);
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
