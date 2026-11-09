@@ -50,6 +50,8 @@ export default defineConfig({
   build: {
     // pdf.js (540 kB, loaded only to show a PDF) is the one chunk over Vite's 500 kB default; the app's stay far below.
     chunkSizeWarningLimit: 600,
+    // KaTeX's smallest font is under the 4 kB limit; inlined as `data:`, the CSP (default-src 'self') would refuse it.
+    assetsInlineLimit: (file) => (/\.(woff2?|ttf)$/.test(file) ? false : undefined),
     rollupOptions: {
       // The reader page (s.html) and the skill page (k.html) are entries of their own: strangers open them, and they
       // load none of the app.
@@ -62,6 +64,11 @@ export default defineConfig({
           // Loaded only when a PDF is shown (attachments/pdf.ts). Not the worker's URL (`?url`), which the lightbox
           // holds: in this chunk, it would load all of pdf.js with the lightbox.
           if (id.includes("/node_modules/.pnpm/pdfjs-dist@") && !id.includes("?")) return "pdfjs";
+          // Loaded only for a note with maths (note/math.ts), with the hast utilities only rehype-katex uses: not in
+          // the markdown chunk, which loads with the app.
+          if (/\/node_modules\/\.pnpm\/(remark-math|micromark-extension-math|mdast-util-math|rehype-katex|katex|hast-util-from-html-isomorphic|hast-util-from-dom|hast-util-to-text|hastscript|hast-util-parse-selector|web-namespaces)@/.test(id)) {
+            return undefined;
+          }
           if (/\/node_modules\/\.pnpm\/(react-markdown|remark-|micromark|mdast-|hast-|unist-|unified|vfile|property-information|space-separated-tokens|comma-separated-tokens|html-url-attributes|decode-named-character-reference|character-entities|ccount|markdown-table|longest-streak|zwitch|trim-lines|devlop|bail|trough|is-plain-obj|estree-util|style-to-|inline-style-parser|escape-string-regexp|@ungap)/.test(id)) {
             return "markdown";
           }

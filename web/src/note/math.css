@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* A wide formula scrolls inside itself, never the page. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.6em 0;
+  padding: 0.25em 0;
+}
+
+.katex-error {
+  text-decoration: underline dotted;
+  cursor: help;
+}

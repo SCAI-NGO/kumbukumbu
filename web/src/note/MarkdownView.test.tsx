@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -529,5 +529,124 @@ describe("highlights and comments", () => {
     show("==x==", [], {}, { lines: new Set([1]), writer: "Bob" });
     expect(document.querySelector("[data-changed]")).toHaveTextContent("x");
     expect(marks()).toHaveLength(1);
+  });
+});
+
+describe("Maths", () => {
+  const rich = [
+    "# Garden",
+    "",
+    "## Beds",
+    "",
+    "- [ ] Sow the carrots, see [[plan]]",
+    "- [x] Water the ==tomatoes== %%every day%%",
+    "  - with #rain water",
+    "",
+    "> [!tip] Soil",
+    "> Mix in compost, [the guide](/Work/plan.md).",
+    "",
+    "| Bed | Plants |",
+    "|---|---|",
+    "| *north* | `kale` |",
+    "",
+    "```js",
+    "const area = width * height;",
+    "```",
+    "",
+    "> Alice: keep the paths clear.",
+  ].join("\n");
+
+  it("renders a note without $ as before maths came", async () => {
+    show(rich, [link(5, "[[plan]]", "note", "/Work/plan.md"), mdLink(10, "[the guide](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")], {}, { lines: new Set([5]), writer: "Bob" });
+    await expect(document.body.innerHTML).toMatchFileSnapshot("__snapshots__/rich-note.html");
+  });
+
+  /** Waits for KaTeX, which loads on its own once a note has maths. */
+  const typeset = () => waitFor(() => expect(document.querySelector(".katex")).not.toBeNull());
+
+  it("typesets inline maths and keeps the text around it", async () => {
+    show("Bed area: $A = \\pi r^2$");
+    await typeset();
+    expect(screen.getByText(/Bed area:/)).toBeInTheDocument();
+    expect(document.querySelector(".katex-display")).toBeNull();
+  });
+
+  it("keeps currency as text", async () => {
+    show("Price per kilo: $3\n\nIt costs $5 and $10.\n\nBed area: $A$");
+    await typeset();
+    expect(screen.getByText("Price per kilo: $3")).toBeInTheDocument();
+    expect(screen.getByText("It costs $5 and $10.")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("\\");
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+  });
+
+  it("loads no maths for a note with only currency in it", async () => {
+    show("Price per kilo: $3");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByText("Price per kilo: $3")).toBeInTheDocument();
+    expect(document.querySelector(".katex")).toBeNull();
+  });
+
+  it("typesets a $$ block, aligned environments included", async () => {
+    show("$$\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n$$");
+    await typeset();
+    expect(document.querySelector(".katex-display")).not.toBeNull();
+    expect(document.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("shows a one-line $$x$$ alone in its paragraph as a display", async () => {
+    show("$$x^2$$");
+    await typeset();
+    expect(document.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("keeps $x$ and $$y$$ inside a sentence inline", async () => {
+    show("$x$ in $$y$$ text");
+    await typeset();
+    expect(document.querySelectorAll(".katex")).toHaveLength(2);
+    expect(document.querySelector(".katex-display")).toBeNull();
+  });
+
+  it("leaves maths-like text in code alone", async () => {
+    show("`$x$` and $y$\n\n```math\n\\sqrt{2}\n```");
+    await typeset();
+    expect(screen.getByText("$x$").tagName).toBe("CODE");
+    expect(screen.getByText("\\sqrt{2}").closest("pre")).not.toBeNull();
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+  });
+
+  it("keeps a link's address, and finds links whose text holds a $", async () => {
+    show("[a](https://x/?p=$5) and [$5 plan](/Work/plan.md) and $y$", [mdLink(1, "[$5 plan](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")]);
+    await typeset();
+    expect(screen.getByRole("link", { name: "a" })).toHaveAttribute("href", "https://x/?p=$5");
+    expect(screen.getByRole("link", { name: "$5 plan" })).toHaveAttribute("href", "/notes/Work/plan.md");
+  });
+
+  it("hands KaTeX the formula with its $ signs", async () => {
+    show("$$\na$b\n$$\n\nand $a $ b$");
+    await waitFor(() => expect(document.querySelectorAll(".katex-error")).toHaveLength(2));
+    expect([...document.querySelectorAll(".katex-error")].map((e) => e.textContent)).toEqual(["a$b", "a $ b"]);
+  });
+
+  it("shows a formula it can't read as its source, quietly, and runs nothing", async () => {
+    const warn = vi.spyOn(console, "warn");
+    const error = vi.spyOn(console, "error");
+    try {
+      show("Broken: $\\frac{1}{$\n\nLink: $\\href{javascript:alert(1)}{x}$\n\nÄ: $ä$");
+      await waitFor(() => expect(document.querySelector(".katex-error")).not.toBeNull());
+      expect(document.querySelector(".katex-error")).toHaveTextContent("\\frac{1}{");
+      expect(document.querySelector("a")).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("keeps the agent's highlight on a maths block", async () => {
+    show("text\n\n$$\nx^2\n$$", [], {}, { lines: new Set([4]), writer: "Bob" });
+    await typeset();
+    expect(document.querySelector("[data-changed] .katex-display")).not.toBeNull();
   });
 });

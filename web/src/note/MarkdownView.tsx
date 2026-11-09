@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
 import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
-import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -16,6 +16,7 @@ import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
 import { remarkComments, remarkHighlights } from "./highlights";
 import { section } from "./outline";
+import { prepareMath, remarkRestoreDollars } from "./prepareMath";
 import { splitFrontmatter } from "./properties";
 import { embedHeading, isExternalUrl, remarkWikiLinks, type LinkView } from "./wikiLinks";
 
@@ -422,13 +423,39 @@ const components: Components = {
   },
 };
 
+type MathPlugins = typeof import("./math");
+let mathLoading: Promise<MathPlugins> | null = null;
+let mathLoaded: MathPlugins | null = null;
+
+/** KaTeX and its plugins once a note with maths asks for them; until then (and if they fail to load) maths stays text. */
+function useMath(wanted: boolean): MathPlugins | null {
+  const [math, setMath] = useState(mathLoaded);
+  useEffect(() => {
+    if (!wanted || math) return;
+    let live = true;
+    mathLoading ??= import("./math").then((m) => (mathLoaded = m));
+    mathLoading.then(
+      (m) => live && setMath(m),
+      () => (mathLoading = null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [wanted, math]);
+  return wanted ? math : null;
+}
+
 function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
+  const prepared = useMemo(() => prepareMath(source), [source]);
+  const math = useMath(prepared.maths);
   const remarkPlugins = useMemo(
     () =>
       [
         remarkGfm,
+        // The prepared source keeps the original's offsets and lines, so positions, links and tags hold.
+        ...(math ? [math.remarkMath, [remarkRestoreDollars, { original: source }]] : []),
         remarkCallouts,
         remarkTags,
         [remarkWikiLinks, { links: links ?? [] }],
@@ -436,9 +463,11 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
         remarkHighlights,
         remarkComments,
         [remarkFind, { query, current }],
+        // Before the agent's highlights, which land on the `div` a display gets.
+        ...(math ? [math.remarkDisplayParagraph, math.remarkMathBlocks] : []),
         [remarkChanged, { highlight }],
       ] as const,
-    [links, highlight, query, current],
+    [links, highlight, query, current, math, source],
   );
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
@@ -450,8 +479,8 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
   return (
     <NoteContext.Provider value={context}>
       <div className="text-[16px] leading-[1.6] break-words text-text-body">
-        <ReactMarkdown remarkPlugins={remarkPlugins as never} components={components}>
-          {source}
+        <ReactMarkdown remarkPlugins={remarkPlugins as never} rehypePlugins={math?.rehypePlugins} components={components}>
+          {math ? prepared.source : source}
         </ReactMarkdown>
       </div>
     </NoteContext.Provider>
