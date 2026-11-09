@@ -10,6 +10,8 @@ import { presenceKey, useSyncStatus } from "../state/sync";
 
 /** The server closed the socket for a newer one of this session (more than four tabs): reconnecting would replace that one. */
 const REPLACED = 4409;
+/** The server closed the socket because the session hid its discreet vaults (or a vault became one): connect again at once, the new ticket leaves them out. */
+const HIDDEN = 4412;
 const MAX_DELAY = 30_000;
 /** WebSocket.OPEN. */
 const OPEN = 1;
@@ -17,6 +19,21 @@ const OPEN = 1;
 const socketUrl = (ticket: string) => {
   const { protocol, host } = window.location;
   return `${protocol === "https:" ? "wss" : "ws"}://${host}/api/ws?ticket=${encodeURIComponent(ticket)}`;
+};
+
+type DiscreetFrame = (queryClient: QueryClient, navigate: NavigateFunction) => void;
+
+/**
+ * What the frames about the session's discreet vaults do, which name no vault: `hidden`, the session hid them again
+ * (in another tab, or their time ran out), and `revealed`, it showed them, so the session and the vault list are asked
+ * again (and the socket opens again for the vaults it gains). The discreet mode sets `hidden`.
+ */
+export const discreetFrames: { hidden: DiscreetFrame; revealed: DiscreetFrame } = {
+  hidden: () => {},
+  revealed: (queryClient) => {
+    void queryClient.invalidateQueries({ queryKey: ["session"] });
+    void queryClient.invalidateQueries({ queryKey: ["vaults"] });
+  },
 };
 
 /**
@@ -31,7 +48,12 @@ function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unk
   } catch {
     return;
   }
-  if (!frame || typeof frame !== "object" || !("type" in frame) || !("vault" in frame) || typeof frame.vault !== "string") return;
+  if (!frame || typeof frame !== "object" || !("type" in frame)) return;
+  if (frame.type === "hidden" || frame.type === "revealed") {
+    discreetFrames[frame.type](queryClient, navigate);
+    return;
+  }
+  if (!("vault" in frame) || typeof frame.vault !== "string") return;
   // One naming no move (the server's catalog forgot the vault meanwhile) would only forget what the tab holds under it.
   if (frame.type === "renamed" && "from" in frame && typeof frame.from === "string" && frame.from !== frame.vault) followRename(queryClient, navigate, frame.from, frame.vault);
   if (frame.type === "changed") vaultHinted(queryClient, frame.vault);
@@ -54,8 +76,9 @@ const down = { connected: false, editors: {}, send: () => false };
  * One socket per signed-in tab (collab design §9.1): each hint has the vault's tree, history, trash, checkpoints and
  * the open note's version asked again. Every connection takes a fresh ticket, which holds the vaults as the server
  * opens them then; a vault gained since (an invitation accepted in another tab) comes with a new ticket, so the socket
- * is opened again when the vault list names one it didn't. Closed, it tries again after 1, 2, 4 … 30 seconds, and
- * meanwhile the version poll runs; after a gap, what it may have missed is asked again.
+ * is opened again when the vault list names one it didn't. Closed, it tries again after 1, 2, 4 … 30 seconds (at once
+ * when its discreet vaults were hidden), and meanwhile the version poll runs; after a gap, what it may have missed is
+ * asked again.
  */
 export function useSyncSocket() {
   const queryClient = useQueryClient();
@@ -113,7 +136,10 @@ export function useSyncSocket() {
         if (socket !== s) return;
         socket = null;
         useSyncStatus.setState(down);
-        if (e.code !== REPLACED) retry();
+        if (e.code === HIDDEN) {
+          attempt = 0;
+          if (!stopped) void connect();
+        } else if (e.code !== REPLACED) retry();
       };
     };
 

@@ -9,7 +9,7 @@ import { useEditor } from "../state/editor";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
 import { FakeSocket } from "../test/socket";
-import { useSyncSocket } from "./useSyncSocket";
+import { discreetFrames, useSyncSocket } from "./useSyncSocket";
 
 const last = () => FakeSocket.all.at(-1)!;
 const ticketOf = (s: FakeSocket) => new URL(s.url).searchParams.get("ticket");
@@ -169,6 +169,66 @@ describe("the sync socket", () => {
 
     expect(count("POST", "/api/ws-ticket")).toBe(1);
     expect(useSyncStatus.getState().connected).toBe(false);
+  });
+
+  it("connects again at once, with a fresh ticket, when the session hid its discreet vaults", async () => {
+    vi.useFakeTimers();
+    const { count } = server();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    last().open();
+    // A drop before it: the back-off it built up doesn't count either.
+    last().drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    last().open();
+
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(count("POST", "/api/ws-ticket")).toBe(3);
+    expect(FakeSocket.all).toHaveLength(3);
+    expect(ticketOf(last())).toBe("t3");
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(4);
+  });
+
+  it("hands a hidden frame, which names no vault, to the discreet mode", async () => {
+    const hidden = vi.spyOn(discreetFrames, "hidden");
+    try {
+      server();
+      const queryClient = new QueryClient();
+      queryClient.setQueryData(["tree", "Work"], {});
+      mount(queryClient);
+      await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+      last().open();
+
+      last().frame({ type: "hidden" });
+
+      expect(hidden).toHaveBeenCalledTimes(1);
+      expect(hidden.mock.calls[0][0]).toBe(queryClient);
+      expect(invalidated(queryClient, ["tree", "Work"])).toBe(false);
+    } finally {
+      hidden.mockRestore();
+    }
+  });
+
+  it("asks for the session and the vault list again on a revealed frame", async () => {
+    server();
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["session"], {});
+    queryClient.setQueryData(["tree", "Work"], {});
+    mount(queryClient);
+    await waitFor(() => expect(queryClient.getQueryData(["vaults"])).toBeDefined());
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    last().open();
+    expect(invalidated(queryClient, ["session"])).toBe(false);
+
+    last().frame({ type: "revealed" });
+
+    expect(invalidated(queryClient, ["session"])).toBe(true);
+    await waitFor(() => expect(invalidated(queryClient, ["vaults"])).not.toBe(false));
+    expect(invalidated(queryClient, ["tree", "Work"])).toBe(false);
   });
 
   it("opens again with a new ticket when the vault list names a vault the ticket didn't hold", async () => {

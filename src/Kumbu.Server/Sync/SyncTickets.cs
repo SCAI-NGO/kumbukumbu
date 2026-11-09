@@ -29,10 +29,16 @@ public sealed record TicketVault(string VaultId, string VaultName, string? Membe
 }
 
 /// <summary>What a ticket lets its WebSocket hear about: the subject and the vaults it opened when the ticket was made.
-/// <c>Display</c>: the user's display name, which members see when she, their vault's owner, is editing.</summary>
+/// <c>Display</c>: the user's display name, which members see when she, their vault's owner, is editing.
+/// <c>Revealed</c>: a session's ticket asked while it showed its discreet vaults, which it may hold then only until the
+/// reveal ends, at <c>RevealUntil</c> (null for a reveal until the session ends or hides them).</summary>
 public sealed record TicketGrant(Subject Subject, IReadOnlyList<TicketVault> Vaults)
 {
     public string Display { get; init; } = "";
+
+    public bool Revealed { get; init; }
+
+    public DateTime? RevealUntil { get; init; }
 }
 
 /// <summary>

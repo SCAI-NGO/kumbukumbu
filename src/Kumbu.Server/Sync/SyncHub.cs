@@ -35,6 +35,14 @@ namespace Kumbu.Server.Sync;
 /// rendered for each receiving connection (<see cref="Presence.Render"/>), on a channel of its own that keeps the last
 /// state per note, so no burst of hints ever pushes out an "off".
 /// </para>
+/// <para>
+/// Discreet vaults (discreet vaults design, Decision 8): a session's ticket holds them only if it was asked while the
+/// session showed them (<see cref="TicketGrant.Revealed"/>). Once the session hides them again (✕, the time-out, for
+/// which each such socket has a timer at <see cref="TicketGrant.RevealUntil"/>, or anything the check finds), each
+/// such socket is sent <c>{"type":"hidden"}</c> and closed with <see cref="Hidden"/>; its tab connects again at once,
+/// with a ticket that holds none. A vault marked discreet closes, with <see cref="Hidden"/> alone, the sockets of her
+/// sessions that hold it and don't show it. A reveal sends the session's sockets <c>{"type":"revealed"}</c>.
+/// </para>
 /// </summary>
 public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions sessions, TimeProvider time, ILogger<SyncHub> log) : IHostedService
 {
@@ -49,6 +57,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// new ticket needs the database.
     /// </summary>
     public const WebSocketCloseStatus CheckFailed = (WebSocketCloseStatus)1013;
+
+    /// <summary>Closed because the socket may hold discreet vaults its session no longer shows: the client connects
+    /// again at once, and its new ticket leaves them out.</summary>
+    public const WebSocketCloseStatus Hidden = (WebSocketCloseStatus)4412;
+
+    private static readonly string HiddenFrame = JsonSerializer.Serialize(new { type = "hidden" });
+
+    private static readonly string RevealedFrame = JsonSerializer.Serialize(new { type = "revealed" });
 
     /// <summary>Connections per subject: a person with several tabs has four in one session.</summary>
     public const int MaxPerKey = 4;
@@ -122,6 +138,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     public async Task RunAsync(WebSocket socket, TicketGrant grant, CancellationToken ct)
     {
         var connection = new Connection(socket, grant, Interlocked.Increment(ref _opened), HintDebounce);
+        // A timed reveal ends at once on this socket, not at the next check; one already over fires now. Armed before
+        // the connection is listed, so whoever finds it listed finds it armed.
+        using var revealEnds = grant.RevealUntil is { } until
+            ? time.CreateTimer(_ => _ = Observed(CheckAsync(connection, _stopping.Token)), null, Max(until - time.GetUtcNow().UtcDateTime, TimeSpan.Zero), Timeout.InfiniteTimeSpan)
+            : null;
         _connections[connection] = 0;
         try
         {
@@ -148,8 +169,13 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
             // The ticket's vaults as they are now: a ticket asked for before a revocation or a role lowered (or while
             // one was told to the hub, before this connection was listed) holds them as they were. Nothing goes out
-            // and no frame is read before this.
-            if (!await RecomputeAsync(connection, ct)) return;
+            // and no frame is read before this. A revealed ticket's session is asked whether it still shows them.
+            if (grant.Revealed)
+            {
+                await CheckAsync(connection, ct);
+                if (connection.IsClosed) return;
+            }
+            else if (!await RecomputeAsync(connection, ct)) return;
 
             // Who is editing already, as this connection is shown it.
             foreach (var vaultId in connection.Vaults.Keys)
@@ -249,15 +275,62 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     }
 
     /// <summary>The session <paramref name="subject"/> (<see cref="Sessions.SubjectOf"/>) hid its discreet vaults again
-    /// (discreet vaults design, Decision 8). Nothing yet: its sockets keep what they hold.</summary>
-    public Task DiscreetHiddenAsync(string subject, CancellationToken ct) => Task.CompletedTask;
+    /// (discreet vaults design, Decision 8): each of its sockets is told, and those whose ticket was asked while they
+    /// were shown close with <see cref="Hidden"/>.</summary>
+    public async Task DiscreetHiddenAsync(string subject, CancellationToken ct)
+    {
+        var picked = _connections.Keys.Where(c => IsSession(c, subject)).ToList();
+        foreach (var connection in picked.Where(c => !c.Grant.Revealed)) connection.Notify(HiddenFrame);
+        await Task.WhenAll(picked.Where(c => c.Grant.Revealed).Select(CloseHiddenAsync));
+    }
 
-    /// <summary>The session <paramref name="subject"/> showed its discreet vaults (Decision 8). Nothing yet.</summary>
-    public Task DiscreetRevealedAsync(string subject, CancellationToken ct) => Task.CompletedTask;
+    /// <summary>The session <paramref name="subject"/> showed its discreet vaults: its sockets are told, so its other tabs
+    /// ask for the vault list again (and so for a new ticket).</summary>
+    public Task DiscreetRevealedAsync(string subject, CancellationToken ct)
+    {
+        foreach (var connection in _connections.Keys.Where(c => IsSession(c, subject))) connection.Notify(RevealedFrame);
+        return Task.CompletedTask;
+    }
 
-    /// <summary>The user <paramref name="userId"/> marked the vault <paramref name="vaultId"/> discreet or not (Decision
-    /// 8). Nothing yet.</summary>
-    public Task DiscreetChangedAsync(string userId, string vaultId, CancellationToken ct) => Task.CompletedTask;
+    /// <summary>
+    /// The user <paramref name="userId"/> marked the vault <paramref name="vaultId"/> discreet or not: every socket of
+    /// her sessions that holds it closes with <see cref="Hidden"/> and nothing else, unless its ticket was asked while
+    /// its session showed the discreet vaults and it shows them still; that one closes when they are hidden. Her keys'
+    /// sockets keep it.
+    /// </summary>
+    public async Task DiscreetChangedAsync(string userId, string vaultId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        var picked = _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId && c.Has(vaultId)).ToList();
+        await Task.WhenAll(picked.Select(async connection =>
+        {
+            bool shown;
+            try
+            {
+                shown = connection.Grant.Revealed && (await sessions.SocketStateAsync(connection.Grant.Subject.Id, ct)).Revealed;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                await FailClosedAsync(connection, e);
+                return;
+            }
+
+            if (shown) return;
+            ClearPresence(connection, null);
+            await connection.CloseAsync(Hidden, "vault marked discreet, connect again");
+        }));
+    }
+
+    private static bool IsSession(Connection connection, string subject) =>
+        connection.Grant.Subject.Kind == SubjectKind.Session && connection.Grant.Subject.Id == subject;
+
+    /// <summary>Told <c>hidden</c>, then closed: its tab forgets the discreet vaults and connects again at once.</summary>
+    private async Task CloseHiddenAsync(Connection connection)
+    {
+        log.LogInformation("Closed a sync connection of {Subject}: its discreet vaults are hidden again", Describe(connection.Grant.Subject));
+        ClearPresence(connection, null);
+        await connection.CloseAsync(Hidden, "discreet vaults hidden, connect again", HiddenFrame);
+    }
 
     /// <summary>A member renamed her vault (collab design §2.3): her connections that hold it through
     /// <paramref name="membershipId"/> name it so in their hints and presence from now on.</summary>
@@ -308,10 +381,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     private async Task CheckAsync(Connection connection, CancellationToken ct)
     {
         var subject = connection.Grant.Subject;
-        bool alive;
+        bool alive, hidden;
         try
         {
-            alive = await IsAliveAsync(subject, ct);
+            (alive, hidden) = await StateAsync(connection, ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -327,7 +400,23 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return;
         }
 
+        if (hidden)
+        {
+            await CloseHiddenAsync(connection);
+            return;
+        }
+
         await RecomputeAsync(connection, ct);
+    }
+
+    /// <summary>Whether the connection's subject is alive (<see cref="IsAliveAsync"/>), and whether its ticket was asked
+    /// during a reveal its session no longer shows.</summary>
+    private async Task<(bool Alive, bool Hidden)> StateAsync(Connection connection, CancellationToken ct)
+    {
+        var subject = connection.Grant.Subject;
+        if (subject.Kind == SubjectKind.Key) return (await keys.IsActiveAsync(subject.Id, ct), false);
+        var (user, revealed) = await sessions.SocketStateAsync(subject.Id, ct);
+        return (user == subject.User, connection.Grant.Revealed && !revealed);
     }
 
     /// <summary>
@@ -414,6 +503,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         return result;
     }
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
     private static string Describe(Subject subject) => subject.Kind == SubjectKind.Key ? $"API key {subject.Id}" : $"a session of user {subject.User}";
 
@@ -540,6 +631,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         /// <summary>The renames to tell, in their order: the vault's id and its old name.</summary>
         private readonly ConcurrentQueue<(string Vault, string From)> _renamed = new();
 
+        /// <summary>Frames about no vault (<c>hidden</c>, <c>revealed</c>), in their order.</summary>
+        private readonly ConcurrentQueue<string> _notices = new();
+
         /// <summary>Wakes the send loop for any of them; one pending wake is enough, since the loop takes all there is.</summary>
         private readonly Channel<byte> _wake = Channel.CreateBounded<byte>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
 
@@ -594,6 +688,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         {
             if (!_vaults.TryGetValue(vaultId, out var vault) || vault.Membership is not null) return;
             _renamed.Enqueue((vaultId, from));
+            _wake.Writer.TryWrite(0);
+        }
+
+        public void Notify(string message)
+        {
+            _notices.Enqueue(message);
             _wake.Writer.TryWrite(0);
         }
 
@@ -696,6 +796,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                     if (_presence.TryRemove(key, out var message) && _vaults.ContainsKey(key.Vault) && !await SendAsync(message, ct)) return;
                 }
 
+                while (_notices.TryDequeue(out var notice))
+                {
+                    if (!await SendAsync(notice, ct)) return;
+                }
+
                 if (!await SendRenamedAsync(ct)) return;
 
                 // Under the name the vault has when the hint goes out: a rename since the change counts.
@@ -748,8 +853,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             }
         }
 
-        /// <summary>Bounded: a send under way is cancelled first, and a socket that won't take the close frame in time is aborted.</summary>
-        public async Task CloseAsync(WebSocketCloseStatus status, string reason)
+        /// <summary>Bounded: a send under way is cancelled first, and a socket that won't take the close frame in time is
+        /// aborted. <paramref name="last"/>: a frame sent just before the close, after everything else.</summary>
+        public async Task CloseAsync(WebSocketCloseStatus status, string reason, string? last = null)
         {
             lock (_gate)
             {
@@ -771,6 +877,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                 if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
                 {
                     using var timeout = new CancellationTokenSource(CloseTimeout);
+                    if (last is not null && socket.State == WebSocketState.Open)
+                    {
+                        await socket.SendAsync(Encoding.UTF8.GetBytes(last), WebSocketMessageType.Text, endOfMessage: true, timeout.Token).WaitAsync(timeout.Token);
+                    }
+
                     await socket.CloseOutputAsync(status, reason, timeout.Token).WaitAsync(timeout.Token);
                 }
             }
