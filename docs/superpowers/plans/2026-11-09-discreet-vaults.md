@@ -32,7 +32,7 @@ A fresh subagent reviewed brief, spec and the draft against the code (React Rout
 16. **Decision 15, the export name:** a discreet vault's ZIP is named `Kumbu² export {date}.zip`, the existing several-vaults form and date. The README's limits say that the download's URL still names the vault in the browser's downloads list.
 17. **Small points:** PIN pattern `\A[0-9]{4,6}\z`; the mark endpoint's 404 is the literal sentence the store gives for a vault the session doesn't have (find it: `RequireVaultAsync` / `ApiErrors`), the same for a hidden and a missing vault; the PIN field is `type="password"` with `inputmode="numeric"`.
 18. **Tests:** "Never after 11 hours" uses a remembered session (or touches the session every 25 minutes); `FaultAt("before-apply")` is made one-shot in the conflict test.
-19. **Accepting an invitation to a hidden vault she is already a member of** answers as for a vault she isn't a member of would fail neutrally: 409 "This name can't be used here." is wrong here, so it answers the existing "already a member" only for a visible vault and, for a hidden one, the invitation's generic refusal used for an invitation that is no longer valid (find it in `VaultInvites`), so it tells nothing. Tested in Task 9.
+19. **Accepting an invitation to a hidden vault she is already a member of** answers with the refusal `VaultInvites` gives an invitation that is no longer valid, so it tells nothing; for a visible vault the existing "already a member" stays. Tested in Task 9.
 
 ## Global constraints
 
