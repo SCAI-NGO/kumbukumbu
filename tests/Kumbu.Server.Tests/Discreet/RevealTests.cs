@@ -134,7 +134,7 @@ public sealed class RevealTests(MongoFixture fixture)
         var secret = await SessionAsync(remember);
         var userId = (await Sessions().ResolveAsync(secret, Ct))!.Value.User.Id;
 
-        for (var i = 1; i < Kumbu.Server.Accounts.Sessions.PinEntryLimit; i++)
+        for (var i = 0; i < 9; i++)
         {
             Assert.False((await Sessions().PinEnteredAsync(secret, Ct)).Ended);
         }
@@ -142,14 +142,13 @@ public sealed class RevealTests(MongoFixture fixture)
         Assert.NotNull(await Sessions().ResolveAsync(secret, Ct));
         Assert.Equal((true, userId), await Sessions().PinEnteredAsync(secret, Ct));
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
-        Assert.Equal(10, Kumbu.Server.Accounts.Sessions.PinEntryLimit);
     }
 
     [Fact]
     public async Task A_reveal_does_not_reset_the_count_of_pin_entries()
     {
         var secret = await SessionAsync();
-        for (var i = 1; i < Kumbu.Server.Accounts.Sessions.PinEntryLimit; i++) await Sessions().PinEnteredAsync(secret, Ct);
+        for (var i = 0; i < 9; i++) await Sessions().PinEnteredAsync(secret, Ct);
 
         await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct);
 
