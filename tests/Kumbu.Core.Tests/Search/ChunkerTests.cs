@@ -201,6 +201,14 @@ public partial class ChunkerTests
 
         Assert.Equal([("#A", 0, 5), ("#B", 5, 8)], chunks.Select(c => (c.Address, c.StartLine, c.EndLine)));
         Assert.DoesNotContain(chunks, c => c.StartLine < 5 && c.EndLine > 5);
+
+        // A leaf after another parent's children stays apart, though both are short.
+        Assert.Equal(
+            [("#A", 0, 3), ("#B", 3, 5)],
+            Chunker.Split(Manual("# A\n## A1\nx\n# B\ny\n"), ChunkBound.Unbounded).Select(c => (c.Address, c.StartLine, c.EndLine)));
+        Assert.Equal(
+            [("#P", 0, 1), ("#P#Q", 1, 4), ("#P#R", 4, 6)],
+            Chunker.Split(Manual("# P\n## Q\n### Q1\nx\n## R\ny\n"), ChunkBound.Unbounded).Select(c => (c.Address, c.StartLine, c.EndLine)));
     }
 
     [Theory]
