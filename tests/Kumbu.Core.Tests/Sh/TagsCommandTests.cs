@@ -103,8 +103,8 @@ public class TagsCommandTests
     [Fact]
     public async Task Help_tags_and_the_command_list()
     {
-        Assert.StartsWith("tags [path]", (await Run("help tags")).Output);
-        Assert.Contains("tags [tag] [path]", (await Run("help")).Output);
+        Assert.StartsWith("tags [--archive] [path]", (await Run("help tags")).Output);
+        Assert.Contains("tags [--archive] [tag] [path]", (await Run("help")).Output);
         Assert.Contains("\n  tags ", Manual.ToolDescription);
     }
 

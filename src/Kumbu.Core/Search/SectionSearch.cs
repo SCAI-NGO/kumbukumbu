@@ -50,9 +50,11 @@ public static class SectionSearch
     /// <summary>Ranks the sections of <paramref name="notes"/> (the notes below <paramref name="scope"/>) and returns
     /// the best <paramref name="max"/>; headings with nothing below them don't count. With <paramref name="pages"/>,
     /// the pages of PDFs the index found by meaning rank among them, by their cosine alone (their text isn't at hand
-    /// for a word bonus); a search by words finds notes only.</summary>
+    /// for a word bonus); a search by words finds notes only. The pages of PDFs in a vault's archive take part only
+    /// with <paramref name="archive"/> or a scope inside it; leaving archived notes out is the caller's.</summary>
     public static async Task<SectionSearchResult> RankAsync(
-        IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false)
+        IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false,
+        bool archive = false)
     {
         var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
 
@@ -72,7 +74,7 @@ public static class SectionSearch
                     ? (chunks, [])
                     : (chunks.Where(c => !wordsOnly.Contains(c.Path.Vault!)).ToList(), chunks.Where(c => wordsOnly.Contains(c.Path.Vault!)).ToList());
                 ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
-                if (pages) ranked = WithPages(ranked, semantic, pageChunks);
+                if (pages) ranked = WithPages(ranked, semantic, pageChunks, ArchiveFolder.Shown(scope, archive));
 
                 // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
                 if (ranked.Count == 0 && semantic.Pending > 0 && mode != SearchMode.Meaning)
@@ -172,13 +174,13 @@ public static class SectionSearch
     }
 
     /// <summary>The pages of PDFs among the hits, best cosine per page, merged into <paramref name="ranked"/> by score;
-    /// a section goes first on a tie.</summary>
-    private static List<(Chunk, double?)> WithPages(List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, int> pageChunks)
+    /// a section goes first on a tie. Those in a vault's archive only if <paramref name="archived"/>.</summary>
+    private static List<(Chunk, double?)> WithPages(List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, int> pageChunks, bool archived)
     {
         var best = new Dictionary<(VaultPath, int), double>();
         foreach (var hit in semantic.Hits)
         {
-            if (!AttachmentFormat.IsPdf(hit.Path)) continue;
+            if (!AttachmentFormat.IsPdf(hit.Path) || (!archived && ArchiveFolder.Contains(hit.Path))) continue;
             best[(hit.Path, hit.StartLine)] = Math.Max(best.GetValueOrDefault((hit.Path, hit.StartLine), double.MinValue), hit.Score);
         }
 

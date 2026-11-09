@@ -43,7 +43,7 @@ public static class ConsoleApi
 
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>
-    internal static readonly FrozenSet<string> Refused = FrozenSet.Create(StringComparer.Ordinal, "restore", "mv", "mkdir", "rm", "mkcp", "rmcp");
+    internal static readonly FrozenSet<string> Refused = FrozenSet.Create(StringComparer.Ordinal, "pdfimages", "restore", "mv", "archive", "mkdir", "rm", "mkcp", "rmcp");
 
     public static void MapConsoleApi(this IEndpointRouteBuilder app)
     {

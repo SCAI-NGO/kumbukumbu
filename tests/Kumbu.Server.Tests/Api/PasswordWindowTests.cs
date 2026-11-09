@@ -156,6 +156,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["PUT /api/memberships/{id}/alias"] = "the member's own name for the vault, in her own namespace: it widens no access",
         ["POST /api/memberships/{id}/provider-seen"] = "the member's own consent for her own searches: it widens no access to the vault",
         ["POST /api/vault-invitations/accept"] = "the owner's secret is the grant: it gives the caller's credentials nothing",
+        ["POST /api/folders/trash"] = "moves an archived folder to the vault's trash, as deleting a note does: vault content under the write right, not the account",
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,
         ["DELETE /api/dav-shares/{id}"] = CleaningUp,

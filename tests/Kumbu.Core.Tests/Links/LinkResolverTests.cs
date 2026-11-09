@@ -84,4 +84,47 @@ public class LinkResolverTests
         var resolver = new LinkResolver("W", [P("/W/inbox.md")], [P("/W/Drafts/.vaultkeep"), P("/W/Drafts/shot.png")]);
         Assert.Equal(LinkKind.NotFound, resolver.Resolve(P("/W/Drafts/n.md"), target).Kind);
     }
+
+    private static readonly LinkResolver Archived = new("W",
+    [
+        P("/W/inbox.md"), P("/W/Projects/Overview.md"), P("/W/_archive/Projects/Overview.md"),
+        P("/W/a/Plans/Budget.md"), P("/W/_archive/Plans/Budget.md"), P("/W/_archive/Old.md"),
+        P("/W/_archive/a/Gone.md"), P("/W/_archive/b/Gone.md"), P("/W/a/Twice.md"), P("/W/b/Twice.md"), P("/W/_archive/Twice.md"),
+        P("/W/Inbox/_archive/Deep.md"), P("/W/Notes/Deep.md"), P("/W/_archive/Specs/Pump.md"),
+        P("/W/b/_archive/Specs/Pump.md"),
+    ]);
+
+    // An archived note never makes a living note's link ambiguous; only when every candidate is archived does such a link
+    // lead there.
+    [Theory]
+    [InlineData("/W/inbox.md", "Overview", "/W/Projects/Overview.md")]
+    [InlineData("/W/inbox.md", "Projects/Overview", "/W/Projects/Overview.md")]
+    [InlineData("/W/inbox.md", "Plans/Budget", "/W/a/Plans/Budget.md")]
+    [InlineData("/W/inbox.md", "Budget", "/W/a/Plans/Budget.md")]
+    [InlineData("/W/inbox.md", "Old", "/W/_archive/Old.md")]
+    [InlineData("/W/inbox.md", "Gone", "ambiguous: /W/_archive/a/Gone.md, /W/_archive/b/Gone.md")]
+    [InlineData("/W/inbox.md", "Twice", "ambiguous: /W/a/Twice.md, /W/b/Twice.md")]
+    // An exact link leads into the archive as anywhere else.
+    [InlineData("/W/inbox.md", "/_archive/Projects/Overview", "/W/_archive/Projects/Overview.md")]
+    [InlineData("/W/_archive/Projects/x.md", "./Overview", "/W/_archive/Projects/Overview.md")]
+    // A folder _archive further down is an ordinary one.
+    [InlineData("/W/inbox.md", "Deep", "ambiguous: /W/Inbox/_archive/Deep.md, /W/Notes/Deep.md")]
+    // The folder-part preferences come first: a link that is the archived note's path from the vault's root leads there,
+    // past a living /W/b/_archive/Specs/Pump.md.
+    [InlineData("/W/inbox.md", "_archive/Specs/Pump", "/W/_archive/Specs/Pump.md")]
+    // An archived note's links resolve as anywhere: its sibling wins by folder, a lone living namesake stays found.
+    [InlineData("/W/_archive/Projects/x.md", "Overview", "/W/_archive/Projects/Overview.md")]
+    [InlineData("/W/_archive/x.md", "Twice", "/W/_archive/Twice.md")]
+    [InlineData("/W/_archive/a/x.md", "Twice", "ambiguous: /W/_archive/Twice.md, /W/a/Twice.md, /W/b/Twice.md")]
+    [InlineData("/W/_archive/a/x.md", "Budget", "ambiguous: /W/_archive/Plans/Budget.md, /W/a/Plans/Budget.md")]
+    public void Links_prefer_what_is_outside_the_archive(string source, string target, string expected)
+    {
+        var r = Archived.Resolve(P(source), target);
+        Assert.Equal(expected, r.Kind switch
+        {
+            LinkKind.Note => r.Target!.Value,
+            LinkKind.Ambiguous => "ambiguous: " + string.Join(", ", r.Candidates.Select(c => c.Value).Order()),
+            _ => r.Kind.ToString(),
+        });
+    }
 }

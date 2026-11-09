@@ -6,7 +6,7 @@
 // top of the page's own rotation; a region then counts in the turned page, while the page's size
 // is reported without the turn.
 
-import { createCanvas } from "@napi-rs/canvas";
+import { type Canvas, createCanvas } from "@napi-rs/canvas";
 import { type Rendered, encode } from "./encode.js";
 import { PdfError, openPdf } from "./pdfjs.js";
 import { type Crop, MAX_PAGE_SCALE, type Target, fit, inside, pixels } from "./steps.js";
@@ -14,6 +14,18 @@ import { type Crop, MAX_PAGE_SCALE, type Target, fit, inside, pixels } from "./s
 export type RenderedPage = Rendered & { pageWidth: number; pageHeight: number; rotate: number };
 
 export async function renderPage(pdf: Uint8Array, page: number, t: Target, crop?: Crop, rotate = 0): Promise<RenderedPage> {
+  return renderWith(pdf, page, crop, rotate, (w, h) => fit(w, h, t, MAX_PAGE_SCALE), (canvas) => encode(canvas, t.bytes));
+}
+
+// The scale for a region of w × h points, and the encoding of what was rendered.
+export async function renderWith(
+  pdf: Uint8Array,
+  page: number,
+  crop: Crop | undefined,
+  rotate: number,
+  scaleFor: (w: number, h: number) => number,
+  encodeAs: (canvas: Canvas) => Promise<Rendered>,
+): Promise<RenderedPage> {
   const doc = await openPdf(pdf);
   try {
     if (!Number.isInteger(page) || page < 1 || page > doc.numPages)
@@ -25,14 +37,14 @@ export async function renderPage(pdf: Uint8Array, page: number, t: Target, crop?
       const region = crop ?? { x: 0, y: 0, w: shown.width, h: shown.height };
       if (!inside(region, shown.width, shown.height))
         throw new PdfError(`The region lies outside the page (${round1(shown.width)} × ${round1(shown.height)} pt).`, "bad_crop");
-      const scale = fit(region.w, region.h, t, MAX_PAGE_SCALE);
+      const scale = scaleFor(region.w, region.h);
       const { width, height } = pixels(region.w, region.h, scale);
       // The viewport is moved so the region's top-left corner lands at the canvas origin.
       const viewport = p.getViewport({ scale, rotation, offsetX: -region.x * scale, offsetY: -region.y * scale });
       const canvas = createCanvas(width, height);
       await p.render({ canvas: canvas as never, canvasContext: canvas.getContext("2d") as never, viewport }).promise;
       const own = p.getViewport({ scale: 1 });
-      return { ...(await encode(canvas, t.bytes)), pageWidth: round1(own.width), pageHeight: round1(own.height), rotate };
+      return { ...(await encodeAs(canvas)), pageWidth: round1(own.width), pageHeight: round1(own.height), rotate };
     } finally {
       p.cleanup();
     }

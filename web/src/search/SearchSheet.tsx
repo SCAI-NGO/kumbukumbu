@@ -19,7 +19,7 @@ import { useEarlierSearch, useSearch, type EarlierResult, type SearchResult } fr
 /**
  * The search overlay (MOBILE_EDITOR §4): header and results above, the input and the mode chips at the bottom
  * where the thumb is. An empty query shows the notes opened last. A switch adds sections of earlier versions (off on
- * every visit), each opening a comparison with today's text.
+ * every visit), each opening a comparison with today's text; another the archive's notes, which are left out otherwise.
  */
 export default function SearchSheet() {
   const { searchQuery, searchMode, searchTag, recentPaths, setSearchQuery, setSearchMode, setSearchTag, setOverlay } = useEditor();
@@ -30,7 +30,8 @@ export default function SearchSheet() {
   const typing = typed.tag !== null && !typed.finished ? typed.tag : null;
   const text = typing === null ? searchQuery : "";
   const listing = searchTag !== null && typing === null && text.trim() === "";
-  const search = useSearch(text, searchMode, searchTag);
+  const [withArchive, setWithArchive] = useState(false);
+  const search = useSearch(text, searchMode, searchTag, withArchive);
   const tagged = useTaggedCount(listing ? searchTag : null);
   const type = (value: string) => {
     const t = splitTagQuery(value);
@@ -184,18 +185,10 @@ export default function SearchSheet() {
           />
         </label>
         <ModeChips mode={searchMode} onChange={setSearchMode} />
-        <button
-          type="button"
-          role="switch"
-          aria-checked={withEarlier}
-          onClick={() => setWithEarlier((on) => !on)}
-          className="flex min-h-11 items-center gap-2.5 self-start rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          <span aria-hidden className={`relative h-6 w-10 flex-none rounded-full transition-colors ${withEarlier ? "bg-accent" : "bg-surface-2 ring-1 ring-line"}`}>
-            <span className={`absolute top-1 size-4 rounded-full bg-surface shadow transition-[left] ${withEarlier ? "left-5" : "left-1"}`} />
-          </span>
-          Include earlier versions
-        </button>
+        <div className="flex flex-wrap gap-x-4">
+          <Switch on={withEarlier} onToggle={() => setWithEarlier((on) => !on)} label="Include earlier versions" />
+          <Switch on={withArchive} onToggle={() => setWithArchive((on) => !on)} label="Include archive" />
+        </div>
       </div>
       {comparing && (
         <Sheet title={comparing.path.slice(comparing.path.lastIndexOf("/") + 1)} onClose={() => setComparing(null)}>
@@ -206,5 +199,22 @@ export default function SearchSheet() {
         </Sheet>
       )}
     </div>
+  );
+}
+
+function Switch({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={onToggle}
+      className="flex min-h-11 items-center gap-2.5 self-start rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      <span aria-hidden className={`relative h-6 w-10 flex-none rounded-full transition-colors ${on ? "bg-accent" : "bg-surface-2 ring-1 ring-line"}`}>
+        <span className={`absolute top-1 size-4 rounded-full bg-surface shadow transition-[left] ${on ? "left-5" : "left-1"}`} />
+      </span>
+      {label}
+    </button>
   );
 }

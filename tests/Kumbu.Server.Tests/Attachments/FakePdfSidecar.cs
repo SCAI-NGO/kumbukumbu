@@ -60,6 +60,36 @@ public sealed class FakePdfSidecar : IPdfSidecar
     /// </summary>
     public Func<int?, int?>? FramesOf { get; set; }
 
+    /// <summary>The images listed for a page (the PDF, the page); by default <see cref="CannedImages"/> of three pages.</summary>
+    public Func<ReadOnlyMemory<byte>, int, PdfPageImages> PageImages { get; set; } = (_, page) => CannedImages(page, 3);
+
+    /// <summary>The image <c>n</c> of a page (the PDF, the page, n); by default a 400 × 300 PNG of one colour.</summary>
+    public Func<ReadOnlyMemory<byte>, int, int, Picture> ExtractedImage { get; set; } = (_, _, _) => new Picture(SolidPng(400, 300), "image/png", 400, 300, 400, 300);
+
+    /// <summary>
+    /// A region of a page (the PDF, the page, the crop, the turn, JPEG asked); by default one colour at 300 dpi within
+    /// 8 megapixels, a PNG or a <see cref="HeaderJpeg"/>.
+    /// </summary>
+    public Func<ReadOnlyMemory<byte>, int, Crop, int, bool, Picture> Region { get; set; } = (_, _, crop, rotate, jpeg) =>
+    {
+        var (w, h) = Rotation.SwapsSides(rotate) ? (crop.Height, crop.Width) : (crop.Width, crop.Height);
+        var (width, height) = Fit(w * 300 / 72, h * 300 / 72, new StepLimits(16_384, 8_000_000, 0));
+        return jpeg
+            ? new Picture(HeaderJpeg(width, height), "image/jpeg", width, height, 595, 842)
+            : new Picture(SolidPng(width, height), "image/png", width, height, 595, 842);
+    };
+
+    /// <summary>The page of each image list asked for.</summary>
+    public List<int> ImageListRequests { get; } = [];
+
+    /// <summary>The page and number of each image asked for.</summary>
+    public List<(int Page, int N)> ExtractRequests { get; } = [];
+
+    public List<(int Page, Crop Crop, int Rotate, bool Jpeg)> RegionRequests { get; } = [];
+
+    /// <summary>The PDF each image list, image or region request carried.</summary>
+    public List<byte[]> ExtractionPdfs { get; } = [];
+
     public async Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct)
     {
         Interlocked.Increment(ref _analyses);
@@ -100,6 +130,27 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return TextBoxes(pages);
     }
 
+    public async Task<PdfPageImages> ListImagesAsync(ReadOnlyMemory<byte> pdf, int page, CancellationToken ct)
+    {
+        lock (ExtractionPdfs) { ExtractionPdfs.Add(pdf.ToArray()); ImageListRequests.Add(page); }
+        await AnswerAsync(ct);
+        return PageImages(pdf, page);
+    }
+
+    public async Task<Picture> ExtractImageAsync(ReadOnlyMemory<byte> pdf, int page, int n, CancellationToken ct)
+    {
+        lock (ExtractionPdfs) { ExtractionPdfs.Add(pdf.ToArray()); ExtractRequests.Add((page, n)); }
+        await AnswerAsync(ct);
+        return ExtractedImage(pdf, page, n);
+    }
+
+    public async Task<Picture> RenderRegionAsync(ReadOnlyMemory<byte> pdf, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct)
+    {
+        lock (ExtractionPdfs) { ExtractionPdfs.Add(pdf.ToArray()); RegionRequests.Add((page, crop, rotate, jpeg)); }
+        await AnswerAsync(ct);
+        return Region(pdf, page, crop, rotate, jpeg);
+    }
+
     private async Task AnswerAsync(CancellationToken ct)
     {
         if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
@@ -122,6 +173,18 @@ public sealed class FakePdfSidecar : IPdfSidecar
             .ToList();
         return new SidecarAnalysis(new PdfAnalysis(PdfAnalyses.Analyser, pages, pages, "A title", null, list), [.. Enumerable.Range(1, pages).Select(text)]);
     }
+
+    /// <summary>
+    /// The images of <paramref name="page"/> of a PDF of <paramref name="pages"/> A4 pages: one photo of 400 × 300 px drawn
+    /// 300 × 225 pt at 72,72, its hash the page's. A page past the end is <c>no_such_page</c>.
+    /// </summary>
+    public static PdfPageImages CannedImages(int page, int pages) => page <= pages
+        ? new PdfPageImages(page, pages, 595, 842, 0, [new PdfImageInfo(1, 400, 300, 72, 72, 300, 225, false, page.ToString("x64", System.Globalization.CultureInfo.InvariantCulture), false)])
+        : throw new SidecarException("no_such_page", $"There is no page {page}.");
+
+    /// <summary>A JPEG of SOI, one SOF0 frame header and EOI: enough for its header to say the size, not to be decoded.</summary>
+    public static byte[] HeaderJpeg(int width, int height) =>
+        [0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, (byte)(height >> 8), (byte)height, (byte)(width >> 8), (byte)width, 1, 1, 0x11, 0, 0xFF, 0xD9];
 
     /// <summary>A real PNG of one colour: signature, IHDR, one IDAT of deflated rows, IEND.</summary>
     public static byte[] SolidPng(int width, int height, byte red = 200, byte green = 120, byte blue = 40)

@@ -13,9 +13,12 @@ public sealed record Picture(byte[] Data, string MediaType, int Width, int Heigh
 /// <summary>
 /// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, the sidecar away or busy
 /// (<c>Unavailable</c>), and an analysis that couldn't run for that reason (<c>AnalysisUnavailable</c>), which
-/// <c>pdf</c> tells apart from one that is merely pending. <c>Failed</c> is anything else (this file, this page).
+/// <c>pdf</c> tells apart from one that is merely pending. A PDF's images and regions to store tell a busy sidecar
+/// apart (<c>Busy</c>, worth a retry in a moment), a page number past the PDF's (<c>NoSuchPage</c>) and an image
+/// number past the page's (<c>NoSuchImage</c>).
+/// <c>Failed</c> is anything else (this file, this page).
 /// </summary>
-public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, BadFrame, AnalysisUnavailable }
+public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, BadFrame, AnalysisUnavailable, Busy, NoSuchImage, NoSuchPage }
 
 /// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
 public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Failed) : Exception(message)
@@ -25,8 +28,8 @@ public sealed class PixelsUnavailableException(string message, PixelsProblem pro
     /// <summary>The shell's error kind for it, for the tool metrics; null for a failure of the file itself.</summary>
     public Sh.ShellErrorKind? Kind => Problem switch
     {
-        PixelsProblem.Unavailable or PixelsProblem.AnalysisUnavailable => Sh.ShellErrorKind.Unavailable,
-        PixelsProblem.TooLarge or PixelsProblem.BadCrop or PixelsProblem.BadFrame => Sh.ShellErrorKind.Invalid,
+        PixelsProblem.Unavailable or PixelsProblem.AnalysisUnavailable or PixelsProblem.Busy => Sh.ShellErrorKind.Unavailable,
+        PixelsProblem.TooLarge or PixelsProblem.BadCrop or PixelsProblem.BadFrame or PixelsProblem.NoSuchImage or PixelsProblem.NoSuchPage => Sh.ShellErrorKind.Invalid,
         _ => null,
     };
 }
@@ -81,6 +84,17 @@ public sealed record TextBox(int At, int End, double X, double Y, double Width, 
 /// <summary>A page's text with the boxes of its items, ascending by offset.</summary>
 public sealed record PageTextBoxes(int Number, double Width, double Height, string Text, IReadOnlyList<TextBox> Items);
 
+/// <summary>
+/// An image a PDF page paints: <paramref name="N"/> from 1 in painting order, its decoded pixel size and its box in
+/// displayed points (clipped to the page), both as painted (after a quarter turn); <paramref name="Small"/> below 1 %
+/// of the page. <paramref name="Hash"/> (SHA-256, lowercase hex) is the same for the same pixels; null with
+/// <paramref name="Failed"/>, an image that couldn't be decoded.
+/// </summary>
+public sealed record PdfImageInfo(int N, int Width, int Height, double X, double Y, double W, double H, bool Small, string? Hash, bool Failed);
+
+/// <summary>The images of one page, in a PDF of <paramref name="PageCount"/> pages; <paramref name="Over"/> images were left out as too large to decode.</summary>
+public sealed record PdfPageImages(int Page, int PageCount, double Width, double Height, int Over, IReadOnlyList<PdfImageInfo> Images);
+
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
 {
@@ -99,5 +113,23 @@ public interface IAttachmentPixels
     /// <summary>The text of the given pages (ascending, distinct) with the boxes of its items, read from the file itself; nothing is stored. Throws <see cref="PixelsUnavailableException"/> if the sidecar can't.</summary>
     Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct);
 
+    /// <summary>The images page <paramref name="page"/> (1-based) of a PDF paints, read from the file itself.</summary>
+    Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct);
+
+    /// <summary>
+    /// Image <paramref name="n"/> of a page to store: turned as painted, within 8 megapixels and 16,384 px on the long edge, a PNG, or a JPEG where the
+    /// PNG would pass 15 MB. Its original size is its pixels before scaling (turned).
+    /// </summary>
+    Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct);
+
+    /// <summary>A region of a page in displayed points to store, at 300 dpi within 8 megapixels and 16,384 px on the long edge, a PNG or (<paramref name="jpeg"/>) a JPEG; its original size is the page's in points.</summary>
+    Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct);
+
     void Count(AttachmentUse use);
+
+    /// <summary>
+    /// The caller's one place for a <c>pdfimages</c> call, held until disposed of; null while another call of theirs holds
+    /// it. One account's calls then never fill the sidecar's extraction queue for everyone.
+    /// </summary>
+    IDisposable? TryStartExtraction();
 }

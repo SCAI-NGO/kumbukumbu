@@ -93,6 +93,9 @@ public sealed class StorageQuota
     /// <summary>The count <see cref="RecentFigureAsync"/> serves per owner, and when it started.</summary>
     private readonly Dictionary<string, (Task<StorageFigure> Count, DateTime StartedAt)> _shown = new(StringComparer.Ordinal);
 
+    /// <summary>The archive's bytes <see cref="RecentArchiveAsync"/> serves per owner, and when they were counted.</summary>
+    private readonly Dictionary<string, (long Bytes, DateTime CountedAt)> _archives = new(StringComparer.Ordinal);
+
     /// <summary>The background work under way, for <see cref="SettledAsync"/>; what has ended is dropped whenever more is added.</summary>
     private readonly List<Task> _running = [];
 
@@ -247,8 +250,9 @@ public sealed class StorageQuota
     {
         lock (_lock)
         {
-            // What df and Settings were shown is stale too: their next ask counts again.
+            // What df and Settings were shown is stale too, the archive's bytes with it: their next ask counts again.
             _shown.Remove(ownerId);
+            _archives.Remove(ownerId);
             var account = AccountOf(ownerId);
             if (account.Refresh is { } running)
             {
@@ -292,6 +296,22 @@ public sealed class StorageQuota
         }
 
         return count.WaitAsync(ct);
+    }
+
+    /// <summary>What the owner's archives take, as <paramref name="count"/> gives it, counted at most once per
+    /// <see cref="ShownFor"/> as <see cref="RecentFigureAsync"/>'s figure is: the count reads every note in them. Calls
+    /// that meet no figure count each, with their own token; the last to end is kept.</summary>
+    internal async Task<long> RecentArchiveAsync(string ownerId, Func<CancellationToken, Task<long>> count, CancellationToken ct)
+    {
+        lock (_lock)
+        {
+            if (_archives.TryGetValue(ownerId, out var shown) && Now - shown.CountedAt < ShownFor) return shown.Bytes;
+        }
+
+        var started = Now;
+        var bytes = await count(ct);
+        lock (_lock) _archives[ownerId] = (bytes, started);
+        return bytes;
     }
 
     /// <summary>

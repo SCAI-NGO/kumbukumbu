@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Links;
@@ -27,11 +28,12 @@ public enum LinkKind
 public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyList<VaultPath> Candidates);
 
 /// <summary>
-/// Resolves link paths to notes within one vault, close to Obsidian's rules: case-insensitive; relative
-/// to the source's folder for "./" and "../"; otherwise the note whose path ends with the link path,
-/// preferring for a path with a folder the one below the source's folder, then the one at that path from the
-/// vault's root, and for a bare name the source's own folder. Never guesses beyond that. Attachments resolve by the
-/// same rules, by their name with its extension ("shot.png"), before notes.
+/// Resolves link paths to notes within one vault, close to Obsidian's rules: case-insensitive; relative to the
+/// source's folder for "./" and "../"; otherwise the note whose path ends with the link path, preferring for a path
+/// with a folder the one below the source's folder, then the one at that path from the vault's root, and for a bare
+/// name the source's own folder. A source outside the vault's archive prefers, after the folder preferences, what lies
+/// outside it over what lies in it; an archived source's links resolve without that preference. Never guesses beyond
+/// that. Attachments resolve by the same rules, by their name with its extension ("shot.png"), before notes.
 /// </summary>
 public sealed class LinkResolver
 {
@@ -123,6 +125,13 @@ public sealed class LinkResolver
             var preferred = named.FirstOrDefault(n => Matches(InVault(n), folder + suffix, true))
                 ?? named.FirstOrDefault(n => Matches(InVault(n), suffix, true));
             if (preferred is not null) return new LinkResolution(kind, preferred, candidates);
+        }
+
+        // For a living note, what lies in the vault's archive counts only when nothing else matches: an archived copy
+        // never makes its link ambiguous. An archived note keeps leading to its archived siblings.
+        if (!exact && !ArchiveFolder.Contains(source) && candidates.Any(ArchiveFolder.Contains) && candidates.Any(c => !ArchiveFolder.Contains(c)))
+        {
+            candidates = [.. candidates.Where(c => !ArchiveFolder.Contains(c))];
         }
 
         if (candidates.Count == 1) return new LinkResolution(kind, candidates[0], candidates);

@@ -36,7 +36,7 @@ public class SkillDirectoryTests
 
     [Fact]
     public async Task Lists_system_then_Skills_then_vaults() =>
-        Assert.Equal(["create-skill", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
 
     [Fact]
     public async Task System_skills_say_so()
@@ -54,7 +54,7 @@ public class SkillDirectoryTests
         Put("/Private/_skills/a-skill/SKILL.md", "---\nname: a-skill\ndescription: A.\n---\n");
         Put("/Archiv/_skills/old/SKILL.md", "---\nname: old\ndescription: Old.\n---\n");
 
-        Assert.Equal(["create-skill", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class SkillDirectoryTests
         Put("/Skills/readme.md", "# Readme\n");
         Put("/Work/_skills/readme.md", "# Readme\n");
 
-        Assert.Equal(["create-skill", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -250,11 +250,24 @@ public class SkillDirectoryTests
     }
 
     [Fact]
+    public async Task The_archive_of_the_vault_Skills_is_no_skill()
+    {
+        Put("/Skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Not a skill.\n---\n");
+        Put("/Skills/_archive/old-skill 2026-11-08 213005/SKILL.md", "---\nname: old-skill\ndescription: Old.\n---\n");
+        _store.AddAttachment("/Skills/_archive/manual 2026-11-08 213005.pdf");
+        // Only the vault Skills has its archive in a skill's place.
+        Put("/Work/_skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Kept.\n---\n");
+
+        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["write-as-alice"], (await dir.ListAsync("Skills", Ct)).Select(s => s.Name));
+    }
+
+    [Fact]
     public async Task An_unmarked_vault_named_Skills_holds_no_skills()
     {
         _store.SkillsVault = null;
 
-        Assert.Equal(["create-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Empty(await dir.ListAsync("Skills", Ct));
     }
 

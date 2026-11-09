@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Attachments;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -17,12 +18,15 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user) => new(
+    /// <summary>The pixels a session of <paramref name="user"/> gets, made by hand; <paramref name="sidecar"/> in place of the host's.</summary>
+    internal static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user, IPdfSidecar? sidecar = null) => new(
         new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
         host.Services.GetRequiredService<VaultCatalog>(),
-        host.Services.GetRequiredService<IPdfSidecar>(),
+        sidecar ?? host.Services.GetRequiredService<IPdfSidecar>(),
         host.Services.GetRequiredService<PdfAnalyses>(),
-        host.Services.GetRequiredService<PdfAnalysisRunner>());
+        host.Services.GetRequiredService<PdfAnalysisRunner>(),
+        new ExtractionGate(),
+        RequestCaller.ForSession(user.User, user.UserKey, DateTime.UtcNow, windowOpen: false, host.Services.GetRequiredService<VaultCatalog>()));
 
     private static VaultPath At(RestClient user, string path) => P($"/{user.Vault}/{path}");
 
@@ -147,10 +151,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("paper.pdf", Pdf("a short paper"));
         var state = await StateAsync(host, user, "paper.pdf");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), sidecar,
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, sidecar);
 
         async Task<string> Says(string code, Crop? crop = null)
         {
@@ -174,9 +175,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("paper.pdf", Pdf("a short paper"));
         var state = await StateAsync(host, user, "paper.pdf");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), sidecar, host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, sidecar);
 
         var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), state, 1, SizeStep.Medium, null, 90, Ct));
 
@@ -224,10 +223,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(host);
         await user.CreateFileAsync("clip.png", FakePdfSidecar.SolidPng(20, 20));
         var state = await StateAsync(host, user, "clip.png");
-        var pixels = new AttachmentPixels(
-            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
-            host.Services.GetRequiredService<VaultCatalog>(), new RefusingSidecar { Code = code },
-            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var pixels = Pixels(host, user, new RefusingSidecar { Code = code });
         var path = At(user, "clip.png");
 
         return (await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.ImageAsync(path, state, SizeStep.Medium, null, 0, frame, Ct)), path);
@@ -246,6 +242,102 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new SidecarException(Code, Message);
 
         public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<PdfPageImages> ListImagesAsync(ReadOnlyMemory<byte> pdf, int page, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<Picture> ExtractImageAsync(ReadOnlyMemory<byte> pdf, int page, int n, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<Picture> RenderRegionAsync(ReadOnlyMemory<byte> pdf, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new SidecarException(Code, Message);
+    }
+
+    [Fact]
+    public async Task A_pdfs_images_and_regions_come_from_the_sidecar_with_the_blob()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var bytes = Pdf("a pump manual with pictures");
+        await user.CreateFileAsync("manual.pdf", bytes);
+        var state = await StateAsync(host, user, "manual.pdf");
+        var pixels = Pixels(host, user);
+        var listed = new PdfPageImages(2, 3, 595, 842, 0, [new PdfImageInfo(1, 400, 300, 72, 72, 300, 225, false, new string('a', 64), false)]);
+        sidecar.PageImages = (_, page) => page == 2 ? listed : throw new SidecarException("no_such_page", "No.");
+        sidecar.ExtractedImage = (_, page, n) => new Picture(FakePdfSidecar.SolidPng(40, 30), "image/png", 40, 30, 400, 300);
+
+        var images = await pixels.PdfImagesAsync(At(user, "manual.pdf"), state, 2, Ct);
+        var image = await pixels.PdfImageAsync(At(user, "manual.pdf"), state, 2, 1, Ct);
+        var region = await pixels.PdfRegionAsync(At(user, "manual.pdf"), state, 2, new Crop(72, 72, 144, 72), 90, true, Ct);
+
+        Assert.Same(listed, images);
+        Assert.Equal((40, 30, 400d, 300d), (image.Width, image.Height, image.OriginalWidth, image.OriginalHeight));
+        Assert.Equal("image/jpeg", region.MediaType);
+        Assert.Equal([2], sidecar.ImageListRequests);
+        Assert.Equal([(2, 1)], sidecar.ExtractRequests);
+        Assert.Equal([(2, new Crop(72, 72, 144, 72), 90, true)], sidecar.RegionRequests);
+        Assert.Equal(3, sidecar.ExtractionPdfs.Count);
+        Assert.All(sidecar.ExtractionPdfs, pdf => Assert.Equal(bytes, pdf));
+    }
+
+    [Fact]
+    public async Task Refusals_of_a_pdfs_images_and_regions_become_their_own_sentences()
+    {
+        var sidecar = new RefusingSidecar();
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("manual.pdf", Pdf("a pump manual"));
+        var state = await StateAsync(host, user, "manual.pdf");
+        var pixels = Pixels(host, user, sidecar);
+        var path = At(user, "manual.pdf");
+
+        async Task<(string, PixelsProblem)> List(string code)
+        {
+            sidecar.Code = code;
+            var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PdfImagesAsync(path, state, 7, Ct));
+            return (e.Message, e.Problem);
+        }
+
+        async Task<(string, PixelsProblem)> One(string code)
+        {
+            sidecar.Code = code;
+            var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PdfImageAsync(path, state, 7, 3, Ct));
+            return (e.Message, e.Problem);
+        }
+
+        async Task<(string, PixelsProblem)> Region(string code, bool jpeg = false)
+        {
+            sidecar.Code = code;
+            var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PdfRegionAsync(path, state, 7, new Crop(10, 10, 5000, 5), 0, jpeg, Ct));
+            return (e.Message, e.Problem);
+        }
+
+        Assert.Equal(($"page 7 of {path} has no image 3", PixelsProblem.NoSuchImage), await One("no_such_image"));
+        Assert.Equal(($"image 3 on page 7 of {path} is over 15 MB even as JPEG at quality 60", PixelsProblem.TooLarge), await One("too_large"));
+        Assert.Equal(("the region is over 15 MB as PNG; name the target .jpg", PixelsProblem.TooLarge), await Region("too_large"));
+        Assert.Equal(("the region is over 15 MB even as JPEG at quality 60; crop a smaller region", PixelsProblem.TooLarge), await Region("too_large", jpeg: true));
+        Assert.Equal(("the crop 10,10,5000,5 lies outside page 7", PixelsProblem.BadCrop), await Region("bad_crop"));
+        Assert.Equal(($"the images of page 7 of {path} couldn't be read", PixelsProblem.Failed), await List("too_large"));
+        Assert.Equal(($"{path} has no page 7", PixelsProblem.NoSuchPage), await List("no_such_page"));
+        Assert.Equal(($"{path} has no page 7", PixelsProblem.NoSuchPage), await One("no_such_page"));
+        Assert.Equal(("this PDF is password-protected; Kumbu² can't read it", PixelsProblem.Failed), await List("encrypted"));
+        Assert.Equal(("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy), await List("busy"));
+        Assert.Equal(("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy), await One("busy"));
+        Assert.Equal(("PDF image extraction is busy; try again in a moment", PixelsProblem.Busy), await Region("busy"));
+        Assert.Equal(("PDF image extraction is unavailable right now; try again later", PixelsProblem.Unavailable), await List("unavailable"));
+        Assert.Equal(($"reading the images of page 7 of {path} took too long", PixelsProblem.Failed), await List("timeout"));
+        Assert.Equal(($"reading image 3 on page 7 of {path} took too long", PixelsProblem.Failed), await One("timeout"));
+        Assert.Equal(($"rendering the region of page 7 of {path} took too long", PixelsProblem.Failed), await Region("timeout"));
+        Assert.Equal(($"reading image 3 on page 7 of {path} stopped part way (the renderer may have run out of memory)", PixelsProblem.Failed), await One("aborted"));
+        Assert.Equal(($"the images of page 7 of {path} couldn't be read", PixelsProblem.Failed), await List("failed"));
+        Assert.Equal(($"image 3 on page 7 of {path} couldn't be read", PixelsProblem.Failed), await One("failed"));
+        Assert.Equal(($"the region of page 7 of {path} couldn't be rendered", PixelsProblem.Failed), await Region("failed"));
+    }
+
+    [Fact]
+    public void Busy_no_such_image_and_no_such_page_have_their_shell_kinds()
+    {
+        Assert.Equal(Kumbu.Core.Sh.ShellErrorKind.Invalid, new PixelsUnavailableException("no page", PixelsProblem.NoSuchPage).Kind);
+        Assert.Equal(Kumbu.Core.Sh.ShellErrorKind.Unavailable, new PixelsUnavailableException("busy", PixelsProblem.Busy).Kind);
+        Assert.Equal(Kumbu.Core.Sh.ShellErrorKind.Invalid, new PixelsUnavailableException("no image", PixelsProblem.NoSuchImage).Kind);
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it } from "vitest";
-import { type Job, Pool } from "../src/pool.js";
+import { Gate, type Job, Pool } from "../src/pool.js";
 
 const stub = new URL("./workers/stub.mjs", import.meta.url);
 // The stub worker understands job kinds of its own.
@@ -78,5 +78,63 @@ describe("Pool", () => {
     const outcomes = Promise.allSettled([first, second]);
     await pool.close();
     for (const o of await outcomes) expect(o).toMatchObject({ status: "rejected", reason: { code: "failed" } });
+  });
+});
+
+describe("Gate", () => {
+  let other: Pool | undefined;
+  afterEach(async () => {
+    await other?.close();
+    other = undefined;
+  });
+
+  // Samples the live threads of both pools until done settles, and answers the most seen at once.
+  async function peak(pools: Pool[], done: Promise<unknown>): Promise<number> {
+    let most = 0;
+    let over = false;
+    void done.finally(() => (over = true));
+    while (!over) {
+      most = Math.max(most, pools.reduce((n, p) => n + p.threads, 0));
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    return most;
+  }
+
+  it("keeps the jobs running across two pools to its limit, and starts the third when one ends", async () => {
+    const gate = new Gate(2);
+    pool = new Pool({ workers: 2, queue: 4, entry: stub, gate });
+    other = new Pool({ workers: 1, queue: 2, entry: stub, gate });
+    const started = Date.now();
+    const renders = [1, 2].map(() => pool!.run(job({ kind: "slow", pages: 1, ms: 400 }), 5_000));
+    const extraction = other.run<number>(job({ kind: "echo", value: 3 }), 5_000).then((v) => [v, Date.now() - started] as const);
+    const all = Promise.all([...renders, extraction]);
+    expect(await peak([pool, other], all)).toBe(2);
+    const [value, after] = (await all)[2] as readonly [number, number];
+    expect(value).toBe(3);
+    expect(after).toBeGreaterThanOrEqual(390);
+  });
+
+  it("holds a render back while an extraction and a render run", async () => {
+    const gate = new Gate(2);
+    pool = new Pool({ workers: 2, queue: 4, entry: stub, gate });
+    other = new Pool({ workers: 1, queue: 2, entry: stub, gate });
+    const started = Date.now();
+    const extraction = other.run(job({ kind: "slow", pages: 1, ms: 400 }), 5_000);
+    const render = pool.run(job({ kind: "slow", pages: 1, ms: 400 }), 5_000);
+    const third = pool.run(job({ kind: "echo", value: 3 }), 5_000).then(() => Date.now() - started);
+    const all = Promise.all([extraction, render, third]);
+    expect(await peak([pool, other], all)).toBe(2);
+    expect((await all)[2]).toBeGreaterThanOrEqual(390);
+  });
+
+  it("still answers busy past a pool's workers plus queue while the gate holds its jobs back", async () => {
+    const gate = new Gate(2);
+    pool = new Pool({ workers: 2, queue: 0, entry: stub, gate });
+    other = new Pool({ workers: 1, queue: 1, entry: stub, gate });
+    const renders = [1, 2].map(() => pool!.run(job({ kind: "hang" }), 300));
+    const waiting = [1, 2].map(() => other!.run(job({ kind: "echo", value: 1 }), 5_000));
+    await expect(other.run(job({ kind: "echo", value: 1 }), 5_000)).rejects.toMatchObject({ code: "busy" });
+    for (const r of renders) await expect(r).rejects.toMatchObject({ code: "timeout" });
+    for (const w of waiting) expect(await w).toBe(1);
   });
 });

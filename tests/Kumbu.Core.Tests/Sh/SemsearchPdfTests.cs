@@ -36,9 +36,17 @@ public class SemsearchPdfTests
 
         public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
 
+        public Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct) => throw new NotSupportedException();
+
         public void Count(AttachmentUse use)
         {
         }
+
+        public IDisposable? TryStartExtraction() => throw new NotSupportedException();
     }
 
     private static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
@@ -160,5 +168,31 @@ public class SemsearchPdfTests
         Assert.False(result.IsError, result.Output);
         Assert.StartsWith("1. /V/Papers/b.pdf p2  score 0.70\n", result.Output);
         Assert.True(empty.IsError);
+    }
+
+    [Fact]
+    public async Task An_archived_pdf_page_is_left_out_unless_asked()
+    {
+        var sh = await ShellAsync(new FakeIndex(new SemanticHit(P("/V/_archive/old.pdf"), 3, 0.95), new SemanticHit(P("/V/_archive/old.md"), 0, 0.9), new SemanticHit(P("/V/plan.md"), 0, 0.5)));
+        var time = new FakeTimeProvider(new DateTime(2026, 10, 29, 11, 0, 0, DateTimeKind.Utc));
+        await new AttachmentWriter(_store, _store, time, new FixedCaller(Writers.Dev)).WriteAsync("/V/_archive/old.pdf", "%PDF-1.7"u8.ToArray(), null, null, Ct);
+        const string Old = "# Old\nthe zebras of old\n";
+        _store.Put(new StoredNote(P("/V/_archive/old.md"), Old, 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Old, Ref: WriterRef.Server));
+
+        var hidden = await sh.RunAsync("semsearch zebras /V", Ct);
+        var root = await sh.RunAsync("semsearch zebras", Ct);
+        var asked = await sh.RunAsync("semsearch --archive zebras /V", Ct);
+        var inside = await sh.RunAsync("semsearch zebras /V/_archive/", Ct);
+
+        Assert.StartsWith("1. /V/plan.md#Plan  lines 1-2  score 0.60\n", hidden.Output);
+        Assert.DoesNotContain("_archive", hidden.Output);
+        Assert.DoesNotContain("_archive", root.Output);
+        Assert.Contains("\n2. /V/_archive/old.pdf p3  score 0.95\n", asked.Output);
+        Assert.StartsWith("1. /V/_archive/old.md#Old", asked.Output);
+        Assert.False(inside.IsError, inside.Output);
+        Assert.StartsWith("1. /V/_archive/old.md#Old", inside.Output);
+        Assert.DoesNotContain("plan.md", inside.Output);
+        Assert.Contains("\n2. /V/_archive/old.pdf p3  score 0.95\n", inside.Output);
+        Assert.StartsWith("1. /V/_archive/old.pdf p3  score 0.95\n", (await sh.RunAsync("semsearch zebras /V/_archive/old.pdf", Ct)).Output);
     }
 }

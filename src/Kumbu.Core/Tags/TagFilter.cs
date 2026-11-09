@@ -44,15 +44,24 @@ public static class TagFilter
     /// <summary>
     /// The notes that carry every one of <paramref name="asked"/> (with or without '#'). <c>Error</c>, a sentence for
     /// the person or agent who asked, when one can't be a tag or no note below <paramref name="scope"/> carries it: a
-    /// misspelt tag says so instead of finding nothing.
+    /// misspelt tag says so instead of finding nothing. A tag that only the notes of <paramref name="archived"/> carry
+    /// (those of a vault's archive the caller left out) says that instead, followed by its <c>Hint</c>, a command that
+    /// takes them in: "rg --archive … searches them".
     /// </summary>
-    public static (IReadOnlyList<Note>? Notes, string? Error) Narrow(IReadOnlyList<Note> notes, IReadOnlyList<string> asked, VaultPath scope)
+    public static (IReadOnlyList<Note>? Notes, string? Error) Narrow(
+        IReadOnlyList<Note> notes, IReadOnlyList<string> asked, VaultPath scope, (IReadOnlyList<Note> Notes, string Hint)? archived = null)
     {
         IReadOnlyList<Note> result = notes;
         foreach (var text in asked)
         {
             if (Parse(text) is not { } tag) return (null, NotATag(text));
-            if (!notes.Any(n => Carries(n, tag))) return (null, Unknown(tag, scope));
+            if (!notes.Any(n => Carries(n, tag)))
+            {
+                return archived is { } hidden && hidden.Notes.Any(n => Carries(n, tag))
+                    ? (null, $"only archived notes{(scope.IsRoot ? "" : " below " + scope.Value)} carry #{tag}; {hidden.Hint}")
+                    : (null, Unknown(tag, scope));
+            }
+
             result = [.. result.Where(n => Carries(n, tag))];
         }
 

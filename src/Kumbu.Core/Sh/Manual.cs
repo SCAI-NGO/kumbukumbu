@@ -7,17 +7,18 @@ public static class Manual
         Shell over Kumbu² — a Markdown second brain. Top-level directories are vaults.
 
         Commands:
-          ls [path]                       list a directory (directories end with '/'); no path lists the vaults
+          ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
           cat <path>[#section]            print a note or one section; its version token comes as a separate block
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
-          semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages
+          semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages (--archive: also archived notes)
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
+          pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
-          backlinks <path>                the notes that link to a note, as path:line:text
-          tags [tag] [path]               the tags below a path with counts; with a tag, the notes that carry it
+          backlinks [--archive] <path>    the notes that link to a note, as path:line:text
+          tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
@@ -28,6 +29,7 @@ public static class Manual
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
           mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
+          archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)
           mkdir <path>                    make a folder; an empty folder stays until you remove it
           rm <path>                       move a note or an empty folder to the trash (kept 30 days)
           trash [path]                    list removed notes and folders
@@ -41,7 +43,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
+        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.

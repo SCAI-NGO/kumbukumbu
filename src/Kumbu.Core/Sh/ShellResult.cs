@@ -41,7 +41,7 @@ public sealed record ShellResult(string Output, bool IsError)
     public string? NoMatchHint { get; init; }
 
     /// <summary>
-    /// A line about what the command read, put above the pipeline's output once it has run, never passed down the
+    /// A line about what the command read or left out, put above the pipeline's output once it has run, never passed down the
     /// pipe: "last written by another user" (collab design §10.3).
     /// </summary>
     public string? Notice { get; init; }

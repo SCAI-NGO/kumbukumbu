@@ -7,6 +7,7 @@
 import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
 import { textBoxes } from "./boxes.js";
+import { extractImage, listImages, quietly, renderRegion } from "./extract.js";
 import { renderImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
@@ -20,18 +21,29 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
     case "analyse":
       return { value: await analyse(job.bytes, job.maxPages, (pages) => post({ type: "pages", pages })), transfer: [] };
     case "page":
-    case "image": {
-      const r =
+    case "image":
+      return own(
         job.kind === "page"
           ? await renderPage(job.bytes, job.page, job.target, job.crop, job.rotate)
-          : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame);
-      // A copy in a buffer of its own: Skia's buffers cannot be transferred, and a Buffer may share one.
-      const data = new Uint8Array(r.data);
-      return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };
-    }
+          : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame),
+      );
     case "boxes":
       return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
+    // A backstop: whatever pdf.js prints during an extraction job, warnings on or not, may name details
+    // of the file, and is swallowed.
+    case "list":
+      return quietly(async () => ({ value: await listImages(job.bytes, job.page), transfer: [] }));
+    case "extract":
+      return quietly(async () => own(await extractImage(job.bytes, job.page, job.n)));
+    case "region":
+      return quietly(async () => own(await renderRegion(job.bytes, job.page, job.crop, job.rotate, job.format)));
   }
+}
+
+// A copy in a buffer of its own: Skia's buffers cannot be transferred, and a Buffer may share one.
+function own<T extends { data: Uint8Array }>(r: T): { value: T; transfer: ArrayBuffer[] } {
+  const data = new Uint8Array(r.data);
+  return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };
 }
 
 port.once("message", (job: Job) => {

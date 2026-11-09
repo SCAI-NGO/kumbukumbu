@@ -61,10 +61,11 @@ public class SkillsCommandTests
 
         Assert.False(result.IsError, result.Output);
         var lines = result.Output.Split('\n');
-        Assert.Equal(3, lines.Length);
+        Assert.Equal(4, lines.Length);
         Assert.StartsWith("create-skill (system): ", lines[0]);
-        Assert.Equal("write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.", lines[1]);
-        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.", lines[2]);
+        Assert.StartsWith("ingest-attachments (system): ", lines[1]);
+        Assert.Equal("write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.", lines[2]);
+        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.", lines[3]);
     }
 
     [Fact]
@@ -81,8 +82,8 @@ public class SkillsCommandTests
 
         var lines = (await Run("skills ls")).Output.Split('\n');
 
-        Assert.EndsWith("Drafts release notes. [update available: Skills screen]", lines[2]);
-        Assert.DoesNotContain("update available", lines[1]);
+        Assert.EndsWith("Drafts release notes. [update available: Skills screen]", lines[3]);
+        Assert.DoesNotContain("update available", lines[2]);
     }
 
     [Fact]
@@ -94,7 +95,7 @@ public class SkillsCommandTests
         var lines = (await Run("skills ls")).Output.Split('\n');
         var found = (await Run("skills find \"release notes\"")).Output;
 
-        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[2]);
+        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[3]);
         Assert.DoesNotContain("update available", string.Join('\n', lines));
         Assert.StartsWith("1. release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", found);
     }
@@ -265,7 +266,7 @@ public class SkillsCommandTests
         Assert.Equal("/Skills/write-as-alice: ok", (await Run("skills check /Skills/write-as-alice")).Output);
         var all = await Run("skills check");
         Assert.False(all.IsError, all.Output);
-        Assert.Equal("create-skill: ok\n/Skills/write-as-alice: ok\n/Work/_skills/release-notes: ok", all.Output);
+        Assert.Equal("create-skill: ok\ningest-attachments: ok\n/Skills/write-as-alice: ok\n/Work/_skills/release-notes: ok", all.Output);
     }
 
     [Fact]
@@ -349,14 +350,16 @@ public class SkillsCommandTests
             [
                 // Words over name and description, words over the body ("# Notes"): 2/61 + 1/61.
                 "1. release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.  score 0.0492",
+                // Second in both word lists ("notes" in its description and its body): 2/62 + 1/62.
+                "2. ingest-attachments (system): " + SkillManifest.Read("ingest-attachments", SystemSkills.Find("ingest-attachments")!.Files[0].Content).Description + "  score 0.0484",
                 // Meaning alone, first in the vault Skills: 1/61.
-                "2. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
+                "3. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
             ],
             result.Output.Split('\n'));
     }
 
     [Fact]
-    public async Task Find_without_a_fit_says_so() => Assert.Equal("no skill fits; skills ls lists them all", (await Run("skills find \"plant tomatoes\"")).Output);
+    public async Task Find_without_a_fit_says_so() => Assert.Equal("no skill fits; skills ls lists them all", (await Run("skills find \"bake bread\"")).Output);
 
     [Fact]
     public async Task Find_takes_one_request()
