@@ -77,7 +77,7 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
 
     /// <summary>
     /// Marks the vault <paramref name="vaultId"/> discreet or not. The write is conditional on the list read (so a
-    /// concurrent mark is never lost: tried again up to three times, then <see cref="InvalidOperationException"/>) and on
+    /// concurrent mark is never lost: tried again up to three times, then <see cref="DiscreetListConflictException"/>) and on
     /// <paramref name="userKey"/> being the one in force (<see cref="CredentialsChangedException"/> if not, so a list is
     /// never sealed under an old key). A list that doesn't open starts from <paramref name="allIds"/>, which excludes
     /// the vault Skills (Decision 2).
@@ -109,7 +109,7 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
             if (written.MatchedCount == 1) return;
         }
 
-        throw new InvalidOperationException("The discreet vaults kept changing; try again.");
+        throw new DiscreetListConflictException();
     }
 
     /// <summary>Sets the PIN, replacing any earlier one; <see cref="ArgumentException"/> unless it has 4 to 6 digits,
@@ -145,3 +145,6 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
     [GeneratedRegex(@"\A[0-9]{4,6}\z", RegexOptions.CultureInvariant)]
     private static partial Regex PinPattern();
 }
+
+/// <summary>The list of discreet vaults kept changing under <see cref="DiscreetVaults.SetAsync"/>; nothing was written.</summary>
+public sealed class DiscreetListConflictException() : Exception("The discreet vaults kept changing; try again.");

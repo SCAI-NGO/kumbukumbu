@@ -163,7 +163,7 @@ public sealed class DiscreetVaultsTests(MongoFixture fixture)
                 cancellationToken: Ct);
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => discreet.SetAsync(user, key, "v1", true, ["v1"], Ct));
+        await Assert.ThrowsAsync<DiscreetListConflictException>(() => discreet.SetAsync(user, key, "v1", true, ["v1"], Ct));
 
         Assert.Equal(3, calls);
     }

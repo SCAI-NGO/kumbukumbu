@@ -61,7 +61,7 @@ public static class DiscreetApi
 
     /// <summary>
     /// The PIN shows the discreet vaults (Decisions 4–6): the minutes are checked first, then the user's limit, then the
-    /// entry is counted, then the PIN derived, once in every case. Every PIN that doesn't reveal gets one answer. The
+    /// entry is counted, then, unless that entry ended the session, the PIN derived once, whatever the PIN or the account. Every PIN that doesn't reveal gets one answer. The
     /// tenth entry of a session, right or wrong, ends it, and it answers as any request of an ended session.
     /// </summary>
     private static async Task<Results<Ok<DiscreetView>, JsonHttpResult<ApiError>>> RevealAsync(
@@ -89,7 +89,7 @@ public static class DiscreetApi
         var (revealed, until) = await sessions.RevealAsync(secret, body.Minutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null, ct);
         // Ended meanwhile (a concurrent tenth entry, a sign-out elsewhere): as the request would have been answered later.
         if (!revealed) return await EndedAsync(http, user.Id, hub);
-        if (Sessions.SubjectOf(secret) is { } subject) hub.DiscreetRevealed(subject);
+        if (Sessions.SubjectOf(secret) is { } subject) await hub.DiscreetRevealedAsync(subject, CancellationToken.None);
         return TypedResults.Ok(new DiscreetView(true, until));
     }
 
@@ -107,7 +107,7 @@ public static class DiscreetApi
     /// discreet vaults. Otherwise, and for a name she doesn't have, the 404 of a vault she doesn't have, whether or not
     /// the vault exists or is discreet. The vault Skills never is.
     /// </summary>
-    private static async Task<Results<NoContent, JsonHttpResult<ApiError>>> MarkAsync(
+    private static async Task<NoContent> MarkAsync(
         string vault, MarkDiscreetRequest body, RequestCaller caller, DiscreetVaults discreet, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
@@ -119,34 +119,19 @@ public static class DiscreetApi
 
         // Every vault the session opens but Skills, should the list not open (Decision 2).
         var all = visible.Concat(session.Hidden).Where(v => !v.IsSkillsVault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
-        try
-        {
-            await discreet.SetAsync(user.Id, caller.UserKey!, access.Id, body.Discreet, all, ct);
-        }
-        catch (InvalidOperationException e) when (e.GetType() == typeof(InvalidOperationException))
-        {
-            throw new ApiException(StatusCodes.Status409Conflict, "Something changed meanwhile; try again.");
-        }
-        // The user key changed (a rotation): this session's request is answered as one of an ended session.
-        catch (CredentialsChangedException)
-        {
-            return Ended();
-        }
-
-        hub.DiscreetChanged(user.Id, access.Id);
+        await discreet.SetAsync(user.Id, caller.UserKey!, access.Id, body.Discreet, all, ct);
+        await hub.DiscreetChangedAsync(user.Id, access.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }
 
-    /// <summary>What a request of an ended session gets from <see cref="CallerMiddleware"/>; the cookie goes and the
-    /// session's sockets close.</summary>
+    /// <summary>The status and body <see cref="CallerMiddleware"/> gives a request of an ended session; here the cookie
+    /// also goes and the session's sockets are checked.</summary>
     private static async Task<JsonHttpResult<ApiError>> EndedAsync(HttpContext http, string userId, SyncHub hub)
     {
         await hub.SubjectsEndedAsync(userId, CancellationToken.None);
         AccountApi.ClearSessionCookie(http);
-        return Ended();
+        return TypedResults.Json(new ApiError(CallerMiddleware.SignInSentence), statusCode: StatusCodes.Status401Unauthorized);
     }
-
-    private static JsonHttpResult<ApiError> Ended() => TypedResults.Json(new ApiError(CallerMiddleware.SignInSentence), statusCode: StatusCodes.Status401Unauthorized);
 
     private static ILogger Log(ILoggerFactory logs) => logs.CreateLogger(typeof(DiscreetApi).FullName!);
 }

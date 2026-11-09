@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Discreet;
 
@@ -51,6 +52,23 @@ public sealed class DiscreetApiTests(KumbuAppFactory app)
 
     private static Task<(HttpStatusCode Status, string Body)> RevealAsync(RestClient client, string pin, int? minutes = null) =>
         SendAsync(client, HttpMethod.Post, "/api/account/discreet/reveal", new { pin, minutes });
+
+    /// <summary>A PIN entry's whole answer: its headers, response and content alike, as "name: values" in order of name.</summary>
+    private static async Task<(HttpStatusCode Status, string Body, string[] Headers)> EntryAsync(RestClient client, string pin, int? minutes = null)
+    {
+        using var response = await client.SendAsync(HttpMethod.Post, "/api/account/discreet/reveal", new { pin, minutes });
+        var headers = response.Headers.Concat(response.Content.Headers)
+            .Select(h => $"{h.Key.ToLowerInvariant()}: {string.Join(", ", h.Value)}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct), headers);
+    }
+
+    /// <summary>The headers that may differ between two answers alike: the time and the session's cookie.</summary>
+    private static string[] Comparable(string[] headers) =>
+        [.. headers.Where(h => !h.StartsWith("date:", StringComparison.Ordinal) && !h.StartsWith("set-cookie:", StringComparison.Ordinal))];
+
+    private static string[] Names(string[] headers) => [.. headers.Select(h => h[..h.IndexOf(':', StringComparison.Ordinal)])];
 
     private static Task<(HttpStatusCode Status, string Body)> HideAsync(RestClient client) => SendAsync(client, HttpMethod.Post, "/api/account/discreet/hide");
 
@@ -166,10 +184,10 @@ public sealed class DiscreetApiTests(KumbuAppFactory app)
         await SetPinAsync(withPin, Pin);
         var withoutPin = await RestClient.NewAsync(api);
 
-        async Task<(HttpStatusCode, string)> EnteredAsync(RestClient client, string pin)
+        async Task<(HttpStatusCode Status, string Body, string[] Headers)> EnteredAsync(RestClient client, string pin)
         {
             var before = kdf.Runs;
-            var answer = await RevealAsync(client, pin, minutes: 10);
+            var answer = await EntryAsync(client, pin, minutes: 10);
             Assert.Equal(before + 1, kdf.Runs);
             return answer;
         }
@@ -183,7 +201,9 @@ public sealed class DiscreetApiTests(KumbuAppFactory app)
             await EnteredAsync(withoutPin, "12a4"),
         };
 
-        Assert.All(answers, a => Assert.Equal((HttpStatusCode.BadRequest, NoneBody), a));
+        Assert.All(answers, a => Assert.Equal((HttpStatusCode.BadRequest, NoneBody), (a.Status, a.Body)));
+        Assert.All(answers, a => Assert.Contains("content-type: application/json; charset=utf-8", a.Headers));
+        Assert.All(answers, a => Assert.Equal(Names(answers[0].Headers), Names(a.Headers)));
         Assert.Equal([("Skills", false), ("Work", false)], await withVaults.VaultsAsync());
     }
 
@@ -195,19 +215,56 @@ public sealed class DiscreetApiTests(KumbuAppFactory app)
         await SetPinAsync(withPin, Pin);
         var withoutPin = await RestClient.NewAsync(api);
 
-        async Task<(HttpStatusCode, string)[]> SixAsync(RestClient client)
+        async Task<(HttpStatusCode Status, string Body, string[] Headers)[]> SixAsync(RestClient client)
         {
-            var answers = new List<(HttpStatusCode, string)>();
-            for (var i = 0; i < 6; i++) answers.Add(await RevealAsync(client, WrongPin, minutes: 10));
+            var answers = new List<(HttpStatusCode, string, string[])>();
+            for (var i = 0; i < 6; i++) answers.Add(await EntryAsync(client, WrongPin, minutes: 10));
             return [.. answers];
         }
 
         var with = await SixAsync(withPin);
         var without = await SixAsync(withoutPin);
 
-        Assert.Equal(with, without);
-        Assert.All(with[..5], a => Assert.Equal((HttpStatusCode.BadRequest, NoneBody), a));
-        Assert.Equal((HttpStatusCode.TooManyRequests, """{"error":"Too many attempts; try again in a minute."}"""), with[5]);
+        for (var i = 0; i < 6; i++)
+        {
+            Assert.Equal((with[i].Status, with[i].Body), (without[i].Status, without[i].Body));
+            Assert.Equal(Comparable(with[i].Headers), Comparable(without[i].Headers));
+        }
+
+        Assert.All(with[..5], a => Assert.Equal((HttpStatusCode.BadRequest, NoneBody), (a.Status, a.Body)));
+        Assert.Equal((HttpStatusCode.TooManyRequests, """{"error":"Too many attempts; try again in a minute."}"""), (with[5].Status, with[5].Body));
+        Assert.Contains(with[5].Headers, h => h.StartsWith("retry-after: ", StringComparison.Ordinal));
+        Assert.Contains(without[5].Headers, h => h.StartsWith("retry-after: ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_PIN_limit_counts_across_the_sessions_of_one_user()
+    {
+        await using var api = Timed();
+        var first = await RestClient.NewAsync(api);
+        await SetPinAsync(first, Pin);
+        var second = await first.SignInAgainAsync();
+
+        for (var i = 0; i < 3; i++) Assert.Equal((HttpStatusCode.BadRequest, NoneBody), await RevealAsync(first, WrongPin));
+        for (var i = 0; i < 2; i++) Assert.Equal((HttpStatusCode.BadRequest, NoneBody), await RevealAsync(second, WrongPin));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await RevealAsync(second, WrongPin)).Status);
+    }
+
+    [Fact]
+    public async Task An_entry_refused_by_the_limit_does_not_count_towards_the_ten()
+    {
+        await using var api = Timed(pinChecksPerUser: 1);
+        var alice = await RestClient.NewAsync(api);
+        await SetPinAsync(alice, Pin);
+        Assert.Equal((HttpStatusCode.BadRequest, NoneBody), await RevealAsync(alice, WrongPin));
+
+        for (var i = 0; i < Sessions.PinEntryLimit; i++) Assert.Equal(HttpStatusCode.TooManyRequests, (await RevealAsync(alice, WrongPin)).Status);
+
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(alice, HttpMethod.Get, "/api/session")).Status);
+        var slot = await app.Database.GetCollection<UserSlotDocument>("user_slots")
+            .Find(s => s.User == alice.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+        Assert.Equal(1, slot.PinEntries);
     }
 
     [Fact]
