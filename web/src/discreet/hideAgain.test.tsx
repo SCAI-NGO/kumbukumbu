@@ -17,7 +17,9 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeSocket);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A hide still under way would go on into the next test, which would join it rather than start its own.
+  await waitFor(() => expect(useDiscreet.getState().hiding).toBe(false));
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -125,11 +127,38 @@ async function openDiary(until: string | null, extra: Parameters<typeof fakeApi>
   useSyncStatus.setState({ editors: { "Tagebuch\n/a.md": ["Bob"] } });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = renderApp("/notes/Tagebuch/a.md", queryClient);
-  expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+  await headingShown("a");
   await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
   expect(useDiscreet.getState().revealed).toBe(true);
-  return { ...api, queryClient, router };
+  /**
+   * Shown again as the tab learns it: the server shows them, and the session and the vault list read again say so. Set
+   * by hand instead, the mode could meet the tab still following the session the hide asked for, which says hidden.
+   */
+  const showAgain = async () => {
+    api.shownAgain();
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await act(() => queryClient.refetchQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => {
+      expect(useDiscreet.getState().revealed).toBe(true);
+      expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]);
+    });
+  };
+  return { ...api, queryClient, router, showAgain };
 }
+
+/**
+ * The tab is back on `path` and done hiding. The URL changes before the hide's last steps (dropping the cached answers,
+ * ending `hiding`), so the URL alone says too little for what a test does next.
+ */
+async function doneHiding(router: ReturnType<typeof renderApp>, path = "/notes/Work/a.md") {
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe(path);
+    expect(useDiscreet.getState().hiding).toBe(false);
+  });
+}
+
+/** The note's heading is shown: looked for and checked at once, as the view may render it anew right after a hide. */
+const headingShown = (name: string) => waitFor(() => expect(screen.getByRole("heading", { name })).toBeInTheDocument());
 
 const hideButton = () => within(screen.getByRole("group", { name: "Discreet vaults shown" })).getByRole("button", { name: "Hide discreet vaults" });
 
@@ -141,7 +170,7 @@ describe("hiding the discreet vaults again", () => {
     const openWhenDone: (string | null)[] = [];
     const stop = useDiscreet.subscribe((s, previous) => void (previous.hiding && !s.hiding && openWhenDone.push(useEditor.getState().currentPath)));
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expect(openWhenDone).toEqual(["/Work/a.md"]));
     stop();
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });
@@ -149,7 +178,7 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expectForgotten(queryClient));
     // The note of the URL is the open one again.
     expect(useEditor.getState().currentPath).toBe("/Work/a.md");
-    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+    await headingShown("a");
     // The session is still there, and asked again.
     await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(false));
     expect(requests("GET", "/api/session").length).toBeGreaterThan(1);
@@ -162,9 +191,9 @@ describe("hiding the discreet vaults again", () => {
     useEditor.setState({ recentPaths: ["/Tagebuch/a.md"] });
     editorOn(log);
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await doneHiding(router, "/");
     await waitFor(() => expectForgotten(queryClient));
-    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    await headingShown("Your vaults");
   });
 
   it("saves a little before the end, and hides at it, leaving the end to the server", async () => {
@@ -177,7 +206,7 @@ describe("hiding the discreet vaults again", () => {
     expect(log).toEqual(["save"]);
     expect(useDiscreet.getState().revealed).toBe(true);
     await act(() => vi.advanceTimersByTimeAsync(SAVE_AHEAD));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     // Saved again at the end, then hidden; the server ends the time itself, and keeps the late save meanwhile.
     expect(log).toEqual(["save", "save"]);
     await waitFor(() => expectForgotten(queryClient));
@@ -197,7 +226,7 @@ describe("hiding the discreet vaults again", () => {
     const beforeRead = vi.fn(async () => !failing);
     useEditor.setState({ beforeRead, unsaved: () => (failing ? { text: "Liebes Tagebuch", version: "v1" } : null) });
     await act(() => vi.advanceTimersByTimeAsync(60_000));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expectForgotten(queryClient));
     expect(holding()).toBe(true);
     failing = false;
@@ -217,7 +246,7 @@ describe("hiding the discreet vaults again", () => {
     // Asleep: the clock moves on, no timer runs; on waking, the timers due meanwhile run at once.
     vi.setSystemTime(Date.now() + 3 * 60_000);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     expect(beforeRead).toHaveBeenCalledTimes(1);
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });
     await waitFor(() => expectForgotten(queryClient));
@@ -231,7 +260,7 @@ describe("hiding the discreet vaults again", () => {
     const shownAgain = vi.fn();
     const stop = useDiscreet.subscribe((s, previous) => void (s.revealed && !previous.revealed && shownAgain()));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     // The session read after the hide still says shown: the server's minute isn't over yet.
     await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(true));
     expect(useDiscreet.getState().revealed).toBe(false);
@@ -255,7 +284,7 @@ describe("hiding the discreet vaults again", () => {
   });
 
   it("tells the server which discreet note is open, and that none is once an ordinary one is", async () => {
-    const { log, told, router, requests, shownAgain } = await openDiary(inMinutes(10));
+    const { log, told, router, requests, showAgain } = await openDiary(inMinutes(10));
     await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }]));
     await act(() => router.navigate("/notes/Work/a.md"));
     await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }, { vault: null }]));
@@ -265,13 +294,12 @@ describe("hiding the discreet vaults again", () => {
     // ✕ clears it on the server itself: nothing more is told, not even while hiding.
     editorOn(log);
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await act(() => router.navigate("/notes/Work/a.md"));
     expect(told).toHaveLength(3);
     expect(requests("PUT", "/api/account/discreet/open-note")).toHaveLength(3);
     // Shown again, the same note is told again: the server forgot it with the hide.
-    shownAgain();
-    act(() => useDiscreet.setState({ revealed: true, until: inMinutes(10), names: new Set(["Tagebuch"]) }));
+    await showAgain();
     await act(() => router.navigate("/notes/Tagebuch/a.md"));
     await waitFor(() => expect(told).toHaveLength(4));
     expect(told[3]).toEqual({ vault: "Tagebuch", path: "a.md" });
@@ -281,7 +309,7 @@ describe("hiding the discreet vaults again", () => {
     const { told, requests } = server(inMinutes(10));
     useEditor.setState({ recentPaths: [] });
     renderApp("/notes/Work/a.md");
-    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+    await headingShown("a");
     await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
     await waitFor(() => expect(requests("GET", "/api/vaults").length).toBeGreaterThan(0));
     expect(told).toEqual([]);
@@ -295,7 +323,7 @@ describe("hiding the discreet vaults again", () => {
     FakeSocket.all.at(-1)!.open();
     hidden();
     FakeSocket.all.at(-1)!.frame({ type: "hidden" });
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     expect(log).toEqual(["save"]);
     await waitFor(() => expectForgotten(queryClient));
   });
@@ -305,7 +333,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log);
     hidden();
     await act(() => queryClient.invalidateQueries({ queryKey: ["session"] }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     expect(log).toEqual(["save"]);
     await waitFor(() => expectForgotten(queryClient));
   });
@@ -315,7 +343,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log);
     hidden();
     await act(() => queryClient.refetchQueries({ queryKey: ["note", "/Tagebuch/a.md"], exact: true }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expectForgotten(queryClient));
   });
 
@@ -331,7 +359,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log, false);
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expectForgotten(queryClient));
     // Not in the editor's draft, nor anywhere the app shows.
     expect(JSON.stringify(useEditor.getState())).not.toContain("Liebes Tagebuch");
@@ -365,7 +393,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log, false);
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     expect(holding()).toBe(true);
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     await waitFor(() => expect(holding()).toBe(false));
@@ -391,7 +419,7 @@ describe("hiding the discreet vaults again", () => {
     FakeSocket.all.at(-1)!.open();
     hidden();
     FakeSocket.all.at(-1)!.frame({ type: "hidden" });
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expectForgotten(queryClient));
   });
 
@@ -411,17 +439,17 @@ describe("hiding the discreet vaults again", () => {
     const mutation = queryClient.getMutationCache().build(queryClient, { mutationFn: () => new Promise<void>((resolve) => (settle = resolve)) });
     void mutation.execute({ path: "/Tagebuch/a.md" });
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     act(() => settle());
     await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("Tagebuch"));
   });
 
   it("stops dropping the vault's answers once it is shown again", async () => {
-    const { log, queryClient, router } = await openDiary(null);
+    const { log, queryClient, router, showAgain } = await openDiary(null);
     editorOn(log);
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
-    act(() => useDiscreet.setState({ revealed: true, names: new Set(["Tagebuch"]) }));
+    await doneHiding(router);
+    await showAgain();
     act(() => void queryClient.setQueryData(["note", "/Tagebuch/a.md"], { path: "/Tagebuch/a.md", content: "Text.", version: "v1" }));
     await act(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
     expect(queryClient.getQueryData(["note", "/Tagebuch/a.md"])).toBeDefined();
@@ -454,7 +482,7 @@ describe("hiding the discreet vaults again", () => {
     const shownAgain = vi.fn();
     const stop = useDiscreet.subscribe((s, previous) => void (s.revealed && !previous.revealed && shownAgain()));
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(false));
     expect(useDiscreet.getState().revealed).toBe(false);
     expect(shownAgain).not.toHaveBeenCalled();
@@ -466,7 +494,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log, false);
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     expect(holding()).toBe(true);
     act(() => useSession.getState().signedIn({ user: { ...user, id: "u2", username: "bob" }, previousSignInAt: null }));
     expect(holding()).toBe(false);
@@ -483,7 +511,7 @@ describe("hiding the discreet vaults again", () => {
     useEditor.setState({ draft: { username: "ada", path: "/Tagebuch/b.md", text: "Älter", version: "v1" } });
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     net.offline = false;
     act(() => void window.dispatchEvent(new Event("online")));
     await waitFor(() => expect(writes).toEqual(["/api/notes/Tagebuch/a.md Liebes Tagebuch"]));
@@ -498,7 +526,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log, false);
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await act(() => vi.advanceTimersByTimeAsync(2 * 60_000));
     expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(0);
     expect(holding()).toBe(true);
@@ -516,7 +544,7 @@ describe("hiding the discreet vaults again", () => {
     editorOn(log, false);
     net.offline = true;
     await userEvent.click(hideButton());
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
     expect(requests("PUT", "/api/notes/Tagebuch/a.md")).toHaveLength(0);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
@@ -544,7 +572,7 @@ describe("hiding the discreet vaults again", () => {
     hidden();
     act(() => FakeSocket.all.at(-1)!.frame({ type: "hidden" }));
     act(() => finish(true));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
     await waitFor(() => expectForgotten(queryClient));
     expect(beforeRead).toHaveBeenCalledTimes(2);
     expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(1);
