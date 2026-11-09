@@ -35,13 +35,16 @@ const tree = (name: string) => json(200, { damaged: 0, root: { name, path: `/${n
 const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 
 /**
- * Alice's server: `Work` and the discreet `Tagebuch`, shown until `until` (null: Never) until a hide (here, or as
- * `server.hidden()` from elsewhere). `log` records the saves and the hide in their order.
+ * Alice's server: `Work` and the discreet `Tagebuch`, shown until `until` (null: Never) by its clock, `behind` ms
+ * behind the tab's, or until a hide (here, or as `server.hidden()` from elsewhere). `log` records the saves and the
+ * hide in their order; `told` what the tab said of the open note.
  */
-function server(until: string | null, extra: Parameters<typeof fakeApi>[0] = {}) {
-  let shown = true;
+function server(until: string | null, extra: Parameters<typeof fakeApi>[0] = {}, behind = 0) {
+  let hidden = false;
   const net = { offline: false };
   const log: string[] = [];
+  const told: unknown[] = [];
+  const isShown = () => !hidden && (until === null || Date.now() - behind < Date.parse(until));
   const offline = (handlers: Parameters<typeof fakeApi>[0]) =>
     Object.fromEntries(
       Object.entries(handlers).map(([key, handler]) => [
@@ -53,14 +56,14 @@ function server(until: string | null, extra: Parameters<typeof fakeApi>[0] = {})
       ]),
     );
   const fetch = fakeApi(offline({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown, until: shown ? until : null } }),
-    "GET /api/vaults": () => json(200, shown ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: isShown(), until: isShown() ? until : null } }),
+    "GET /api/vaults": () => json(200, isShown() ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => tree("Work"),
-    "GET /api/vaults/Tagebuch/tree": () => (shown ? tree("Tagebuch") : json(404, { error: "you have no vault named Tagebuch" })),
+    "GET /api/vaults/Tagebuch/tree": () => (isShown() ? tree("Tagebuch") : json(404, { error: "you have no vault named Tagebuch" })),
     "GET /api/notes/*": (r) => {
       const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
-      if (!shown && path.startsWith("/Tagebuch/")) return json(404, { error: "you have no vault named Tagebuch" });
+      if (!isShown() && path.startsWith("/Tagebuch/")) return json(404, { error: "you have no vault named Tagebuch" });
       return json(200, { path, content: "Text.", version: "v1", lastWriter: "ada", lastWriteAt: "2026-11-09T09:00:00Z" });
     },
     "GET /api/version/*": () => json(404, { error: "no" }),
@@ -72,12 +75,16 @@ function server(until: string | null, extra: Parameters<typeof fakeApi>[0] = {})
     "POST /api/ws-ticket": () => json(200, { ticket: "t1", expiresAt: "2026-11-09T10:00:30Z" }),
     "POST /api/account/discreet/hide": () => {
       log.push("hide");
-      shown = false;
+      hidden = true;
+      return noContent();
+    },
+    "PUT /api/account/discreet/open-note": async (r) => {
+      told.push(await r.clone().json());
       return noContent();
     },
     ...extra,
   }));
-  return { fetch, log, net, hidden: () => (shown = false), requests: (method: string, path: string) => fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === method && new URL(r.url).pathname === path) };
+  return { fetch, log, net, told, hidden: () => (hidden = true), requests: (method: string, path: string) => fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === method && new URL(r.url).pathname === path) };
 }
 
 /** The open note's editor, as far as hiding sees it: it saves (or fails to) and says what is left. */
@@ -111,8 +118,8 @@ function expectForgotten(queryClient: QueryClient) {
 }
 
 /** Opened on a note of `Tagebuch`, with a note of `Work` read before it, an answer in the console and an editor shown elsewhere. */
-async function openDiary(until: string | null, extra: Parameters<typeof fakeApi>[0] = {}) {
-  const api = server(until, extra);
+async function openDiary(until: string | null, extra: Parameters<typeof fakeApi>[0] = {}, behind = 0) {
+  const api = server(until, extra, behind);
   useEditor.setState({ recentPaths: ["/Work/a.md"] });
   useConsole.getState().add({ id: 1, cwd: "/Tagebuch", typed: "ls", output: [{ kind: "text", text: "a.md" }] });
   useSyncStatus.setState({ editors: { "Tagebuch\n/a.md": ["Bob"] } });
@@ -160,9 +167,9 @@ describe("hiding the discreet vaults again", () => {
     expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
   });
 
-  it("saves a little before the end, and hides at it", async () => {
+  it("saves a little before the end, and hides at it, leaving the end to the server", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { log, queryClient, router } = await openDiary(inMinutes(1));
+    const { log, queryClient, router, requests } = await openDiary(inMinutes(1));
     const beforeRead = editorOn(log);
     await act(() => vi.advanceTimersByTimeAsync(60_000 - SAVE_AHEAD - 2_000));
     expect(beforeRead).not.toHaveBeenCalled();
@@ -171,10 +178,109 @@ describe("hiding the discreet vaults again", () => {
     expect(useDiscreet.getState().revealed).toBe(true);
     await act(() => vi.advanceTimersByTimeAsync(SAVE_AHEAD));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
-    // Saved again at the end, then hidden.
-    expect(log).toEqual(["save", "save", "hide"]);
+    // Saved again at the end, then hidden; the server ends the time itself, and keeps the late save meanwhile.
+    expect(log).toEqual(["save", "save"]);
     await waitFor(() => expectForgotten(queryClient));
+    expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(0);
   });
+
+  it("at the end, a save that fails is held and tried once more, as the server's late save", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const writes: string[] = [];
+    let failing = true;
+    const { log, queryClient, router, requests } = await openDiary(inMinutes(1), {
+      "PUT /api/notes/Tagebuch/a.md": async (r) => {
+        writes.push(((await r.clone().json()) as { content: string }).content);
+        return json(200, { path: "/Tagebuch/a.md", content: "Liebes Tagebuch", version: "v2", lastWriter: "ada", lastWriteAt: "2026-11-09T10:00:00Z" });
+      },
+    });
+    const beforeRead = vi.fn(async () => !failing);
+    useEditor.setState({ beforeRead, unsaved: () => (failing ? { text: "Liebes Tagebuch", version: "v1" } : null) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await waitFor(() => expectForgotten(queryClient));
+    expect(holding()).toBe(true);
+    failing = false;
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(writes).toEqual(["Liebes Tagebuch"]));
+    expect(holding()).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(writes).toHaveLength(1);
+    expect(log).toEqual([]);
+    expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(0);
+  });
+
+  it("waking from a sleep past the end, saves once and sends no hide", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { log, queryClient, router, requests } = await openDiary(inMinutes(1));
+    const beforeRead = editorOn(log);
+    // Asleep: the clock moves on, no timer runs; on waking, the timers due meanwhile run at once.
+    vi.setSystemTime(Date.now() + 3 * 60_000);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    expect(beforeRead).toHaveBeenCalledTimes(1);
+    expect(beforeRead).toHaveBeenCalledWith({ reread: false });
+    await waitFor(() => expectForgotten(queryClient));
+    expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(0);
+  });
+
+  it("doesn't show them again when the server's clock is a little behind this tab's, and asks again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { log, queryClient, router, requests } = await openDiary(inMinutes(1), {}, 5_000);
+    editorOn(log);
+    const shownAgain = vi.fn();
+    const stop = useDiscreet.subscribe((s, previous) => void (s.revealed && !previous.revealed && shownAgain()));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    // The session read after the hide still says shown: the server's minute isn't over yet.
+    await waitFor(() => expect(queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"])?.discreet.revealed).toBe(true));
+    expect(useDiscreet.getState().revealed).toBe(false);
+    expect(screen.queryByRole("group", { name: "Discreet vaults shown" })).not.toBeInTheDocument();
+    // Nor in the vault menu, though the vault list read meanwhile still has it.
+    await waitFor(() => expect(JSON.stringify(queryClient.getQueryData(["vaults"]) ?? null)).toContain("Tagebuch"));
+    await userEvent.click(screen.getByRole("button", { name: "Open file tree" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Switch vault: Work" }));
+    expect(await screen.findByRole("dialog", { name: /vault/i })).toBeInTheDocument();
+    expect(screen.queryAllByText(/Tagebuch/)).toEqual([]);
+    await userEvent.keyboard("{Escape}");
+    const reads = requests("GET", "/api/session").length;
+    const session = () => queryClient.getQueryData<{ discreet: { revealed: boolean } }>(["session"]);
+    for (let s = 0; s < 20 && session()?.discreet.revealed; s++) await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(session()?.discreet.revealed).toBe(false);
+    expect(requests("GET", "/api/session").length).toBeGreaterThan(reads);
+    expect(shownAgain).not.toHaveBeenCalled();
+    expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(0);
+    await waitFor(() => expectForgotten(queryClient));
+    stop();
+  });
+
+  it("tells the server which discreet note is open, and that none is once an ordinary one is", async () => {
+    const { log, told, router, requests } = await openDiary(inMinutes(10));
+    await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }]));
+    await act(() => router.navigate("/notes/Work/a.md"));
+    await waitFor(() => expect(told).toEqual([{ vault: "Tagebuch", path: "a.md" }, { vault: null }]));
+    await act(() => router.navigate("/notes/Tagebuch/a.md"));
+    await waitFor(() => expect(told).toHaveLength(3));
+    expect(told[2]).toEqual({ vault: "Tagebuch", path: "a.md" });
+    // ✕ clears it on the server itself: nothing more is told, not even while hiding.
+    editorOn(log);
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await act(() => router.navigate("/notes/Work/a.md"));
+    expect(told).toHaveLength(3);
+    expect(requests("PUT", "/api/account/discreet/open-note")).toHaveLength(3);
+  });
+
+  it("tells nothing while they are hidden, nor for an ordinary note while they are shown", async () => {
+    const { told, requests } = server(inMinutes(10));
+    useEditor.setState({ recentPaths: [] });
+    renderApp("/notes/Work/a.md");
+    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    await waitFor(() => expect(requests("GET", "/api/vaults").length).toBeGreaterThan(0));
+    expect(told).toEqual([]);
+  });
+
 
   it("a hidden frame from the server does the same in another tab, without telling the server again", async () => {
     const { log, queryClient, router, hidden } = await openDiary(null);

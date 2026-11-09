@@ -224,7 +224,9 @@ export function useHideAgain() {
 /**
  * The discreet mode's clock and ears, once per signed-in tab: a little before the end the open discreet note is
  * saved, at the end the vaults are hidden again; so they are when another tab hid them (the socket's `hidden`), and
- * the session is asked again when a vault that was discreet answers 404, which then finds the session hidden.
+ * the session is asked again when a vault that was discreet answers 404, which then finds the session hidden. The end
+ * of the time isn't told to the server, which ends it by its own clock and then takes one late save of the open note
+ * (spec §3.8): a hide would forgo that.
  */
 export function useDiscreetMode() {
   const queryClient = useQueryClient();
@@ -244,11 +246,13 @@ export function useDiscreetMode() {
   useEffect(() => {
     if (!revealed || !until) return;
     const left = Date.parse(until) - Date.now();
-    const ahead = setTimeout(() => void saveAhead(), Math.max(0, left - SAVE_AHEAD));
-    const end = setTimeout(() => void hideAgain(queryClient, navigate, { tell: true, pathname: pathname() }), Math.max(0, left));
+    const end = Date.parse(until);
+    // Woken after the end, both run at once: the end's save is the one.
+    const ahead = setTimeout(() => void (Date.now() < end && saveAhead()), Math.max(0, left - SAVE_AHEAD));
+    const ended = setTimeout(() => void hideAgain(queryClient, navigate, { tell: false, pathname: pathname() }), Math.max(0, left));
     return () => {
       clearTimeout(ahead);
-      clearTimeout(end);
+      clearTimeout(ended);
     };
   }, [revealed, until, queryClient, navigate, pathname]);
 
@@ -289,5 +293,19 @@ export function followSession(queryClient: QueryClient, navigate: NavigateFuncti
     void hideAgain(queryClient, navigate, { tell: false, pathname });
     return;
   }
+  // This tab's time ran out before the server's (its clock is a little behind): not shown again, asked again shortly.
+  if (!was && view?.revealed && view.until && Date.parse(view.until) <= Date.now()) {
+    askAgain ??= setTimeout(() => {
+      askAgain = null;
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
+    }, ASK_AGAIN);
+    return;
+  }
+  // A vault list read meanwhile still has them.
+  if (!view?.revealed && queryClient.getQueryData<{ discreet?: boolean }[]>(["vaults"])?.some((v) => v.discreet)) void queryClient.resetQueries({ queryKey: ["vaults"] });
   useDiscreet.getState().setFromSession(view);
 }
+
+/** How soon a session that still shows them after this tab's end is asked again. */
+const ASK_AGAIN = 2_000;
+let askAgain: ReturnType<typeof setTimeout> | null = null;

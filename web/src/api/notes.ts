@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useDiscreet } from "../discreet/state";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
 import { isVaultBusy } from "./error-text";
@@ -121,13 +122,22 @@ export function groupVaults(vaults: VaultView[]) {
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
-/** The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. */
-export const useVaults = () =>
-  useQuery({
+/** The list without discreet vaults, which a server whose clock is a little behind may still send after the end. */
+const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet) ? vaults.filter((v) => !v.discreet) : vaults);
+
+/**
+ * The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. While
+ * this tab doesn't show the discreet vaults, none is listed, whatever the answer.
+ */
+export const useVaults = () => {
+  const revealed = useDiscreet((s) => s.revealed);
+  return useQuery({
     queryKey: ["vaults"],
     queryFn: () => call(api.GET("/api/vaults")),
+    select: revealed ? undefined : withoutDiscreet,
     refetchInterval: (query) => (query.state.data?.some((v) => v.pending) ? 5000 : false),
   });
+};
 
 /** The server's embedding providers, the internal model first. */
 export const useEmbeddingProviders = () =>

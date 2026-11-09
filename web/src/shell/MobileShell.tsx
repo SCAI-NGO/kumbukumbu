@@ -16,6 +16,7 @@ import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
+import { useTellOpenNote } from "../discreet/openNote";
 import { useDiscreet } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
@@ -140,6 +141,7 @@ export default function MobileShell() {
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   useSyncSocket();
+  useTellOpenNote();
   const [vaultDialog, setVaultDialog] = useState(false);
   /** The folder a new folder goes into, while its dialog is open. */
   const [folderDialog, setFolderDialog] = useState<string | null>(null);
