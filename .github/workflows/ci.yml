@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p "$HOME/.cache/kumbu"
           if [ ! -f "$HOME/.cache/kumbu/tokenizer.json" ]; then
-            curl -fsSL -o "$HOME/.cache/kumbu/tokenizer.json" https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json
+            curl -fsSL --retry 3 --retry-all-errors -o "$HOME/.cache/kumbu/tokenizer.json" https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json
           fi
           echo "f1cc44ad7faaeec47241864835473fd5403f2da94673f3f764a77ebcb0a803ec  $HOME/.cache/kumbu/tokenizer.json" | sha256sum -c -
           echo "KUMBU_TOKENIZER=$HOME/.cache/kumbu/tokenizer.json" >> "$GITHUB_ENV"

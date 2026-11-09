@@ -21,16 +21,20 @@ public sealed class ChunkBound
     /// </summary>
     public const int FallbackMaxChars = 500;
 
-    // Task 2 moves this to Chunker.SchemeVersion.
+    /// <summary>The version of the chunking, the first part of <see cref="Scheme"/>.</summary>
     private const int SchemeVersion = 2;
 
     private const int MemoLimit = 100_000;
+
+    /// <summary>Longer pieces are counted each time: they are rare, and would fill the memo with text.</summary>
+    private const int MemoMaxLength = 4_000;
 
     private enum Kind { Tokens, Characters, None }
 
     private readonly Kind _kind;
     private readonly UnigramTokenizer? _tokenizer;
     private readonly ConcurrentDictionary<string, int> _costs = new(StringComparer.Ordinal);
+    private int _memoised;
 
     private ChunkBound(string id, Kind kind, UnigramTokenizer? tokenizer)
     {
@@ -70,9 +74,17 @@ public sealed class ChunkBound
         switch (_kind)
         {
             case Kind.Tokens:
+                if (piece.Length > MemoMaxLength) return _tokenizer!.Count(piece) - 2;
                 if (_costs.TryGetValue(piece, out var cost)) return cost;
-                if (_costs.Count >= MemoLimit) _costs.Clear();
-                return _costs[piece] = _tokenizer!.Count(piece) - 2;
+                cost = _tokenizer!.Count(piece) - 2;
+                if (Interlocked.Increment(ref _memoised) >= MemoLimit)
+                {
+                    _costs.Clear();
+                    Interlocked.Exchange(ref _memoised, 0);
+                }
+
+                _costs[piece] = cost;
+                return cost;
             case Kind.Characters:
                 return piece.Length + 1;
             default:

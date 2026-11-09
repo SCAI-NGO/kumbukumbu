@@ -102,6 +102,20 @@ public sealed class ChunkTokenizerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_download_longer_than_the_file_is_cut_off()
+    {
+        var oneMore = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[ModelFiles.ChunkTokenizer.Size + 1]) });
+        Assert.Same(ChunkBound.Fallback, (await SettleAsync(Options(external: true), oneMore)).Bound);
+        Assert.Empty(Directory.GetFiles(Folder));
+
+        var endless = new EndlessStream();
+        var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(endless) });
+        Assert.Same(ChunkBound.Fallback, (await SettleAsync(Options(external: true), serving)).Bound);
+        Assert.InRange(endless.Served, ModelFiles.ChunkTokenizer.Size + 1, ModelFiles.ChunkTokenizer.Size + (2 << 20));
+        Assert.Empty(Directory.GetFiles(Folder));
+    }
+
+    [Fact]
     public async Task A_failed_download_falls_back()
     {
         var serving = new Serving(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
@@ -199,6 +213,44 @@ public sealed class ChunkTokenizerTests : IDisposable
                 return Task.FromResult(respond(request));
             }
         }
+    }
+
+    /// <summary>Zeros without end; counts what it served.</summary>
+    private sealed class EndlessStream : Stream
+    {
+        public long Served { get; private set; }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            buffer.Span.Clear();
+            Served += buffer.Length;
+            return ValueTask.FromResult(buffer.Length);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>A few bytes, then nothing until released; then its end.</summary>

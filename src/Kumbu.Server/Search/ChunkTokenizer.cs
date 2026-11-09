@@ -17,8 +17,10 @@ public sealed class ChunkTokenizer(IOptions<KumbuOptions> options, IHttpClientFa
 
     private readonly TaskCompletionSource _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    private volatile ChunkBound _bound = ChunkBound.Fallback;
+
     /// <summary>Until <see cref="Settled"/>, the fallback.</summary>
-    public ChunkBound Bound { get; private set; } = ChunkBound.Fallback;
+    public ChunkBound Bound => _bound;
 
     /// <summary>Loaded, or clear that there is none.</summary>
     public bool Settled => _settled.Task.IsCompleted;
@@ -39,19 +41,19 @@ public sealed class ChunkTokenizer(IOptions<KumbuOptions> options, IHttpClientFa
             {
                 if (!Needed(o))
                 {
-                    Bound = ChunkBound.Unbounded;
+                    _bound = ChunkBound.Unbounded;
                     return;
                 }
 
                 await DownloadAsync(file, path, stoppingToken);
             }
 
-            await using (var stream = File.OpenRead(path)) Bound = ChunkBound.Of(UnigramTokenizer.Load(stream), file.Sha256);
+            await using (var stream = File.OpenRead(path)) _bound = ChunkBound.Of(UnigramTokenizer.Load(stream), file.Sha256);
             log.LogInformation("Chunks are bounded by the tokenizer in {Path}", path);
         }
         catch (Exception e) when (!stoppingToken.IsCancellationRequested)
         {
-            Bound = Needed(o) ? ChunkBound.Fallback : ChunkBound.Unbounded;
+            _bound = Needed(o) ? ChunkBound.Fallback : ChunkBound.Unbounded;
             log.LogWarning("The tokenizer isn't available ({Message}); search chunks by a character bound until the next start", e.Message);
         }
         finally
@@ -84,6 +86,8 @@ public sealed class ChunkTokenizer(IOptions<KumbuOptions> options, IHttpClientFa
                     await target.WriteAsync(buffer.AsMemory(0, read), ct);
                     hash.AppendData(buffer, 0, read);
                     done += read;
+                    // A server that sends more than the file holds is cut off, not written to the disk without end.
+                    if (done > file.Size) throw new InvalidDataException($"{file.Local} is longer than it should be");
                 }
 
                 if (done != file.Size || Convert.ToHexStringLower(hash.GetHashAndReset()) != file.Sha256)

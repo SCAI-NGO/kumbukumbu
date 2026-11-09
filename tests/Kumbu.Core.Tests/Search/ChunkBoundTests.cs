@@ -39,6 +39,17 @@ public class ChunkBoundTests
     }
 
     [Fact]
+    public void A_long_piece_costs_its_tokens_too()
+    {
+        var tokenizer = Tokenizer();
+        var bound = ChunkBound.Of(tokenizer, TestTokenizer.Sha256);
+        var piece = string.Concat(Enumerable.Repeat(DenseFixtures.GermanProse.Replace('\n', ' ') + " ", 8));
+        Assert.True(piece.Length > 4_000);
+        Assert.Equal(tokenizer.Count(piece) - 2, bound.Cost(piece));
+        Assert.Equal(tokenizer.Count(piece) - 2, bound.Cost(piece));
+    }
+
+    [Fact]
     public void The_fallback_counts_characters()
     {
         Assert.True(ChunkBound.Fallback.Fits(new string('x', 500)));

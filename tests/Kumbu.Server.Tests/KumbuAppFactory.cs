@@ -91,15 +91,8 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
             services.AddSingleton<Kumbu.Server.Attachments.IPdfSidecar>(Sidecar);
             // No test reaches the real GitHub: one that needs it brings a Skills.FakeGitHub through WithWebHostBuilder.
             services.AddHttpClient(Kumbu.Server.Skills.GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => new NoGitHub());
-            // Test hosts never download the tokenizer: one configuring a provider without it gets the fallback bound.
-            services.AddHttpClient(Kumbu.Server.Search.ChunkTokenizer.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => new NoDownload());
+            Search.NoDownload.Register(services);
         });
-    }
-
-    private sealed class NoDownload : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw new HttpRequestException($"Test hosts don't download ({request.RequestUri}).");
     }
 
     private sealed class NoGitHub : HttpMessageHandler
