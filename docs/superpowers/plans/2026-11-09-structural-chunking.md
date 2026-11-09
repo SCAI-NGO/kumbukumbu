@@ -90,7 +90,7 @@
   - `Count_is_Encode_without_the_cut`: with the real tokenizer (skip without `KUMBU_TOKENIZER`), for a German paragraph repeated to 3,000 characters, `tokenizer.Count(text) > 512` and `tokenizer.Encode(text, int.MaxValue).Count == tokenizer.Count(text)`, and for a short text `Count == Encode(text).Count`.
   - `Costs_of_lines_add_up_to_the_count`: for each fixture (German prose, a numeric table, code, a URL list — the measurement fixtures below), `2 + lines.Sum(bound.Cost) == tokenizer.Count(string.Join('\n', lines))`.
   - `The_fallback_counts_characters`: `ChunkBound.Fallback.Fits(new string('x', 500))` is true, 501 false; `Fallback.Budget == 501`; `Fallback.Cost("abc") == 4`; `Fallback.Id == "fallback"`.
-  - `The_scheme_names_the_bound`: `ChunkBound.Of(tok, "f1cc44ad7faaeec4…").Scheme == "2/tok-f1cc44ad7fae"`, `Fallback.Scheme == "2/fallback"`.
+  - `The_scheme_names_the_bound`: `ChunkBound.Of(tok, "f1cc44ad7faaeec4…").Scheme == "2/tok-f1cc44ad7faa"`, `Fallback.Scheme == "2/fallback"`.
   - `The_fallback_keeps_dense_text_under_the_limit` (real tokenizer): for 500-character prefixes of each dense fixture (numeric table, base64, punctuation, symbols "→∑≈€§¶•✓★♣", hex), `tokenizer.Count(prefix) <= 512`.
   `TestTokenizer.Load()` returns the tokenizer from `KUMBU_TOKENIZER` (cached), or null; tests call `Assert.SkipUnless(TestTokenizer.Load() is not null, "KUMBU_TOKENIZER (arctic-m's tokenizer.json) not set")`.
 - [ ] **Step 2: Run** `dotnet test --project tests/Kumbu.Core.Tests -- --filter-class "*ChunkBoundTests"` → FAIL (types missing).
@@ -98,7 +98,7 @@
 - [ ] **Step 4: Run** the same command → PASS (with `KUMBU_TOKENIZER` set; without it the tokenizer tests skip).
 - [ ] **Step 5: Write the failing server tests** in `ChunkTokenizerTests` (no MongoDB needed; a temp `ModelPath`, a fake `IHttpClientFactory` whose handler serves given bytes and counts requests):
   - `Without_a_provider_nothing_is_downloaded`: `Search.Enabled = false`, no providers → settled, `Bound == ChunkBound.Fallback`, 0 requests.
-  - `An_external_provider_gets_the_tokenizer`: `Search.Enabled = false`, one provider configured, handler serves the file from `KUMBU_TOKENIZER` (skip without) → settled, `Bound.Id == "tok-f1cc44ad7fae"`, 1 request to `https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json`, the file is in `<ModelPath>/arctic-m/tokenizer.json`.
+  - `An_external_provider_gets_the_tokenizer`: `Search.Enabled = false`, one provider configured, handler serves the file from `KUMBU_TOKENIZER` (skip without) → settled, `Bound.Id == "tok-f1cc44ad7faa"`, 1 request to `https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json`, the file is in `<ModelPath>/arctic-m/tokenizer.json`.
   - `A_file_already_there_is_checked_and_used`: the file copied into `<ModelPath>/arctic-m/` beforehand → 0 requests, tokenizer bound (skip without `KUMBU_TOKENIZER`).
   - `A_download_that_does_not_match_falls_back`: handler serves 17,083,009 zero bytes → settled, `Bound == ChunkBound.Fallback`, no `tokenizer.json` and no `.part` left.
   - `A_failed_download_falls_back`: handler returns 503 → settled, fallback.
