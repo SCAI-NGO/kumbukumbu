@@ -102,7 +102,7 @@ public static class SharingApi
         }
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
-        var vaultId = await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        var vaultId = await OwnVaultIdAsync(vault, caller, catalog, ct);
         if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Id == vaultId && v.IsSkillsVault)) throw new ApiException(StatusCodes.Status409Conflict, SharingRefusedException.SkillsVault().Message);
         var invite = await memberships.InviteAsync(caller.User!.Id, caller.UserKey!, vaultId, body.Label, role, TimeSpan.FromDays(days), body.Confirm, ct);
         return TypedResults.Created(
@@ -118,9 +118,11 @@ public static class SharingApi
         VaultInvitationPeekRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
     {
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct);
+        var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct, await caller.HiddenIdsAsync(ct));
+        // A name the session hides is free to the peek: only accepting meets the clash (Decision 14).
+        var aliasFree = peek.AliasFree || await HiddenNames.ClashesWithHiddenAsync(caller, peek.Alias, ct);
         return TypedResults.Ok(new VaultInvitationPeekView(
-            peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, peek.AliasFree,
+            peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, aliasFree,
             peek.Confirm, peek.ExpiresAt));
     }
 
@@ -134,14 +136,27 @@ public static class SharingApi
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // An alias follows the rules of a vault name: it is one, to the member.
         var alias = VaultNames.Check(body.Alias);
-        var accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        AcceptedInvite accepted;
+        try
+        {
+            accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct, hidden);
+        }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, alias, ct)) throw HiddenNames.Refusal();
+            throw;
+        }
+
         return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
     }
 
-    /// <summary>The id of the caller's own vault named <paramref name="vault"/>, from her user slot: a member's alias, or
-    /// a vault of someone else's, answers 404 (collab design §6.0 binds every write to this id).</summary>
+    /// <summary>The id of the caller's own vault named <paramref name="vault"/>, from her user slot: a member's alias, a
+    /// vault of someone else's, or one her session hides answers 404 (collab design §6.0 binds every write to this id).</summary>
     private static async Task<string> OwnVaultIdAsync(string vault, RequestCaller caller, VaultCatalog catalog, CancellationToken ct) =>
-        await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) is { } vaultId && !await caller.HidesAsync(vaultId, ct)
+            ? vaultId
+            : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
 
     private static MembershipView View(OwnersMembership m) => new(
         m.Id, m.Label, MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.ExpiresAt, m.RedeemedAt,
@@ -227,13 +242,15 @@ public static class SharingApi
         RequestCaller caller, Vaults.EncryptedNoteStore store, Memberships memberships, MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
     {
         var aliases = (await store.UnlockedVaultsAsync(ct)).Where(a => a.Membership is not null).ToDictionary(a => a.Id, a => a.Name, StringComparer.Ordinal);
-        var events = await VaultEvents.OfMemberEverywhereAsync(db, caller.User!.Id, aliases, memberships.DisplayNameAsync, ct);
+        var events = await VaultEvents.OfMemberEverywhereAsync(db, caller.User!.Id, aliases, await caller.HiddenIdsAsync(ct), memberships.DisplayNameAsync, ct);
         return TypedResults.Ok(events.Select(e => new VaultEventView(e.Event.Kind, e.Event.At, e.Text, e.Event.Role, e.Vault)).ToArray());
     }
 
     /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>
     private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
+        // A vault her session hides answers as a membership that isn't hers.
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub);
         return TypedResults.NoContent();
     }
@@ -247,6 +264,7 @@ public static class SharingApi
     {
         if (limits.AliasRename(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var alias = VaultNames.Check(body.Alias);
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         try
         {
             alias = await catalog.RenameAliasAsync(caller.User!.Id, caller.UserKey!, id, alias, ct);
@@ -254,6 +272,11 @@ public static class SharingApi
         catch (ArgumentException)
         {
             throw new MembershipNotFoundException();
+        }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, alias, ct)) throw HiddenNames.Refusal();
+            throw;
         }
 
         // Her sockets' hints and presence name the vault as she does now.
@@ -268,6 +291,7 @@ public static class SharingApi
         string id, ProviderSeenRequest body, RequestCaller caller, Memberships memberships, Search.SearchIndex index, CancellationToken ct)
     {
         if (index.Providers.Get(body.Provider) is null) throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'.");
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         await memberships.ProviderSeenAsync(caller.User!.Id, id, body.Provider, ct);
         return TypedResults.NoContent();
     }
@@ -298,12 +322,14 @@ public static class SharingApi
 
     /// <summary>The caller's notices of shared vaults, newest first, each naming the vault by her alias, opened with her
     /// user key. One of a vault deleted for everyone never names the owner; one of a re-encryption is listed only while
-    /// her membership is active, and names the owner as she is now, read through it: the notice itself names nobody.</summary>
+    /// her membership is active, and names the owner as she is now, read through it: the notice itself names nobody.
+    /// None of a vault her session hides, also once it is gone.</summary>
     private static async Task<Ok<MemberNoticeView[]>> NoticesAsync(
         RequestCaller caller, Memberships memberships, MongoDB.Driver.IMongoDatabase db, TimeProvider time, CancellationToken ct)
     {
         await memberships.EnsureReadyAsync(ct);
-        var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, hidden, ct);
         var active = await MemberNotices.ActiveOwnersAsync(
             db, caller.User.Id, [.. notices.Where(n => n.Notice.Kind == MemberNoticeDocument.VaultRekeyed).Select(n => n.Notice.Membership)], ct);
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -324,9 +350,10 @@ public static class SharingApi
         return TypedResults.Ok(result.ToArray());
     }
 
-    /// <summary>Dismissing one of her own notices; any other id answers 404.</summary>
+    /// <summary>Dismissing one of her own notices; any other id answers 404, as does one of a vault her session hides.</summary>
     private static async Task<NoContent> DismissNoticeAsync(string id, RequestCaller caller, MongoDB.Driver.IMongoDatabase db, CancellationToken ct) =>
-        await MemberNotices.DismissAsync(db, caller.User!.Id, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such notice.");
+        await MemberNotices.DismissAsync(db, caller.User!.Id, id, await caller.HiddenIdsAsync(ct), ct)
+            ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such notice.");
 
     /// <summary>Withdrawing an open invitation needs no password window either.</summary>
     private static async Task<NoContent> WithdrawAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct)

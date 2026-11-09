@@ -77,7 +77,7 @@ public static class ApiErrors
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
         catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or DavShareLabelTakenException or DavShareLimitException or PrimaryAdminExistsException or VaultNameTakenException
-            or RotationConflictException or RecoveryConflictException or PasswordConflictException
+            or RotationConflictException or DiscreetListConflictException or RecoveryConflictException or PasswordConflictException
             or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException or RekeyRunningException
             or Publishing.PublishingConflictException)
         {

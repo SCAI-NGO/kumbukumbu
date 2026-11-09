@@ -19,6 +19,9 @@ import PublicationsSection from "./PublicationsSection";
 import SharedVaultsSection from "./SharedVaultsSection";
 import DeleteVaultDialog from "../shell/DeleteVaultDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
+import { useMarkDiscreet } from "../discreet/api";
+import SetPinDialog from "../discreet/SetPinDialog";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
@@ -34,6 +37,7 @@ export default function Settings() {
       <SchemeSection />
       <ElsewhereSection />
       <PasswordSection />
+      <DiscreetSection />
       <RecoverySection />
       <ReencryptSection />
       <SessionsSection />
@@ -202,6 +206,82 @@ function PasswordSection() {
         </button>
       </form>
     </Section>
+  );
+}
+
+/**
+ * The same for everyone (discreet spec §3.1), so that it tells nobody whether a PIN or discreet vaults exist: the way
+ * to set or change the PIN. Only while the discreet vaults are shown, a switch per vault marks it, the vault Skills
+ * excepted.
+ */
+function DiscreetSection() {
+  const [setting, setSetting] = useState(false);
+  const [set, setSet] = useState(false);
+  const revealed = useDiscreet((s) => s.revealed);
+  return (
+    <Section title="Discreet vaults">
+      <p className="text-text-body">
+        A PIN of its own shows the vaults you marked as discreet, from More vaults… in the vault menu, for the time you choose. Agents, synced devices,
+        keys, WebDAV and connections see them as before.
+      </p>
+      {revealed && <DiscreetSwitches />}
+      {set && <Done>The PIN is set.</Done>}
+      <button
+        type="button"
+        onClick={() => {
+          setSet(false);
+          setSetting(true);
+        }}
+        className={secondaryButtonClass}
+      >
+        Set or change PIN
+      </button>
+      {setting && (
+        <SetPinDialog
+          onDone={() => {
+            setSetting(false);
+            setSet(true);
+          }}
+          onClose={() => setSetting(false)}
+        />
+      )}
+    </Section>
+  );
+}
+
+/** A switch per vault, while the mode is on; a vault marked now stays shown until it ends. */
+function DiscreetSwitches() {
+  const vaults = useVaults();
+  const mark = useMarkDiscreet();
+  const listed = vaults.data?.filter((v) => v.kind !== "skills") ?? [];
+  return (
+    <>
+      <p className="text-text-body">Marked vaults stay shown until discreet mode ends.</p>
+      {listed.length > 0 && (
+        <ul aria-label="Discreet vaults" className="flex flex-col gap-1">
+          {listed.map((vault) => (
+            <li key={vault.name}>
+              <label className="flex min-h-11 items-center gap-3 text-text">
+                <span className="min-w-0 flex-1 break-words">{vault.name}</span>
+                <span className="text-sm text-muted" aria-hidden>
+                  Discreet
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label={`Discreet: ${vault.name}`}
+                  checked={!!vault.discreet}
+                  disabled={mark.isPending}
+                  onChange={(e) => mark.mutate({ vault: vault.name, discreet: e.target.checked })}
+                  className="size-5 shrink-0 accent-discreet"
+                />
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      {mark.isError && <FormError>{errorText(mark.error)}</FormError>}
+    </>
   );
 }
 

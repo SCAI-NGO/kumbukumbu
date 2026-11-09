@@ -25,9 +25,13 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
 /// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
 /// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
-/// the shell's notice asks for the storage only then. <c>skillsNotice</c>: the vault or alias renamed to make room for
-/// the vault Skills, until she dismisses it (<c>DELETE /api/account/skills-notice</c>); null when there is none.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, SkillsNoticeView? SkillsNotice = null);
+/// the shell's notice asks for the storage only then. <c>discreet</c>: whether the session shows the discreet vaults now,
+/// and until when (null: until it ends or hides them); never revealed in the sign-in's answer. <c>skillsNotice</c>: the
+/// vault or alias renamed to make room for the vault Skills, until she dismisses it (<c>DELETE
+/// /api/account/skills-notice</c>); null when there is none.</summary>
+public sealed record SessionView(
+    UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, DiscreetView Discreet,
+    SkillsNoticeView? SkillsNotice = null);
 
 /// <summary><c>renamed</c>: the name the vault (or, with <c>alias</c>, the vault shared with her) has now.</summary>
 public sealed record SkillsNoticeView(string Renamed, bool Alias)
@@ -238,7 +242,8 @@ public static class AccountApi
 
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
-        StorageQuota quota, Skills.SkillsVaults skills, IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+        StorageQuota quota, Skills.SkillsVaults skills, DiscreetVaults discreet, VaultCatalog catalog, IOptions<KumbuOptions> options, ILoggerFactory logs,
+        CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -265,9 +270,18 @@ public static class AccountApi
         rekeying.ResumePending(user, userKey);
         // Never fails the sign-in, and not cancellable by the client, as at the join.
         await skills.EnsureAsync(user, userKey, readAt, CancellationToken.None);
+        SkillsNoticeView? notice = null;
+        if (await skills.NoticeAsync(user, userKey, ct) is { } rename)
+        {
+            // A new session hides the discreet vaults, so the Skills notice is filtered as the session's later requests will filter it.
+            var session = RequestCaller.ForSession(
+                user, userKey, readAt, windowOpen: true, catalog, new SessionDiscreet(false, null, await discreet.SealedListAsync(user.Id, ct), null), Log(logs));
+            notice = await ShownAsync(session, rename, ct);
+        }
+
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
-            SkillsNoticeView.From(await skills.NoticeAsync(user, userKey, ct))));
+            DiscreetView.Hidden, notice));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -335,13 +349,32 @@ public static class AccountApi
         await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct), SkillsNoticeView.From(await skills.NoticeAsync(caller.User, caller.UserKey!, ct))));
+            await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), await SkillsNoticeAsync(caller, skills, ct)));
     }
 
-    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes.</summary>
+    /// <summary>The notice of the vault Skills as the session may show it (<see cref="ShownAsync"/>).</summary>
+    private static async Task<SkillsNoticeView?> SkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct) =>
+        await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is { } notice ? await ShownAsync(caller, notice, ct) : null;
+
+    /// <summary><paramref name="notice"/>, left out while the session hides the vault it renamed (Decision 13), also
+    /// once that vault is gone or renamed again. One kept before it named the vault's id goes by the name it gives,
+    /// compared as vault names are.</summary>
+    private static async Task<SkillsNoticeView?> ShownAsync(RequestCaller caller, Skills.SkillsRename notice, CancellationToken ct)
+    {
+        if (notice.VaultId is { } id) return (await caller.HiddenIdsAsync(ct)).Contains(id) ? null : SkillsNoticeView.From(notice);
+        var name = VaultCatalog.NormaliseVaultName(notice.NewName);
+        return (await caller.HiddenVaultsAsync(ct)).Any(a => VaultCatalog.NormaliseVaultName(a.Name) == name) ? null : SkillsNoticeView.From(notice);
+    }
+
+    /// <summary>The notice of the vault or alias renamed for the vault Skills was read: it goes. One the session hides
+    /// stays, answered as if dismissed.</summary>
     private static async Task<NoContent> DismissSkillsNoticeAsync(RequestCaller caller, Skills.SkillsVaults skills, CancellationToken ct)
     {
-        await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        if (await skills.NoticeAsync(caller.User!, caller.UserKey!, ct) is not { } notice || await ShownAsync(caller, notice, ct) is not null)
+        {
+            await skills.DismissNoticeAsync(caller.User!.Id, ct);
+        }
+
         return TypedResults.NoContent();
     }
 
@@ -452,8 +485,9 @@ public static class AccountApi
     private static async Task<Ok<ApiKeyView[]>> ListKeysAsync(RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
         var list = await keys.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(list.Select(k => KeyView(k, names)).ToArray());
+        return TypedResults.Ok(list.Where(k => !onlyHidden(k.Vaults.Keys)).Select(k => KeyView(k, names)).ToArray());
     }
 
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
@@ -475,8 +509,16 @@ public static class AccountApi
 
     internal static string InstructionsText(InstructionsMode mode) => mode == InstructionsMode.HintOnly ? "hint" : "list";
 
-    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
-        await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
+    /// <summary>A key on hidden vaults only answers as one she doesn't have (<see cref="OnlyHidden"/>).</summary>
+    private static async Task<NoContent> SetKeyInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
+    {
+        var mode = ParseInstructions(body.Mode);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
+        var hidden = (await keys.ListAsync(caller.User!, caller.UserKey!, ct)).Any(k => k.Id == id && onlyHidden(k.Vaults.Keys));
+        return !hidden && await keys.SetInstructionsAsync(caller.User!, caller.UserKey!, id, mode, ct)
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
+    }
 
     private static async Task<NoContent> RevokeKeyAsync(string id, RequestCaller caller, ApiKeys keys, CancellationToken ct) =>
         await keys.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such API key that isn't revoked.");
@@ -484,8 +526,10 @@ public static class AccountApi
     private static async Task<Ok<DavSharesView>> ListDavSharesAsync(RequestCaller caller, DavShares shares, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        var onlyHidden = await OnlyHiddenAsync(caller, ct);
         var list = await shares.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Select(s => DavShareView(s, names))]));
+        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Where(s => !onlyHidden(s.Vaults.Keys)).Select(s => DavShareView(s, names, hidden))]));
     }
 
     private static async Task<Created<CreatedDavShareView>> CreateDavShareAsync(CreateDavShareRequest body, RequestCaller caller, DavShares shares, CancellationToken ct)
@@ -695,6 +739,23 @@ public static class AccountApi
     internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Whether a key, share or connection covers hidden vaults and none the session sees (discreet design, Decision 9),
+    /// whatever else it lists (a vault deleted since): such an item isn't listed at all, as a device key's name holds its
+    /// vault's, and its id answers as one she doesn't have, except to revoke it, which stays whole. One that covers
+    /// visible vaults too is listed with those only.
+    /// </summary>
+    internal static bool OnlyHidden(IEnumerable<string> vaultIds, IReadOnlySet<string> hidden, IReadOnlySet<string> visible) =>
+        vaultIds.Any(hidden.Contains) && !vaultIds.Any(visible.Contains);
+
+    /// <summary><see cref="OnlyHidden"/> for this caller's session.</summary>
+    internal static async Task<Func<IEnumerable<string>, bool>> OnlyHiddenAsync(RequestCaller caller, CancellationToken ct)
+    {
+        var visible = (await caller.OpenVaultsAsync(ct)).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        return ids => OnlyHidden(ids, hidden, visible);
+    }
+
     /// <summary>A vault the key was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
     private static ApiKeyView KeyView(ApiKeyInfo info, Dictionary<string, string> names) => new(
         info.Id,
@@ -709,8 +770,9 @@ public static class AccountApi
         PublishNames(info.Publish, names),
         InstructionsText(info.Instructions));
 
-    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
-    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(
+    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name, nor a lost
+    /// vault the session hides by id.</summary>
+    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names, IReadOnlySet<string>? hidden = null) => new(
         info.Id,
         info.Username,
         info.Label,
@@ -719,7 +781,7 @@ public static class AccountApi
         info.LastUsedAt,
         info.RevokedAt,
         info.ExpiresAt,
-        [.. info.LostVaults]);
+        [.. info.LostVaults.Where(v => hidden?.Contains(v) != true)]);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));
@@ -743,7 +805,7 @@ public static class AccountApi
         http.Response.Cookies.Append(CallerMiddleware.SessionCookie, secret, options);
     }
 
-    private static void ClearSessionCookie(HttpContext http) => http.Response.Cookies.Delete(CallerMiddleware.SessionCookie, SessionCookieOptions());
+    internal static void ClearSessionCookie(HttpContext http) => http.Response.Cookies.Delete(CallerMiddleware.SessionCookie, SessionCookieOptions());
 
     private static async Task<Ok<PreferencesView>> PreferencesAsync(RequestCaller caller, UserCatalog users, CancellationToken ct) =>
         TypedResults.Ok(new PreferencesView(await users.AsksPasswordForDownloadsAsync(caller.User!.Id, ct)));

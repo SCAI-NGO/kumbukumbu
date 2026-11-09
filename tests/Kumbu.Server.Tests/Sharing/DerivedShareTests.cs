@@ -238,7 +238,7 @@ public sealed class DerivedShareTests(KumbuAppFactory app)
         var both = await ShareAsync(alice, "Laptop", new Dictionary<string, KeyRight> { [garten] = KeyRight.Write, [privat] = KeyRight.Write });
         var only = await ShareAsync(alice, "Desktop", new Dictionary<string, KeyRight> { [privat] = KeyRight.Write });
 
-        Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(alice.User, alice.UserKey, "Privat", RestClient.Password, "Privat", Ct));
+        Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(alice.User, alice.UserKey, "Privat", RestClient.Password, "Privat", null, Ct));
 
         Assert.NotNull((await ShareDocAsync(only.Id)).RevokedAt);
         Assert.Null((await ShareDocAsync(only.Id)).NameId);

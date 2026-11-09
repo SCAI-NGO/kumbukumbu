@@ -23,20 +23,60 @@ public sealed class FixedCredential(string secret) : ICredential
 }
 
 /// <summary>
+/// What a web session hides of the user's vaults (discreet vaults design): the ids of her discreet vaults, null when
+/// their list didn't open (then every vault but the vault Skills counts as discreet, Decision 2), and whether the
+/// session shows them now. <c>AlsoOpen</c>: a discreet vault shown to this one request anyway, for the late save of
+/// its open note (Decision 12).
+/// </summary>
+public sealed record DiscreetFilter(bool Revealed, IReadOnlySet<string>? Ids, string? AlsoOpen = null);
+
+/// <summary>
 /// A user's key, from their session: opens the user's own vaults, as their owner, and those shared with them, at the
 /// membership's role (collab design §3.3). Opened once per request, as a key is, so <see cref="Level"/> answers from
-/// exactly the vaults the store sees; before that it has none (every write endpoint opens the vault first).
+/// exactly the vaults the store sees; before that it has none (every write endpoint opens the vault first). With a
+/// <see cref="DiscreetFilter"/> (only a web session's has one), a discreet vault the session doesn't show is left out
+/// of everything it answers, as if the user had no such vault; the vault Skills never is.
 /// </summary>
-public sealed class UserCredential(string userId, byte[] userKey) : ICredential, IRightsCredential
+public sealed class UserCredential(string userId, byte[] userKey, DiscreetFilter? discreet = null) : ICredential, IRightsCredential
 {
-    private IReadOnlyList<VaultAccess>? _opened;
+    private static readonly IReadOnlySet<string> None = new HashSet<string>(StringComparer.Ordinal);
 
-    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
-        _opened ??= await catalog.OpenForUserAsync(userId, userKey, ct);
+    /// <summary>What the opening saw, assigned in one step, so that nobody reads its vaults without its hidden ids.</summary>
+    private sealed record Opened(
+        IReadOnlyList<VaultAccess> Visible, IReadOnlyList<VaultAccess> Hidden, IReadOnlySet<string> HiddenIds, IReadOnlySet<string> SkillsIds);
 
-    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
+    private Opened? _opened;
 
-    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct)
+    {
+        if (_opened is { } opened) return opened.Visible;
+        var all = await catalog.OpenForUserAsync(userId, userKey, ct);
+        var skillsIds = all.Where(a => a.IsSkillsVault).Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+        IReadOnlySet<string> hidden = discreet is null || discreet.Revealed ? None
+            : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !skillsIds.Contains(id) && id != discreet.AlsoOpen).ToHashSet(StringComparer.Ordinal);
+        _opened = new Opened([.. all.Where(a => !hidden.Contains(a.Id))], [.. all.Where(a => hidden.Contains(a.Id))], hidden, skillsIds);
+        return _opened.Visible;
+    }
+
+    /// <summary>Whether the session shows the discreet vaults now.</summary>
+    public bool Revealed => discreet?.Revealed ?? false;
+
+    /// <summary>Whether <paramref name="vaultId"/> is marked discreet, shown now or not; for a list that didn't open,
+    /// every vault but the vault Skills. Answers from the vaults opened: false before <see cref="OpenAsync"/>.</summary>
+    public bool IsDiscreet(string vaultId) =>
+        discreet is not null && _opened is { } opened && !opened.SkillsIds.Contains(vaultId) && (discreet.Ids is not { } ids || ids.Contains(vaultId));
+
+    /// <summary>The vaults opened and left out, after <see cref="OpenAsync"/>; none before.</summary>
+    public IReadOnlyList<VaultAccess> Hidden => _opened?.Hidden ?? [];
+
+    /// <summary>The ids this session hides, after <see cref="OpenAsync"/>: the discreet list's while not shown, those of
+    /// vaults that are gone included, or every vault opened but the vault Skills for a list that didn't open (a gone
+    /// vault is then covered no more: only a list that opens still names it).</summary>
+    public IReadOnlySet<string> HiddenIds => _opened?.HiddenIds ?? None;
+
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Visible, vault);
+
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened?.Visible, vault);
 
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.

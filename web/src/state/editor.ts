@@ -11,6 +11,8 @@ export type SearchMode = "hybrid" | "meaning" | "exact";
 export type NoteTool = "outline" | "find" | null;
 export type Find = { query: string; index: number; count: number };
 export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
+/** The open editor's text and the version it goes on, while any of it isn't saved. */
+export type Unsaved = () => { text: string; version: string } | null;
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -49,6 +51,8 @@ interface EditorState {
    * session's end and answer 401.
    */
   beforeRead: BeforeRead | null;
+  /** Set by the open editor with `beforeRead`: what a save that failed left, for hiding discreet vaults again. */
+  unsaved: Unsaved | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
@@ -67,7 +71,7 @@ interface EditorState {
   /** Ends Write mode (Done, the Read toggle): only once the editor has saved everything. */
   endWrite(): Promise<void>;
   setScrollTarget(target: { path: string; line: number } | null): void;
-  setBeforeRead(guard: BeforeRead | null): void;
+  setBeforeRead(guard: BeforeRead | null, unsaved?: Unsaved | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
   refused: { path: string; code: RefusalCode; at: number } | null;
@@ -95,7 +99,10 @@ interface EditorState {
   forgetNote(path: string): void;
   /** A moved note (or folder, `from` ending in `/`): the open note, the recent notes and the open folders follow it. */
   moved(from: string, to: string): void;
-  /** A deleted vault: its notes leave the recent notes, the open note and the draft, an upload sheet for it closes, and it is no longer active. */
+  /**
+   * A deleted vault: its notes leave the recent notes, the open note and the draft, a folder marked in it, a refusal and
+   * a scroll target in it go, an upload sheet for it closes, and it is no longer active.
+   */
   forgetVault(vault: string): void;
   reset(): void;
 }
@@ -114,6 +121,7 @@ const initial = {
   showAgentHighlights: false,
   recentPaths: [],
   beforeRead: null,
+  unsaved: null as Unsaved | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
   scrollTarget: null,
@@ -160,7 +168,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     const guard = get().beforeRead;
     if (!guard || (await guard())) set({ mode: "read" });
   },
-  setBeforeRead: (beforeRead) => set({ beforeRead }),
+  setBeforeRead: (beforeRead, unsaved = null) => set({ beforeRead, unsaved }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
@@ -208,6 +216,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
         recentPaths: s.recentPaths.filter(outside),
         currentPath: outside(s.currentPath) ? s.currentPath : null,
         draft: outside(s.draft?.path) ? s.draft : null,
+        selectedFolder: outside(s.selectedFolder) ? s.selectedFolder : null,
+        refused: outside(s.refused?.path) ? s.refused : null,
+        scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
         activeVault: s.activeVault === vault ? null : s.activeVault,
         expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
       };

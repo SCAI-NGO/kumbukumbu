@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -78,6 +79,8 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     private const string MetaLabel = "kumbu/v1/connection-meta";
     private const string Noun = "A connection";
 
+    private const string NeedsAVault = "A connection needs at least one vault.";
+
     /// <summary>RFC 4648 Base32, lower-cased: an id that survives a URL, a host's case folding and being read aloud.</summary>
     private const string Base32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -107,7 +110,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     {
         publish ??= new HashSet<string>();
         var clean = WriterNames.Check(user, name, Noun);
-        if (vaults.Count == 0) throw new ArgumentException("A connection needs at least one vault.", nameof(vaults));
+        if (vaults.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
         if (expiresInDays is { } days && !ApiKeys.ExpiryDays.Contains(days))
         {
             throw new ArgumentException($"A connection expires after {string.Join(", ", ApiKeys.ExpiryDays.Order())} days, or never.", nameof(expiresInDays));
@@ -242,18 +245,26 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// revoked nor expired. <see cref="CredentialsChangedException"/>, as at creation, if the user is inactive, their
     /// credentials changed at or after <paramref name="credentialReadAt"/>, or the user key isn't the one in force.
     /// "May publish" becomes <paramref name="publish"/>: without it, the connection may publish nowhere.
+    /// The stored grants on the vaults of <paramref name="keep"/> (those a web session hides, discreet design §4), with
+    /// their right and "May publish", stay as stored; the edit names at least one vault, and the merged set keeps one. An edit
+    /// that leaves the rights and "May publish" as stored writes nothing and leaves the tokens alone.
     /// </summary>
     public async Task<ConnectionInfo?> SetVaultsAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        IReadOnlySet<string>? publish = null)
+        IReadOnlySet<string>? publish = null, IReadOnlySet<string>? keep = null)
     {
-        if (vaults.Count == 0) throw new ArgumentException("A connection needs at least one vault.", nameof(vaults));
+        // Judged on what the session names, not on the merged set: an empty edit answers the same whether the
+        // connection holds grants on hidden vaults or not, so it can't tell that any exist.
+        if (vaults.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
+        keep ??= new HashSet<string>();
         publish ??= new HashSet<string>();
         await EnsureReadyAsync(ct);
         if (!await IsLiveAsync(user.Id, id, ct)) return null;
         await CheckVaultsAsync(user, userKey, vaults, publish, ct);
 
         bool changed;
+        var count = 0;
+        ConnectionInfo? unchanged = null;
         using (var session = await catalog.StartSessionAsync(ct))
         {
             changed = await session.WithTransactionAsync(
@@ -262,24 +273,40 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     // Read in the transaction: a concurrent re-seal of the meta (the client, at consent) conflicts, and
                     // the retry starts from it rather than overwriting it.
                     var now = Now;
+                    unchanged = null;
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
-                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion, Publish = PublishField(publish) };
+                    var (merged, mergedPublish) = Merged(doc, meta, vaults, publish, keep);
+                    if (merged.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
+                    var keyId = UserCatalog.KeyId(userKey, user.Id);
+                    Expression<Func<UserDocument, bool>> fresh =
+                        u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId;
+                    var stored = VaultsOf(doc, meta);
+                    if (merged.Count == stored.Count && merged.All(v => stored.TryGetValue(v.Key, out var right) && right == v.Value)
+                        && mergedPublish.SetEquals(PublishOf(doc, meta)))
+                    {
+                        // Nothing changes: no write, so the agent keeps its tokens; a stale session is still refused.
+                        if (!await Users.Find(s, fresh).AnyAsync(token)) throw new CredentialsChangedException();
+                        unchanged = Info(doc, meta, now);
+                        return false;
+                    }
+
+                    count = merged.Count;
+                    var next = meta with { Vaults = merged.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion, Publish = PublishField(mergedPublish) };
                     // As at creation: the user document is checked and written here, so a credentials change, a
                     // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
                     // above is seen here, or its deletion conflicts on the user document.
-                    var keyId = UserCatalog.KeyId(userKey, user.Id);
                     var owner = await Users.UpdateOneAsync(
                         s,
-                        u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
+                        fresh,
                         Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1),
                         cancellationToken: token);
                     if (owner.MatchedCount == 0) throw new CredentialsChangedException();
-                    await catalog.RequireVaultsAsync(s, [.. vaults.Keys], Noun, token);
+                    await catalog.RequireVaultsAsync(s, [.. merged.Keys], Noun, token);
                     await Docs.UpdateOneAsync(
                         s,
                         c => c.Id == id,
-                        Builders<ConnectionDocument>.Update.Set(c => c.Meta, SealMeta(userKey, user.Id, id, next)).Set(c => c.Vaults, vaults.Keys.ToList()),
+                        Builders<ConnectionDocument>.Update.Set(c => c.Meta, SealMeta(userKey, user.Id, id, next)).Set(c => c.Vaults, merged.Keys.ToList()),
                         cancellationToken: token);
                     await ConnectionRevocation.RevokeTokensAsync(db, s, Builders<ConnectionDocument>.Filter.Eq(c => c.Id, id), ConnectionReasons.RightsChanged, now, token);
                     return true;
@@ -287,8 +314,9 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                 cancellationToken: ct);
         }
 
+        if (unchanged is not null) return unchanged;
         if (!changed) return null;
-        log.LogInformation("User {Username} changed the rights of connection {ConnectionId} to {Count} vaults", user.Username, id, vaults.Count);
+        log.LogInformation("User {Username} changed the rights of connection {ConnectionId} to {Count} vaults", user.Username, id, count);
         var updated = await FindAsync(id, ct);
         return updated is not null && OpenMeta(user, userKey, updated) is { } opened ? Info(updated, opened, Now) : null;
     }
@@ -459,6 +487,22 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         if (meta.Publish is not { } publish) return [];
         var vaults = VaultsOf(doc, meta);
         return publish.Where(vaults.ContainsKey).ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>The edit's rights and "May publish", with the stored ones on the vaults of <paramref name="keep"/> in
+    /// place of whatever the edit says of them.</summary>
+    private static (Dictionary<string, KeyRight> Vaults, HashSet<string> Publish) Merged(
+        ConnectionDocument doc, ConnectionMeta meta, IReadOnlyDictionary<string, KeyRight> vaults, IReadOnlySet<string> publish, IReadOnlySet<string> keep)
+    {
+        var merged = vaults.Where(v => !keep.Contains(v.Key)).ToDictionary(StringComparer.Ordinal);
+        var mergedPublish = publish.Where(v => !keep.Contains(v)).ToHashSet(StringComparer.Ordinal);
+        foreach (var (vault, right) in VaultsOf(doc, meta))
+        {
+            if (keep.Contains(vault)) merged[vault] = right;
+        }
+
+        mergedPublish.UnionWith(PublishOf(doc, meta).Where(keep.Contains));
+        return (merged, mergedPublish);
     }
 
     /// <summary>The vaults must be the user's, and "May publish" only on those she owns (<see cref="VaultCatalog.RequirePublishable"/>).</summary>

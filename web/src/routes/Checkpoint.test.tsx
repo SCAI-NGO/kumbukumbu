@@ -277,7 +277,13 @@ describe("a checkpoint in the web app", () => {
       expect(asked).toEqual(["shots/a.png"]);
       expect(screen.getByText("Checkpoint before-cleanup · read only")).toBeInTheDocument();
       expect(screen.getByText("File 1 of 2")).toBeInTheDocument();
-      expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/vaults/Work/checkpoints/before-cleanup/files/shots/a.png?download=1");
+      const clicked: string[] = [];
+      const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push(this.getAttribute("href") ?? "");
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      click.mockRestore();
+      expect(clicked).toEqual(["/api/vaults/Work/checkpoints/before-cleanup/files/shots/a.png?download=1"]);
       expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Rename or move" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Copy link" })).toBeNull();

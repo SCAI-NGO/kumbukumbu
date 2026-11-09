@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { fakeApi, json } from "../test/app";
 import VaultSwitcher from "./VaultSwitcher";
@@ -12,6 +13,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
 });
 
 const own = (name: string) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false });
@@ -30,7 +32,8 @@ function renderSwitcher(vaults: unknown[] = [own("Work"), own("Gartenarbeit"), s
   fakeApi({ "GET /api/vaults": () => json(200, vaults) });
   const onNewVault = vi.fn();
   const onRename = vi.fn();
-  const router = createMemoryRouter([{ path: "*", element: <VaultSwitcher onNewVault={onNewVault} onRename={onRename} /> }], { initialEntries: ["/notes/Work/a.md"] });
+  const onMoreVaults = vi.fn();
+  const router = createMemoryRouter([{ path: "*", element: <VaultSwitcher onNewVault={onNewVault} onRename={onRename} onMoreVaults={onMoreVaults} /> }], { initialEntries: ["/notes/Work/a.md"] });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(["vaults"], vaults);
   render(
@@ -38,7 +41,7 @@ function renderSwitcher(vaults: unknown[] = [own("Work"), own("Gartenarbeit"), s
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  return { router, onNewVault, onRename };
+  return { router, onNewVault, onRename, onMoreVaults };
 }
 
 const popout = () => screen.getByRole("dialog", { name: "Vaults" });
@@ -68,8 +71,8 @@ describe("VaultSwitcher", () => {
     expect(within(dialog).getByRole("heading", { name: "Shared with me" })).toBeInTheDocument();
     expect(labels(within(dialog).getByRole("list", { name: 'Shared by "Alice" (alice)' }))).toEqual(["garten", "Beete"]);
     expect(labels(within(dialog).getByRole("list", { name: 'Shared by "Carol" (carol)' }))).toEqual(["Rezepte"]);
-    // Her own first, then each owner's, then the ways to a new vault and to all of them.
-    expect(labels(dialog)).toEqual(["Work", "Gartenarbeit", "garten", "Beete", "Rezepte", "New vault", "All vaults"]);
+    // Her own first, then each owner's, then the ways to a new vault and to all of them, and More vaults… last.
+    expect(labels(dialog)).toEqual(["Work", "Gartenarbeit", "garten", "Beete", "Rezepte", "New vault", "All vaults", "More vaults…"]);
     // The current one is marked, and has the focus.
     const current = within(dialog).getByRole("button", { name: "Work" });
     expect(current).toHaveAttribute("aria-current", "true");
@@ -145,5 +148,25 @@ describe("VaultSwitcher", () => {
     await userEvent.click(within(popout()).getByRole("button", { name: "Your name for this vault…" }));
     expect(onRename).toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Vaults" })).not.toBeInTheDocument();
+  });
+
+  it("ends with More vaults…, always, whatever there is to show", async () => {
+    // With vaults, without any, and while discreet ones are shown: the entry is there, last, and the same.
+    const cases: [unknown[], boolean][] = [
+      [[own("Work"), own("Gartenarbeit")], false],
+      [[], false],
+      [[own("Work"), { ...own("Tagebuch"), discreet: true }], true],
+    ];
+    for (const [vaults, shown] of cases) {
+      useEditor.setState({ activeVault: (vaults[0] as { name: string } | undefined)?.name ?? null });
+      useDiscreet.setState({ revealed: shown, until: null, names: new Set(shown ? ["Tagebuch"] : []) });
+      const { onMoreVaults } = renderSwitcher(vaults);
+      await userEvent.click(await screen.findByRole("button", { name: /^Switch vault/ }));
+      expect(labels(popout()).at(-1)).toBe("More vaults…");
+      await userEvent.click(within(popout()).getByRole("button", { name: "More vaults…" }));
+      expect(onMoreVaults).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog", { name: "Vaults" })).not.toBeInTheDocument();
+      cleanup();
+    }
   });
 });

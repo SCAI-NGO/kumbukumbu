@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.OAuth;
@@ -21,14 +22,21 @@ public enum CallerKind
 /// </summary>
 public sealed class RequestCaller : ICaller
 {
+    private static readonly IReadOnlySet<string> NoneHidden = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>The users whose unreadable discreet list was logged: once per process, not on every request.</summary>
+    private static readonly ConcurrentDictionary<string, byte> UnreadableLogged = new(StringComparer.Ordinal);
+
     private readonly VaultCatalog _catalog;
     private readonly bool _human;
 
     private RequestCaller(
         CallerKind kind, User? user, string writer, WriterRef reference, ICredential credential, VaultCatalog catalog, byte[]? userKey = null,
-        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false)
+        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false, SessionDiscreet? discreet = null, bool lateSave = false)
     {
         Kind = kind;
+        Discreet = discreet;
+        LateSave = lateSave;
         _human = kind is CallerKind.Session or CallerKind.DavShare || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
@@ -91,6 +99,14 @@ public sealed class RequestCaller : ICaller
     /// caller: fails closed.</summary>
     internal bool PasswordWindowOpen { get; }
 
+    /// <summary>For a session only: its reveal of the discreet vaults as it was resolved for this request; null for every
+    /// other caller, and for a session built without it (nothing hidden, nothing shown).</summary>
+    internal SessionDiscreet? Discreet { get; }
+
+    /// <summary>This request is a session's late save (<see cref="Api.LateSave"/>), which writes its one note and reads
+    /// nothing: its answers say no more than their status (<see cref="Api.LateSave.Filter"/>).</summary>
+    internal bool LateSave { get; }
+
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
@@ -138,9 +154,63 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, WriterRef.Server, new FixedCredential(devToken), catalog);
 
-    internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog) =>
-        new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey), catalog, userKey,
-            credentialReadAt, passwordWindowOpen: windowOpen);
+    /// <summary>The credential of a web session; null for every other caller. Only <see cref="ForSession"/> gives it a
+    /// filter, so it is the only credential that hides discreet vaults.</summary>
+    internal UserCredential? Session => Kind == CallerKind.Session ? Credential as UserCredential : null;
+
+    /// <summary>The ids of the vaults this session hides (opening its vaults first): those of the discreet vaults while
+    /// it doesn't show them. None for every other caller, which sees every vault it has.</summary>
+    internal async Task<IReadOnlySet<string>> HiddenIdsAsync(CancellationToken ct)
+    {
+        // A revealed session hides nothing: no need to open the vaults to know it.
+        if (Session is not { } session || session.Revealed) return NoneHidden;
+        await OpenVaultsAsync(ct);
+        return session.HiddenIds;
+    }
+
+    /// <summary>The vaults this session hides (opening its vaults first), each under her name for it; none for every
+    /// other caller.</summary>
+    internal async Task<IReadOnlyList<VaultAccess>> HiddenVaultsAsync(CancellationToken ct)
+    {
+        if (Session is not { } session) return [];
+        await OpenVaultsAsync(ct);
+        return session.Hidden;
+    }
+
+    /// <summary>Whether this session hides the vault <paramref name="vaultId"/>; false for every other caller.</summary>
+    internal async Task<bool> HidesAsync(string vaultId, CancellationToken ct) => (await HiddenIdsAsync(ct)).Contains(vaultId);
+
+    /// <summary>Whether this session hides the vault of the user's membership <paramref name="membershipId"/>, so that it
+    /// answers as one she doesn't have; false for every other caller.</summary>
+    internal async Task<bool> HidesMembershipAsync(string membershipId, CancellationToken ct)
+    {
+        // Relies on OpenForUserAsync opening exactly her active memberships: they are all a session can hide.
+        return (await HiddenVaultsAsync(ct)).Any(a => a.Membership?.Id == membershipId);
+    }
+
+    /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
+    /// them (none hidden without). A sealed list that doesn't open hides every vault but the vault Skills, and is logged
+    /// to <paramref name="log"/> by the exception's type, once per process for each user. <paramref name="alsoOpen"/>: a
+    /// discreet vault this one request opens anyway, for a late save (<see cref="Api.LateSave"/>).</summary>
+    internal static RequestCaller ForSession(
+        User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null,
+        string? alsoOpen = null)
+    {
+        DiscreetFilter? filter = null;
+        if (discreet is not null)
+        {
+            var ids = DiscreetVaults.OpenList(user.Id, userKey, discreet.SealedList, out var failure);
+            if (ids is null && UnreadableLogged.TryAdd(user.Id, 0))
+            {
+                log?.LogWarning("The discreet vaults of user {UserId} do not open: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
+            }
+
+            filter = new DiscreetFilter(discreet.Revealed, ids, alsoOpen);
+        }
+
+        return new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey, filter), catalog, userKey,
+            credentialReadAt, passwordWindowOpen: windowOpen, discreet: discreet, lateSave: alsoOpen is not null);
+    }
 
     /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)

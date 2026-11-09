@@ -556,7 +556,13 @@ describe("an attachment's history, the trash and the activity", () => {
     expect(await screen.findByText(`Version of ${timeText("2026-10-24T09:00:00Z")} · read only`)).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "shot.png" })).toBeInTheDocument();
     expect(fetched.at(-1)).toBe("s1");
-    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/files/Work/shots/shot.png?version=s1&download=1");
+    const clicked: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute("href") ?? "");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    click.mockRestore();
+    expect(clicked).toEqual(["/api/files/Work/shots/shot.png?version=s1&download=1"]);
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rename or move" })).not.toBeInTheDocument();
 

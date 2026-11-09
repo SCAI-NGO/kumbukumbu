@@ -61,6 +61,9 @@ public static class ConnectionApi
 {
     private const string NoSuchConnection = "You have no such connection that is neither revoked nor expired.";
 
+    /// <summary>No connection has it: a connection's id is 16 Base32 characters.</summary>
+    private const string NoId = "-";
+
     public static void MapConnectionApi(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/connections").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
@@ -205,9 +208,10 @@ public static class ConnectionApi
     private static async Task<Ok<ConnectionView[]>> ListAsync(HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var open = await caller.OpenVaultsAsync(ct);
+        var onlyHidden = await AccountApi.OnlyHiddenAsync(caller, ct);
         var list = await connections.ListAsync(caller.User!, caller.UserKey!, ct);
         var origin = OAuthUrls.Origin(http, options.Value.PublicUrl);
-        return TypedResults.Ok(list.Select(c => View(c, open, origin)).ToArray());
+        return TypedResults.Ok(list.Where(c => !onlyHidden(c.Vaults.Keys)).Select(c => View(c, open, origin)).ToArray());
     }
 
     private static async Task<Created<ConnectionView>> CreateAsync(
@@ -227,13 +231,31 @@ public static class ConnectionApi
         var open = await caller.OpenVaultsAsync(ct);
         var names = Names(open);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct, AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open)))
+        var publish = AccountApi.PublishByVaultId(body.Publish, names, AccountApi.SkillsVaultIds(open));
+        // One on hidden vaults only answers as no connection, an empty edit too; on others, the grants on vaults the
+        // session hides can't be named here and stay as stored (discreet design §4).
+        var hidden = await IsOnlyHiddenAsync(id, caller, connections, ct);
+        var info = await connections.SetVaultsAsync(
+                caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, hidden ? NoId : id, vaults, ct, publish, hidden ? null : await caller.HiddenIdsAsync(ct))
             ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
-    private static async Task<NoContent> SetInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, Connections connections, CancellationToken ct) =>
-        await connections.SetInstructionsAsync(caller.User!, id, AccountApi.ParseInstructions(body.Mode), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound(NoSuchConnection);
+    private static async Task<NoContent> SetInstructionsAsync(string id, InstructionsRequest body, RequestCaller caller, Connections connections, CancellationToken ct)
+    {
+        var mode = AccountApi.ParseInstructions(body.Mode);
+        return !await IsOnlyHiddenAsync(id, caller, connections, ct) && await connections.SetInstructionsAsync(caller.User!, id, mode, ct)
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound(NoSuchConnection);
+    }
+
+    /// <summary>Whether the user's connection <paramref name="id"/> covers only vaults the session hides, so that it
+    /// answers as one she doesn't have (<see cref="AccountApi.OnlyHidden"/>).</summary>
+    private static async Task<bool> IsOnlyHiddenAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct)
+    {
+        var onlyHidden = await AccountApi.OnlyHiddenAsync(caller, ct);
+        return (await connections.ListAsync(caller.User!, caller.UserKey!, ct)).Any(c => c.Id == id && onlyHidden(c.Vaults.Keys));
+    }
 
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyScheme, storedScheme } from "./apply";
-import { schemes } from "./schemes";
+import { discreet, schemes } from "./schemes";
 
 function mockSystem(dark: boolean) {
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: dark && q.includes("dark"), addEventListener() {} }));
@@ -52,5 +52,18 @@ describe("index.css", () => {
     for (const [token, value] of Object.entries(scheme.tokens)) {
       expect(block).toContain(`--${kebab(token)}: ${value};`);
     }
+  });
+
+  it.each(schemes)("has the discreet amber of schemes.ts in $name", (scheme) => {
+    const block = css.match(new RegExp(`\\[data-scheme="${scheme.id}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    const amber = scheme.light ? discreet.light : discreet.dark;
+    expect(block).toContain(`--discreet: ${amber.text};`);
+    expect(block).toContain(`--discreet-line: ${amber.line};`);
+    expect(block).toContain(`--discreet-soft: color-mix(in srgb, ${amber.text} 14%, transparent);`);
+  });
+
+  it("gives the discreet tokens to Tailwind", () => {
+    for (const token of ["discreet", "discreet-line", "discreet-soft"]) expect(css).toContain(`--color-${token}: var(--${token});`);
+    expect(css).not.toContain("light-dark(");
   });
 });

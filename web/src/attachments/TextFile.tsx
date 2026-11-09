@@ -3,6 +3,7 @@ import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { fileAtUrl, type FileAt } from "../api/paths";
 import { fetchFile } from "../api/notes";
+import { download } from "../data/exportUrl";
 
 /**
  * A text file of a skill's folder as its text, in a `pre`: never rendered. A script, an HTML or an SVG file is data
@@ -43,10 +44,15 @@ export default function TextFile({ vault, path, at = {} }: { vault: string; path
           {state?.text}
         </pre>
       )}
-      <a href={`${href}${href.includes("?") ? "&" : "?"}download=1`} download className="flex items-center gap-2 self-start text-[14px] text-[#f0a848] underline">
+      {/* A button, as the lightbox's: no link names the file's path. */}
+      <button
+        type="button"
+        onClick={() => download(`${href}${href.includes("?") ? "&" : "?"}download=1`)}
+        className="flex items-center gap-2 self-start text-[14px] text-[#f0a848] underline"
+      >
         <Download size={16} aria-hidden />
         Download
-      </a>
+      </button>
     </div>
   );
 }

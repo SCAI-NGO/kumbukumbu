@@ -367,7 +367,7 @@ public sealed class PdfJobTests(KumbuAppFactory app)
         sidecar.Down = true;
         await user.CreateFileAsync("pending.pdf", Pdf("queued, then the vault goes"));
 
-        Assert.NotNull(await host.Services.GetRequiredService<Kumbu.Server.Accounts.Deletion>().DeleteVaultAsync(user.User, user.UserKey, user.Vault, RestClient.Password, user.Vault, Ct));
+        Assert.NotNull(await host.Services.GetRequiredService<Kumbu.Server.Accounts.Deletion>().DeleteVaultAsync(user.User, user.UserKey, user.Vault, RestClient.Password, user.Vault, null, Ct));
 
         Assert.Equal(0, await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
         Assert.Equal(0, await JobsAsync(vault.Id));

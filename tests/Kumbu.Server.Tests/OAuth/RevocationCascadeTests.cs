@@ -181,7 +181,7 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         var (flow, pair) = await ConnectedAsync(new Dictionary<string, string> { ["Arbeit"] = "write", ["Privat"] = "read" }, privat: true);
         var privat = (await Service<VaultCatalog>().OpenForUserAsync(flow.Owner.User.Id, flow.Owner.UserKey, Ct)).Single(v => v.Name == "Privat").Id;
 
-        Assert.NotNull(await Service<Deletion>().DeleteVaultAsync(flow.Owner.User, flow.Owner.UserKey, "Privat", RestClient.Password, "Privat", Ct));
+        Assert.NotNull(await Service<Deletion>().DeleteVaultAsync(flow.Owner.User, flow.Owner.UserKey, "Privat", RestClient.Password, "Privat", null, Ct));
 
         var resolved = (await Service<OAuthTokens>().ResolveAccessAsync(pair.Access, flow.ConnectionId, flow.Resource, Ct)).Connection!;
         var opened = await new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access).OpenAsync(Service<VaultCatalog>(), Ct);
@@ -280,7 +280,7 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
     {
         var (flow, pair) = await ConnectedAsync();
 
-        Assert.NotNull(await Service<Deletion>().DeleteVaultAsync(flow.Owner.User, flow.Owner.UserKey, "Arbeit", RestClient.Password, "Arbeit", Ct));
+        Assert.NotNull(await Service<Deletion>().DeleteVaultAsync(flow.Owner.User, flow.Owner.UserKey, "Arbeit", RestClient.Password, "Arbeit", null, Ct));
 
         await AssertDisconnectedAsync(flow, pair);
         Assert.Equal((ConnectionState.Revoked, ConnectionReasons.VaultDeleted), await StateAsync(flow));

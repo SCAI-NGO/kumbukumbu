@@ -104,6 +104,15 @@ public static class ExportApi
             }
         }
 
+        /// <summary>Whether one of these vaults (by the name the caller sees) is discreet. The session reaches it only
+        /// while it shows it; its ZIP is then named without it (discreet design, Decision 15).</summary>
+        public async Task<bool> AnyDiscreetAsync(IEnumerable<string> names)
+        {
+            if (Caller.Session is not { } session) return false;
+            var open = await Caller.OpenVaultsAsync(Ct);
+            return names.Any(n => open.FirstOrDefault(v => v.Name == n) is { } vault && session.IsDiscreet(vault.Id));
+        }
+
         /// <summary>The ids of these vaults (by the name the caller sees), for the log.</summary>
         public async Task<string> VaultIdsAsync(IEnumerable<string> names)
         {
@@ -144,7 +153,11 @@ public static class ExportApi
         export.Log.LogInformation(
             "User {UserId} exported a checkpoint of vault {VaultId}: {Notes} notes, {Files} files",
             export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]), entries.Count(e => e.IsNote), entries.Count(e => !e.IsNote));
-        return Zip(http, CheckpointZipName(root.Segments[0], name, made, zone), [(root.Segments[0] + "/", entries)], zone, export.Log, ct);
+        var now = export.Time.GetUtcNow().UtcDateTime;
+        var zipName = await export.AnyDiscreetAsync([root.Segments[0]])
+            ? NeutralZipName(now)
+            : CheckpointZipName(root.Segments[0], name, made, zone);
+        return Zip(http, zipName, [(root.Segments[0] + "/", entries)], zone, export.Log, ct);
     }
 
     /// <summary>Every vault is checked and its notes taken before the first byte, so a refusal (unknown vault,
@@ -190,7 +203,9 @@ public static class ExportApi
             content.Sum(c => c.Entries.Count(e => e.IsNote)), content.Sum(c => c.Entries.Count(e => !e.IsNote)), damaged.Sum(d => d.Count));
         var now = export.Time.GetUtcNow().UtcDateTime;
         var missing = damaged.Count > 0 ? (MissingText(damaged), now) : default((string, DateTime)?);
-        return Zip(http, ZipName([.. roots.Select(r => r.Segments[0])], now), content, Zone(tz), export.Log, ct, missing: missing);
+        var names = roots.Select(r => r.Segments[0]).ToList();
+        var zipName = await export.AnyDiscreetAsync(names) ? NeutralZipName(now) : ZipName(names, now);
+        return Zip(http, zipName, content, Zone(tz), export.Log, ct, missing: missing);
     }
 
     /// <summary>The name of the export's note on what it couldn't read, at the ZIP's root, beside the vault folders
@@ -261,7 +276,10 @@ public static class ExportApi
         await export.RecordMemberExportsAsync([root.Segments[0]]);
         // Logged once the last byte is out: a download cut off by a file that doesn't open is logged as such instead.
         var (userId, vaultId) = (export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]));
-        var name = $"{root.Segments[0]} files {export.Time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
+        var now = export.Time.GetUtcNow().UtcDateTime;
+        var name = await export.AnyDiscreetAsync([root.Segments[0]])
+            ? NeutralZipName(now)
+            : $"{root.Segments[0]} files {now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
         return Zip(http, name, [("", entries)], Zone(tz), export.Log, ct, completed: () => export.Log.LogInformation(
             "User {UserId} downloaded {Files} files ({Bytes} bytes) of vault {VaultId} as a ZIP, {Password}",
             userId, entries.Count, bytes, vaultId, withPassword ? "with the password" : "without the password (turned off)"));
@@ -454,8 +472,13 @@ public static class ExportApi
     internal static string ZipName(IReadOnlyList<string> vaults, DateTime utcNow)
     {
         var date = utcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        return vaults.Count == 1 ? $"{vaults[0]} {date}.zip" : $"Kumbu² export {date}.zip";
+        return vaults.Count == 1 ? $"{vaults[0]} {date}.zip" : NeutralZipName(utcNow);
     }
+
+    /// <summary><c>Kumbu² export 2026-10-26.zip</c>, the server's UTC date: the name of an export of several vaults, and
+    /// of every ZIP of a discreet vault, which never names it. The download's URL still does, in the browser's list.</summary>
+    internal static string NeutralZipName(DateTime utcNow) =>
+        $"Kumbu² export {utcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
 
     /// <summary><c>Work checkpoint before-cleanup 2026-10-19.zip</c>: the day the checkpoint was made, on the reader's
     /// clock, so it matches the date the web app shows.</summary>

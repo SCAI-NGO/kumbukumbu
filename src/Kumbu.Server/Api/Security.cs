@@ -155,7 +155,7 @@ public static class Security
     /// </summary>
     public static IApplicationBuilder UseCallerRules(this IApplicationBuilder app, string? publicUrl)
     {
-        var expected = publicUrl is null ? null : new Uri(publicUrl).GetLeftPart(UriPartial.Authority);
+        var expected = OwnOrigin(publicUrl);
         return app.Use(async (context, next) =>
         {
             if (!context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
@@ -174,9 +174,7 @@ public static class Security
             var exempt = caller is null && context.GetEndpoint()?.Metadata.GetMetadata<OriginExemptMetadata>() is not null;
             if (!IsSafe(context.Request.Method) && (caller?.Kind is null or CallerKind.Session) && !exempt)
             {
-                var origin = context.Request.Headers.Origin.ToString();
-                var own = expected ?? $"{context.Request.Scheme}://{context.Request.Host}";
-                if (!string.Equals(origin, own, StringComparison.OrdinalIgnoreCase))
+                if (!FromOwnPages(context, expected))
                 {
                     await RefuseAsync(context, "This request didn't come from Kumbu's own pages.");
                     return;
@@ -193,6 +191,16 @@ public static class Security
             await next(context);
         });
     }
+
+    /// <summary>The origin of <c>Kumbu:PublicUrl</c>, which <see cref="FromOwnPages"/> expects; null without one.</summary>
+    internal static string? OwnOrigin(string? publicUrl) =>
+        string.IsNullOrEmpty(publicUrl) ? null : new Uri(publicUrl).GetLeftPart(UriPartial.Authority);
+
+    /// <summary>Whether the request's <c>Origin</c> is <paramref name="expected"/> (<see cref="OwnOrigin"/>), else, without
+    /// one, the request's own scheme and host: the Origin check of <see cref="UseCallerRules"/>.</summary>
+    internal static bool FromOwnPages(HttpContext context, string? expected) =>
+        string.Equals(
+            context.Request.Headers.Origin.ToString(), expected ?? $"{context.Request.Scheme}://{context.Request.Host}", StringComparison.OrdinalIgnoreCase);
 
     private const string PasswordRequiredSentence = "This needs your password again: confirm it with POST /api/session/confirm.";
 
@@ -331,6 +339,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _signInByUsername = Limiter(SignInsPerUsername);
     private readonly PartitionedRateLimiter<string> _signInByAddress = Limiter(SignInsPerAddress);
     private readonly PartitionedRateLimiter<string> _passwordCheckByUsername = Limiter(SignInsPerUsername);
+    private readonly PartitionedRateLimiter<string> _pinCheckByUser;
     private readonly PartitionedRateLimiter<string> _joinByAddress = Limiter(JoinsPerAddress);
     private readonly PartitionedRateLimiter<string> _recoveryByAddress = Limiter(RecoveriesPerAddress);
     private readonly PartitionedRateLimiter<string> _redeemByAddress = Limiter(RedeemsPerAddress);
@@ -358,14 +367,16 @@ public sealed class AccountLimits : IDisposable
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks, on renames and on readers, so that
+    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks, on renames, on readers and on PIN entries, so that
     /// one can be reached in a few requests, or not at all.</summary>
     internal AccountLimits(
         int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
         int aliasRenamesPerUser = AliasRenamesPerUser, int readerReadsPerAddress = ReaderReadsPerAddress, int readerFailuresPerNetwork = ReaderFailuresPerNetwork,
         int readerFailuresPerServer = ReaderFailuresPerServer, int readerFilesPerAddress = ReaderFilesPerAddress, int readerReadsPerNetwork = ReaderReadsPerNetwork,
-        int readerReadsPerServer = ReaderReadsPerServer, int readerFilesPerNetwork = ReaderFilesPerNetwork, int readerFilesPerServer = ReaderFilesPerServer)
+        int readerReadsPerServer = ReaderReadsPerServer, int readerFilesPerNetwork = ReaderFilesPerNetwork, int readerFilesPerServer = ReaderFilesPerServer,
+        int pinChecksPerUser = SignInsPerUsername)
     {
+        _pinCheckByUser = Limiter(pinChecksPerUser);
         _readerReadByAddress = Limiter(readerReadsPerAddress);
         _readerReadByNetwork = Limiter(readerReadsPerNetwork);
         _readerReads = Limiter(readerReadsPerServer);
@@ -390,6 +401,10 @@ public sealed class AccountLimits : IDisposable
     /// sign-ins (but apart from them, so changing the password doesn't use up the sign-in that follows), so that a
     /// stolen session can't be used to guess the password faster than signing in could.</summary>
     public TimeSpan? PasswordCheck(string username) => Take(_passwordCheckByUsername, UsernameKey(username));
+
+    /// <summary>A PIN entered to show the discreet vaults, counted per user across her sessions, as many a minute as a
+    /// username's sign-ins: every user is limited alike, with a PIN or without.</summary>
+    public TimeSpan? PinCheck(string userId) => Take(_pinCheckByUser, userId);
 
     public TimeSpan? Join(HttpContext context) => Take(_joinByAddress, Address(context));
 
@@ -507,6 +522,7 @@ public sealed class AccountLimits : IDisposable
         _signInByUsername.Dispose();
         _signInByAddress.Dispose();
         _passwordCheckByUsername.Dispose();
+        _pinCheckByUser.Dispose();
         _joinByAddress.Dispose();
         _recoveryByAddress.Dispose();
         _redeemByAddress.Dispose();

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, call } from "../api/client";
 import { followRename } from "../api/sharing";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -696,7 +697,7 @@ describe("vaults shared with the user", () => {
     await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
     await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: garten" }));
     const switcher = screen.getByRole("dialog", { name: "Vaults" });
-    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "Your name for this vault…", "New vault", "All vaults"]);
+    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "Your name for this vault…", "New vault", "All vaults", "More vaults…"]);
     expect(within(switcher).getByRole("list", { name: 'Shared by "Alice"' })).toHaveTextContent("garten");
     await userEvent.keyboard("{Escape}");
     expect(within(drawer()).getByText('Shared by "Alice"', { selector: "p" })).toBeInTheDocument();
@@ -906,5 +907,38 @@ describe("vaults shared with the user", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
       expect(await noteMenu()).not.toContain("Publish…");
     });
+  });
+});
+
+const frameOf = (box: HTMLElement) => box.querySelector(":scope > [data-discreet-frame]");
+
+describe("discreet mode on a phone", () => {
+  afterEach(() => useDiscreet.getState().reset());
+  const shownApi = (revealed: boolean) =>
+    signedInApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed, until: revealed ? new Date(Date.now() + 9 * 60_000 + 30_000).toISOString() : null } }),
+      "POST /api/ws-ticket": () => json(503, { error: "later" }),
+    });
+
+  it("frames the shell and shows the pill under the top bar, and in the drawer", async () => {
+    shownApi(true);
+    renderApp("/notes/Work/inbox.md");
+    const shell = await screen.findByTestId("shell");
+    const pill = await within(shell).findByRole("group", { name: "Discreet vaults shown" });
+    expect(pill).toHaveTextContent("Discreet · 10 min");
+    expect(frameOf(shell)).toBeInTheDocument();
+    const tree = await openDrawer();
+    expect(frameOf(tree)).toBeInTheDocument();
+    expect(within(tree).getByRole("group", { name: "Discreet vaults shown" })).toBeInTheDocument();
+  });
+
+  it("shows neither while they are hidden", async () => {
+    shownApi(false);
+    renderApp("/notes/Work/inbox.md");
+    const shell = await screen.findByTestId("shell");
+    await screen.findByRole("heading", { name: "inbox" });
+    expect(screen.queryByRole("group", { name: "Discreet vaults shown" })).not.toBeInTheDocument();
+    expect(frameOf(shell)).toBeNull();
+    expect(frameOf(await openDrawer())).toBeNull();
   });
 });

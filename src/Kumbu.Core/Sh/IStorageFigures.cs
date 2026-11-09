@@ -8,8 +8,9 @@ public sealed record VaultFigure(string Vault, long Used, int Notes, int Attachm
 
 /// <summary>What <c>df</c> shows, counted in one go: the caller's own vaults that this credential opens, her storage limit
 /// in bytes (null: none), and whether those are all the vaults she owns. When they aren't (a key for some of them), the
-/// limit applies to more than the rows add up to.</summary>
-public sealed record OwnFigures(IReadOnlyList<VaultFigure> Vaults, long? Limit, bool AllOwned)
+/// limit applies to more than the rows add up to. <paramref name="Total"/>, when set, is the total shown instead of the
+/// rows' sum: that of every vault she owns, also those left out of the rows (a web session's hidden ones).</summary>
+public sealed record OwnFigures(IReadOnlyList<VaultFigure> Vaults, long? Limit, bool AllOwned, long? Total = null)
 {
     public static readonly OwnFigures None = new([], null, true);
 }

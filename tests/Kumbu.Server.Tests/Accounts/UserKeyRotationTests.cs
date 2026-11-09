@@ -731,7 +731,7 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
         var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
         _time.Advance(TimeSpan.FromSeconds(1));
 
-        var (notice, alias) = Assert.Single(await Kumbu.Server.Sharing.MemberNotices.ListAsync(_db, bob.User.Id, key, Now, Ct));
+        var (notice, alias) = Assert.Single(await Kumbu.Server.Sharing.MemberNotices.ListAsync(_db, bob.User.Id, key, Now, new HashSet<string>(), Ct));
         Assert.Equal(("vault-rekeyed", "garten"), (notice.Kind, alias));
     }
 

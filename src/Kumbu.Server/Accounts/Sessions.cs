@@ -8,6 +8,19 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Accounts;
 
 /// <summary>
+/// The discreet vaults' state of a web session (discreet vaults design, Decision 1): whether the PIN shows them now,
+/// <c>RevealUntil</c>, the user's sealed list of discreet vault ids (<see cref="DiscreetVaults"/>), and the open
+/// discreet note a late save may still reach. <c>RevealUntil</c>: when the last reveal ends; null for a reveal until
+/// the session ends or the vaults are hidden, and when there was none. <c>Revealed</c> alone says whether the vaults
+/// are shown now: a timed reveal that has run out keeps its <c>RevealUntil</c> (the late save reads it).
+/// </summary>
+public sealed record SessionDiscreet(bool Revealed, DateTime? RevealUntil, byte[]? SealedList, byte[]? LateSave)
+{
+    /// <summary>When the reveal shown now ends; null if the vaults aren't shown, or are until the session ends.</summary>
+    public DateTime? ShownUntil => Revealed ? RevealUntil : null;
+}
+
+/// <summary>
 /// Web sessions (accounts design, "Sessions"): a random secret in the browser's cookie and, in
 /// <c>user_slots</c>, a <c>session</c> slot with the user key wrapped under a key derived from that secret. The
 /// server keeps neither the secret nor the user key, so a request can only use the user key if it brings the
@@ -36,7 +49,8 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 
     private IMongoCollection<UserSlotDocument> Slots { get; } = db.GetCollection<UserSlotDocument>("user_slots");
 
-    private DateTime Now => time.GetUtcNow().UtcDateTime;
+    /// <summary>Now, by this service's clock (the late save's grace in <see cref="Auth.CallerMiddleware"/> reads it too).</summary>
+    internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>
     /// Starts a session for a user just signed in and returns its secret (Base64Url) for the cookie.
@@ -100,9 +114,10 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// (<see cref="OpenWindowAsync"/>). Without <paramref name="touch"/> the request doesn't count as the session's use
     /// and moves no clock: the web app's poll in the background must not keep a session alive that nobody uses. The
     /// first touching request after 30 minutes without one (only a remembered session lives that long) begins a visit:
-    /// the user's <c>lastSignInAt</c> moves to now, and the returned user carries it.
+    /// the user's <c>lastSignInAt</c> moves to now, and the returned user carries it. <c>Discreet</c> says whether the
+    /// session shows the user's discreet vaults now.
     /// </summary>
-    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt, bool WindowOpen)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt, bool WindowOpen, SessionDiscreet Discreet)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
     {
         if (Decode(secret) is not { } bytes) return null;
         if (await LiveAsync(Lookup(bytes), ct) is not var (slot, user, now, lastUsedAt)) return null;
@@ -140,7 +155,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             }
         }
 
-        return (user.ToUser(), userKey, slot.CreatedAt, windowOpen);
+        return (user.ToUser(), userKey, slot.CreatedAt, windowOpen, new SessionDiscreet(Revealed(slot, now), slot.RevealUntil, user.DiscreetVaults, slot.LateSave));
     }
 
     /// <summary>
@@ -154,7 +169,14 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// <see cref="ResolveAsync"/>, else null. Never touches it: an open sync socket is no use of the session, so a tab
     /// left open doesn't keep it alive, and its socket closes once the session's idle time is up.
     /// </summary>
-    public async Task<string?> AliveAsync(string subject, CancellationToken ct)
+    public async Task<string?> AliveAsync(string subject, CancellationToken ct) => (await SocketStateAsync(subject, ct)).UserId;
+
+    /// <summary>
+    /// The user of the session <paramref name="subject"/>, whether it shows the discreet vaults now, by the rules of
+    /// <see cref="ResolveAsync"/>, and until when if it does (null for a reveal until the session ends); no user (and
+    /// not revealed) if the session isn't alive. Touches nothing, as <see cref="AliveAsync"/>.
+    /// </summary>
+    public async Task<(string? UserId, bool Revealed, DateTime? RevealUntil)> SocketStateAsync(string subject, CancellationToken ct)
     {
         byte[] lookup;
         try
@@ -163,10 +185,12 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         }
         catch (FormatException)
         {
-            return null;
+            return (null, false, null);
         }
 
-        return await LiveAsync(lookup, ct) is var (_, user, _, _) ? user.Id : null;
+        if (await LiveAsync(lookup, ct) is not var (slot, user, now, _)) return (null, false, null);
+        var revealed = Revealed(slot, now);
+        return (user.Id, revealed, revealed ? slot.RevealUntil : null);
     }
 
     /// <summary>
@@ -243,6 +267,106 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// <summary>Ends every session of the user inside the caller's transaction (deactivating the user).</summary>
     internal Task EndAllAsync(IClientSessionHandle session, string userId, CancellationToken ct) =>
         Slots.DeleteManyAsync(session, s => s.User == userId && s.Kind == UserSlotDocument.Session, cancellationToken: ct);
+
+    /// <summary>
+    /// Shows the discreet vaults in the session of <paramref name="secret"/> from now, for <paramref name="duration"/> or,
+    /// if null, until the session ends or they are hidden again, and forgets the note a late save could reach. Callers
+    /// have resolved the session for this request and checked the PIN; the filter still matches only a slot within both
+    /// its limits, as <see cref="OpenWindowAsync"/>. Answers whether it revealed, false if the session ended meanwhile
+    /// (by a concurrent tenth PIN entry, say), and the end written.
+    /// </summary>
+    public async Task<(bool Revealed, DateTime? Until)> RevealAsync(string secret, TimeSpan? duration, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return (false, null);
+        var lookup = Lookup(bytes);
+        // In whole milliseconds, as MongoDB keeps them, so the end answered is the end stored.
+        var now = Now;
+        now = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMillisecond));
+        var until = now + duration;
+        var idleSince = now - IdleTimeout;
+        var rememberedIdleSince = now - RememberedIdleTimeout;
+        var update = Builders<UserSlotDocument>.Update.Set(s => s.RevealedAt, now).Unset(s => s.LateSave).Unset(s => s.LateSaveRetried);
+        update = until is { } end ? update.Set(s => s.RevealUntil, end) : update.Unset(s => s.RevealUntil);
+        var revealed = await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.ExpiresAt > now
+                && ((s.Remembered && s.LastUsedAt >= rememberedIdleSince) || (!s.Remembered && s.LastUsedAt >= idleSince)),
+            update,
+            cancellationToken: ct);
+        return revealed.MatchedCount > 0 ? (true, until) : (false, null);
+    }
+
+    /// <summary>Hides the discreet vaults in the session of <paramref name="secret"/> again, revealed or not, and forgets
+    /// the note a late save could reach.</summary>
+    public async Task HideAsync(string secret, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup,
+            Builders<UserSlotDocument>.Update.Unset(s => s.RevealedAt).Unset(s => s.RevealUntil).Unset(s => s.LateSave).Unset(s => s.LateSaveRetried),
+            cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Records <paramref name="sealedMarker"/> (<see cref="Api.LateSave"/>) as the discreet note open in the session of
+    /// <paramref name="secret"/>, or forgets it for null; only while the session has a reveal, so a hide that came first
+    /// isn't undone.
+    /// </summary>
+    public async Task SetLateSaveAsync(string secret, byte[]? sealedMarker, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        var update = sealedMarker is null
+            ? Builders<UserSlotDocument>.Update.Unset(s => s.LateSave)
+            : Builders<UserSlotDocument>.Update.Set(s => s.LateSave, sealedMarker);
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.RevealedAt != null, update.Unset(s => s.LateSaveRetried), cancellationToken: ct);
+    }
+
+    /// <summary>Takes the late save's marker of the session of <paramref name="secret"/>, conditional on its exact bytes
+    /// and on the reveal that ended at <paramref name="revealUntil"/>, so of concurrent requests only one gets it, and
+    /// none after a new reveal. Answers whether this one did.</summary>
+    public async Task<bool> TakeLateSaveAsync(string secret, byte[] expected, DateTime revealUntil, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return false;
+        var lookup = Lookup(bytes);
+        var taken = await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.LateSave == expected && s.RevealedAt != null && s.RevealUntil == revealUntil,
+            Builders<UserSlotDocument>.Update.Unset(s => s.LateSave),
+            cancellationToken: ct);
+        return taken.ModifiedCount > 0;
+    }
+
+    /// <summary>Forgets the late save's marker of the session of <paramref name="secret"/> once its grace is over, if
+    /// it is still <paramref name="expected"/>.</summary>
+    public async Task ForgetLateSaveAsync(string secret, byte[] expected, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.LateSave == expected,
+            Builders<UserSlotDocument>.Update.Unset(s => s.LateSave).Unset(s => s.LateSaveRetried),
+            cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Puts back a marker taken for a late save that didn't succeed (ruling 10), so the tab may try once more: once, only
+    /// if no marker has been recorded since and the session's reveal is still the one that ended at
+    /// <paramref name="revealUntil"/> (a hide or a new reveal since forgot the marker for good).
+    /// </summary>
+    public async Task PutBackLateSaveAsync(string secret, byte[] sealedMarker, DateTime revealUntil, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.LateSave == null && !s.LateSaveRetried
+                && s.RevealedAt != null && s.RevealUntil == revealUntil,
+            Builders<UserSlotDocument>.Update.Set(s => s.LateSave, sealedMarker).Set(s => s.LateSaveRetried, true),
+            cancellationToken: ct);
+    }
+
+    /// <summary>A reveal without an end lasts as long as the session; one with an end, until just before it.</summary>
+    private static bool Revealed(UserSlotDocument slot, DateTime now) => slot.RevealedAt is not null && (slot.RevealUntil is not { } until || now < until);
 
     private static TimeSpan IdleLimit(UserSlotDocument slot) => slot.Remembered ? RememberedIdleTimeout : IdleTimeout;
 
@@ -334,5 +458,31 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         if (slot is null || (slot.WrongPasswords < WrongPasswordLimit && slot.WrongPasswordsTotal < WrongPasswordTotalLimit)) return null;
         var ended = await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
         return ended.DeletedCount > 0 ? slot.User : null;
+    }
+
+    /// <summary>The PIN entries, right or wrong, that end a session (<see cref="PinEnteredAsync"/>).</summary>
+    public const int PinEntryLimit = 10;
+
+    /// <summary>
+    /// Counts a PIN entered through the session of <paramref name="secret"/>, right or wrong; the
+    /// <see cref="PinEntryLimit"/>th ends it (its slot deleted). Every session counts, normal or remembered, and nothing
+    /// resets the count, so a stolen cookie is good for at most nine guesses, whatever the rate limit allows. Callers
+    /// have resolved the session for this request and branch on <c>Ended</c> alone: it is also true for an entry past
+    /// the limit and for a session gone meanwhile. Only the entry that deleted the slot answers its user's id.
+    /// </summary>
+    public async Task<(bool Ended, string? UserId)> PinEnteredAsync(string secret, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return (true, null);
+        var lookup = Lookup(bytes);
+        // Atomic, and decided on the count it returns: of concurrent entries, each sees its own.
+        var slot = await Slots.FindOneAndUpdateAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup,
+            Builders<UserSlotDocument>.Update.Inc(s => s.PinEntries, 1),
+            new FindOneAndUpdateOptions<UserSlotDocument> { ReturnDocument = ReturnDocument.After },
+            ct);
+        if (slot is null) return (true, null);
+        if (slot.PinEntries < PinEntryLimit) return (false, null);
+        var ended = await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
+        return (true, ended.DeletedCount > 0 ? slot.User : null);
     }
 }

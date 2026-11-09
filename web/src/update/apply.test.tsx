@@ -426,6 +426,28 @@ describe("what a reload must never lose (I2, I3)", () => {
     expect(await tryReload("auto")).toBe(true);
   });
 
+  it("holds the automatic reload while a discreet view is open, which only memory knows", async () => {
+    useUpdate.getState().report(NEWER);
+    window.history.replaceState(null, "", "/discreet");
+    try {
+      expect(await tryReload("auto")).toBe(false);
+      window.history.replaceState(null, "", "/notes/Work/a.md");
+      expect(await tryReload("auto")).toBe(true);
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("reloads from a discreet view when the button asks", async () => {
+    useUpdate.getState().report(NEWER);
+    window.history.replaceState(null, "", "/discreet");
+    try {
+      expect(await tryReload("button")).toBe(true);
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("holds the reload while typed text stands in a field on the page", async () => {
     render(
       <form>

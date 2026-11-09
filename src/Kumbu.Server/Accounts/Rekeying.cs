@@ -77,14 +77,15 @@ public sealed class Rekeying(
 
     /// <summary>
     /// Re-keys the user's vault named <paramref name="vaultName"/> and waits for it (it may wait behind other vaults);
-    /// null if the user has no such vault. The password is checked before the name is looked up, so that a stolen
-    /// session alone learns nothing (<see cref="WrongPasswordException"/> if it is wrong). Cancelling the wait leaves the run
-    /// going.
+    /// null if the user has no such vault, or it is among <paramref name="hidden"/> (those a web session doesn't show).
+    /// The password is checked before the name is looked up, so that a stolen session alone learns nothing
+    /// (<see cref="WrongPasswordException"/> if it is wrong). Cancelling the wait leaves the run going.
     /// </summary>
-    public async Task<RekeySummary?> RekeyVaultAsync(User user, byte[] userKey, string vaultName, string password, CancellationToken ct)
+    public async Task<RekeySummary?> RekeyVaultAsync(
+        User user, byte[] userKey, string vaultName, string password, IReadOnlySet<string>? hidden, CancellationToken ct)
     {
         if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
-        if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
+        if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId || hidden?.Contains(vaultId) == true) return null;
 
         // Through the runner, never RekeyAsync directly: a run of its own would race the runner's.
         var summary = await runner.RunAsync(vaultId, user.Id, userKey).WaitAsync(ct);
@@ -145,10 +146,11 @@ public sealed class Rekeying(
 
     /// <summary>The names of what a re-keying of the vault would take access from: API keys and WebDAV shares with a
     /// slot on it, and connections that list it and aren't revoked, with the device keys among the keys named apart; and who the vault is shared with (collab design §8.6), with the
-    /// members' credentials on it, and who left it since its last re-encryption (§6.4). Null if the user has no such vault: a vault shared with her is not hers to list.</summary>
-    internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct)
+    /// members' credentials on it, and who left it since its last re-encryption (§6.4). Null if the user has no such vault: a vault shared with her is not hers to list,
+    /// and one among <paramref name="hidden"/> (those a web session doesn't show) is as none.</summary>
+    internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, IReadOnlySet<string>? hidden, CancellationToken ct)
     {
-        if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
+        if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId || hidden?.Contains(vaultId) == true) return null;
         var (keyIds, connectionIds, shareIds) = await catalog.AccessAsync(vaultId, ct);
         // Only what has access now: a key or app past its expiry, whose slots wait for the sweep, or revoked has none
         // to lose.

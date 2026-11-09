@@ -430,3 +430,13 @@ export const schemes: readonly Scheme[] = [
 ];
 
 export const defaultSchemeFor = (prefersDark: boolean): string => (prefersDark ? "kumbu" : "catppuccin-latte");
+
+/**
+ * The discreet mode's amber, one for every light scheme and one for every dark one, which index.css repeats in each
+ * scheme's block. `text` (the pill's words) at 4.5:1 on every ground and on the pill's tint; `line` (the frame, the
+ * pill's border) at 3:1, on light schemes a brighter amber than the dark brown the text needs there.
+ */
+export const discreet = {
+  light: { text: "#643b00", line: "#a05800" },
+  dark: { text: "#ffd27f", line: "#ffd27f" },
+} as const;

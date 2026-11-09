@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
 import type { LinkView } from "./wikiLinks";
 import { useEditor } from "../state/editor";
@@ -261,6 +261,23 @@ describe("MarkdownView", () => {
     expect(site).toHaveAttribute("target", "_blank");
     expect(site).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("bad").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
+  });
+
+  it("scrolls to a footnote in the page, leaving the URL as it is", () => {
+    const scrolled: string[] = [];
+    // jsdom has no scrollIntoView.
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    onTestFinished(() => void delete (Element.prototype as Partial<Element>).scrollIntoView);
+    show("Text.[^Grüße]\n\n[^Grüße]: The note.");
+    const ref = screen.getByRole("link", { name: "1" });
+    expect(fireEvent.click(ref)).toBe(false);
+    // Each view prefixes its footnote ids of its own (`user-content-r0-`).
+    expect(scrolled).toEqual([expect.stringMatching(/^user-content-.*fn-gr%C3%BCsse$/)]);
+    const back = screen.getByRole("link", { name: /back to reference/i });
+    expect(fireEvent.click(back)).toBe(false);
+    expect(scrolled).toEqual([expect.stringMatching(/fn-gr%C3%BCsse$/), expect.stringMatching(/^user-content-.*fnref-gr%C3%BCsse$/)]);
   });
 
   it("does not load images; it names them instead", () => {
@@ -767,10 +784,11 @@ describe("Footnotes", () => {
   });
 
   // `[x](#goals)` is the server's to resolve (remarkWikiLinks); a reference-style link reaches the `a` as written.
-  it("leaves other fragment links as they were", () => {
+  // It leaves the URL alone too (a hash would show a discreet note's real path), and finds no target: headings have no id.
+  it("keeps the URL for other fragment links too", () => {
     show("[Goals][g] and [top][t]\n\n## Goals\n\n[g]: #goals\n[t]: #");
-    expect(prevented(screen.getByRole("link", { name: "Goals" }))).toBe(false);
-    expect(prevented(screen.getByRole("link", { name: "top" }))).toBe(false);
+    expect(prevented(screen.getByRole("link", { name: "Goals" }))).toBe(true);
+    expect(prevented(screen.getByRole("link", { name: "top" }))).toBe(true);
     expect(scrolled).toHaveLength(0);
   });
 

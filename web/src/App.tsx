@@ -3,10 +3,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { HttpError } from "./api/client";
 import { forgetReload } from "./components/AppError";
+import { neutralWindow, wrapCreateHref } from "./discreet/neutralWindow";
 import { routerFuture, routes } from "./router";
 
-// A data router: useBlocker (the recovery key's "leave without it?") needs one.
-const router = createBrowserRouter(routes, { future: routerFuture });
+// A data router: useBlocker (the recovery key's "leave without it?") needs one. On a window of its own, which keeps
+// discreet paths out of the address bar, the history and every link (spec §3.5).
+const router = wrapCreateHref(createBrowserRouter(routes, { future: routerFuture, window: neutralWindow }));
 // A navigation that worked: the next update may reload by itself once again.
 router.subscribe((state) => {
   if (state.navigation.state === "idle" && !state.errors) forgetReload();

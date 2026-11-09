@@ -317,7 +317,7 @@ function Anchor({ href, footnote, children, ...props }: ComponentPropsWithoutRef
       {...props}
       aria-describedby={describedBy}
       {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-      {...(footnote && href?.startsWith("#") ? { onClick: jump } : {})}
+      {...(href?.startsWith("#") ? { onClick: jump } : {})}
       className={footnote ? "px-0.5 text-accent-text no-underline" : "text-accent-text underline decoration-accent/45 underline-offset-[3px]"}
     >
       {children}
@@ -362,6 +362,7 @@ function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldabl
     </>
   );
 }
+
 
 const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
@@ -448,6 +449,8 @@ const components: Components = {
     </div>
   ),
   // react-markdown's default urlTransform already drops dangerous protocols (javascript: and the like).
+  // A link within the page (a footnote, its way back, or any other `#` link) scrolls there and leaves the URL alone:
+  // a hash in the address bar would leave the router's location, and in a discreet note show the real path again.
   a: ({ node, children, ...props }) => (
     <Anchor footnote={node?.properties.dataFootnoteRef !== undefined || node?.properties.dataFootnoteBackref !== undefined} {...props}>
       {children}

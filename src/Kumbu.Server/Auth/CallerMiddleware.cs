@@ -36,9 +36,12 @@ public sealed class BackgroundMetadata
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment, ILogger<CallerMiddleware> log)
 {
     public const string SessionCookie = "kumbu_session";
+
+    /// <summary>What <c>/api</c> answers, with a 401, a request without a caller: also a session ended meanwhile.</summary>
+    internal const string SignInSentence = "Sign in, or send an API key.";
 
     /// <summary>What <c>/dav</c> answers without a share's credentials (WebDAV design §3.3). Not ASCII: Kestrel sends this
     /// header in ISO-8859-1 (Program.cs).</summary>
@@ -52,6 +55,9 @@ public sealed class CallerMiddleware(
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly string? _devToken = string.IsNullOrEmpty(options.Value.DevToken) ? null : options.Value.DevToken;
+
+    /// <summary>What a late save's <c>Origin</c> must be, as <see cref="Api.Security.UseCallerRules"/> checks after this.</summary>
+    private readonly string? _ownOrigin = Api.Security.OwnOrigin(options.Value.PublicUrl);
 
     private readonly byte[]? _devTokenHash = string.IsNullOrEmpty(options.Value.DevToken) ? null : Hash(options.Value.DevToken);
 
@@ -114,9 +120,21 @@ public sealed class CallerMiddleware(
             // tools/call with the user's session.
             if (context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
                 && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
-                    is var (user, userKey, readAt, windowOpen))
+                    is var (user, userKey, readAt, windowOpen, discreet))
             {
-                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog);
+                if (await LateSaveAsync(context, secret, user.Id, userKey, discreet) is { } taken)
+                {
+                    // From the take on, a late save that doesn't succeed puts the marker back, whatever fails.
+                    await LateSaveRequestAsync(context, secret, taken, () =>
+                    {
+                        context.Features.Set(RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log, taken.VaultId));
+                        rekeying.ResumeOnce(user, userKey);
+                        return next(context);
+                    });
+                    return;
+                }
+
+                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log);
                 // A remembered session may see no sign-in for 30 days, so its first request in this process resumes
                 // what a sign-in would.
                 rekeying.ResumeOnce(user, userKey);
@@ -131,6 +149,74 @@ public sealed class CallerMiddleware(
 
         context.Features.Set(caller);
         await next(context);
+    }
+
+    /// <summary>
+    /// A late save, its marker taken: <paramref name="run"/> builds its caller and runs it. If it doesn't succeed (a
+    /// conflict, say, or a fault) the marker goes back for one more try (ruling 10), before the answer starts, so a
+    /// retry made at once finds it.
+    /// </summary>
+    private async Task LateSaveRequestAsync(HttpContext context, string secret, (string VaultId, byte[] Marker, DateTime RevealUntil) taken, Func<Task> run)
+    {
+        var putBack = false;
+        async Task PutBackAsync()
+        {
+            if (putBack) return;
+            putBack = true;
+            try
+            {
+                await sessions.PutBackLateSaveAsync(secret, taken.Marker, taken.RevealUntil, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                // Not to hide what failed the save; the tab's next try then finds no marker.
+                log.LogWarning("A late save's marker could not be put back: {Reason}", e.GetType().Name);
+            }
+        }
+
+        context.Response.OnStarting(() => context.Response.StatusCode is >= 200 and < 300 ? Task.CompletedTask : PutBackAsync());
+        var saved = false;
+        try
+        {
+            await run();
+            saved = context.Response.StatusCode is >= 200 and < 300;
+        }
+        finally
+        {
+            if (!saved) await PutBackAsync();
+        }
+    }
+
+    /// <summary>
+    /// The late save of discreet vaults design, Decision 12: a session whose timed reveal ended less than
+    /// <see cref="Api.LateSave.Grace"/> ago, whose marker names exactly the note this <c>PUT /api/notes/{vault}/{**path}</c>
+    /// (<see cref="Api.LateSaveMetadata"/>) writes, takes the marker (atomically, so only one request does) and answers the
+    /// vault's id, which this request's credential then opens too, with what to put back. Null for every other request,
+    /// which goes on unchanged; a marker met past its grace goes.
+    /// </summary>
+    private async Task<(string VaultId, byte[] Marker, DateTime RevealUntil)?> LateSaveAsync(
+        HttpContext context, string secret, string userId, byte[] userKey, SessionDiscreet discreet)
+    {
+        if (discreet is not { Revealed: false, LateSave: { } sealedMarker, RevealUntil: { } until }) return null;
+        if (sessions.Now >= until + Api.LateSave.Grace)
+        {
+            await sessions.ForgetLateSaveAsync(secret, sealedMarker, context.RequestAborted);
+            return null;
+        }
+
+        // A forged request (from a sibling subdomain, which SameSite=Strict lets through) is refused after this; it
+        // mustn't take the marker first, or the put-back would spend the tab's one more try.
+        if (context.GetEndpoint()?.Metadata.GetMetadata<Api.LateSaveMetadata>() is null || !Api.Security.FromOwnPages(context, _ownOrigin)) return null;
+        if (context.Request.RouteValues["vault"] is not string vault
+            || Api.LateSave.Of(vault, context.Request.RouteValues["path"] as string) is not { } note
+            || Sessions.SubjectOf(secret) is not { } subject
+            || Api.LateSave.Open(userId, userKey, subject, sealedMarker) is not { } marker
+            || marker.Name != note.Vault || marker.Path != note.Path)
+        {
+            return null;
+        }
+
+        return await sessions.TakeLateSaveAsync(secret, sealedMarker, until, context.RequestAborted) ? (marker.VaultId, sealedMarker, until) : null;
     }
 
     /// <summary>The third segment of <c>/mcp/c/{id}…</c> (the prefix case-insensitive, as routing is), else null.</summary>
@@ -376,7 +462,7 @@ public sealed class CallerMiddleware(
     private static Task UnauthorisedAsync(HttpContext context)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        if (IsUnder(context, "/api")) return context.Response.WriteAsJsonAsync(new { error = "Sign in, or send an API key." });
+        if (IsUnder(context, "/api")) return context.Response.WriteAsJsonAsync(new { error = SignInSentence });
         context.Response.Headers.WWWAuthenticate = "Bearer";
         return Task.CompletedTask;
     }

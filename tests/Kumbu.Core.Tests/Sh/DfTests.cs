@@ -20,17 +20,17 @@ public class DfTests
         new("Personal", 182 * Mb, 412, 38),
     ];
 
-    private sealed class Figures(IReadOnlyList<VaultFigure> owned, long? limit, bool allOwned) : IStorageFigures
+    private sealed class Figures(IReadOnlyList<VaultFigure> owned, long? limit, bool allOwned, long? total) : IStorageFigures
     {
-        public Task<OwnFigures> OwnedAsync(CancellationToken ct) => Task.FromResult(new OwnFigures(owned, limit, allOwned));
+        public Task<OwnFigures> OwnedAsync(CancellationToken ct) => Task.FromResult(new OwnFigures(owned, limit, allOwned, total));
     }
 
-    private static Task<ShellResult> Run(string line, long? limit = TwoGb, InMemoryNoteStore? store = null, bool allOwned = true)
+    private static Task<ShellResult> Run(string line, long? limit = TwoGb, InMemoryNoteStore? store = null, bool allOwned = true, long? total = null)
     {
         store ??= new InMemoryNoteStore(("/Work/a.md", "A"), ("/Personal/b.md", "B"));
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded);
         var caller = new FixedCaller(Writers.Dev);
-        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), figures: new Figures(Example, limit, allOwned));
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), figures: new Figures(Example, limit, allOwned, total));
         return shell.RunAsync(line, CancellationToken.None);
     }
 
@@ -66,6 +66,23 @@ public class DfTests
         Assert.EndsWith("\n──────────────────────────────────────────\nTotal        223.3 MB  (vaults this key opens; your other vaults count against the 2.0 GB limit too)", result.Output);
         Assert.DoesNotContain("%", result.Output);
         Assert.EndsWith("\nTotal        223.3 MB (no limit)", (await Run("df", limit: null, allOwned: false)).Output);
+    }
+
+    /// <summary>A total given with the figures (a web session that hides some of the caller's vaults) is the one shown,
+    /// its percentage too, and the Used column is as wide as it.</summary>
+    [Fact]
+    public async Task Df_shows_a_given_total_instead_of_the_rows_sum()
+    {
+        Assert.Equal(
+            ShellResult.Ok("""
+                Vault        Used       Notes  Attachments
+                /Personal     190840832   412           38
+                /Work          43306189   127            9
+                ────────────────────────────────────────────
+                Total        1073741824  of 2147483648 (50 %)
+                """),
+            await Run("df -b", total: 1L << 30));
+        Assert.EndsWith("\nTotal          1.0 GB (no limit)", (await Run("df", limit: null, total: 1L << 30)).Output);
     }
 
     [Theory]

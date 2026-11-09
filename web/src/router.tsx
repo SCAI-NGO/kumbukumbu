@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
+import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
+import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
+import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -39,7 +42,9 @@ function Root() {
     // Write mode ends with the session: the editor keeps its unsaved text as a draft, and the note opens again
     // after signing in (in Write mode, with the draft). Left on, Write mode would outlive the editor.
     useEditor.setState({ mode: "read", currentPath: null });
-    if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(pathname + search)}`, { replace: true });
+    // Never the way back into a discreet view: the session's end has forgotten which vaults are discreet already.
+    const neutral = pathname === NEUTRAL || discreetUrl(pathname) || showsDiscreet();
+    if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(neutral ? "/" : pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
   // The shell shows the update bar under its own top bar; every other page has it above.
@@ -57,10 +62,21 @@ function Root() {
 function RequireSession({ children }: { children?: ReactNode }) {
   const session = useQuery({ queryKey: ["session"], queryFn: () => call(api.GET("/api/session")) });
   const signedIn = useSession((s) => s.signedIn);
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const pathname = useLatestPathname();
+  useDiscreetMode();
+
+  useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
     if (session.data) signedIn(session.data);
   }, [session.data, signedIn]);
+
+  // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).
+  useEffect(() => {
+    if (session.data) followSession(queryClient, navigate, pathname(), session.data.discreet);
+  }, [session.data, session.dataUpdatedAt, queryClient, navigate, pathname]);
 
   if (session.isPending) return null;
   // A 401 has already sent the app to sign-in; anything else is shown.
@@ -106,6 +122,8 @@ export const routes: RouteObject[] = [
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       { path: "/consent", element: <ConsentRoute /> },
+      // A discreet view's address: one this tab no longer remembers (a reload, a hide) shows the vault list.
+      { path: NEUTRAL, element: <Navigate to="/" replace /> },
       {
         element: <RequireSession />,
         // A page that fails takes only its own place; Root still sends a session that ended to sign-in.

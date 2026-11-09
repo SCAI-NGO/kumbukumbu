@@ -75,11 +75,14 @@ public static class MemberNotices
     }
 
     /// <summary>The user's notices, newest first, each with the alias she had for the vault, opened with her user key;
-    /// null where it doesn't open (then "a shared vault").</summary>
+    /// null where it doesn't open (then "a shared vault"). None of a vault in <paramref name="hidden"/>: those are
+    /// never read.</summary>
     internal static async Task<IReadOnlyList<(MemberNoticeDocument Notice, string? Alias)>> ListAsync(
-        IMongoDatabase db, string userId, byte[] userKey, DateTime now, CancellationToken ct)
+        IMongoDatabase db, string userId, byte[] userKey, DateTime now, IReadOnlySet<string> hidden, CancellationToken ct)
     {
-        var docs = await Docs(db).Find(n => n.User == userId && n.At > now - Window).SortByDescending(n => n.At).ToListAsync(ct);
+        var f = Builders<MemberNoticeDocument>.Filter;
+        var docs = await Docs(db).Find(f.Where(n => n.User == userId && n.At > now - Window) & f.Nin(n => n.Vault, hidden))
+            .SortByDescending(n => n.At).ToListAsync(ct);
         return [.. docs.Select(n => (n, AliasOf(n, userKey)))];
     }
 
@@ -125,9 +128,12 @@ public static class MemberNotices
     private static SlotDocument AsSlot(MemberNoticeDocument notice) =>
         new() { Vault = notice.Vault, Kind = SlotDocument.Member, Membership = notice.Membership, Alias = notice.Alias, AliasKey = notice.AliasKey };
 
-    /// <summary>Dismissing: only her own notice; false for any other id.</summary>
-    internal static async Task<bool> DismissAsync(IMongoDatabase db, string userId, string id, CancellationToken ct) =>
-        ObjectId.TryParse(id, out var oid) && (await Docs(db).DeleteOneAsync(n => n.Id == oid && n.User == userId, ct)).DeletedCount == 1;
+    /// <summary>Dismissing: only her own notice, and not one of a vault in <paramref name="hidden"/>; false for any other id.</summary>
+    internal static async Task<bool> DismissAsync(IMongoDatabase db, string userId, string id, IReadOnlySet<string> hidden, CancellationToken ct) =>
+        ObjectId.TryParse(id, out var oid)
+        && (await Docs(db).DeleteOneAsync(
+            Builders<MemberNoticeDocument>.Filter.Where(n => n.Id == oid && n.User == userId) & Builders<MemberNoticeDocument>.Filter.Nin(n => n.Vault, hidden),
+            ct)).DeletedCount == 1;
 
     /// <summary>
     /// For a rotation of <paramref name="userId"/>'s user key: the alias key of each of her notices sealed again under

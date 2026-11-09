@@ -107,6 +107,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
+builder.Services.AddSingleton<DiscreetVaults>();
 builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
@@ -294,6 +295,7 @@ app.MapDiscovery();
 app.MapOAuthEndpoints();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
+app.MapDiscreetApi();
 app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();

@@ -141,7 +141,27 @@ public sealed class UserDocument
     [BsonElement("skillsNotice"), BsonIgnoreIfNull]
     public byte[]? SkillsNotice { get; set; }
 
+    /// <summary>The ids of the vaults she marked discreet, sealed under a key derived from the user key
+    /// (<see cref="Accounts.DiscreetVaults"/>); null until she marks one. Keeps ids of vaults that are gone.</summary>
+    [BsonElement("discreetVaults"), BsonIgnoreIfNull]
+    public byte[]? DiscreetVaults { get; set; }
+
+    /// <summary>What checks the PIN that shows her discreet vaults; null until she sets one.</summary>
+    [BsonElement("discreetPin"), BsonIgnoreIfNull]
+    public PinVerifierDocument? DiscreetPin { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
+}
+
+/// <summary>A PIN's Argon2id derivation with its own salt: it only checks the PIN, never a key.</summary>
+[BsonIgnoreExtraElements]
+public sealed class PinVerifierDocument
+{
+    [BsonElement("salt")]
+    public byte[] Salt { get; set; } = [];
+
+    [BsonElement("verifier")]
+    public byte[] Verifier { get; set; } = [];
 }
 
 /// <summary>A slot of the user key (collection <c>user_slots</c>): the user key, wrapped with a key derived from one credential.</summary>
@@ -205,4 +225,26 @@ public sealed class UserSlotDocument
     /// <summary>A remembered session: every wrong password given through it, which a right one doesn't reset.</summary>
     [BsonElement("wrongPasswordsTotal"), BsonIgnoreIfDefault]
     public int WrongPasswordsTotal { get; set; }
+
+    /// <summary>Sessions only: when the PIN last showed the discreet vaults (<see cref="Sessions.RevealAsync"/>); null
+    /// while they are hidden.</summary>
+    [BsonElement("revealedAt"), BsonIgnoreIfNull]
+    public DateTime? RevealedAt { get; set; }
+
+    /// <summary>Sessions only: when that reveal ends; null with <see cref="RevealedAt"/> set means until the session ends
+    /// or they are hidden again.</summary>
+    [BsonElement("revealUntil"), BsonIgnoreIfNull]
+    public DateTime? RevealUntil { get; set; }
+
+    /// <summary>Sessions only: every PIN entered through it, right or wrong (<see cref="Sessions.PinEnteredAsync"/>).</summary>
+    [BsonElement("pinEntries"), BsonIgnoreIfDefault]
+    public int PinEntries { get; set; }
+
+    /// <summary>Sessions only: the discreet note open while revealed, sealed, which one late save may still reach.</summary>
+    [BsonElement("lateSave"), BsonIgnoreIfNull]
+    public byte[]? LateSave { get; set; }
+
+    /// <summary>Sessions only: <see cref="LateSave"/> was put back once after a failed late save; it isn't again.</summary>
+    [BsonElement("lateSaveRetried"), BsonIgnoreIfDefault]
+    public bool LateSaveRetried { get; set; }
 }

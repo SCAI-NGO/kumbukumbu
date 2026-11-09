@@ -81,7 +81,14 @@ public static class SyncApi
             vaults.Add(new TicketVault(access.Id, access.Name, access.Membership?.Id, access.Level) { Label = label });
         }
 
-        var (ticket, expiresAt) = tickets.Issue(new TicketGrant(subject, vaults) { Display = caller.User!.Display });
+        // A ticket of a session that shows its discreet vaults holds them; its socket closes when they are hidden again.
+        var revealed = subject.Kind == SubjectKind.Session && caller.Session is { Revealed: true };
+        var (ticket, expiresAt) = tickets.Issue(new TicketGrant(subject, vaults)
+        {
+            Display = caller.User!.Display,
+            Revealed = revealed,
+            RevealUntil = revealed ? caller.Discreet?.ShownUntil : null,
+        });
         return TypedResults.Ok(new WsTicketView(ticket, expiresAt));
     }
 

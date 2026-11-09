@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
+import { showsDiscreet } from "../discreet/neutralWindow";
 import { useEditor, type Mode } from "../state/editor";
 import { checkVersion, useUpdate } from "./store";
 import { appVersion, parseVersion, type Version } from "./version";
@@ -92,9 +93,10 @@ function busy(): boolean {
  * typed text), no text a session end kept waits for its sign-in, and an open editor has saved everything (no
  * conflict, no failure); asked twice, as a keystroke may come in while the first save runs. At most once per
  * version: if this is still the old app after the reload, it says so instead of trying again. `reason` is who
- * asked: the bar's button, or the watcher; both are held back the same way.
+ * asked: the bar's button, or the watcher; both are held back the same way, but the watcher also by an open
+ * discreet view.
  */
-export async function tryReload(_reason: "auto" | "button", reload = () => page.reload()): Promise<boolean> {
+export async function tryReload(reason: "auto" | "button", reload = () => page.reload()): Promise<boolean> {
   const { available, fail } = useUpdate.getState();
   if (!available) return false;
   if (read(reloadedKey) === full(available)) {
@@ -104,6 +106,8 @@ export async function tryReload(_reason: "auto" | "button", reload = () => page.
   // A search hit's section waits to be scrolled to (memory only): the reload would open the note at the top.
   const { mode, beforeRead, draft, scrollTarget } = useEditor.getState();
   if (draft || scrollTarget || busy()) return false;
+  // A discreet view lives in memory only: a reload would close it (`/discreet` shows the vault list), so not by itself.
+  if (reason === "auto" && showsDiscreet()) return false;
   if (beforeRead && !((await beforeRead({ reread: false })) && (await beforeRead({ reread: false })))) return false;
   if (busy()) return false;
   write(reloadedKey, full(available));

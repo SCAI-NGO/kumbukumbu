@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronsUpDown, LayoutList, PenLine, Plus } from "lucide-react";
+import { ChevronsUpDown, Ellipsis, LayoutList, PenLine, Plus } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { groupVaults, useVaults, type VaultView } from "../api/notes";
@@ -41,11 +41,12 @@ function Action({ icon, onSelect, children }: { icon: ReactNode; onSelect(): voi
 
 /**
  * The vaults' popout: the user's own first, then those shared with her, each owner's together under the owner's name;
- * then a new vault, and the overview of all of them. A sheet from the bottom on a phone; from `md` on, a panel above
- * the switcher, wider than a narrow sidebar so that names fit. A modal dialog either way: Escape or a tap beside it
- * closes it, and the focus goes back to the switcher.
+ * then a new vault, the overview of all of them, and More vaults… last, always (discreet spec §3.6): whether or not
+ * she has a PIN or discreet vaults, so its presence tells nothing. A sheet from the bottom on a phone; from `md` on, a
+ * panel above the switcher, wider than a narrow sidebar so that names fit. A modal dialog either way: Escape or a tap
+ * beside it closes it, and the focus goes back to the switcher.
  */
-function Popout({ onClose, onNewVault, onRename }: { onClose(): void; onNewVault(): void; onRename?(): void }) {
+function Popout({ onClose, onNewVault, onRename, onMoreVaults }: { onClose(): void; onNewVault(): void; onRename?(): void; onMoreVaults(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const navigate = useNavigate();
@@ -108,6 +109,9 @@ function Popout({ onClose, onNewVault, onRename }: { onClose(): void; onNewVault
           >
             All vaults
           </Action>
+          <Action icon={<Ellipsis size={18} strokeWidth={1.8} aria-hidden className="flex-none text-muted" />} onSelect={then(onMoreVaults)}>
+            More vaults…
+          </Action>
         </div>
       </div>
     </>
@@ -116,9 +120,10 @@ function Popout({ onClose, onNewVault, onRename }: { onClose(): void; onNewVault
 
 /**
  * The switcher at the bottom of the drawer: a button with the current vault's name, which opens the popout of all of
- * them. `onRename` opens her side of a vault shared with her, where she gives it her own name.
+ * them. `onRename` opens her side of a vault shared with her, where she gives it her own name; `onMoreVaults` the PIN
+ * dialog.
  */
-export default function VaultSwitcher({ onNewVault, onRename }: { onNewVault(): void; onRename?(): void }) {
+export default function VaultSwitcher({ onNewVault, onRename, onMoreVaults }: { onNewVault(): void; onRename?(): void; onMoreVaults(): void }) {
   const active = useEditor((s) => s.activeVault);
   const [open, setOpen] = useState(false);
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(active ?? "");
@@ -138,7 +143,7 @@ export default function VaultSwitcher({ onNewVault, onRename }: { onNewVault(): 
         </span>
         <ChevronsUpDown size={16} aria-hidden className="flex-none text-muted" />
       </button>
-      {open && <Popout onClose={() => setOpen(false)} onNewVault={onNewVault} onRename={onRename} />}
+      {open && <Popout onClose={() => setOpen(false)} onNewVault={onNewVault} onRename={onRename} onMoreVaults={onMoreVaults} />}
     </div>
   );
 }
