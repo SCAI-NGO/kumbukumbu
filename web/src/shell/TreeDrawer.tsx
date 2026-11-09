@@ -24,6 +24,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import { useMarking } from "./ConfirmMark";
+import { copyItems } from "./copyItems";
 import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
@@ -31,6 +32,7 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
+import { useCopied } from "./useCopied";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -194,19 +196,23 @@ export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment
 export type VaultSheet = { kind: "trash" | "activity" | "checkpoints" | "archive"; vault: string };
 
 /**
- * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
- * server's deletion needs, can't be deleted from here.
+ * The menu of a note or attachment, which copying gives entries at any level. An attachment moves as one (its extension
+ * kept); one without a version, which the server's deletion needs, can't be deleted from here.
  */
 function FileMenu({
   row,
+  root,
   level,
   publishing,
+  copy,
   onMove,
   onDelete,
 }: {
   row: Extract<Row, { kind: "note" }>;
+  root: TreeFolder;
   level: Level;
   publishing: Publishing | null;
+  copy(text: string): void;
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
 }) {
@@ -214,6 +220,7 @@ function FileMenu({
   const { path, version } = row;
   const changes = mayChange(level, path);
   const items: MenuItem[] = [
+    ...copyItems(path, root, note, copy),
     ...(changes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
     ...entriesOf(publishing, path, note),
@@ -223,7 +230,6 @@ function FileMenu({
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
   ];
-  if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />
@@ -459,6 +465,8 @@ export default function TreeDrawer(props: {
   const publications = usePublications(activeVault ?? "", ownVault && !!activeVault);
   const published = publications.data?.publications.map((p) => p.path);
   const marking = useMarking(published);
+  // Said here, not over the note: the drawer covers that on a phone.
+  const copied = useCopied();
   const [publishing, setPublishing] = useState<string | null>(null);
   const publishingActions: Publishing | null = ownVault
     ? {
@@ -561,6 +569,7 @@ export default function TreeDrawer(props: {
           <FormError>{errorText(marking.error)}</FormError>
         </div>
       )}
+      {copied.status && <div className="flex-none px-[18px] pb-2.5">{copied.status}</div>}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -589,7 +598,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} level={level} publishing={publishingActions} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} root={tree.data.root} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>

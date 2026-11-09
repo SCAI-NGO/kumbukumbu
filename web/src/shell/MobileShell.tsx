@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useTree, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
@@ -22,6 +22,7 @@ import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
+import { copyItems } from "./copyItems";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -32,6 +33,7 @@ import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { publishingItems } from "./publishingItems";
+import { useCopied } from "./useCopied";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -135,6 +137,9 @@ export default function MobileShell() {
   const dockLevel = useLevel(activeVault);
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
+  // The note's vault's tree, which says whether its bare name is unique for Copy link.
+  const noteTree = useTree(path ? vaultOf(path) : null);
+  const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   useSyncSocket();
@@ -285,6 +290,7 @@ export default function MobileShell() {
               {errorText(marking.error)}
             </p>
           )}
+          {copied.status}
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
@@ -296,6 +302,7 @@ export default function MobileShell() {
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
+                      ...copyItems(path, noteTree.data?.root, true, copied.copy),
                       ...publishingActions,
                       ...(noteChanges
                         ? [
