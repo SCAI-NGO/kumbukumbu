@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useDiscreet } from "../discreet/state";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
 import { isVaultBusy } from "./error-text";
@@ -125,7 +126,12 @@ const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(
 export const useVaults = () =>
   useQuery({
     queryKey: ["vaults"],
-    queryFn: () => call(api.GET("/api/vaults")),
+    queryFn: async () => {
+      const vaults = await call(api.GET("/api/vaults"));
+      // The discreet names follow the list wherever it is read: it carries them only while the mode is on.
+      useDiscreet.getState().setFromVaults(vaults);
+      return vaults;
+    },
     refetchInterval: (query) => (query.state.data?.some((v) => v.pending) ? 5000 : false),
   });
 

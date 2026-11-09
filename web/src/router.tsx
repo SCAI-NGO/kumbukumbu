@@ -6,6 +6,7 @@ import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
+import { useDiscreet } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -59,7 +60,9 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const signedIn = useSession((s) => s.signedIn);
 
   useEffect(() => {
-    if (session.data) signedIn(session.data);
+    if (!session.data) return;
+    signedIn(session.data);
+    useDiscreet.getState().setFromSession(session.data.discreet);
   }, [session.data, signedIn]);
 
   if (session.isPending) return null;

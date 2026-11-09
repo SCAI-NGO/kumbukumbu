@@ -20,6 +20,7 @@ import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
 import { exportUrl } from "../data/exportUrl";
 import ExportConfirm from "../data/ExportConfirm";
+import PinDialog from "../discreet/PinDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
@@ -433,6 +434,7 @@ export default function TreeDrawer(props: {
   const [exporting, setExporting] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [member, setMember] = useState(false);
+  const [askingPin, setAskingPin] = useState(false);
   const [deletingVault, setDeletingVault] = useState<string | null>(null);
   const [renamingVault, setRenamingVault] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<{ vault: string; membership: string } | null>(null);
@@ -610,7 +612,7 @@ export default function TreeDrawer(props: {
       </div>
 
       <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
-        <VaultSwitcher onNewVault={onNewVault} onRename={() => setMember(true)} />
+        <VaultSwitcher onNewVault={onNewVault} onRename={() => setMember(true)} onMoreVaults={() => setAskingPin(true)} />
         <AccountRow />
       </div>
       {/* Last in the tab order: the tree and its controls come first. */}
@@ -622,6 +624,7 @@ export default function TreeDrawer(props: {
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
+      {askingPin && <PinDialog onClose={() => setAskingPin(false)} />}
       {renamingVault && <RenameVaultDialog vault={renamingVault} onClose={() => setRenamingVault(null)} />}
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}

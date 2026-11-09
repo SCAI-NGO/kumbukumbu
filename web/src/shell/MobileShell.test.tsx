@@ -662,7 +662,7 @@ describe("vaults shared with the user", () => {
     await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
     await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: garten" }));
     const switcher = screen.getByRole("dialog", { name: "Vaults" });
-    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "Your name for this vault…", "New vault", "All vaults"]);
+    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "Your name for this vault…", "New vault", "All vaults", "More vaults…"]);
     expect(within(switcher).getByRole("list", { name: 'Shared by "Alice"' })).toHaveTextContent("garten");
     await userEvent.keyboard("{Escape}");
     expect(within(drawer()).getByText('Shared by "Alice"', { selector: "p" })).toBeInTheDocument();
