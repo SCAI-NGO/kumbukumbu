@@ -141,7 +141,26 @@ public sealed class UserDocument
     [BsonElement("skillsNotice"), BsonIgnoreIfNull]
     public byte[]? SkillsNotice { get; set; }
 
+    /// <summary>The ids of the vaults she marked discreet, sealed under a key derived from the user key
+    /// (<see cref="Accounts.DiscreetVaults"/>); null until she marks one. Keeps ids of vaults that are gone.</summary>
+    [BsonElement("discreetVaults"), BsonIgnoreIfNull]
+    public byte[]? DiscreetVaults { get; set; }
+
+    /// <summary>What checks the PIN that shows her discreet vaults; null until she sets one.</summary>
+    [BsonElement("discreetPin"), BsonIgnoreIfNull]
+    public PinVerifierDocument? DiscreetPin { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
+}
+
+/// <summary>A PIN's Argon2id derivation with its own salt: it only checks the PIN, never a key.</summary>
+public sealed class PinVerifierDocument
+{
+    [BsonElement("salt")]
+    public byte[] Salt { get; set; } = [];
+
+    [BsonElement("verifier")]
+    public byte[] Verifier { get; set; } = [];
 }
 
 /// <summary>A slot of the user key (collection <c>user_slots</c>): the user key, wrapped with a key derived from one credential.</summary>
