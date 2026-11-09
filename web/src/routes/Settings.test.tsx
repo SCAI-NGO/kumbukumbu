@@ -675,6 +675,8 @@ describe("Settings: discreet vaults", () => {
       api({ "GET /api/session": session(false), "GET /api/vaults": () => json(200, vaults) });
       renderApp("/settings");
       const region = await screen.findByRole("region", { name: "Discreet vaults" });
+      // The vault list is in: the switches would be there by now.
+      await within(screen.getByRole("region", { name: "Vaults" })).findByText("Work");
       expect(within(region).getByRole("button", { name: "Set or change PIN" })).toBeInTheDocument();
       expect(within(region).queryAllByRole("switch")).toEqual([]);
       texts.push(region.textContent ?? "");
