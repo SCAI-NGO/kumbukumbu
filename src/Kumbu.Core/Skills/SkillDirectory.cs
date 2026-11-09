@@ -98,7 +98,9 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         var notePaths = await notes.ListNotesUnderAsync(location, ct);
         var attachments = await StoreAttachments.UnderAsync(notes, location, ct);
         // Only what lies inside a subfolder makes one a skill; a file loose at the location's root is none.
+        // In the vault Skills the location is the vault's root, so its archive would show as a skill.
         var folders = notePaths.Concat(attachments.Select(a => a.Path)).Where(p => p.Segments.Count > depth + 1)
+            .Where(p => vault != marked || !ArchiveFolder.Contains(p))
             .Select(p => p.Segments[depth]).Distinct(StringComparer.Ordinal).Order(TextOrder.Default);
 
         var info = await notes.VaultInfoAsync(vault, ct);

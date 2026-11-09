@@ -27,7 +27,8 @@ const linkPath = (path: string) => path.split("/").slice(2).join("/").replace(/\
 
 /**
  * The shortest link that leads to `path` alone, by the server's rule (`LinkResolver`: the note whose path ends
- * with the link, ignoring case): the name, else as many folders in front of it as it takes to tell it apart.
+ * with the link, ignoring case): the name, else as many folders in front of it as it takes to tell it apart. `all`
+ * comes from the vault's tree, which leaves its archive out, as the server's rule does for a living note's links.
  */
 export function linkTarget(path: string, all: string[]): string {
   const segments = linkPath(path).split("/");

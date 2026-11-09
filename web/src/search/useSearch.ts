@@ -15,9 +15,10 @@ const RESULTS = 20;
 /**
  * Searches all of the user's vaults (no `path`) once the query has rested for 200 ms. The result belongs to the key
  * (query, mode): a newer query never shows an older one's answer, and TanStack Query aborts the request of the
- * key it left through `signal`. With `tag`, only the notes that carry it (or a tag nested below it) are searched.
+ * key it left through `signal`. With `tag`, only the notes that carry it (or a tag nested below it) are searched; with
+ * `archive`, the archive's notes too, which the server leaves out otherwise.
  */
-export function useSearch(query: string, mode: SearchMode, tag: string | null = null) {
+export function useSearch(query: string, mode: SearchMode, tag: string | null = null, archive = false) {
   const trimmed = query.trim();
   const [settled, setSettled] = useState(trimmed);
   useEffect(() => {
@@ -27,8 +28,10 @@ export function useSearch(query: string, mode: SearchMode, tag: string | null = 
   }, [trimmed, settled]);
 
   const result = useQuery({
-    queryKey: ["search", settled, mode, tag],
-    queryFn: ({ signal }) => call(api.GET("/api/search", { params: { query: { q: settled, mode, n: RESULTS, ...(tag ? { tag: [tag] } : {}) } }, signal })),    enabled: settled !== "",
+    queryKey: ["search", settled, mode, tag, archive],
+    queryFn: ({ signal }) =>
+      call(api.GET("/api/search", { params: { query: { q: settled, mode, n: RESULTS, ...(tag ? { tag: [tag] } : {}), ...(archive ? { archive: true } : {}) } }, signal })),
+    enabled: settled !== "",
   });
 
   return {

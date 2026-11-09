@@ -272,7 +272,7 @@ describe("local commands", () => {
         "In this console:",
         "  cd [path] (.. alone is cd ..), pwd, clear, exit",
         "  Relative paths work here; the console turns them into absolute ones, and → shows the result.",
-        "  It only reads: restore, mv, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy are refused, and the write tools aren't here.",
+        "  It only reads: pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy are refused, and the write tools aren't here.",
         "",
         "The manual agents get, unchanged:",
       ].join("\n"),
@@ -304,7 +304,7 @@ describe("local commands", () => {
     const block = lines()[3]!;
     // publish is allowed for ls alone, skills for all but copy; their other subcommands are refused (ConsoleApi.ShAsync).
     const refused = `${fixture.refused.join(", ")}, publish add, update and rm and skills copy`;
-    expect(refused).toBe("restore, mv, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy");
+    expect(refused).toBe("pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy");
     expect(block).toContain(`It only reads: ${refused} are refused`);
   });
 });

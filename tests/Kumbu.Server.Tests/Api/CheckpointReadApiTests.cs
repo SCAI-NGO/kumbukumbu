@@ -167,6 +167,22 @@ public sealed class CheckpointReadApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, notMarkdown.StatusCode);
     }
 
+    /// <summary>The vault's tree leaves its archive out; a checkpoint's tree shows everything it holds, the archive too.</summary>
+    [Fact]
+    public async Task A_checkpoints_tree_shows_the_archive()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateAsync("_archive/old 2026-11-08 213005.md", "old\n");
+        await MakeAsync(user, "cp");
+
+        using var tree = await user.GetAsync(Tree(user, "cp"));
+        Assert.Equal(HttpStatusCode.OK, tree.StatusCode);
+        var archive = Assert.Single((await JsonAsync(tree))["root"]!["folders"]!.AsArray())!;
+        Assert.Equal("_archive", archive["name"]!.GetValue<string>());
+        Assert.Equal(["old 2026-11-08 213005.md"], Names(archive["notes"]));
+    }
+
     // The form the web app's "Copy for your AI" hands out: it has to work in the shell as it is.
     [Fact]
     public async Task The_copied_shell_command_reads_the_checkpoint()

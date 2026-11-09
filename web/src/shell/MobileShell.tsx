@@ -30,7 +30,7 @@ import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
-import TreeDrawer, { sidebarId, type DeleteSubject } from "./TreeDrawer";
+import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { publishingItems } from "./publishingItems";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
@@ -49,6 +49,7 @@ const HistorySheet = lazy(() => import("../note/HistorySheet"));
 const TrashSheet = lazy(() => import("./TrashSheet"));
 const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
 const ActivitySheet = lazy(() => import("./ActivitySheet"));
+const ArchiveSheet = lazy(() => import("./ArchiveSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -144,7 +145,7 @@ export default function MobileShell() {
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
-  const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "activity" | "checkpoints"; vault: string } | null>(null);
+  const [vaultSheet, setVaultSheet] = useState<VaultSheet | null>(null);
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
     overlay === "tree",
@@ -358,6 +359,8 @@ export default function MobileShell() {
               <TrashSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
             ) : vaultSheet.kind === "activity" ? (
               <ActivitySheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} onOpenTrash={() => setVaultSheet({ kind: "trash", vault: vaultSheet.vault })} />
+            ) : vaultSheet.kind === "archive" ? (
+              <ArchiveSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
             ) : (
               <CheckpointsSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
             )}

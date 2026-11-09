@@ -13,7 +13,10 @@ export type Job =
   | { kind: "analyse"; bytes: Uint8Array; maxPages: number }
   | { kind: "page"; bytes: Uint8Array; page: number; target: Target; crop?: Crop; rotate: number }
   | { kind: "image"; bytes: Uint8Array; target: Target; crop?: Crop; rotate: number; frame?: number }
-  | { kind: "boxes"; bytes: Uint8Array; pages: number[] };
+  | { kind: "boxes"; bytes: Uint8Array; pages: number[] }
+  | { kind: "list"; bytes: Uint8Array; page: number }
+  | { kind: "extract"; bytes: Uint8Array; page: number; n: number }
+  | { kind: "region"; bytes: Uint8Array; page: number; crop: Crop; rotate: number; format: "png" | "jpeg" };
 
 // What a worker posts: its page count as soon as it knows it, then one answer.
 export type WorkerMessage =
@@ -36,19 +39,53 @@ export type Reservation = {
   release(): void;
 };
 
+/**
+ * Places for running jobs shared by several pools, so that together they run at most limit jobs at a
+ * time: the container's memory is budgeted for that many. A freed place is offered to the pools in turn.
+ */
+export class Gate {
+  private used = 0;
+  private next = 0;
+  private readonly pools: (() => void)[] = [];
+
+  constructor(readonly limit: number) {}
+
+  listen(pump: () => void) {
+    this.pools.push(pump);
+  }
+
+  take(): boolean {
+    if (this.used >= this.limit) return false;
+    this.used++;
+    return true;
+  }
+
+  give() {
+    this.used--;
+    const n = this.pools.length;
+    const first = this.next;
+    this.next = (first + 1) % n;
+    for (let i = 0; i < n && this.used < this.limit; i++) this.pools[(first + i) % n]!();
+  }
+}
+
 export class Pool {
   private readonly workers: number;
   private readonly queue: number;
   private readonly entry: URL;
+  private readonly gate: Gate | undefined;
   private readonly waiting: Pending[] = [];
   private readonly running = new Set<Worker>();
   private reserved = 0;
   private closed = false;
 
-  constructor(o: { workers: number; queue: number; entry?: URL }) {
+  /** gate, shared with other pools, limits the jobs they run together; a job waits in its queue for a place. */
+  constructor(o: { workers: number; queue: number; entry?: URL; gate?: Gate }) {
     this.workers = o.workers;
     this.queue = o.queue;
     this.entry = o.entry ?? new URL("./worker.js", import.meta.url);
+    this.gate = o.gate;
+    this.gate?.listen(() => this.pump());
   }
 
   /** Jobs the pool holds at most: running, queued and reserved. */
@@ -117,7 +154,7 @@ export class Pool {
   }
 
   private pump() {
-    while (!this.closed && this.running.size < this.workers && this.waiting.length > 0) this.start(this.waiting.shift()!);
+    while (!this.closed && this.running.size < this.workers && this.waiting.length > 0 && (this.gate?.take() ?? true)) this.start(this.waiting.shift()!);
   }
 
   private start(p: Pending) {
@@ -126,7 +163,9 @@ export class Pool {
     const started = Date.now();
     let settled = false;
     const free = () => {
-      if (this.running.delete(worker)) this.pump();
+      if (!this.running.delete(worker)) return;
+      this.gate?.give();
+      this.pump();
     };
     const settle = (f: () => void, timedOut = false) => {
       if (settled) return;

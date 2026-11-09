@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "../src/pool.js";
 import { MAX_BODY, createSidecar } from "../src/server.js";
-import { chartPage, encryptedPdf, gifOf, threePages } from "./fixtures.js";
+import { chartPage, encryptedPdf, gifOf, hugeImagePage, threePages, twoImagesPage, vectorDrawingPage } from "./fixtures.js";
 
 // The built worker (vitest's global setup builds it).
 const entry = new URL("../dist/worker.js", import.meta.url);
@@ -233,6 +233,102 @@ describe("server", () => {
     expect(status).toBe(413);
   });
 
+  it("lists a page's images", async () => {
+    const r = await post("/images/list?page=1", await twoImagesPage());
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/json");
+    const list = (await r.json()) as { page: number; pageCount: number; over: number; images: { n: number; width: number; height: number; hash: string; failed: boolean }[] };
+    expect(list).toMatchObject({ page: 1, pageCount: 1, width: 595, height: 842, over: 0 });
+    expect(list.images.map((i) => [i.n, i.width, i.height, i.failed])).toEqual([
+      [1, 400, 300, false],
+      [2, 200, 200, false],
+    ]);
+    expect(list.images[0]!.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("counts the images pdf.js left out", async () => {
+    const r = await post("/images/list?page=1", await hugeImagePage());
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ over: 1, images: [] });
+  });
+
+  it("answers an image with its sizes in headers", async () => {
+    const r = await post("/images/image?page=1&n=1", await twoImagesPage());
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/png");
+    const body = new Uint8Array(await r.arrayBuffer());
+    const view = new DataView(body.buffer, body.byteOffset);
+    // The PNG header's width and height (IHDR at 16).
+    expect(r.headers.get("x-kumbu-width")).toBe(String(view.getUint32(16)));
+    expect(r.headers.get("x-kumbu-height")).toBe(String(view.getUint32(20)));
+    expect(r.headers.get("x-kumbu-width")).toBe("400");
+    expect(r.headers.get("x-kumbu-height")).toBe("300");
+    expect(r.headers.get("x-kumbu-original-width")).toBe("400");
+    expect(r.headers.get("x-kumbu-original-height")).toBe("300");
+    expect(r.headers.get("x-kumbu-rotate")).toBeNull();
+    expect(r.headers.get("content-length")).toBe(String(body.length));
+  });
+
+  it("answers no_such_image with 422", async () => {
+    const r = await post("/images/image?page=1&n=3", await twoImagesPage());
+    expect(r.status).toBe(422);
+    expect(await r.json()).toMatchObject({ code: "no_such_image", error: expect.any(String) });
+  });
+
+  it("renders a region to store, PNG or JPEG as asked", async () => {
+    const pdf = await vectorDrawingPage();
+    const png = await post("/images/region?page=1&crop=72,72,144,72&format=png", pdf);
+    expect(png.status).toBe(200);
+    expect(png.headers.get("content-type")).toBe("image/png");
+    expect(png.headers.get("x-kumbu-width")).toBe("600");
+    expect(png.headers.get("x-kumbu-height")).toBe("300");
+    expect(png.headers.get("x-kumbu-page-width")).toBe("595");
+    expect(png.headers.get("x-kumbu-page-height")).toBe("842");
+    expect(png.headers.get("x-kumbu-rotate")).toBeNull();
+    const jpeg = await post("/images/region?page=1&crop=72,72,144,72&format=jpeg&rotate=90", pdf);
+    expect(jpeg.status).toBe(200);
+    expect(jpeg.headers.get("content-type")).toBe("image/jpeg");
+    expect([...new Uint8Array(await jpeg.arrayBuffer()).subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    // The crop is in the turned page's points; the page's size is as it stands.
+    expect(jpeg.headers.get("x-kumbu-width")).toBe("600");
+    expect(jpeg.headers.get("x-kumbu-page-width")).toBe("595");
+    expect(jpeg.headers.get("x-kumbu-rotate")).toBe("90");
+  });
+
+  it("refuses bad parameters on the extraction routes", async () => {
+    const pdf = await twoImagesPage();
+    for (const q of [
+      "/images/list",
+      "/images/list?page=0",
+      "/images/list?page=x",
+      "/images/image?page=1",
+      "/images/image?n=1",
+      "/images/image?page=1&n=0",
+      "/images/image?page=1&n=1.5",
+      "/images/image?page=1&n=-1",
+      "/images/region?page=1&format=png",
+      "/images/region?page=1&crop=1,2,3&format=png",
+      "/images/region?page=1&crop=0,0,10,10",
+      "/images/region?page=1&crop=0,0,10,10&format=webp",
+      "/images/region?page=1&crop=0,0,10,10&format=PNG",
+      "/images/region?crop=0,0,10,10&format=png",
+      "/images/region?page=1&crop=0,0,10,10&format=png&rotate=45",
+    ]) {
+      const r = await post(q, pdf);
+      expect(r.status, q).toBe(400);
+      expect(await r.json()).toMatchObject({ code: "bad_request" });
+    }
+  });
+
+  it("answers no_such_page on the extraction routes with 422", async () => {
+    const pdf = await twoImagesPage();
+    for (const q of ["/images/list?page=2", "/images/image?page=2&n=1", "/images/region?page=2&crop=0,0,10,10&format=png"]) {
+      const r = await post(q, pdf);
+      expect(r.status, q).toBe(422);
+      expect(await r.json()).toMatchObject({ code: "no_such_page" });
+    }
+  });
+
   it("answers 404 for an unknown route", async () => {
     const r = await fetch(base + "/nothing");
     expect(r.status).toBe(404);
@@ -282,5 +378,49 @@ describe("server limits", () => {
     });
     expect(status).toBe(503);
     for (const r of await Promise.all(full)) expect(r.status).toBe(504);
+  });
+});
+
+describe("extraction pool", () => {
+  const stub = new URL("./workers/stub.mjs", import.meta.url);
+  const main = new Pool({ workers: 1, queue: 0, entry: stub });
+  const extract = new Pool({ workers: 1, queue: 0, entry: stub });
+  // A render limit far past the test's own: an extraction that times out has kept to its own limit.
+  const sidecar = createSidecar(main, { renderMs: 60_000, extractMs: 300 }, extract);
+  let url = "";
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => sidecar.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => sidecar.close(resolve));
+    await Promise.all([main.close(), extract.close()]);
+  });
+
+  it("runs extraction in a pool of its own", async () => {
+    const held = extract.reserve();
+    try {
+      for (const q of ["/images/list?page=1", "/images/image?page=1&n=1", "/images/region?page=1&crop=0,0,10,10&format=png"]) {
+        const r = await fetch(url + q, { method: "POST", body: new Uint8Array(10) });
+        expect(r.status, q).toBe(503);
+        expect(await r.json()).toMatchObject({ code: "busy" });
+      }
+      const page = await fetch(`${url}/render/page?page=1&${medium}`, { method: "POST", body: new Uint8Array(10) });
+      expect(page.status).toBe(200);
+    } finally {
+      held.release();
+    }
+  });
+
+  it("counts both pools in its connections", () => {
+    expect(sidecar.maxConnections).toBe(main.capacity + extract.capacity + 16);
+  });
+
+  it("answers 504 for an extraction past its own limit", async () => {
+    const r = await fetch(url + "/images/list?page=1", { method: "POST", body: new Uint8Array(10) });
+    expect(r.status).toBe(504);
+    expect(await r.json()).toMatchObject({ code: "timeout" });
   });
 });

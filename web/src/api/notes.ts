@@ -288,7 +288,7 @@ export function useSaveNote(path: string) {
 export function useMove() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ from, to }: { from: string; to: string }) => call(api.POST("/api/move", { body: { from, to, keepLinks: false } })),
+    mutationFn: ({ from, to }: { from: string; to: string }) => call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact: false } })),
     onSuccess: (_, { from }) => {
       const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
       for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });

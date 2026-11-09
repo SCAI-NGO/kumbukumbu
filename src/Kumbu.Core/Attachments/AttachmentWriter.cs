@@ -17,7 +17,7 @@ public sealed record WriteResult(ShellResult Result, StoredAttachment? Attachmen
 /// </summary>
 public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, TimeProvider time, ICaller caller)
 {
-    private const string Upload = "upload";
+    internal const string Upload = "upload";
 
     public ICaller Caller => caller;
 

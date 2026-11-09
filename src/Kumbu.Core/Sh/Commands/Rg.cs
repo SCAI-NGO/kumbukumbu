@@ -40,7 +40,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
         new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true), new(null, "tag", TakesValue: true),
-        new(null, "regions"),
+        new(null, "regions"), new(null, "archive"),
     ];
 
     public string Name => "rg";
@@ -55,7 +55,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           Without a path, search every vault. Prints path:line:text, sorted by path; context lines
           print as path-line-text, and '--' separates groups that are not adjacent.
           Right of a pipe, rg filters the piped lines instead and prints them without a prefix.
-          If nothing matches in the text but note names do, a hint line lists them (not when piped).
+          If nothing matches in the text but note names or archived notes do, a hint line says so (not when piped).
           PDFs below the paths are searched after the notes, in the text stored when they were uploaded,
           page by page: a match prints /Work/paper.pdf:p7: text (with -n the line within the page:
           /Work/paper.pdf:p7:12: text), context lines /Work/paper.pdf:p7- text, and context stays within
@@ -88,6 +88,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
+          --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
         never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.
@@ -118,7 +119,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             return ShellResult.Error("rg: --regions says where matches lie in PDFs; it doesn't go with -l, -c, -v, --files, --tag or --version, nor right of a pipe");
         }
 
-        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, input, ct);
+        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, options.Has("archive"), input, ct);
 
         List<string> patterns = [.. options.Values("regexp")];
         var operands = options.Operands;
@@ -177,6 +178,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, IReadOnlyList<string> tags, CancellationToken ct)
     {
         var found = new Dictionary<VaultPath, Note>();
+        var archived = new Dictionary<VaultPath, Note>();
         var documents = new Dictionary<VaultPath, AttachmentState>();
         var scope = VaultPath.Root;
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)
@@ -214,16 +216,25 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 below = [new Note(path, content)];
             }
 
-            foreach (var note in below) found.TryAdd(note.Path, note);
-            foreach (var pdf in pdfs) documents.TryAdd(pdf.Path, pdf.Current);
+            // After the checks above, so that a vault holding nothing but its archive has nothing to find, not nothing there.
+            var shown = ArchiveFolder.Shown(path, options.Has("archive"));
+            foreach (var note in below)
+            {
+                if (shown || !ArchiveFolder.Contains(note.Path)) found.TryAdd(note.Path, note);
+                else archived.TryAdd(note.Path, note);
+            }
+
+            foreach (var pdf in pdfs.Where(p => shown || !ArchiveFolder.Contains(p.Path))) documents.TryAdd(pdf.Path, pdf.Current);
         }
 
         IReadOnlyList<Note> searched = [.. found.Values];
+        IReadOnlyList<Note> hidden = [.. archived.Values.Where(n => !found.ContainsKey(n.Path))];
         if (tags.Count > 0)
         {
-            var (carrying, tagError) = TagFilter.Narrow(searched, tags, scope);
+            var (carrying, tagError) = TagFilter.Narrow(searched, tags, scope, (hidden, $"{Archived(options, operands)} searches them"));
             if (carrying is null) return ShellResult.Error($"rg: {tagError}");
             searched = carrying;
+            hidden = [.. hidden.Where(n => tags.All(t => TagFilter.Parse(t) is { } tag && TagFilter.Carries(n, tag)))];
         }
 
         var matched = new List<VaultPath>();
@@ -234,25 +245,84 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         var result = ShellResult.Ok(Lines.Join(lines));
         if (marks is not null && !options.Has("invert-match") && await marks.NoticeAsync(matched, ct) is { } written) notices.Insert(0, written);
         if (notices.Count > 0) result = result with { Notice = string.Join('\n', notices) };
-        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NoMatchHint(NameHint(search, options, searched.Select(n => n.Path)), PictureHint(pictured)) };
+        if (result.Output.Length > 0 || options.Has("invert-match")) return result;
+
+        // Only the first line says that nothing matched; the ones below it add where else to look.
+        var archivedHint = ArchivedHint(hidden, n => search.Matches(Lines.Split(n.Content), 1).Count > 0, Archived(options, operands), ct);
+        var nameHint = NameHint(search, options, searched.Select(n => n.Path), lead: archivedHint is null);
+        string?[] hints = [archivedHint, nameHint, PictureHint(pictured, lead: archivedHint is null && nameHint is null)];
+        return result with { NoMatchHint = hints.Any(h => h is not null) ? string.Join('\n', hints.OfType<string>()) : null };
     }
 
-    private static string? NoMatchHint(string? names, string? pictures) =>
-        names is not null && pictures is not null ? $"{names}\n{pictures}" : names ?? pictures;
+    /// <summary>
+    /// For a search that found nothing in the text: whether archived notes it left out would have matched, so that
+    /// nothing found isn't taken for nothing there, with <paramref name="command"/>, the search with --archive. It
+    /// counts no further than one past the paths a hint names, stops on cancellation, and is null when a match took
+    /// too long: the hint is no reason to fail the search. Archived PDFs aren't read. It runs left of a pipe too,
+    /// where the shell drops it, as a command can't tell; the notes are in memory, and the count stops early.
+    /// </summary>
+    internal static string? ArchivedHint(IReadOnlyList<Note> hidden, Func<Note, bool> matches, string command, CancellationToken ct)
+    {
+        var count = 0;
+        try
+        {
+            foreach (var note in hidden)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (matches(note) && ++count > HintedPaths) break;
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return null;
+        }
+
+        var matching = count switch
+        {
+            0 => null,
+            1 => "1 archived note matches",
+            > HintedPaths => $"more than {HintedPaths} archived notes match",
+            _ => $"{count} archived notes match",
+        };
+        return matching is null ? null : $"no match outside the archive; {matching} ({command} searches {(count == 1 ? "it" : "them")})";
+    }
+
+    /// <summary>This search as typed again with --archive: what it prints (-l, -c), how it matches, its tags, patterns
+    /// and paths.</summary>
+    private static string Archived(Options options, IReadOnlyList<string> paths)
+    {
+        var printing = string.Concat(options.Has("files-with-matches") ? "-l " : "", options.Has("count") ? "-c " : "");
+        var tags = string.Concat(options.Values("tag").Select(t => $"--tag {Quote(t)} "));
+        var where = string.Concat(paths.Select(p => " " + Quote(p)));
+        return $"rg --archive {printing}{MatchingFlags(options)}{tags}{Patterns(options)}{where}";
+    }
+
+    /// <summary>The options that change what matches, as typed again, each followed by a space.</summary>
+    private static string MatchingFlags(Options options) =>
+        string.Concat(options.Has("ignore-case") ? "-i " : "", options.Has("fixed-strings") ? "-F " : "", options.Has("word-regexp") ? "-w " : "");
+
+    /// <summary>The patterns as typed again: each -e, or the first operand.</summary>
+    private static string Patterns(Options options)
+    {
+        var explicitPatterns = options.Values("regexp");
+        return explicitPatterns.Count > 0
+            ? string.Join(' ', explicitPatterns.Select(p => $"-e {Quote(p)}"))
+            : Quote(options.Operands[0]);
+    }
 
     /// <summary>
     /// For a search that found nothing in the text: the PDFs in its scope with pages that are pictures, whose text is
     /// missing or may be wrong, and with images on pages of text, whose words no text layer holds, so that the empty
     /// answer isn't taken for proof that the words aren't there.
     /// </summary>
-    private static string? PictureHint(List<(VaultPath Path, int Scans, int WithImages)> pictured)
+    private static string? PictureHint(List<(VaultPath Path, int Scans, int WithImages)> pictured, bool lead)
     {
         if (pictured.Count == 0) return null;
 
         var sorted = pictured.OrderBy(p => p.Path.Value, TextOrder.Default).ToList();
         var shown = string.Join(", ", sorted.Take(HintedPaths).Select(p => $"{p.Path.Value} ({PictureCounts(p.Scans, p.WithImages)})"));
         var more = sorted.Count > HintedPaths ? $" and {sorted.Count - HintedPaths} more" : "";
-        return $"no match in the text, but pictures may hold it, on pages that are scans or photos, whose text is missing or may be wrong, or in images on pages with text: {shown}{more} (pdf info shows which; pdf <path> --images shows them)";
+        return $"{(lead ? "no match in the text, but pictures" : "pictures")} may hold it, on pages that are scans or photos, whose text is missing or may be wrong, or in images on pages with text: {shown}{more} (pdf info shows which; pdf <path> --images shows them)";
     }
 
     private static string PictureCounts(int scans, int withImages)
@@ -270,26 +340,24 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     /// <summary>
     /// For a search that found nothing in the text: the notes in its scope whose path matches the pattern, since a
-    /// note's title is often only its file name. Null if none does.
+    /// note's title is often only its file name. Null if none does. The command it suggests lists archived notes
+    /// too when one of them matches, as with --archive or a path inside the archive.
     /// </summary>
-    private static string? NameHint(Search search, Options options, IEnumerable<VaultPath> scope)
+    private static string? NameHint(Search search, Options options, IEnumerable<VaultPath> scope, bool lead)
     {
-        var names = scope.Select(p => p.Value).Where(search.IsMatch).Order(TextOrder.Default).ToList();
-        if (names.Count == 0) return null;
+        var paths = scope.Where(p => search.IsMatch(p.Value)).ToList();
+        if (paths.Count == 0) return null;
 
+        var names = paths.Select(p => p.Value).Order(TextOrder.Default).ToList();
         var shown = string.Join(", ", names.Take(HintedPaths));
         var more = names.Count > HintedPaths ? $" and {names.Count - HintedPaths} more" : "";
-        var flags = string.Concat(options.Has("ignore-case") ? "-i " : "", options.Has("fixed-strings") ? "-F " : "", options.Has("word-regexp") ? "-w " : "");
-        var explicitPatterns = options.Values("regexp");
-        var patterns = explicitPatterns.Count > 0
-            ? string.Join(' ', explicitPatterns.Select(p => $"-e {Quote(p)}"))
-            : Quote(options.Operands[0]);
-        var command = $"rg --files | rg {flags}{patterns}";
-        return $"no match in the text; {names.Count} note name{(names.Count == 1 ? "" : "s")} match{(names.Count == 1 ? "es" : "")}: {shown}{more} ({command} lists them)";
+        var files = paths.Any(ArchiveFolder.Contains) ? "rg --files --archive" : "rg --files";
+        var command = $"{files} | rg {MatchingFlags(options)}{Patterns(options)}";
+        return $"{(lead ? "no match in the text; " : "")}{names.Count} note name{(names.Count == 1 ? "" : "s")} match{(names.Count == 1 ? "es" : "")}: {shown}{more} ({command} lists them)";
     }
 
-    /// <summary>The pattern as the shell reads it back: bare if it is plain, else quoted.</summary>
-    private static string Quote(string pattern)
+    /// <summary>A pattern or path as the shell reads it back: bare if it is plain, else quoted.</summary>
+    internal static string Quote(string pattern)
     {
         if (pattern.Length > 0 && pattern.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/')) return pattern;
         return pattern.Contains('\'') ? $"\"{pattern}\"" : $"'{pattern}'";
@@ -572,7 +640,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             lineNumbers ? $"{n}{sep}{text}" : text)));
     }
 
-    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, string? input, CancellationToken ct)
+    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, bool archive, string? input, CancellationToken ct)
     {
         if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
         if (tags.Count > 0)
@@ -580,9 +648,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");
             var scope = VaultPath.Root;
             if (operands.Count == 1 && !CommandArgs.TryParsePath(Name, operands[0], out scope, out var scopeError)) return scopeError!;
-            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, ct);
+            var (all, archived, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, archive, ct);
             if (all is null) return readError!;
-            var (carrying, tagError) = TagFilter.Narrow(all, tags, scope);
+            var listing = string.Concat(tags.Select(t => $" --tag {Quote(t)}")) + string.Concat(operands.Select(p => " " + Quote(p)));
+            var (carrying, tagError) = TagFilter.Narrow(all, tags, scope, (archived, $"rg --files --archive{listing} lists them"));
             return carrying is null
                 ? ShellResult.Error($"rg: {tagError}")
                 : ShellResult.Ok(Lines.Join(carrying.Select(n => n.Path.Value).Order(TextOrder.Default)));
@@ -600,7 +669,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 else if (!await HasNothingToSearchAsync(path, ct)) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
             }
 
-            found.UnionWith(below.Select(p => p.Value));
+            var shown = ArchiveFolder.Shown(path, archive);
+            found.UnionWith(below.Where(p => shown || !ArchiveFolder.Contains(p)).Select(p => p.Value));
         }
 
         return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));

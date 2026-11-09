@@ -3089,6 +3089,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vaults/{vault}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    vault: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ArchiveView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/embeddings": {
         parameters: {
             query?: never;
@@ -3682,6 +3755,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folders/trash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TrashFolderRequest"];
+                };
+            };
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/links/{vault}/{path}": {
         parameters: {
             query?: never;
@@ -3919,6 +4083,7 @@ export interface paths {
                     path?: string;
                     n?: number | string;
                     tag?: string[];
+                    archive?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -11112,6 +11277,11 @@ export interface components {
             used: number | string;
             /** Format: int64 */
             limit: null | number | string;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            archive: number | string;
         };
         ActivityFileView: {
             path: string;
@@ -11209,6 +11379,29 @@ export interface components {
             kind: string;
             publish: string[];
             instructions?: string;
+        };
+        ArchiveItem: {
+            path: string;
+            name: string;
+            originalPath: string;
+            /** Format: date-time */
+            archivedAt: null | string;
+            folder: boolean;
+            /** Format: int32 */
+            files: number | string;
+            /** Format: int64 */
+            bytes: number | string;
+            kind: string;
+        };
+        ArchiveSummary: {
+            /** Format: int32 */
+            files: number | string;
+            /** Format: int64 */
+            bytes: number | string;
+        };
+        ArchiveView: {
+            items: components["schemas"]["ArchiveItem"][];
+            canWrite: boolean;
         };
         BacklinkView: {
             path: string;
@@ -11732,6 +11925,8 @@ export interface components {
             to: string;
             /** @default false */
             keepLinks: boolean;
+            /** @default false */
+            exact: boolean;
         };
         NoteVersionView: {
             path: string;
@@ -12130,6 +12325,9 @@ export interface components {
             /** @default text/markdown */
             mediaType: string;
         };
+        TrashFolderRequest: {
+            path: string;
+        };
         TrashView: {
             /** Format: int32 */
             retentionDays: number | string;
@@ -12158,6 +12356,7 @@ export interface components {
             root: components["schemas"]["TreeFolder"];
             /** Format: int32 */
             damaged: number | string;
+            archive?: null | components["schemas"]["ArchiveSummary"];
         };
         UpdateCardRequest: {
             card: string;
