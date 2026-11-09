@@ -64,6 +64,44 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
         Assert.DoesNotContain("x.pdf", words.Text);
     }
 
+    /// <summary>A page of about 9,000 characters in numbered lines, paragraphs of four, ending with <paramref name="last"/>.</summary>
+    private static string DensePage(string last)
+    {
+        var page = new StringBuilder();
+        for (var i = 1; page.Length < 9_000; i++)
+        {
+            page.Append($"{i}. Die Kreiselpumpe fördert Kühlwasser in den Wärmetauscher; Messwert {i * 37 % 1000},{i % 10} bar bei {1450 + i} 1/min.\n");
+            if (i % 4 == 0) page.Append('\n');
+        }
+
+        return page.Append(last).Append('\n').ToString();
+    }
+
+    [Fact]
+    public async Task A_dense_PDF_page_is_embedded_in_parts()
+    {
+        const string last = "Capybaras bathe in hot springs.";
+        var sidecar = new FakePdfSidecar { Analysis = _ => FakePdfSidecar.Canned(2, n => n == 1 ? DensePage(last) : "filler page of plain words") };
+        await using var host = Host(app, sidecar);
+        var (user, vault, key) = await UploadAsync(host, "dense.pdf", "a dense page");
+        var path = P($"/{user.Vault}/dense.pdf");
+
+        var chunks = Current(host, vault).Embeddings[path].Chunks;
+        var (_, output) = await user.ShAsync($"semsearch -n 1 capybaras bathe hot springs /{user.Vault}", key);
+
+        var first = chunks.Where(c => c.StartLine == 1).ToList();
+        Assert.True(first.Count >= 3, $"{first.Count} parts");
+        Assert.Equal(Enumerable.Range(0, first.Count), first.Select(c => c.Part));
+        Assert.Equal([(2, 0)], chunks.Where(c => c.StartLine != 1).Select(c => (c.StartLine, c.Part)));
+        // Only the page's last part holds its last line, and the search finds it on page 1.
+        string[] embedded;
+        lock (app.Embedder.Seen) embedded = [.. app.Embedder.Seen.Where(t => !t.Query && t.Text.Contains("Capybaras", StringComparison.Ordinal)).Select(t => t.Text)];
+        var text = Assert.Single(embedded);
+        Assert.StartsWith("dense > p1\n", text);
+        Assert.EndsWith("\n" + last, text);
+        Assert.StartsWith($"1. {path.Value} p1  score ", output);
+    }
+
     [Fact]
     public async Task A_trashed_pdf_loses_its_embeddings()
     {

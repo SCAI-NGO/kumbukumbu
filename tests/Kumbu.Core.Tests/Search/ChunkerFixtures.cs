@@ -74,6 +74,18 @@ public static class ChunkerFixtures
     /// <summary>A line of 10,000 characters without a space.</summary>
     public static readonly string NoSpaces = "# Dump\n" + Convert.ToHexStringLower(Bytes(5_000)) + "\n";
 
+    /// <summary>A dense page of a PDF, about 9,000 characters: numbered lines of German prose and measurements,
+    /// paragraphs of four lines.</summary>
+    public static readonly string DensePage = Build(text =>
+    {
+        var sentences = DenseFixtures.GermanProse.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = 0; text.Length < 9_000; i++)
+        {
+            text.Append($"{i + 1}. {sentences[i % sentences.Length]} Messwert {i * 37 % 1000},{i % 10} bar bei {1450 + i} 1/min.\n");
+            if (i % 4 == 3) text.Append('\n');
+        }
+    });
+
     /// <summary>Headings six levels deep, each of 80 words.</summary>
     public static readonly string DeepHeadings = Build(text =>
     {

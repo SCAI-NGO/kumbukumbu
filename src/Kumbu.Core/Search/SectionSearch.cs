@@ -26,6 +26,9 @@ public sealed record SectionHit(Chunk Chunk, double? Score)
     /// <summary>For a page of a PDF: its number. <see cref="Chunk"/> then holds the PDF's path and no text (the
     /// index has only the page's vector; its text is read for the output).</summary>
     public int? Page { get; init; }
+
+    /// <summary>With <see cref="Page"/>: the part of the page's best-ranking chunk (<see cref="PageChunk.Part"/>).</summary>
+    public int? PagePart { get; init; }
 }
 
 /// <param name="Semantic">The search by meaning, or null for <see cref="SearchMode.Words"/>.</param>
@@ -64,7 +67,7 @@ public static class SectionSearch
         SemanticResult? semantic = null;
         var fellBack = false;
         List<(Chunk Chunk, double? Score)> ranked;
-        var pageChunks = new Dictionary<Chunk, int>(ReferenceEqualityComparer.Instance);
+        var pageChunks = new Dictionary<Chunk, (int Page, int Part)>(ReferenceEqualityComparer.Instance);
         if (mode == SearchMode.Words) ranked = RankByWords(chunks, query);
         else
         {
@@ -98,7 +101,9 @@ public static class SectionSearch
 
         // Headings with nothing below them say little; they still rank, but the next section takes their place.
         var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max)
-            .Select(r => new SectionHit(r.Chunk, r.Score) { Page = pageChunks.TryGetValue(r.Chunk, out var page) ? page : null }).ToList();
+            .Select(r => pageChunks.TryGetValue(r.Chunk, out var page)
+                ? new SectionHit(r.Chunk, r.Score) { Page = page.Page, PagePart = page.Part }
+                : new SectionHit(r.Chunk, r.Score)).ToList();
         return new SectionSearchResult(listed, semantic, fellBack);
     }
 
@@ -184,20 +189,22 @@ public static class SectionSearch
             .Select(r => (r.Chunk, (double?)r.Score))];
     }
 
-    /// <summary>The pages of PDFs among the hits, best cosine per page, merged into <paramref name="ranked"/> by score;
-    /// a section goes first on a tie. Those in a vault's archive only if <paramref name="archived"/>.</summary>
-    private static List<(Chunk, double?)> WithPages(List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, int> pageChunks, bool archived)
+    /// <summary>The pages of PDFs among the hits, one per page with the cosine and part of its best chunk, merged
+    /// into <paramref name="ranked"/> by score; a section goes first on a tie, and of a page's parts on a tie, the
+    /// first hit. Those in a vault's archive only if <paramref name="archived"/>.</summary>
+    private static List<(Chunk, double?)> WithPages(
+        List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, (int Page, int Part)> pageChunks, bool archived)
     {
-        var best = new Dictionary<(VaultPath, int), double>();
+        var best = new Dictionary<(VaultPath, int), (double Score, int Part)>();
         foreach (var hit in semantic.Hits)
         {
             if (!AttachmentFormat.IsPdf(hit.Path) || (!archived && ArchiveFolder.Contains(hit.Path))) continue;
-            best[(hit.Path, hit.StartLine)] = Math.Max(best.GetValueOrDefault((hit.Path, hit.StartLine), double.MinValue), hit.Score);
+            if (!best.TryGetValue((hit.Path, hit.StartLine), out var known) || hit.Score > known.Score) best[(hit.Path, hit.StartLine)] = (hit.Score, hit.Part);
         }
 
         if (best.Count == 0) return ranked;
-        foreach (var ((path, page), _) in best) pageChunks[new Chunk(path, "", page, page, "", "")] = page;
-        var found = pageChunks.Select(p => (Chunk: p.Key, Score: (double?)best[(p.Key.Path, p.Value)]))
+        foreach (var ((path, page), (_, part)) in best) pageChunks[new Chunk(path, "", page, page, "", "")] = (page, part);
+        var found = pageChunks.Select(p => (Chunk: p.Key, Score: (double?)best[(p.Key.Path, p.Value.Page)].Score))
             .OrderBy(p => p.Chunk.Path.Value, TextOrder.Default).ThenBy(p => p.Chunk.StartLine);
         return [.. ranked.Select(r => (r.Chunk, r.Score, List: 0)).Concat(found.Select(p => (p.Chunk, p.Score, List: 1)))
             .OrderByDescending(r => r.Score).ThenBy(r => r.List).Select(r => (r.Chunk, r.Score))];

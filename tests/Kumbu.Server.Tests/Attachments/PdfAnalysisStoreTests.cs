@@ -304,14 +304,16 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task The_text_for_search_is_cut_per_page_and_never_inside_a_surrogate_pair()
+    public async Task The_text_for_search_holds_every_page_whole()
     {
         var w = await WorldAsync();
-        var long1 = new string('a', 1999) + "😀" + new string('b', 300_000);
+        // Longer than a text part holds: the page is in two parts.
+        var long1 = new string('a', 1999) + "😀" + new string('b', 1_500_000);
         Assert.NotNull(await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(3, n => n switch { 1 => long1, 2 => "short page", _ => "" }), Ct));
+        Assert.True(await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct) > 2);
 
-        var texts = await w.Analyses.SearchTextAsync(w.Vault, w.BlobId, 2000, Ct);
+        var texts = await w.Analyses.SearchTextAsync(w.Vault, w.BlobId, Ct);
 
-        Assert.Equal([new string('a', 1999), "short page", ""], texts);
+        Assert.Equal([long1, "short page", ""], texts);
     }
 }

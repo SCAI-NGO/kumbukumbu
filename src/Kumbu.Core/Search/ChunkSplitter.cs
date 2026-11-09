@@ -113,8 +113,6 @@ internal sealed class ChunkSplitter
         return sum;
     }
 
-    private bool Within(int context, int cost, int words) => words <= MaxWords && context + cost <= _bound.Budget;
-
     /// <summary>
     /// Whether the lines [start, end), after the header rows at <paramref name="header"/> if not -1, fit with the context:
     /// within <see cref="Chunker.MaxWords"/> and the budget. A candidate whose <see cref="ChunkBound.Ceiling"/> fits
@@ -207,7 +205,7 @@ internal sealed class ChunkSplitter
             sum += next;
         }
 
-        var text = kept.Count > 0 ? string.Join(' ', kept) : context[..Prefix(context, limit, "")];
+        var text = kept.Count > 0 ? string.Join(' ', kept) : context[..Prefix(_bound, context, limit, "")];
         return (text, _bound.Cost(text));
     }
 
@@ -350,29 +348,41 @@ internal sealed class ChunkSplitter
         return text.ToString();
     }
 
-    /// <summary>A line too long for a chunk: pieces of whole words, as many as fit; a run without spaces that doesn't
-    /// fit alone is cut at the longest prefix that does.</summary>
+    /// <summary>A line too long for a chunk: its <see cref="Pieces"/>, each a chunk of its own.</summary>
     private void SplitLine(int line)
     {
         Close();
         var part = 0;
+        foreach (var piece in Pieces(_lines[line], _context, _bound))
+        {
+            _chunks.Add(new Chunk(_note.Path, _address, line, line + 1, piece, _context.Text) { Part = part++ });
+        }
+    }
+
+    private static bool Within(ChunkBound bound, int context, int cost, int words) => words <= MaxWords && context + cost <= bound.Budget;
+
+    /// <summary>A line too long for a chunk with <paramref name="context"/>: pieces of whole words, as many as fit;
+    /// a run without spaces that doesn't fit alone is cut at the longest prefix that does.</summary>
+    internal static List<string> Pieces(string line, (string Text, int Cost) context, ChunkBound bound)
+    {
+        var pieces = new List<string>();
         var piece = new List<string>();
         var (cost, words) = (0, 0);
-        foreach (var word in _lines[line].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var word in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
-            var (wordCost, wordWords) = (_bound.Cost(word), Words(word));
-            if (piece.Count > 0 && !Within(_context.Cost, cost + wordCost, words + wordWords)) Piece();
-            if (piece.Count == 0 && !Within(_context.Cost, wordCost, wordWords))
+            var (wordCost, wordWords) = (bound.Cost(word), Words(word));
+            if (piece.Count > 0 && !Within(bound, context.Cost, cost + wordCost, words + wordWords)) Piece();
+            if (piece.Count == 0 && !Within(bound, context.Cost, wordCost, wordWords))
             {
                 var rest = word;
-                while (!Within(_context.Cost, _bound.Cost(rest), Words(rest)))
+                while (!Within(bound, context.Cost, bound.Cost(rest), Words(rest)))
                 {
-                    var length = Prefix(rest, _bound.Budget - _context.Cost, _context.Text + "\n");
-                    Add(rest[..length]);
+                    var length = Prefix(bound, rest, bound.Budget - context.Cost, context.Text + "\n");
+                    pieces.Add(rest[..length]);
                     rest = rest[length..];
                 }
 
-                if (rest.Length > 0) (piece, cost, words) = ([rest], _bound.Cost(rest), Words(rest));
+                if (rest.Length > 0) (piece, cost, words) = ([rest], bound.Cost(rest), Words(rest));
                 continue;
             }
 
@@ -382,14 +392,13 @@ internal sealed class ChunkSplitter
         }
 
         if (piece.Count > 0) Piece();
+        return pieces;
 
         void Piece()
         {
-            Add(string.Join(' ', piece));
+            pieces.Add(string.Join(' ', piece));
             (piece, cost, words) = ([], 0, 0);
         }
-
-        void Add(string text) => _chunks.Add(new Chunk(_note.Path, _address, line, line + 1, text, _context.Text) { Part = part++ });
     }
 
     /// <summary>
@@ -399,18 +408,18 @@ internal sealed class ChunkSplitter
     /// strictly monotonic, so the prefix is shortened while <paramref name="lead"/> and it don't fit. At least one
     /// character (or surrogate pair).
     /// </summary>
-    private int Prefix(string text, int room, string lead)
+    private static int Prefix(ChunkBound bound, string text, int room, string lead)
     {
         var (low, high) = (1, text.Length);
         while (low < high)
         {
             var middle = low + (high - low + 1) / 2;
-            if (_bound.Cost(text[..middle]) <= room && Words(text[..middle]) <= MaxWords) low = middle;
+            if (bound.Cost(text[..middle]) <= room && Words(text[..middle]) <= MaxWords) low = middle;
             else high = middle - 1;
         }
 
         var length = low;
-        while (length > 1 && (char.IsHighSurrogate(text[length - 1]) || !_bound.Fits(lead + text[..length]))) length--;
+        while (length > 1 && (char.IsHighSurrogate(text[length - 1]) || !bound.Fits(lead + text[..length]))) length--;
         if (char.IsHighSurrogate(text[length - 1]) && length < text.Length) length++;
         return length;
     }

@@ -55,6 +55,19 @@ public class SearchTests
     }
 
     [Fact]
+    public async Task One_hit_per_PDF_page_with_its_best_part()
+    {
+        var pdf = P("/Work/manual.pdf");
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready,
+            [new(pdf, 3, 0.4), new(pdf, 3, 0.7) { Part = 2 }, new(pdf, 3, 0.5) { Part = 1 }, new(pdf, 5, 0.6)], 0));
+
+        var result = await SectionSearch.RankAsync([], VaultPath.Root, "seal", SearchMode.Meaning, 10, index, CancellationToken.None, pages: true);
+
+        Assert.Equal([(3, 2, 0.7), (5, 0, 0.6)], result.Hits.Select(h => (h.Page!.Value, h.PagePart!.Value, Math.Round(h.Score!.Value, 2))));
+        Assert.All(result.Hits, h => Assert.Equal(pdf, h.Chunk.Path));
+    }
+
+    [Fact]
     public async Task Stale_notes_are_ranked_by_words_meanwhile()
     {
         // farm.md is being chunked anew: no cosines of its own, but its words still find it, fused by rank.

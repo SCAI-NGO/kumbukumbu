@@ -22,8 +22,9 @@ namespace Kumbu.Server.Search;
 /// A vault catches up when it is unlocked, so nothing written while it was locked, or before a restart, is missed.
 /// Each vault is embedded by its own provider (<see cref="UnlockedVault.EmbeddingProvider"/>): the internal model,
 /// or an external one its owner opted in to or the instance's default.
-/// A PDF's pages are embedded under its path as a note's sections are, one chunk per page with text
-/// (<see cref="EmbeddedChunk.StartLine"/> = the page number), from its stored analysis, once that is there.
+/// A PDF's pages are embedded under its path as a note's sections are, each page with text in chunks
+/// (<see cref="EmbeddedChunk.StartLine"/> = the page number, <see cref="EmbeddedChunk.Part"/> = the chunk's on the
+/// page), from its stored analysis, once that is there.
 /// Embeddings remember the chunking's scheme (<see cref="ChunkBound.Scheme"/>): those of another are chunked anew,
 /// and only texts that changed are embedded again.
 /// </summary>
@@ -270,16 +271,16 @@ public sealed class SearchIndex : BackgroundService
     }
 
     /// <summary>
-    /// A PDF's pages with text, each a chunk: its file name and page number as context, then the page's text, cut
-    /// where a note's chunk ends (about what the model reads). Read again whenever the PDF is queued, so a new analysis
-    /// of the same version is seen; nothing is embedded if the pages are as before. A PDF whose analysis failed, or
-    /// that has no text (a scan), gets embeddings without chunks: it counts as indexed. Without an analysis yet, the
-    /// pages of an older version go: their text is no longer what the PDF holds.
+    /// A PDF's pages with text, each split into chunks within the bound (<see cref="Chunker.SplitPage"/>): its file
+    /// name and page number as context, then a part of the page's text, none of it cut off. Read again whenever the
+    /// PDF is queued, so a new analysis of the same version is seen; nothing is embedded if the pages are as before.
+    /// A PDF whose analysis failed, or that has no text (a scan), gets embeddings without chunks: it counts as indexed.
+    /// Without an analysis yet, the pages of an older version go: their text is no longer what the PDF holds.
     /// </summary>
     private async Task IndexPdfAsync(UnlockedVault vault, VaultPath path, FilterDefinition<SealedDocument> filter, EmbeddingProvider configured, AttachmentState state, CancellationToken ct)
     {
         if (!EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId)) return;
-        var texts = await _analyses!.SearchTextAsync(vault, blobId, Chunker.MaxChars, ct);
+        var texts = await _analyses!.SearchTextAsync(vault, blobId, ct);
         if (texts is null)
         {
             if (vault.Embeddings.GetValueOrDefault(path) is { } older && older.Version != state.Version && MayIndex(vault, path)) await RemoveAsync(vault, path, filter, ct);
@@ -287,8 +288,9 @@ public sealed class SearchIndex : BackgroundService
         }
 
         var title = path.Name[..^".pdf".Length];
+        var bound = Bound;
         await EmbedAsync(vault, path, filter, configured, state.Version,
-            [.. texts.Select((text, i) => (Page: i + 1, Text: text)).Where(p => !string.IsNullOrWhiteSpace(p.Text)).Select(p => (p.Page, 0, $"{title} > p{p.Page}\n{p.Text}"))],
+            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText(title, i + 1))))],
             ct);
     }
 

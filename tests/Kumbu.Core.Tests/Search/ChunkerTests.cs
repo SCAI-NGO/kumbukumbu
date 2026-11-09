@@ -497,6 +497,89 @@ public partial class ChunkerTests
         AssertEveryLineInOneCore(content, chunks);
     }
 
+    // ---- Pages of PDFs ----
+
+    private static string Collapsed(string text) => Spaces().Replace(text, " ").Trim();
+
+    [Theory]
+    [InlineData("fallback", true)]
+    [InlineData("fallback", false)]
+    [InlineData("tokenizer", true)]
+    [InlineData("tokenizer", false)]
+    public void A_dense_page_yields_several_chunks_covering_its_text(string name, bool lineBreaks)
+    {
+        var bound = Bound(name);
+        var page = lineBreaks ? ChunkerFixtures.DensePage : Collapsed(ChunkerFixtures.DensePage);
+        Assert.True(page.Length >= 9_000);
+
+        var chunks = Chunker.SplitPage("Manual", 4, page, bound);
+
+        Assert.True(chunks.Count >= 3, $"{chunks.Count} chunks");
+        Assert.Equal(Enumerable.Range(0, chunks.Count), chunks.Select(c => c.Part));
+        Assert.Equal(Collapsed(page), Collapsed(string.Join(' ', chunks.Select(c => c.Core))));
+        Assert.All(chunks, c => Assert.StartsWith("Manual > p4\n", c.EmbeddingText("Manual", 4)));
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText("Manual", 4)), $"{c.EmbeddingText("Manual", 4).Length} characters"));
+        Assert.All(chunks, c => Assert.True(Chunker.Words(c.Core) <= Chunker.MaxWords));
+        Assert.All(chunks, c => Assert.Equal(c.Core.Trim('\n'), c.Core));
+    }
+
+    [Fact]
+    public void A_dense_page_is_cut_at_paragraphs_where_it_can()
+    {
+        var chunks = Chunker.SplitPage("Manual", 1, ChunkerFixtures.DensePage, ChunkBound.Unbounded);
+        var paragraphs = ChunkerFixtures.DensePage.Split("\n\n", StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToHashSet();
+
+        Assert.True(chunks.Count >= 3, $"{chunks.Count} chunks");
+        Assert.All(chunks, c => Assert.All(c.Core.Split("\n\n"), p => Assert.Contains(p, paragraphs)));
+    }
+
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("unbounded")]
+    [InlineData("tokenizer")]
+    public void Rolls_stay_within_the_page(string name)
+    {
+        var page = ChunkerFixtures.DensePage;
+        var chunks = Chunker.SplitPage("Manual", 4, page, Bound(name));
+
+        Assert.True(chunks.Count >= 3, $"{chunks.Count} chunks");
+        Assert.Equal("", chunks[0].PreRoll);
+        Assert.Equal("", chunks[^1].PostRoll);
+        foreach (var chunk in chunks.Skip(1).SkipLast(1))
+        {
+            Assert.NotEqual("", chunk.PreRoll);
+            Assert.NotEqual("", chunk.PostRoll);
+            foreach (var roll in new[] { chunk.PreRoll, chunk.PostRoll })
+            {
+                Assert.True(Chunker.Words(roll) <= Chunker.RollWords, $"{Chunker.Words(roll)} words");
+                Assert.True(roll.Length <= 1_000, $"{roll.Length} characters");
+                Assert.Equal(roll.Trim('\n'), roll);
+            }
+
+            // The rolls are the lines right before and after the core, none of its own: the lines are numbered, so
+            // a line in both would be there twice.
+            Assert.Contains(Collapsed(chunk.PreRoll + "\n" + chunk.Core + "\n" + chunk.PostRoll), Collapsed(page));
+        }
+
+        // The rolls hold whole lines.
+        var lines = Lines.Split(page).ToHashSet();
+        Assert.All(chunks, c => Assert.All(c.PreRoll.Split('\n').Concat(c.PostRoll.Split('\n')).Where(l => l.Length > 0), l => Assert.Contains(l, lines)));
+    }
+
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("unbounded")]
+    [InlineData("tokenizer")]
+    public void A_short_page_is_one_chunk(string name)
+    {
+        var chunks = Chunker.SplitPage("Report", 2, "\n  \nFindings\nzebras migrate across the savannah\n\n", Bound(name));
+
+        var chunk = Assert.Single(chunks);
+        Assert.Equal(new PageChunk(0, "Findings\nzebras migrate across the savannah", "", ""), chunk);
+        Assert.Equal("Report > p2\nFindings\nzebras migrate across the savannah", chunk.EmbeddingText("Report", 2));
+        Assert.Empty(Chunker.SplitPage("Report", 3, " \n\t\n", Bound(name)));
+    }
+
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
 }

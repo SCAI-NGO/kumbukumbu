@@ -158,19 +158,18 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     }
 
     /// <summary>
-    /// The text of every page analysed (index 0 = page 1), each cut after <paramref name="maxChars"/>, for the search
-    /// index: the parts are read one at a time, so a long PDF never has all its text in memory. Read at one point in
-    /// time with part 0, as <see cref="TextAsync"/>. An empty list for a failed analysis (there is no text to search);
+    /// The whole text of every page analysed (index 0 = page 1), for the search index, which splits each page into
+    /// chunks: all of it is held, but the parts are read one at a time. Read at one point in time with part 0, as
+    /// <see cref="TextAsync"/>. An empty list for a failed analysis (there is no text to search);
     /// null without an analysis, or if a part is missing or doesn't open.
     /// </summary>
-    public async Task<IReadOnlyList<string>?> SearchTextAsync(UnlockedVault vault, byte[] blobId, int maxChars, CancellationToken ct)
+    public async Task<IReadOnlyList<string>?> SearchTextAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
     {
         using var session = await catalog.StartSnapshotSessionAsync(ct);
         if (await ReadHeaderAsync(vault, blobId, session, ct) is not { } header) return null;
         if (header.Failure is not null || header.AnalysedPages == 0) return [];
 
         var pages = Enumerable.Range(0, header.AnalysedPages).Select(_ => new StringBuilder()).ToArray();
-        var cut = new bool[pages.Length];
         var wanted = header.Parts.Select(p => p.Part).ToList();
         var read = 0;
         using var cursor = await catalog.PdfParts.Find(session, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted), new FindOptions { BatchSize = 1 })
@@ -192,20 +191,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
                     return null;
                 }
 
-                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length))
-                {
-                    if (cut[s.Page - 1]) continue;
-                    var page = pages[s.Page - 1];
-                    var length = Math.Min(s.Text.Length, maxChars - page.Length);
-                    if (length < s.Text.Length)
-                    {
-                        // Cut, and not between the halves of a surrogate pair; what follows on the page isn't taken.
-                        if (length > 0 && char.IsHighSurrogate(s.Text[length - 1])) length--;
-                        cut[s.Page - 1] = true;
-                    }
-
-                    page.Append(s.Text.AsSpan(0, length));
-                }
+                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length)) pages[s.Page - 1].Append(s.Text);
             }
         }
 

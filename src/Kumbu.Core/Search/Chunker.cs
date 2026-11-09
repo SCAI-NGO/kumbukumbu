@@ -30,6 +30,21 @@ public sealed record Chunk(VaultPath Path, string Address, int StartLine, int En
 }
 
 /// <summary>
+/// A piece of a PDF's page that search ranks (spec 2026-11-09-structural-chunking §3.6): whole lines of the page, or
+/// a piece of a line too long for a chunk.
+/// </summary>
+/// <param name="Part">0, 1, … in order on the page.</param>
+/// <param name="Core">What is embedded, after the context; blank lines trimmed at both ends.</param>
+/// <param name="PreRoll">The whole lines before the core on the page, up to <see cref="Chunker.RollWords"/> words and
+/// <see cref="Chunker.RollChars"/> characters: context for showing a hit, never embedded. "" at the start of the page.</param>
+/// <param name="PostRoll">Likewise the lines after the core; "" at the end of the page.</param>
+public sealed record PageChunk(int Part, string Core, string PreRoll, string PostRoll)
+{
+    /// <summary>What gets embedded: the PDF's name and the page number, then the core.</summary>
+    public string EmbeddingText(string pdfTitle, int page) => Chunker.PageContext(pdfTitle, page) + "\n" + Core;
+}
+
+/// <summary>
 /// Chunks a note by its Markdown structure (spec 2026-11-09-structural-chunking): sections, merged under their parent
 /// while short, and split into whole blocks while long; tables between rows, with their header in every part.
 /// Length is counted in <see cref="Words"/>, and the <see cref="ChunkBound"/> is a ceiling on every embedding text.
@@ -50,6 +65,9 @@ public static class Chunker
 
     /// <summary>A chunk under this many words merges beyond <see cref="TargetWords"/> where the structure allows.</summary>
     public const int MinWords = 40;
+
+    /// <summary>A roll of a page's chunk holds at most this many characters on each side.</summary>
+    public const int RollChars = 1_000;
 
     /// <summary>About 512 tokens (concept §6); a token is roughly 4 characters of prose. <see cref="Sections"/>' limit.</summary>
     public const int MaxChars = 2000;
@@ -73,6 +91,69 @@ public static class Chunker
         var chunks = new ChunkSplitter(note, bound).Run();
         Splits.AddOrUpdate(note.Content, new Splitting(note.Path, bound.Id, [.. chunks]));
         return chunks;
+    }
+
+    internal static string PageContext(string pdfTitle, int page) => $"{pdfTitle} > p{page}";
+
+    /// <summary>
+    /// A page of a PDF in chunks, in order; none if it has no text. A page has no Markdown structure: its lines are
+    /// packed greedily within <see cref="MaxWords"/> and the bound, and a chunk that would take the next line ends at
+    /// the last blank line in its second half, else at that line. A line that doesn't fit alone is split into pieces.
+    /// </summary>
+    public static IReadOnlyList<PageChunk> SplitPage(string pdfTitle, int page, string text, ChunkBound bound)
+    {
+        var lines = Lines.Split(text);
+        var context = PageContext(pdfTitle, page);
+        var contextCost = bound.Cost(context);
+        var words = lines.Select(Words).ToArray();
+        var costs = lines.Select(bound.Cost).ToArray();
+        var cores = new List<(int Start, int End, string Text)>();
+        for (var start = 0; start < lines.Count;)
+        {
+            if (string.IsNullOrWhiteSpace(lines[start]))
+            {
+                start++;
+                continue;
+            }
+
+            var (end, cost, count) = (start, contextCost, 0);
+            while (end < lines.Count && count + words[end] <= MaxWords && cost + costs[end] <= bound.Budget) (cost, count, end) = (cost + costs[end], count + words[end], end + 1);
+            if (end == start)
+            {
+                foreach (var piece in ChunkSplitter.Pieces(lines[start], (context, contextCost), bound)) cores.Add((start, start + 1, piece));
+                start++;
+                continue;
+            }
+
+            if (end < lines.Count)
+            {
+                var blank = end - 1;
+                while (blank > start && !string.IsNullOrWhiteSpace(lines[blank])) blank--;
+                if (blank > start && 2 * words[start..blank].Sum() >= count) end = blank;
+            }
+
+            while (string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+            cores.Add((start, end, string.Join('\n', lines.Skip(start).Take(end - start))));
+            start = end;
+        }
+
+        return [.. cores.Select((c, i) => new PageChunk(i, c.Text, Roll(c.Start - 1, -1), Roll(c.End, 1)))];
+
+        // Whole lines from the one at `from` on in `step`'s direction, while they stay within the roll's budget.
+        string Roll(int from, int step)
+        {
+            var (count, chars, taken) = (0, -1, 0);
+            for (var i = from; i >= 0 && i < lines.Count; i += step)
+            {
+                if (count + words[i] > RollWords || chars + 1 + lines[i].Length > RollChars) break;
+                (count, chars, taken) = (count + words[i], chars + 1 + lines[i].Length, taken + 1);
+            }
+
+            var (first, end) = step > 0 ? (from, from + taken) : (from - taken + 1, from + 1);
+            while (first < end && string.IsNullOrWhiteSpace(lines[first])) first++;
+            while (end > first && string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+            return string.Join('\n', lines.Skip(first).Take(end - first));
+        }
     }
 
     /// <summary>Runs of Unicode letters and digits (with their combining marks): markup and punctuation weigh nothing.</summary>
