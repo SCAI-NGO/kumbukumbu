@@ -26,7 +26,9 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
     /// <summary>The answer to every PIN that doesn't reveal, whether or not she has a PIN or discreet vaults.</summary>
     public const string NoneSentence = "You have no discreet vaults.";
 
-    private const string PinSentence = "A PIN has 4 to 6 digits.";
+    /// <summary>The refusal of a PIN that doesn't have 4 to 6 digits.</summary>
+    public const string PinSentence = "A PIN has 4 to 6 digits.";
+
     private const string ListLabel = "kumbu/v1/discreet-vaults";
     private const int Attempts = 3;
 
@@ -42,18 +44,27 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
     /// <summary>Exactly 4 to 6 ASCII digits.</summary>
     public static bool IsPin(string? pin) => pin is not null && PinPattern().IsMatch(pin);
 
+    /// <inheritdoc cref="OpenList(string, byte[], byte[], out string)"/>
+    internal static IReadOnlySet<string>? OpenList(string userId, byte[] userKey, byte[]? sealedList) =>
+        OpenList(userId, userKey, sealedList, out _);
+
     /// <summary>The ids in <paramref name="sealedList"/>: none for no list, null when it doesn't open or doesn't parse
-    /// (only tampering with the database can cause it; the caller then counts every vault as discreet).</summary>
-    internal static IReadOnlySet<string>? OpenList(string userId, byte[] userKey, byte[]? sealedList)
+    /// (only tampering with the database can cause it; the caller then counts every vault but the vault Skills as
+    /// discreet). <paramref name="failure"/> is then the exception's type name, for the log; null otherwise.</summary>
+    internal static IReadOnlySet<string>? OpenList(string userId, byte[] userKey, byte[]? sealedList, out string? failure)
     {
+        failure = null;
         if (sealedList is null) return new HashSet<string>(StringComparer.Ordinal);
         try
         {
             var ids = JsonSerializer.Deserialize<string[]>(VaultCrypto.Open(ListKey(userId, userKey), sealedList, ListContext(userId)));
-            return ids is null || ids.Any(id => id is null) ? null : ids.ToHashSet(StringComparer.Ordinal);
+            if (ids is not null && !ids.Any(id => id is null)) return ids.ToHashSet(StringComparer.Ordinal);
+            failure = nameof(JsonException);
+            return null;
         }
         catch (Exception e) when (e is CryptographicException or JsonException)
         {
+            failure = e.GetType().Name;
             return null;
         }
     }
@@ -68,7 +79,8 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
     /// Marks the vault <paramref name="vaultId"/> discreet or not. The write is conditional on the list read (so a
     /// concurrent mark is never lost: tried again up to three times, then <see cref="InvalidOperationException"/>) and on
     /// <paramref name="userKey"/> being the one in force (<see cref="CredentialsChangedException"/> if not, so a list is
-    /// never sealed under an old key). A list that doesn't open starts from <paramref name="allIds"/>.
+    /// never sealed under an old key). A list that doesn't open starts from <paramref name="allIds"/>, which excludes
+    /// the vault Skills (Decision 2).
     /// </summary>
     public async Task SetAsync(string userId, byte[] userKey, string vaultId, bool discreet, IReadOnlyCollection<string> allIds, CancellationToken ct)
     {
@@ -78,17 +90,18 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
         {
             var user = await Users.Find(u => u.Id == userId).Project(u => new { u.KeyId, u.DiscreetVaults }).FirstOrDefaultAsync(ct);
             if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
-            var ids = OpenList(userId, userKey, user.DiscreetVaults)?.ToHashSet(StringComparer.Ordinal);
+            var ids = OpenList(userId, userKey, user.DiscreetVaults, out var failure)?.ToHashSet(StringComparer.Ordinal);
             if (ids is null)
             {
-                log.LogWarning("The discreet vaults of user {UserId} could not be read; every vault counts as discreet", userId);
+                log.LogWarning(
+                    "The discreet vaults of user {UserId} could not be read: {Reason}; every vault but Skills counts as discreet", userId, failure);
                 ids = allIds.ToHashSet(StringComparer.Ordinal);
             }
 
             if (discreet) ids.Add(vaultId);
             else ids.Remove(vaultId);
             if (BeforeWrite is { } before) await before();
-            var unchanged = user.DiscreetVaults is null ? f.Exists(u => u.DiscreetVaults, false) : f.Eq(u => u.DiscreetVaults, user.DiscreetVaults);
+            var unchanged = user.DiscreetVaults is null ? f.Eq(u => u.DiscreetVaults, null) : f.Eq(u => u.DiscreetVaults, user.DiscreetVaults);
             var written = await Users.UpdateOneAsync(
                 f.Eq(u => u.Id, userId) & f.Eq(u => u.KeyId, keyId) & unchanged,
                 Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, SealList(userId, userKey, ids)),
@@ -99,16 +112,18 @@ public sealed partial class DiscreetVaults(IMongoDatabase db, Argon2Kdf kdf, ILo
         throw new InvalidOperationException("The discreet vaults kept changing; try again.");
     }
 
-    /// <summary>Sets the PIN, replacing any earlier one; <see cref="ArgumentException"/> unless it has 4 to 6 digits.</summary>
+    /// <summary>Sets the PIN, replacing any earlier one; <see cref="ArgumentException"/> unless it has 4 to 6 digits,
+    /// <see cref="CredentialsChangedException"/> if the user is gone.</summary>
     public async Task SetPinAsync(string userId, string pin, CancellationToken ct)
     {
         if (!IsPin(pin)) throw new ArgumentException(PinSentence);
         var salt = RandomNumberGenerator.GetBytes(Argon2Kdf.SaltBytes);
         var verifier = await kdf.DeriveAsync(pin, salt, ct);
-        await Users.UpdateOneAsync(
+        var written = await Users.UpdateOneAsync(
             u => u.Id == userId,
             Builders<UserDocument>.Update.Set(u => u.DiscreetPin, new PinVerifierDocument { Salt = salt, Verifier = verifier }),
             cancellationToken: ct);
+        if (written.MatchedCount == 0) throw new CredentialsChangedException();
     }
 
     /// <summary>Whether <paramref name="pin"/> is hers. Exactly one derivation in every case (no PIN set, a malformed

@@ -154,6 +154,7 @@ public sealed class UserDocument
 }
 
 /// <summary>A PIN's Argon2id derivation with its own salt: it only checks the PIN, never a key.</summary>
+[BsonIgnoreExtraElements]
 public sealed class PinVerifierDocument
 {
     [BsonElement("salt")]
