@@ -119,7 +119,7 @@ describe("attachments in the tree", () => {
     expect(items).not.toContain("Copy markdown link");
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy file path" }));
     expect(writeText).toHaveBeenCalledWith("/Work/report.pdf");
-    expect(await within(drawer()).findByRole("status")).toHaveTextContent("Copied");
+    expect(await within(drawer()).findByText("Copied")).toBeInTheDocument();
   });
 
   it("says inside the drawer when a copy fails", async () => {
@@ -127,7 +127,7 @@ describe("attachments in the tree", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
     await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
-    expect(await within(drawer()).findByRole("status")).toHaveTextContent("Couldn't copy. Copy it by hand.");
+    expect(await within(drawer()).findByText("Couldn't copy. Copy it by hand.")).toBeInTheDocument();
   });
 
   it("gives a note of a read-only vault a menu with the three copy items and nothing that writes", async () => {

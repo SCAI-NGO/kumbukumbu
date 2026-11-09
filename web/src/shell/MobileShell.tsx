@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
@@ -22,7 +22,7 @@ import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
-import { copyItems } from "./copyItems";
+import { copyItems, noteNames } from "./copyItems";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -137,8 +137,10 @@ export default function MobileShell() {
   const dockLevel = useLevel(activeVault);
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
-  // The note's vault's tree, which says whether its bare name is unique for Copy link.
+  // The note's vault's tree, which says whether its bare name is unique for Copy link. The drawer reads the same
+  // query; read here it is also there before the drawer was first opened, so Copy link gives the same form either way.
   const noteTree = useTree(path ? vaultOf(path) : null);
+  const noteNamesInVault = useMemo(() => noteTree.data && noteNames(noteTree.data.root), [noteTree.data]);
   const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
@@ -320,7 +322,7 @@ export default function MobileShell() {
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
-                      ...copyItems(path, noteTree.data?.root, true, copied.copy),
+                      ...copyItems(path, noteNamesInVault, true, copied.copy),
                       ...publishingActions,
                       ...(noteChanges
                         ? [

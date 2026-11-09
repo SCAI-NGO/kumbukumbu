@@ -606,7 +606,7 @@ describe("the shell", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
     expect(writeText).toHaveBeenCalledWith("[[garden]]");
-    expect(await screen.findByRole("status")).toHaveTextContent("Copied");
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy markdown link" }));
@@ -623,7 +623,7 @@ describe("the shell", () => {
     await screen.findByRole("heading", { name: "garden" });
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy file path" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Couldn't copy. Copy it by hand.");
+    expect(await screen.findByText("Couldn't copy. Copy it by hand.")).toBeInTheDocument();
   });
 
   it("stays in Write mode when the open note's vault is renamed in another tab", async () => {

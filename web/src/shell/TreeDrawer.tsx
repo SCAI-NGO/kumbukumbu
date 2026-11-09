@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
+import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
@@ -24,7 +24,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import { useMarking } from "./ConfirmMark";
-import { copyItems } from "./copyItems";
+import { copyItems, noteNames, type NoteNames } from "./copyItems";
 import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
@@ -45,7 +45,6 @@ export type Row =
   | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
-const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
@@ -201,7 +200,7 @@ export type VaultSheet = { kind: "trash" | "activity" | "checkpoints" | "archive
  */
 function FileMenu({
   row,
-  root,
+  names,
   level,
   publishing,
   copy,
@@ -209,7 +208,7 @@ function FileMenu({
   onDelete,
 }: {
   row: Extract<Row, { kind: "note" }>;
-  root: TreeFolder;
+  names: NoteNames | undefined;
   level: Level;
   publishing: Publishing | null;
   copy(text: string): void;
@@ -220,7 +219,7 @@ function FileMenu({
   const { path, version } = row;
   const changes = mayChange(level, path);
   const items: MenuItem[] = [
-    ...copyItems(path, root, note, copy),
+    ...copyItems(path, names, note, copy),
     ...(changes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
     ...entriesOf(publishing, path, note),
@@ -466,7 +465,9 @@ export default function TreeDrawer(props: {
   const published = publications.data?.publications.map((p) => p.path);
   const marking = useMarking(published);
   // Said here, not over the note: the drawer covers that on a phone.
-  const copied = useCopied();
+  const copied = useCopied("mx-[18px] mb-2.5");
+  // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
+  const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
   const publishingActions: Publishing | null = ownVault
     ? {
@@ -569,7 +570,7 @@ export default function TreeDrawer(props: {
           <FormError>{errorText(marking.error)}</FormError>
         </div>
       )}
-      {copied.status && <div className="flex-none px-[18px] pb-2.5">{copied.status}</div>}
+      {copied.status}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -598,7 +599,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} root={tree.data.root} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>

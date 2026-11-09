@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
 import { isVaultBusy } from "./error-text";
-import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
+import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
 
@@ -143,6 +143,9 @@ export const useTree = (vault: string | null) =>
     enabled: vault !== null,
     refetchInterval: whileBusy,
   });
+
+/** What a tree entry is: an image, PDF or text file the vault keeps, or a note. */
+export const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 /** The folder at `path` (`/Work/projects`) in a vault's tree, if it is there. */
 export function findFolder(root: TreeFolder, path: string): TreeFolder | undefined {
