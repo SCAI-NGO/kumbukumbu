@@ -119,8 +119,10 @@ public static class SharingApi
     {
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct);
+        // A name the session hides is free to the peek: only accepting meets the clash (Decision 14).
+        var aliasFree = peek.AliasFree || await HiddenNames.ClashesWithHiddenAsync(caller, peek.Alias, ct);
         return TypedResults.Ok(new VaultInvitationPeekView(
-            peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, peek.AliasFree,
+            peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, aliasFree,
             peek.Confirm, peek.ExpiresAt));
     }
 
@@ -134,7 +136,18 @@ public static class SharingApi
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // An alias follows the rules of a vault name: it is one, to the member.
         var alias = VaultNames.Check(body.Alias);
-        var accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
+        AcceptedInvite accepted;
+        try
+        {
+            accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct, hidden);
+        }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, alias, ct)) throw HiddenNames.Refusal();
+            throw;
+        }
+
         return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
     }
 
@@ -259,6 +272,11 @@ public static class SharingApi
         catch (ArgumentException)
         {
             throw new MembershipNotFoundException();
+        }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, alias, ct)) throw HiddenNames.Refusal();
+            throw;
         }
 
         // Her sockets' hints and presence name the vault as she does now.

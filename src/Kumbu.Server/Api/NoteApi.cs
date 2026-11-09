@@ -323,6 +323,11 @@ public static class NoteApi
         {
             throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, name, ct)) throw HiddenNames.Refusal();
+            throw;
+        }
 
         return TypedResults.NoContent();
     }
@@ -373,7 +378,16 @@ public static class NoteApi
     {
         var name = VaultNames.Check(body.Name);
 
-        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
+        try
+        {
+            await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
+        }
+        catch (VaultNameTakenException)
+        {
+            if (await HiddenNames.ClashesWithHiddenAsync(caller, name, ct)) throw HiddenNames.Refusal();
+            throw;
+        }
+
         return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
     }
 

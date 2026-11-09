@@ -154,9 +154,12 @@ public sealed partial class Memberships
     /// account or rotation of her user key, conflict with it. Any refusal aborts the whole transaction, the claim with
     /// it, so the link stays usable: a taken alias (<see cref="VaultNameTakenException"/>), her own vault
     /// (<see cref="NotPermittedException"/>), a second membership (<see cref="AlreadyMemberException"/>), an inactive
-    /// owner or a closing vault (<see cref="SharingRefusedException"/>). <see cref="InvitationNotFoundException"/> as peek's.
+    /// owner or a closing vault (<see cref="SharingRefusedException"/>). <see cref="InvitationNotFoundException"/> as peek's,
+    /// also for a second membership of a vault in <paramref name="hidden"/> (those a web session hides), so the answer
+    /// tells nothing of it.
     /// </summary>
-    public async Task<AcceptedInvite> AcceptAsync(string userId, byte[] userKey, string inviteSecret, string alias, CancellationToken ct)
+    public async Task<AcceptedInvite> AcceptAsync(
+        string userId, byte[] userKey, string inviteSecret, string alias, CancellationToken ct, IReadOnlySet<string>? hidden = null)
     {
         if (DecodeSecret(inviteSecret) is not { } bytes) throw new InvitationNotFoundException();
         await EnsureReadyAsync(ct);
@@ -201,6 +204,13 @@ public sealed partial class Memberships
         {
             // Counted by the kind of refusal only, never by its text.
             Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Refused);
+            // The refusal left the invitation open, so its vault is still found by the lookup.
+            if (e is AlreadyMemberException && hidden is { Count: > 0 }
+                && await Docs.Find(OpenInvite(lookup, Now)).Project(m => m.Vault).FirstOrDefaultAsync(ct) is { } vaultId && hidden.Contains(vaultId))
+            {
+                throw new InvitationNotFoundException();
+            }
+
             throw;
         }
         finally
