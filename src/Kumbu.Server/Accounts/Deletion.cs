@@ -83,15 +83,17 @@ public sealed class Deletion(
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
     /// once <paramref name="confirm"/> repeats the name and <paramref name="password"/> is the user's (so a stolen
     /// session alone can't); null if the user has no vault of that name. API keys and connections that had it keep their
-    /// other vaults; one left with none is revoked for good in the same transaction.
+    /// other vaults; one left with none is revoked for good in the same transaction. A vault among <paramref name="hidden"/>
+    /// (those a web session doesn't show) counts as none of that name.
     /// </summary>
-    public async Task<DeletionSummary?> DeleteVaultAsync(User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct)
+    public async Task<DeletionSummary?> DeleteVaultAsync(
+        User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct, IReadOnlySet<string>? hidden = null)
     {
         if (!string.Equals(confirm, name, StringComparison.Ordinal)) throw new ArgumentException("Type the vault's name exactly to confirm.", nameof(confirm));
         // Before the lookup: without the password, nobody learns whether a vault of that name exists.
         if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
         // Only the owner's user key finds a vault through a user slot: nobody else finds it by name.
-        if (await catalog.FindForUserAsync(user.Id, userKey, name, ct) is not { } vaultId) return null;
+        if (await catalog.FindForUserAsync(user.Id, userKey, name, ct) is not { } vaultId || hidden?.Contains(vaultId) == true) return null;
 
         await RequireNoSharedRunAsync(null, [vaultId], ct);
         var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct, first: (s, token) => RequireNoSharedRunAsync(s, [vaultId], token));

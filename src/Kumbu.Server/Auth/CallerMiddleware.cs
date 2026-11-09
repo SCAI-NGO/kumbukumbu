@@ -36,7 +36,7 @@ public sealed class BackgroundMetadata
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment, ILogger<CallerMiddleware> log)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -114,9 +114,9 @@ public sealed class CallerMiddleware(
             // tools/call with the user's session.
             if (context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
                 && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
-                    is var (user, userKey, readAt, windowOpen, _))
+                    is var (user, userKey, readAt, windowOpen, discreet))
             {
-                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog);
+                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog, discreet, log);
                 // A remembered session may see no sign-in for 30 days, so its first request in this process resumes
                 // what a sign-in would.
                 rekeying.ResumeOnce(user, userKey);

@@ -102,7 +102,7 @@ public static class SharingApi
         }
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
-        var vaultId = await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        var vaultId = await OwnVaultIdAsync(vault, caller, catalog, ct);
         if ((await caller.OpenVaultsAsync(ct)).Any(v => v.Id == vaultId && v.IsSkillsVault)) throw new ApiException(StatusCodes.Status409Conflict, SharingRefusedException.SkillsVault().Message);
         var invite = await memberships.InviteAsync(caller.User!.Id, caller.UserKey!, vaultId, body.Label, role, TimeSpan.FromDays(days), body.Confirm, ct);
         return TypedResults.Created(
@@ -138,10 +138,12 @@ public static class SharingApi
         return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
     }
 
-    /// <summary>The id of the caller's own vault named <paramref name="vault"/>, from her user slot: a member's alias, or
-    /// a vault of someone else's, answers 404 (collab design §6.0 binds every write to this id).</summary>
+    /// <summary>The id of the caller's own vault named <paramref name="vault"/>, from her user slot: a member's alias, a
+    /// vault of someone else's, or one her session hides answers 404 (collab design §6.0 binds every write to this id).</summary>
     private static async Task<string> OwnVaultIdAsync(string vault, RequestCaller caller, VaultCatalog catalog, CancellationToken ct) =>
-        await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) is { } vaultId && !await caller.HidesAsync(vaultId, ct)
+            ? vaultId
+            : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
 
     private static MembershipView View(OwnersMembership m) => new(
         m.Id, m.Label, MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.ExpiresAt, m.RedeemedAt,
@@ -234,6 +236,8 @@ public static class SharingApi
     /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>
     private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
+        // A vault her session hides answers as a membership that isn't hers.
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub);
         return TypedResults.NoContent();
     }
@@ -247,6 +251,7 @@ public static class SharingApi
     {
         if (limits.AliasRename(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var alias = VaultNames.Check(body.Alias);
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         try
         {
             alias = await catalog.RenameAliasAsync(caller.User!.Id, caller.UserKey!, id, alias, ct);
@@ -268,6 +273,7 @@ public static class SharingApi
         string id, ProviderSeenRequest body, RequestCaller caller, Memberships memberships, Search.SearchIndex index, CancellationToken ct)
     {
         if (index.Providers.Get(body.Provider) is null) throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'.");
+        if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         await memberships.ProviderSeenAsync(caller.User!.Id, id, body.Provider, ct);
         return TypedResults.NoContent();
     }

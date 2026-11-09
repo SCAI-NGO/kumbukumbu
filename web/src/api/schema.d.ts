@@ -12459,6 +12459,8 @@ export interface components {
             closingAt?: null | string;
             ownerUsername?: null | string;
             kind?: null | string;
+            /** @default false */
+            discreet: boolean;
         };
         VersionEntry: {
             path: string;

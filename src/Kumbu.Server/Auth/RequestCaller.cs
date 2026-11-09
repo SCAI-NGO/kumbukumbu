@@ -138,9 +138,51 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, WriterRef.Server, new FixedCredential(devToken), catalog);
 
-    internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog) =>
-        new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey), catalog, userKey,
+    /// <summary>The credential of a web session, the only one that hides discreet vaults; null for every other caller.</summary>
+    internal UserCredential? Session => Kind == CallerKind.Session ? Credential as UserCredential : null;
+
+    /// <summary>The ids of the vaults this session hides (opening its vaults first): those of the discreet vaults while
+    /// it doesn't show them. None for every other caller, which sees every vault it has.</summary>
+    internal async Task<IReadOnlySet<string>> HiddenIdsAsync(CancellationToken ct)
+    {
+        if (Session is not { } session) return new HashSet<string>(StringComparer.Ordinal);
+        await OpenVaultsAsync(ct);
+        return session.HiddenIds;
+    }
+
+    /// <summary>Whether this session hides the vault <paramref name="vaultId"/>; false for every other caller.</summary>
+    internal async Task<bool> HidesAsync(string vaultId, CancellationToken ct) => (await HiddenIdsAsync(ct)).Contains(vaultId);
+
+    /// <summary>Whether this session hides the vault of the user's membership <paramref name="membershipId"/>, so that it
+    /// answers as one she doesn't have; false for every other caller.</summary>
+    internal async Task<bool> HidesMembershipAsync(string membershipId, CancellationToken ct)
+    {
+        if (Session is not { } session) return false;
+        await OpenVaultsAsync(ct);
+        return session.Hidden.Any(a => a.Membership?.Id == membershipId);
+    }
+
+    /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
+    /// them (none hidden without). A sealed list that doesn't open hides every vault but the vault Skills, and is logged
+    /// to <paramref name="log"/> by the exception's type.</summary>
+    internal static RequestCaller ForSession(
+        User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null)
+    {
+        DiscreetFilter? filter = null;
+        if (discreet is not null)
+        {
+            var ids = DiscreetVaults.OpenList(user.Id, userKey, discreet.SealedList, out var failure);
+            if (ids is null)
+            {
+                log?.LogWarning("The discreet vaults of user {UserId} could not be read: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
+            }
+
+            filter = new DiscreetFilter(discreet.Revealed, ids);
+        }
+
+        return new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey, filter), catalog, userKey,
             credentialReadAt, passwordWindowOpen: windowOpen);
+    }
 
     /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)

@@ -35,11 +35,12 @@ namespace Kumbu.Server.Api;
 /// <c>closingAt</c>: on a vault shared with her, its owner deleted her account and gave the members time: it is
 /// read-only, may be exported, and is deleted at this time. <c>ownerUsername</c>: on a vault shared with her, the
 /// owner's username beside <c>owner</c>, which is free text: two owners of one display name stay two. <c>kind</c>: on her
-/// own vault, what it is marked as (<c>skills</c>); absent for an ordinary vault and for one shared with her.</summary>
+/// own vault, what it is marked as (<c>skills</c>); absent for an ordinary vault and for one shared with her.
+/// <c>discreet</c>: the vault is one of her discreet vaults, so only ever true while her session shows them.</summary>
 public sealed record VaultView(
     string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
     int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false, DateTime? ClosingAt = null,
-    string? OwnerUsername = null, string? Kind = null);
+    string? OwnerUsername = null, string? Kind = null, bool Discreet = false);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c>, <c>connections</c> and <c>shares</c>: what would lose
 /// access if the vault were re-encrypted, the names of her API keys with access to it, of her connected apps that list
@@ -364,7 +365,8 @@ public static class NoteApi
             members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access), access.ReadOnlyCode == Refusals.OwnerInactive,
             access.ReadOnlyCode == Refusals.Closing ? access.Membership?.ClosingAt : null,
             access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null,
-            access.Membership is null && access.IsOwner ? vault.Kind : null);
+            access.Membership is null && access.IsOwner ? vault.Kind : null,
+            caller.Session?.IsDiscreet(access.Id) ?? false);
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -387,8 +389,8 @@ public static class NoteApi
             throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills can't be deleted: it holds your skills. Remove single skills instead.");
         }
 
-        // A wrong password throws; null is a right one and no such vault.
-        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
+        // A wrong password throws; null is a right one and no such vault (or one the session hides).
+        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct, await caller.HiddenIdsAsync(ct));
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         return deleted is not null ? TypedResults.NoContent() : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
@@ -397,7 +399,7 @@ public static class NoteApi
     /// she shares it with. Owner-only: a member's alias answers 404, and she sees no member list (collab design §8.6).</summary>
     private static async Task<Ok<VaultAccessView>> AccessAsync(string vault, RequestCaller caller, Rekeying rekeying, CancellationToken ct)
     {
-        var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
+        var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct, await caller.HiddenIdsAsync(ct))
             ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.DeviceKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
             m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
@@ -418,7 +420,7 @@ public static class NoteApi
         var passwordRight = true;
         try
         {
-            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct, await caller.HiddenIdsAsync(ct));
         }
         catch (WrongPasswordException)
         {
