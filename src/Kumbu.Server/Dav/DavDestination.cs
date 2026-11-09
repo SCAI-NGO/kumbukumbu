@@ -43,10 +43,10 @@ public static class DavDestination
 
     /// <summary>Whether the URL is on the request's origin. Only a client's own mistakes are caught here: what keeps a
     /// copy or move inside what the share may touch is the caller's check that the destination is in the source's vault
-    /// (by id), as every path is resolved through the share's own vaults.</summary>
+    /// (by id), as every path is resolved through the share's own vaults. A username in it is ignored: KDE's KIO
+    /// (Dolphin) keeps the one of the mounted URL in the Destination of every rename and move.</summary>
     private static bool SameOrigin(HttpRequest request, Uri uri) =>
         uri.Scheme.Equals(request.Scheme, StringComparison.OrdinalIgnoreCase)
         && uri.Host.Equals(request.Host.Host, StringComparison.OrdinalIgnoreCase)
-        && uri.Port == (request.Host.Port ?? (request.IsHttps ? 443 : 80))
-        && uri.UserInfo.Length == 0;
+        && uri.Port == (request.Host.Port ?? (request.IsHttps ? 443 : 80));
 }
