@@ -12,6 +12,8 @@ import { presenceKey, useSyncStatus } from "../state/sync";
 const REPLACED = 4409;
 /** The server closed the socket because the session hid its discreet vaults (or a vault became one): connect again at once, the new ticket leaves them out. */
 const HIDDEN = 4412;
+/** Within this of the last at-once reconnect for {@link HIDDEN}, the next one backs off as any other close. */
+const HIDDEN_AGAIN = 5_000;
 const MAX_DELAY = 30_000;
 /** WebSocket.OPEN. */
 const OPEN = 1;
@@ -21,20 +23,22 @@ const socketUrl = (ticket: string) => {
   return `${protocol === "https:" ? "wss" : "ws"}://${host}/api/ws?ticket=${encodeURIComponent(ticket)}`;
 };
 
-type DiscreetFrame = (queryClient: QueryClient, navigate: NavigateFunction) => void;
+export type DiscreetFrame = "hidden" | "revealed";
+
+type DiscreetListener = (type: DiscreetFrame, queryClient: QueryClient, navigate: NavigateFunction) => void;
+
+const discreetListeners = new Set<DiscreetListener>();
 
 /**
- * What the frames about the session's discreet vaults do, which name no vault: `hidden`, the session hid them again
- * (in another tab, or their time ran out), and `revealed`, it showed them, so the session and the vault list are asked
- * again (and the socket opens again for the vaults it gains). The discreet mode sets `hidden`.
+ * The frames about the session's discreet vaults, which name no vault: `hidden`, the session hid them again (in
+ * another tab, or their time ran out), and `revealed`, it showed them. `revealed` has the session and the vault list
+ * asked again (and so the socket opens again for the vaults it gains) before `listener` hears of it; `hidden` only
+ * reaches the listeners, the discreet mode among them. Returns the call that stops it.
  */
-export const discreetFrames: { hidden: DiscreetFrame; revealed: DiscreetFrame } = {
-  hidden: () => {},
-  revealed: (queryClient) => {
-    void queryClient.invalidateQueries({ queryKey: ["session"] });
-    void queryClient.invalidateQueries({ queryKey: ["vaults"] });
-  },
-};
+export function onDiscreetFrame(listener: DiscreetListener): () => void {
+  discreetListeners.add(listener);
+  return () => void discreetListeners.delete(listener);
+}
 
 /**
  * A frame from the server; `vault` is the caller's own name for it (an alias for a vault shared with her). `renamed`
@@ -50,7 +54,11 @@ function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unk
   }
   if (!frame || typeof frame !== "object" || !("type" in frame)) return;
   if (frame.type === "hidden" || frame.type === "revealed") {
-    discreetFrames[frame.type](queryClient, navigate);
+    if (frame.type === "revealed") {
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
+      void queryClient.invalidateQueries({ queryKey: ["vaults"] });
+    }
+    for (const listener of [...discreetListeners]) listener(frame.type, queryClient, navigate);
     return;
   }
   if (!("vault" in frame) || typeof frame.vault !== "string") return;
@@ -77,8 +85,8 @@ const down = { connected: false, editors: {}, send: () => false };
  * the open note's version asked again. Every connection takes a fresh ticket, which holds the vaults as the server
  * opens them then; a vault gained since (an invitation accepted in another tab) comes with a new ticket, so the socket
  * is opened again when the vault list names one it didn't. Closed, it tries again after 1, 2, 4 … 30 seconds (at once
- * when its discreet vaults were hidden), and meanwhile the version poll runs; after a gap, what it may have missed is
- * asked again.
+ * when an open socket was closed for its discreet vaults, unless that happened within the last five seconds), and
+ * meanwhile the version poll runs; after a gap, what it may have missed is asked again.
  */
 export function useSyncSocket() {
   const queryClient = useQueryClient();
@@ -98,6 +106,8 @@ export function useSyncSocket() {
     let socket: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    /** When it last connected again at once for {@link HIDDEN}. */
+    let hiddenAt = -Infinity;
 
     const retry = () => {
       if (stopped) return;
@@ -117,7 +127,9 @@ export function useSyncSocket() {
       held.current = names ? new Set(names.map((v) => v.name)) : null;
       const s = new WebSocket(socketUrl(ticket));
       socket = s;
+      let wasOpen = false;
       s.onopen = () => {
+        wasOpen = true;
         attempt = 0;
         useSyncStatus.setState({
           connected: true,
@@ -128,7 +140,7 @@ export function useSyncSocket() {
           },
         });
         // Hints sent while there was no socket are lost: everything they would have asked again is.
-        if (opened.current) for (const key of ["tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
+        if (opened.current) for (const key of ["session", "tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
         opened.current = true;
       };
       s.onmessage = (e: MessageEvent) => onFrame(queryClient, navigate.current, e.data);
@@ -136,7 +148,11 @@ export function useSyncSocket() {
         if (socket !== s) return;
         socket = null;
         useSyncStatus.setState(down);
-        if (e.code === HIDDEN) {
+        // What the session shows changed: its discreet mode, and the vault list with it.
+        if (e.code === HIDDEN) void queryClient.invalidateQueries({ queryKey: ["session"] });
+        // At once only for a socket that was up, and not again soon: a server that closes every socket gets the back-off.
+        if (e.code === HIDDEN && wasOpen && Date.now() - hiddenAt >= HIDDEN_AGAIN) {
+          hiddenAt = Date.now();
           attempt = 0;
           if (!stopped) void connect();
         } else if (e.code !== REPLACED) retry();
@@ -166,6 +182,9 @@ export function useSyncSocket() {
     if (list.some((n) => !held.current!.has(n))) {
       held.current = new Set(list);
       setGeneration((g) => g + 1);
+      return;
     }
+    // A vault gone from the list (hidden, say) is no longer held: when it comes back, the socket opens again for it.
+    held.current = new Set([...held.current].filter((n) => list.includes(n)));
   }, [names]);
 }

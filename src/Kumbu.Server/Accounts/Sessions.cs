@@ -171,11 +171,11 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     public async Task<string?> AliveAsync(string subject, CancellationToken ct) => (await SocketStateAsync(subject, ct)).UserId;
 
     /// <summary>
-    /// The user of the session <paramref name="subject"/> and whether it shows the discreet vaults now, by the rules of
-    /// <see cref="ResolveAsync"/>; no user (and not revealed) if the session isn't alive. Touches nothing, as
-    /// <see cref="AliveAsync"/>.
+    /// The user of the session <paramref name="subject"/>, whether it shows the discreet vaults now, by the rules of
+    /// <see cref="ResolveAsync"/>, and until when if it does (null for a reveal until the session ends); no user (and
+    /// not revealed) if the session isn't alive. Touches nothing, as <see cref="AliveAsync"/>.
     /// </summary>
-    public async Task<(string? UserId, bool Revealed)> SocketStateAsync(string subject, CancellationToken ct)
+    public async Task<(string? UserId, bool Revealed, DateTime? RevealUntil)> SocketStateAsync(string subject, CancellationToken ct)
     {
         byte[] lookup;
         try
@@ -184,10 +184,12 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         }
         catch (FormatException)
         {
-            return (null, false);
+            return (null, false, null);
         }
 
-        return await LiveAsync(lookup, ct) is var (slot, user, now, _) ? (user.Id, Revealed(slot, now)) : (null, false);
+        if (await LiveAsync(lookup, ct) is not var (slot, user, now, _)) return (null, false, null);
+        var revealed = Revealed(slot, now);
+        return (user.Id, revealed, revealed ? slot.RevealUntil : null);
     }
 
     /// <summary>

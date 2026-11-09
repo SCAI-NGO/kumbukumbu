@@ -162,7 +162,7 @@ public sealed class RevealTests(MongoFixture fixture)
         await Sessions().EndAsync(secret, Ct);
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
-        Assert.Equal(((string?)null, false), await Sessions().SocketStateAsync(subject, Ct));
+        Assert.Equal(((string?)null, false, (DateTime?)null), await Sessions().SocketStateAsync(subject, Ct));
     }
 
     [Fact]
@@ -270,16 +270,20 @@ public sealed class RevealTests(MongoFixture fixture)
         var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         var subject = Kumbu.Server.Accounts.Sessions.SubjectOf(secret)!;
 
-        Assert.Equal((user.Id, false), await Sessions().SocketStateAsync(subject, Ct));
+        Assert.Equal((user.Id, false, (DateTime?)null), await Sessions().SocketStateAsync(subject, Ct));
 
-        await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct);
-        Assert.Equal((user.Id, true), await Sessions().SocketStateAsync(subject, Ct));
+        var (_, until) = await Sessions().RevealAsync(secret, TimeSpan.FromMinutes(5), Ct);
+        Assert.NotNull(until);
+        Assert.Equal((user.Id, true, until), await Sessions().SocketStateAsync(subject, Ct));
 
         _time.Advance(TimeSpan.FromMinutes(5));
-        Assert.Equal((user.Id, false), await Sessions().SocketStateAsync(subject, Ct));
+        Assert.Equal((user.Id, false, (DateTime?)null), await Sessions().SocketStateAsync(subject, Ct));
+
+        await Sessions().RevealAsync(secret, null, Ct);
+        Assert.Equal((user.Id, true, (DateTime?)null), await Sessions().SocketStateAsync(subject, Ct));
 
         await Sessions().EndAsync(secret, Ct);
-        Assert.Equal(((string?)null, false), await Sessions().SocketStateAsync(subject, Ct));
-        Assert.Equal(((string?)null, false), await Sessions().SocketStateAsync("not hex", Ct));
+        Assert.Equal(((string?)null, false, (DateTime?)null), await Sessions().SocketStateAsync(subject, Ct));
+        Assert.Equal(((string?)null, false, (DateTime?)null), await Sessions().SocketStateAsync("not hex", Ct));
     }
 }

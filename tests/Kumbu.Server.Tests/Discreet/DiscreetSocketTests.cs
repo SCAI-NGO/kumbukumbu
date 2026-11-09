@@ -240,6 +240,8 @@ public sealed class DiscreetSocketTests(KumbuAppFactory app) : IAsyncDisposable
 
         // No hidden frame for a session that shows nothing discreet: it only takes a new ticket.
         Assert.Equal([ClosedHidden], await DrainAsync(hidden, Wait));
+        // A ticket asked after the mark, not in its very clock tick.
+        _time.Advance(TimeSpan.FromSeconds(1));
         using var again = await OpenAsync(Api, other);
         await ListedAsync(SubjectOf(other), 1);
         Assert.Equal(["Skills"], HeldBy(SubjectOf(other)));
@@ -253,6 +255,76 @@ public sealed class DiscreetSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(WebSocketState.Open, agent.State);
         await WriteAsync(w.Alice, "Work", bearer: key);
         Assert.Equal(Changed("Work"), await ReceiveAsync(agent, Wait));
+    }
+
+    [Fact]
+    public async Task A_ticket_asked_before_a_mark_and_used_after_it_closes_at_once()
+    {
+        var w = await WorldAsync();
+        var other = await w.Alice.SignInAgainAsync();
+        var elsewhere = await TicketAsync(other);
+        // Her own, asked before she showed the discreet vaults.
+        var own = await TicketAsync(w.Alice);
+        await RevealAsync(w.Alice);
+        await MarkAsync(w.Alice, "Work", discreet: true);
+
+        using var late = await ConnectAsync(Api, elsewhere);
+        using var lateOwn = await ConnectAsync(Api, own);
+
+        Assert.Equal([ClosedHidden], await DrainAsync(late, Wait));
+        Assert.Equal([ClosedHidden], await DrainAsync(lateOwn, Wait));
+        // One asked after the mark holds what the session shows now.
+        _time.Advance(TimeSpan.FromSeconds(1));
+        using var again = await OpenAsync(Api, other);
+        await ListedAsync(SubjectOf(other), 1);
+        Assert.Equal(["Skills"], HeldBy(SubjectOf(other)));
+        Assert.Equal(WebSocketState.Open, again.State);
+    }
+
+    [Fact]
+    public async Task A_reveal_renewed_while_shown_closes_its_sockets_so_they_end_with_it()
+    {
+        var w = await WorldAsync();
+        await RevealAsync(w.Alice, minutes: 5);
+        using var socket = await OpenAsync(Api, w.Alice);
+        await ListedAsync(SubjectOf(w.Alice), 1);
+
+        await RevealAsync(w.Alice, minutes: 10);
+
+        Assert.Equal([RevealedFrame, ClosedHidden], await DrainAsync(socket, Wait));
+        using var again = await OpenAsync(Api, w.Alice);
+        Assert.Equal([Changed("Work")], await UntilWorkHintAsync(w, again));
+        _time.Advance(TimeSpan.FromMinutes(9));
+        Assert.Equal([Changed("Work")], await UntilWorkHintAsync(w, again));
+
+        // The timer of the new ticket, not the 30-second check.
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal([HiddenFrame, ClosedHidden], await DrainAsync(again, Wait));
+    }
+
+    [Fact]
+    public async Task A_reveal_timer_that_finds_the_reveal_still_shown_waits_for_its_end()
+    {
+        var w = await WorldAsync();
+        await RevealAsync(w.Alice, minutes: 5);
+        using var socket = await OpenAsync(Api, w.Alice);
+        // Up and checked: hints go out only after the first check.
+        Assert.Equal([Changed("Work")], await UntilWorkHintAsync(w, socket));
+        // Renewed without telling the hub, as a clock running behind the database's would leave it.
+        await Api.Services.GetRequiredService<Sessions>().RevealAsync(w.Alice.Session, TimeSpan.FromMinutes(10), Ct);
+        var checkedOnce = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Hub.BeforeRecompute = _ =>
+        {
+            checkedOnce.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        await checkedOnce.Task.WaitAsync(Wait, Ct);
+        Assert.Equal([Changed("Work")], await UntilWorkHintAsync(w, socket));
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal([HiddenFrame, ClosedHidden], await DrainAsync(socket, Wait));
     }
 
     [Fact]

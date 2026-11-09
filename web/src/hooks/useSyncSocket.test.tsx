@@ -9,7 +9,7 @@ import { useEditor } from "../state/editor";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
 import { FakeSocket } from "../test/socket";
-import { discreetFrames, useSyncSocket } from "./useSyncSocket";
+import { onDiscreetFrame, useSyncSocket } from "./useSyncSocket";
 
 const last = () => FakeSocket.all.at(-1)!;
 const ticketOf = (s: FakeSocket) => new URL(s.url).searchParams.get("ticket");
@@ -174,13 +174,18 @@ describe("the sync socket", () => {
   it("connects again at once, with a fresh ticket, when the session hid its discreet vaults", async () => {
     vi.useFakeTimers();
     const { count } = server();
-    mount();
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["session"], {});
+    mount(queryClient);
     await vi.advanceTimersByTimeAsync(0);
     last().open();
     // A drop before it: the back-off it built up doesn't count either.
     last().drop();
     await vi.advanceTimersByTimeAsync(1000);
     last().open();
+    expect(invalidated(queryClient, ["session"])).toBe(true);
+    queryClient.setQueryData(["session"], {});
+    expect(invalidated(queryClient, ["session"])).toBe(false);
 
     last().drop(4412);
     await vi.advanceTimersByTimeAsync(0);
@@ -188,13 +193,70 @@ describe("the sync socket", () => {
     expect(count("POST", "/api/ws-ticket")).toBe(3);
     expect(FakeSocket.all).toHaveLength(3);
     expect(ticketOf(last())).toBe("t3");
-    last().drop(4412);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all).toHaveLength(4);
+    // What the session shows has changed.
+    expect(invalidated(queryClient, ["session"])).toBe(true);
   });
 
-  it("hands a hidden frame, which names no vault, to the discreet mode", async () => {
-    const hidden = vi.spyOn(discreetFrames, "hidden");
+  it("backs off on a second close for hidden vaults within five seconds, and on one before the socket opened", async () => {
+    vi.useFakeTimers();
+    server();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    last().open();
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(2);
+
+    // Never opened: no loop of tickets against a server that closes every socket.
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.all).toHaveLength(3);
+
+    // Opened, but within five seconds of the last one.
+    last().open();
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.all).toHaveLength(4);
+
+    // Five seconds on: at once again.
+    await vi.advanceTimersByTimeAsync(5000);
+    last().open();
+    last().drop(4412);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(5);
+  });
+
+  it("opens again when a vault it left out after a close for hidden vaults comes back", async () => {
+    const { vaults } = server([{ name: "Tagebuch" }, { name: "Work" }]);
+    const queryClient = new QueryClient();
+    mount(queryClient);
+    await waitFor(() => expect(queryClient.getQueryData(["vaults"])).toBeDefined());
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    last().open();
+    // The vault list is still the old one when the new ticket is asked for.
+    last().drop(4412);
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(2));
+    last().open();
+
+    vaults.splice(0, 1);
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(queryClient.getQueryData<{ name: string }[]>(["vaults"])).toHaveLength(1));
+    expect(FakeSocket.all).toHaveLength(2);
+
+    vaults.unshift({ name: "Tagebuch" });
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(3));
+    expect(ticketOf(last())).toBe("t3");
+  });
+
+  it("hands the frames about discreet vaults, which name no vault, to whoever registered for them", async () => {
+    const seen = vi.fn();
+    const stop = onDiscreetFrame(seen);
     try {
       server();
       const queryClient = new QueryClient();
@@ -205,11 +267,16 @@ describe("the sync socket", () => {
 
       last().frame({ type: "hidden" });
 
-      expect(hidden).toHaveBeenCalledTimes(1);
-      expect(hidden.mock.calls[0][0]).toBe(queryClient);
+      expect(seen).toHaveBeenCalledTimes(1);
+      expect(seen.mock.calls[0][0]).toBe("hidden");
+      expect(seen.mock.calls[0][1]).toBe(queryClient);
       expect(invalidated(queryClient, ["tree", "Work"])).toBe(false);
+
+      stop();
+      last().frame({ type: "hidden" });
+      expect(seen).toHaveBeenCalledTimes(1);
     } finally {
-      hidden.mockRestore();
+      stop();
     }
   });
 

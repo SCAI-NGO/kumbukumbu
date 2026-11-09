@@ -41,7 +41,9 @@ namespace Kumbu.Server.Sync;
 /// which each such socket has a timer at <see cref="TicketGrant.RevealUntil"/>, or anything the check finds), each
 /// such socket is sent <c>{"type":"hidden"}</c> and closed with <see cref="Hidden"/>; its tab connects again at once,
 /// with a ticket that holds none. A vault marked discreet closes, with <see cref="Hidden"/> alone, the sockets of her
-/// sessions that hold it and don't show it. A reveal sends the session's sockets <c>{"type":"revealed"}</c>.
+/// sessions that hold it and don't show it, and so does a ticket asked before the mark and used after it. A reveal
+/// sends the session's sockets <c>{"type":"revealed"}</c>; those whose ticket was asked during an earlier reveal close
+/// after it with <see cref="Hidden"/>, so that their new ticket ends with this one.
 /// </para>
 /// </summary>
 public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions sessions, TimeProvider time, ILogger<SyncHub> log) : IHostedService
@@ -86,6 +88,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     private static readonly JsonSerializerOptions FrameOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
+
+    /// <summary>Per user, when she last marked a vault discreet or not; kept as long as a ticket asked before it lives.</summary>
+    private readonly ConcurrentDictionary<string, DateTime> _marks = new(StringComparer.Ordinal);
     private readonly Presence _presence = new(time);
     private long _opened;
     private readonly CancellationTokenSource _stopping = new();
@@ -139,10 +144,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     {
         var connection = new Connection(socket, grant, Interlocked.Increment(ref _opened), HintDebounce);
         // A timed reveal ends at once on this socket, not at the next check; one already over fires now. Armed before
-        // the connection is listed, so whoever finds it listed finds it armed.
-        using var revealEnds = grant.RevealUntil is { } until
-            ? time.CreateTimer(_ => _ = Observed(CheckAsync(connection, _stopping.Token)), null, Max(until - time.GetUtcNow().UtcDateTime, TimeSpan.Zero), Timeout.InfiniteTimeSpan)
-            : null;
+        // the connection is listed, so whoever finds it listed finds it armed; created first, so its callback has it.
+        ITimer? revealEnds = null;
+        if (grant.RevealUntil is { } until)
+        {
+            revealEnds = time.CreateTimer(_ => _ = Observed(CheckAsync(connection, _stopping.Token, revealEnds)), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            revealEnds.Change(Left(until), Timeout.InfiniteTimeSpan);
+        }
+
         _connections[connection] = 0;
         try
         {
@@ -169,7 +178,16 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
             // The ticket's vaults as they are now: a ticket asked for before a revocation or a role lowered (or while
             // one was told to the hub, before this connection was listed) holds them as they were. Nothing goes out
-            // and no frame is read before this. A revealed ticket's session is asked whether it still shows them.
+            // and no frame is read before this. A revealed ticket's session is asked whether it still shows them. A
+            // ticket asked before a mark may hold a vault now discreet: the mark's own sweep missed it, unlisted then,
+            // and read after the listing, a mark set later finds the connection.
+            if (!grant.Revealed && MarkedSince(grant))
+            {
+                log.LogInformation("Closed the sync connection of {Subject}: its ticket was asked before a vault was marked discreet or not", Describe(grant.Subject));
+                await connection.CloseAsync(Hidden, "vault marked discreet, connect again");
+                return;
+            }
+
             if (grant.Revealed)
             {
                 await CheckAsync(connection, ct);
@@ -222,6 +240,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
         finally
         {
+            revealEnds?.Dispose();
             _connections.TryRemove(connection, out _);
             connection.Complete();
             ClearPresence(connection, null);
@@ -279,17 +298,27 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// were shown close with <see cref="Hidden"/>.</summary>
     public async Task DiscreetHiddenAsync(string subject, CancellationToken ct)
     {
+        if (BeforeAccessChange is { } before) await before();
         var picked = _connections.Keys.Where(c => IsSession(c, subject)).ToList();
         foreach (var connection in picked.Where(c => !c.Grant.Revealed)) connection.Notify(HiddenFrame);
         await Task.WhenAll(picked.Where(c => c.Grant.Revealed).Select(CloseHiddenAsync));
     }
 
     /// <summary>The session <paramref name="subject"/> showed its discreet vaults: its sockets are told, so its other tabs
-    /// ask for the vault list again (and so for a new ticket).</summary>
-    public Task DiscreetRevealedAsync(string subject, CancellationToken ct)
+    /// ask for the vault list again (and so for a new ticket). Those whose ticket was asked during an earlier reveal are
+    /// closed after it with <see cref="Hidden"/>: their timer is at that reveal's end, and their new ticket has this one's.</summary>
+    public async Task DiscreetRevealedAsync(string subject, CancellationToken ct)
     {
-        foreach (var connection in _connections.Keys.Where(c => IsSession(c, subject))) connection.Notify(RevealedFrame);
-        return Task.CompletedTask;
+        var picked = _connections.Keys.Where(c => IsSession(c, subject)).ToList();
+        foreach (var connection in picked.Where(c => !c.Grant.Revealed)) connection.Notify(RevealedFrame);
+        var renewed = picked.Where(c => c.Grant.Revealed && !c.IsClosed).ToList();
+        if (renewed.Count == 0) return;
+        log.LogInformation("Closed {Count} sync connections of {Subject}: its discreet vaults are revealed again", renewed.Count, Describe(renewed[0].Grant.Subject));
+        await Task.WhenAll(renewed.Select(async connection =>
+        {
+            ClearPresence(connection, null);
+            await connection.CloseAsync(Hidden, "discreet vaults revealed again, connect again", RevealedFrame);
+        }));
     }
 
     /// <summary>
@@ -300,8 +329,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// </summary>
     public async Task DiscreetChangedAsync(string userId, string vaultId, CancellationToken ct)
     {
+        // Before the sweep: a ticket asked before the mark whose connection the sweep doesn't find yet is closed by RunAsync.
+        PruneMarks();
+        _marks[userId] = time.GetUtcNow().UtcDateTime;
         if (BeforeAccessChange is { } before) await before();
         var picked = _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId && c.Has(vaultId)).ToList();
+        var closed = 0;
         await Task.WhenAll(picked.Select(async connection =>
         {
             bool shown;
@@ -316,9 +349,22 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             }
 
             if (shown) return;
+            Interlocked.Increment(ref closed);
             ClearPresence(connection, null);
             await connection.CloseAsync(Hidden, "vault marked discreet, connect again");
         }));
+        if (closed > 0) log.LogInformation("Closed {Count} sync connections of user {UserId}: a vault was marked discreet or not", closed, userId);
+    }
+
+    /// <summary>Whether the session's ticket was asked before (or in the clock tick of) its user's last mark.</summary>
+    private bool MarkedSince(TicketGrant grant) =>
+        grant.Subject.Kind == SubjectKind.Session && _marks.TryGetValue(grant.Subject.User, out var at) && grant.IssuedAt <= at;
+
+    /// <summary>Marks older than any ticket that can still be used.</summary>
+    private void PruneMarks()
+    {
+        var oldest = time.GetUtcNow().UtcDateTime - SyncTickets.Lifetime;
+        foreach (var mark in _marks.Where(m => m.Value < oldest)) _marks.TryRemove(mark);
     }
 
     private static bool IsSession(Connection connection, string subject) =>
@@ -327,7 +373,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// <summary>Told <c>hidden</c>, then closed: its tab forgets the discreet vaults and connects again at once.</summary>
     private async Task CloseHiddenAsync(Connection connection)
     {
-        log.LogInformation("Closed a sync connection of {Subject}: its discreet vaults are hidden again", Describe(connection.Grant.Subject));
+        if (connection.IsClosed) return;
+        log.LogInformation("Closed the sync connection of {Subject}: its discreet vaults are hidden again", Describe(connection.Grant.Subject));
         ClearPresence(connection, null);
         await connection.CloseAsync(Hidden, "discreet vaults hidden, connect again", HiddenFrame);
     }
@@ -367,7 +414,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         [.. _connections.Keys.SelectMany(c => c.Vaults.Select(v => (c.Grant.Subject, v.Key, v.Value.Name, v.Value.Level)))];
 
     /// <summary>One round of the 30-second check, for every connection; the loop runs it, tests call it directly.</summary>
-    internal Task CheckAsync(CancellationToken ct) => Task.WhenAll(_connections.Keys.Select(c => CheckAsync(c, ct)));
+    internal Task CheckAsync(CancellationToken ct)
+    {
+        PruneMarks();
+        return Task.WhenAll(_connections.Keys.Select(c => CheckAsync(c, ct)));
+    }
 
     /// <summary>The connections <paramref name="which"/> picks, checked now; how many.</summary>
     private async Task<int> RefreshAsync(Func<Connection, bool> which, CancellationToken ct)
@@ -377,14 +428,16 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         return picked.Count;
     }
 
-    /// <summary>One connection; in parallel with the others, so a slow close holds up only its own.</summary>
-    private async Task CheckAsync(Connection connection, CancellationToken ct)
+    /// <summary>One connection; in parallel with the others, so a slow close holds up only its own. <paramref name="revealEnds"/>:
+    /// the timer at the end of the ticket's reveal, set again to the end the session's reveal has now if it still shows it.</summary>
+    private async Task CheckAsync(Connection connection, CancellationToken ct, ITimer? revealEnds = null)
     {
         var subject = connection.Grant.Subject;
         bool alive, hidden;
+        DateTime? revealUntil;
         try
         {
-            (alive, hidden) = await StateAsync(connection, ct);
+            (alive, hidden, revealUntil) = await StateAsync(connection, ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -406,17 +459,19 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return;
         }
 
+        // Still shown when the ticket's reveal ends (renewed without the hub told, or the clocks apart): at the new end.
+        if (revealEnds is not null && revealUntil is { } until && !connection.IsClosed) revealEnds.Change(Left(until), Timeout.InfiniteTimeSpan);
         await RecomputeAsync(connection, ct);
     }
 
-    /// <summary>Whether the connection's subject is alive (<see cref="IsAliveAsync"/>), and whether its ticket was asked
-    /// during a reveal its session no longer shows.</summary>
-    private async Task<(bool Alive, bool Hidden)> StateAsync(Connection connection, CancellationToken ct)
+    /// <summary>Whether the connection's subject is alive (<see cref="IsAliveAsync"/>), whether its ticket was asked
+    /// during a reveal its session no longer shows, and when the session's reveal ends if it shows them.</summary>
+    private async Task<(bool Alive, bool Hidden, DateTime? RevealUntil)> StateAsync(Connection connection, CancellationToken ct)
     {
         var subject = connection.Grant.Subject;
-        if (subject.Kind == SubjectKind.Key) return (await keys.IsActiveAsync(subject.Id, ct), false);
-        var (user, revealed) = await sessions.SocketStateAsync(subject.Id, ct);
-        return (user == subject.User, connection.Grant.Revealed && !revealed);
+        if (subject.Kind == SubjectKind.Key) return (await keys.IsActiveAsync(subject.Id, ct), false, null);
+        var (user, revealed, until) = await sessions.SocketStateAsync(subject.Id, ct);
+        return (user == subject.User, connection.Grant.Revealed && !revealed, until);
     }
 
     /// <summary>
@@ -504,7 +559,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         return result;
     }
 
-    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+    /// <summary>The time from now until <paramref name="until"/>, none if it is past.</summary>
+    private TimeSpan Left(DateTime until) => until - time.GetUtcNow().UtcDateTime is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     private static string Describe(Subject subject) => subject.Kind == SubjectKind.Key ? $"API key {subject.Id}" : $"a session of user {subject.User}";
 
@@ -854,7 +910,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         /// <summary>Bounded: a send under way is cancelled first, and a socket that won't take the close frame in time is
-        /// aborted. <paramref name="last"/>: a frame sent just before the close, after everything else.</summary>
+        /// aborted. <paramref name="last"/>: a frame sent just before the close, instead of anything still queued.</summary>
         public async Task CloseAsync(WebSocketCloseStatus status, string reason, string? last = null)
         {
             lock (_gate)
@@ -879,7 +935,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                     using var timeout = new CancellationTokenSource(CloseTimeout);
                     if (last is not null && socket.State == WebSocketState.Open)
                     {
-                        await socket.SendAsync(Encoding.UTF8.GetBytes(last), WebSocketMessageType.Text, endOfMessage: true, timeout.Token).WaitAsync(timeout.Token);
+                        await Observed(socket.SendAsync(Encoding.UTF8.GetBytes(last), WebSocketMessageType.Text, endOfMessage: true, timeout.Token)).WaitAsync(timeout.Token);
                     }
 
                     await socket.CloseOutputAsync(status, reason, timeout.Token).WaitAsync(timeout.Token);

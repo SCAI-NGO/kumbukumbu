@@ -31,7 +31,8 @@ public sealed record TicketVault(string VaultId, string VaultName, string? Membe
 /// <summary>What a ticket lets its WebSocket hear about: the subject and the vaults it opened when the ticket was made.
 /// <c>Display</c>: the user's display name, which members see when she, their vault's owner, is editing.
 /// <c>Revealed</c>: a session's ticket asked while it showed its discreet vaults, which it may hold then only until the
-/// reveal ends, at <c>RevealUntil</c> (null for a reveal until the session ends or hides them).</summary>
+/// reveal ends, at <c>RevealUntil</c> (null for a reveal until the session ends or hides them). <c>IssuedAt</c>: when
+/// the ticket was issued, set by <see cref="SyncTickets.Issue"/>.</summary>
 public sealed record TicketGrant(Subject Subject, IReadOnlyList<TicketVault> Vaults)
 {
     public string Display { get; init; } = "";
@@ -39,6 +40,8 @@ public sealed record TicketGrant(Subject Subject, IReadOnlyList<TicketVault> Vau
     public bool Revealed { get; init; }
 
     public DateTime? RevealUntil { get; init; }
+
+    public DateTime IssuedAt { get; init; }
 }
 
 /// <summary>
@@ -70,7 +73,7 @@ public sealed class SyncTickets(TimeProvider time)
         Sweep();
         var ticket = Secrets.New(Prefix);
         var now = Now;
-        _tickets[Hash(ticket)] = (grant, now, Interlocked.Increment(ref _issued));
+        _tickets[Hash(ticket)] = (grant with { IssuedAt = now }, now, Interlocked.Increment(ref _issued));
         // By number, not time: tickets issued within one clock tick still have an order, and the new one is never dropped.
         var held = _tickets.Where(t => t.Value.Grant.Subject == grant.Subject).OrderByDescending(t => t.Value.Number).Skip(MaxPerKey).ToList();
         foreach (var (hash, _) in held) _tickets.TryRemove(hash, out _);
