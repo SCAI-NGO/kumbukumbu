@@ -304,7 +304,7 @@ export type MoveResult = components["schemas"]["MovedView"];
 export async function moveNote(queryClient: QueryClient, from: string, to: string, { exact = false, signal }: { exact?: boolean; signal?: AbortSignal } = {}): Promise<MoveResult> {
   const result = await call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact }, signal }));
   const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
-  const old = (q: Query) => ["note", "links", "backlinks", "history", "publication"].includes(q.queryKey[0] as string) && gone(q.queryKey);
+  const old = (q: Query) => ["note", "links", "backlinks", "history", "version", "publication"].includes(q.queryKey[0] as string) && gone(q.queryKey);
   // The old path's views stay mounted until the caller has moved on: asked again, or removed under them (which builds
   // the query anew and fetches it), they would ask the server for a note that is no longer there.
   void queryClient.cancelQueries({ predicate: old });
