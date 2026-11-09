@@ -765,13 +765,14 @@ describe("Named from its heading", () => {
   });
 
   it("sends no move while text is unsaved", async () => {
-    const { moves, puts } = gardenApi();
+    const { moves, puts } = gardenApi({ notes: { [UNTITLED]: "# Einkaufsliste" } });
     const { u } = await writeIn(untitledUrl);
-    await u.type(editorBox(), "Einkaufsliste");
-    // Write mode ended under the editor, without its guard (a role lowered meanwhile): what was typed is sent as it goes.
+    await u.type(editorBox(), "{Enter}- Tomaten");
+    // Write mode ended under the editor, without its guard (a role lowered meanwhile): what was typed is sent as it
+    // goes, and a move now could overtake that save.
     act(() => useEditor.getState().setMode("read"));
     await wait(50);
-    await waitFor(() => expect(puts.at(-1)).toEqual({ path: UNTITLED, content: "# Einkaufsliste" }));
+    await waitFor(() => expect(puts.at(-1)).toEqual({ path: UNTITLED, content: "# Einkaufsliste\n- Tomaten" }));
     expect(moves).toEqual([]);
   });
 
