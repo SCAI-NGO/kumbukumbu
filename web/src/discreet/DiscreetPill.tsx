@@ -30,7 +30,7 @@ export const useRevealed = () => useDiscreet((s) => s.revealed);
  * background don't cover it; it takes no clicks.
  */
 export function DiscreetFrame() {
-  return <div aria-hidden data-discreet-frame className="pointer-events-none absolute inset-0 z-30 inset-ring-2 inset-ring-discreet" />;
+  return <div aria-hidden data-discreet-frame className="pointer-events-none absolute inset-0 z-30 inset-ring-2 inset-ring-discreet-line" />;
 }
 
 /**
@@ -42,7 +42,7 @@ export default function DiscreetPill() {
   const minutes = useMinutesLeft(until);
   const hide = useHideAgain();
   return (
-    <div role="group" aria-label="Discreet vaults shown" className="flex min-h-9 w-fit max-w-full items-center gap-1.5 rounded-full border border-discreet bg-discreet-soft pr-0.5 pl-3 text-sm font-medium text-discreet">
+    <div role="group" aria-label="Discreet vaults shown" className="flex min-h-9 w-fit max-w-full items-center gap-1.5 rounded-full border border-discreet-line bg-discreet-soft pr-0.5 pl-3 text-sm font-medium text-discreet">
       <Eye size={16} aria-hidden className="flex-none" />
       <span className="truncate">
         Discreet
@@ -59,7 +59,8 @@ export default function DiscreetPill() {
         onClick={() => void hide()}
         aria-label="Hide discreet vaults"
         title="Hide discreet vaults"
-        className="flex size-8 flex-none items-center justify-center rounded-full hover:bg-discreet/15 focus-visible:outline-2 focus-visible:outline-discreet"
+        // 32 px drawn, 44 px to tap: the area reaches past the circle on every side.
+        className="relative flex size-8 flex-none items-center justify-center rounded-full after:absolute after:-inset-1.5 hover:bg-discreet/15 focus-visible:outline-2 focus-visible:outline-discreet"
       >
         <X size={16} aria-hidden />
       </button>

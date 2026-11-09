@@ -54,8 +54,16 @@ describe("index.css", () => {
     }
   });
 
-  it("has the discreet amber of schemes.ts, light and dark", () => {
-    expect(css).toContain(`--color-discreet: light-dark(${discreet.light}, ${discreet.dark});`);
-    expect(css).toContain(`--color-discreet-soft: color-mix(in srgb, light-dark(${discreet.light}, ${discreet.dark}) 14%, transparent);`);
+  it.each(schemes)("has the discreet amber of schemes.ts in $name", (scheme) => {
+    const block = css.match(new RegExp(`\\[data-scheme="${scheme.id}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    const amber = scheme.light ? discreet.light : discreet.dark;
+    expect(block).toContain(`--discreet: ${amber.text};`);
+    expect(block).toContain(`--discreet-line: ${amber.line};`);
+    expect(block).toContain(`--discreet-soft: color-mix(in srgb, ${amber.text} 14%, transparent);`);
+  });
+
+  it("gives the discreet tokens to Tailwind", () => {
+    for (const token of ["discreet", "discreet-line", "discreet-soft"]) expect(css).toContain(`--color-${token}: var(--${token});`);
+    expect(css).not.toContain("light-dark(");
   });
 });

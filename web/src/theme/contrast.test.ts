@@ -60,11 +60,21 @@ describe("colour schemes", () => {
     "#" + [1, 3, 5].map((i) => Math.round(parseInt(color.slice(i, i + 2), 16) * alpha + parseInt(ground.slice(i, i + 2), 16) * (1 - alpha)).toString(16).padStart(2, "0")).join("");
 
   it.each(schemes)("the discreet amber reads at 4.5:1 on $name's grounds and on its tint", (scheme) => {
-    const amber = scheme.light ? discreet.light : discreet.dark;
+    const { text } = scheme.light ? discreet.light : discreet.dark;
     for (const ground of grounds) {
-      expect(contrast(amber, scheme.tokens[ground])).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(amber, over(amber, scheme.tokens[ground], 0.14))).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(text, scheme.tokens[ground])).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(text, over(text, scheme.tokens[ground], 0.14))).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  // The frame and the pill's border: a mark, not text, so 3:1 (WCAG 1.4.11), brighter than the text where it can be.
+  it.each(schemes)("the discreet frame stands out at 3:1 on $name's grounds", (scheme) => {
+    const { line } = scheme.light ? discreet.light : discreet.dark;
+    for (const ground of grounds) expect(contrast(line, scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
+  });
+
+  it("draws the light frame brighter than the light text", () => {
+    expect(luminance(discreet.light.line)).toBeGreaterThan(luminance(discreet.light.text));
   });
 
   it("has a checker that notices a failing pair", () => {

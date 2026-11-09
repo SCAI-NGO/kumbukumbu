@@ -22,6 +22,9 @@
   --on-accent: #17110a;
   --warning: #ff9466;
   --success: #6cc070;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="catppuccin-mocha"] {
@@ -39,6 +42,9 @@
   --on-accent: #0c0c13;
   --warning: #fab387;
   --success: #a6e3a1;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="catppuccin-latte"] {
@@ -56,6 +62,9 @@
   --on-accent: #ffffff;
   --warning: #a64107;
   --success: #3a9027;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="tokyo-night"] {
@@ -73,6 +82,9 @@
   --on-accent: #0d0e13;
   --warning: #ff9e64;
   --success: #9ece6a;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="tokyo-night-day"] {
@@ -90,6 +102,9 @@
   --on-accent: #ffffff;
   --warning: #804300;
   --success: #587539;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="gruvbox-dark"] {
@@ -107,6 +122,9 @@
   --on-accent: #141414;
   --warning: #feaa64;
   --success: #b8bb26;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="gruvbox-light"] {
@@ -124,6 +142,9 @@
   --on-accent: #ffffff;
   --warning: #923003;
   --success: #746f0d;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="nord"] {
@@ -141,6 +162,9 @@
   --on-accent: #171a20;
   --warning: #ebcb8b;
   --success: #a3be8c;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="dracula"] {
@@ -158,6 +182,9 @@
   --on-accent: #14151b;
   --warning: #ffb86c;
   --success: #50fa7b;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="solarized-dark"] {
@@ -175,6 +202,9 @@
   --on-accent: #00161b;
   --warning: #ccad4e;
   --success: #859900;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="solarized-light"] {
@@ -192,6 +222,9 @@
   --on-accent: #ffffff;
   --warning: #765a00;
   --success: #708100;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="everforest-dark"] {
@@ -209,6 +242,9 @@
   --on-accent: #171b1e;
   --warning: #eaa788;
   --success: #a7c080;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="everforest-light"] {
@@ -226,6 +262,9 @@
   --on-accent: #ffffff;
   --warning: #974d17;
   --success: #768701;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="rose-pine"] {
@@ -243,6 +282,9 @@
   --on-accent: #0d0c12;
   --warning: #f6c177;
   --success: #9ccfd8;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="rose-pine-dawn"] {
@@ -260,6 +302,9 @@
   --on-accent: #ffffff;
   --warning: #8d5f1f;
   --success: #538e99;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 [data-scheme="one-dark"] {
@@ -277,6 +322,9 @@
   --on-accent: #14161a;
   --warning: #e5c07b;
   --success: #98c379;
+  --discreet: #ffd27f;
+  --discreet-line: #ffd27f;
+  --discreet-soft: color-mix(in srgb, #ffd27f 14%, transparent);
 }
 
 [data-scheme="one-light"] {
@@ -294,6 +342,9 @@
   --on-accent: #ffffff;
   --warning: #865c01;
   --success: #489147;
+  --discreet: #643b00;
+  --discreet-line: #a05800;
+  --discreet-soft: color-mix(in srgb, #643b00 14%, transparent);
 }
 
 @theme inline {
@@ -311,8 +362,9 @@
   --color-warning: var(--warning);
   --color-success: var(--success);
   /* The discreet mode's amber, the same in every scheme of a kind (schemes.ts, `discreet`). */
-  --color-discreet: light-dark(#643b00, #ffd27f);
-  --color-discreet-soft: color-mix(in srgb, light-dark(#643b00, #ffd27f) 14%, transparent);
+  --color-discreet: var(--discreet);
+  --color-discreet-line: var(--discreet-line);
+  --color-discreet-soft: var(--discreet-soft);
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
