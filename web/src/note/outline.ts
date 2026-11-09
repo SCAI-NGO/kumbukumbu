@@ -4,11 +4,34 @@ import { linkLabel } from "./wikiLinks";
 /** A heading of the note: its level (1–6), its text as shown, and its 1-based source line. */
 export type Heading = { level: number; text: string; line: number };
 
-/** A heading's Markdown as it reads: wiki links by their label, emphasis and code marks and links' URLs gone. */
-const plain = (md: string) =>
-  md
-    .replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))
+// A code span (`` `…` ``, its backticks paired by count), in which `%%` is text.
+const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
+
+/** The text with its code spans blanked, so `%%` is found where it starts or ends a comment, at the same places. */
+const masked = (text: string) => text.replace(codeSpan, (span) => " ".repeat(span.length));
+
+/** What of `text` lies outside comments, one opened before it when `open`; and whether one is open at its end. */
+function outsideComments(text: string, open: boolean): { text: string; open: boolean } {
+  const hidden = masked(text);
+  let shown = "";
+  let from = 0;
+  for (let p = hidden.indexOf("%%"); p >= 0; p = hidden.indexOf("%%", p + 2)) {
+    if (!open) shown += text.slice(from, p);
+    open = !open;
+    from = p + 2;
+  }
+  return { text: open ? shown : shown + text.slice(from), open };
+}
+
+/**
+ * A heading's Markdown as it reads: wiki links by their label, emphasis, highlight and code marks, links' URLs and
+ * comments gone.
+ */
+export const headingText = (md: string) =>
+  outsideComments(md, false)
+    .text.replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/==(?=[^\s=])(.+?)(?<=[^\s=])==/g, "$1")
     .replace(/(\*\*|__|\*|_|~~|`)(.+?)\1/g, "$2")
     .trim();
 
@@ -17,30 +40,38 @@ const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3
 
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
- * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code. The body keeps
- * the source's line numbers (front matter lines are empty).
+ * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
+ * (remarkComments hides those). The body keeps the source's line numbers (front matter lines are empty).
  */
 export function outline(body: string): Heading[] {
   const headings: Heading[] = [];
   let fence: string | null = null;
+  let comment = false;
   // The paragraph the current line continues: its first line (0-based) and its text so far.
   let para: { start: number; text: string[] } | null = null;
-  body.split("\n").forEach((line, i) => {
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+  body.split("\n").forEach((source, i) => {
+    // Fences are found on the source, comments or not: Markdown parses the code first, and a `%%` in it is text.
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source)?.[1];
     if (marker && (fence === null || (marker[0] === fence[0] && marker.length >= fence.length))) {
       fence = fence === null ? marker : null;
       para = null;
       return;
     }
     if (fence !== null) return;
+    // Indented code (not a paragraph's next line) holds no heading and no comment's start or end.
+    if (!para && /^( {4}|\t)/.test(source) && source.trim()) return;
+    // The line as it shows: what lies outside comments.
+    const shown = outsideComments(source, comment);
+    comment = shown.open;
+    const line = shown.text;
     const setext = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
     if (setext && para) {
-      headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: plain(para.text.join(" ")), line: para.start + 1 });
+      headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: headingText(para.text.join(" ")), line: para.start + 1 });
       para = null;
       return;
     }
     const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
-    if (m && m[2]) headings.push({ level: m[1].length, text: plain(m[2]), line: i + 1 });
+    if (m && m[2]) headings.push({ level: m[1].length, text: headingText(m[2]), line: i + 1 });
     if (m || !paragraphLine(line)) para = null;
     else if (para) para.text.push(line.trim());
     else para = { start: i, text: [line.trim()] };
