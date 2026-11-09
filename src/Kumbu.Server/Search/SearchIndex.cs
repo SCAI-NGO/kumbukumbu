@@ -37,6 +37,8 @@ public sealed class SearchIndex : BackgroundService
     private readonly ChunkTokenizer? _tokenizer;
     private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
     private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
+    // Notes and PDFs whose last attempt failed, at which version and under which scheme (see Requeue).
+    private readonly ConcurrentDictionary<(string Vault, VaultPath Path), (string Version, string Scheme)> _failed = new();
     private int _busy;
     private readonly CancellationTokenSource _stopping = new();
     private readonly SemaphoreSlim _warming = new(1, 1);
@@ -76,6 +78,24 @@ public sealed class SearchIndex : BackgroundService
         }
     }
 
+    /// <summary>Queues what a search found stale, but not a note or PDF whose last attempt at its current version, under
+    /// the current scheme, failed: each search would send it to the provider again. A write (a new version), another
+    /// scheme or the next unlock tries it again.</summary>
+    public void Requeue(UnlockedVault vault, IEnumerable<VaultPath> paths) => Enqueue(vault, paths.Where(p => !HasFailed(vault, p)));
+
+    internal bool HasFailed(UnlockedVault vault, VaultPath path) =>
+        _failed.TryGetValue((vault.Id, path), out var failed) && failed == (CurrentVersion(vault, path), Bound.Scheme);
+
+    internal void NoteFailed(UnlockedVault vault, VaultPath path)
+    {
+        if (CurrentVersion(vault, path) is { } version) _failed[(vault.Id, path)] = (version, Bound.Scheme);
+    }
+
+    private static string? CurrentVersion(UnlockedVault vault, VaultPath path) =>
+        vault.Notes.TryGetValue(path, out var entry) ? entry.Note.Version
+        : vault.Attachments.TryGetValue(path, out var file) ? file.Attachment.Current.Version
+        : null;
+
     /// <summary>Every note whose current version has no embeddings of the vault's model, and every embedding whose
     /// note is gone. Embeddings of another model count as missing: after a switch (of the internal model, or of the
     /// vault's provider), the vault is embedded again; so do those of another chunking scheme, which are chunked anew
@@ -88,6 +108,7 @@ public sealed class SearchIndex : BackgroundService
         // Compared with the fallback, every note stored under the tokenizer would look stale; ExecuteAsync catches up
         // every open vault once the bound has settled.
         if (!TokenizerSettled) return;
+        foreach (var key in _failed.Keys.Where(k => k.Vault == vault.Id)) _failed.TryRemove(key, out _);
         if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
         {
             _log.LogWarning("Vault {VaultId} uses the embedding provider {Provider}, which isn't configured; it isn't indexed", vault.Id, vault.EmbeddingProvider);
@@ -206,6 +227,7 @@ public sealed class SearchIndex : BackgroundService
             {
                 // The owner switched the vault to another provider since: that provider's queue has the note.
                 if (vault.EmbeddingProvider == provider.Name) await IndexAsync(vault, path, stoppingToken);
+                _failed.TryRemove((vault.Id, path), out _);
             }
             catch (EmbeddingUnavailableException e) when (e.ProviderDown)
             {
@@ -217,6 +239,7 @@ public sealed class SearchIndex : BackgroundService
             {
                 // The next write or unlock tries again; one bad note must not stop the index.
                 _log.LogError("Indexing a note of vault {VaultId} failed: {Message}", vault.Id, e.Message);
+                NoteFailed(vault, path);
             }
             finally
             {

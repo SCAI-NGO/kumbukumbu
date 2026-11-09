@@ -623,7 +623,7 @@ public sealed class EncryptedNoteStore(
                     if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
                     {
                         pending++;
-                        index.Enqueue(vault, [path]);
+                        index.Requeue(vault, [path]);
                         continue;
                     }
 
@@ -650,7 +650,7 @@ public sealed class EncryptedNoteStore(
                     if (!embeddings.TryGetValue(path, out var e) || e.Model != model || e.Version != file.Version) continue;
                     if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
                     {
-                        index.Enqueue(vault, [path]);
+                        index.Requeue(vault, [path]);
                         continue;
                     }
 
@@ -662,7 +662,7 @@ public sealed class EncryptedNoteStore(
                     }
                 }
 
-                if (rechunk.Count > 0) index.Enqueue(vault, rechunk);
+                if (rechunk.Count > 0) index.Requeue(vault, rechunk);
             }
         }
 

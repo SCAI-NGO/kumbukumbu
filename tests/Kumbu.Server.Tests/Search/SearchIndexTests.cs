@@ -388,6 +388,62 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_note_that_fails_is_not_sent_again_by_every_search()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/bad.md", "alpha poison\n"), Ct);
+        await IdleAsync(s);
+        // Stored under another scheme, and chunked otherwise then: chunking anew has a text to embed.
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        var old = vault.Embeddings[P("/Work/bad.md")];
+        vault.Embeddings = vault.Embeddings.SetItem(P("/Work/bad.md"), old with { Scheme = null, Chunks = [.. old.Chunks.Select(c => c with { Hash = "older" })] });
+        s.Embedder.Refuses = t => t.Contains("poison");
+
+        Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).StaleNotes);
+        await IdleAsync(s);
+        Assert.Equal(1, s.Embedder.Refused);
+        Assert.True(s.Index.HasFailed(vault, P("/Work/bad.md")));
+
+        for (var i = 0; i < 3; i++)
+        {
+            // Still stale, so still ranked by its words, but not queued again.
+            Assert.Single((await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct)).StaleNotes);
+            Assert.Equal(0, s.Index.Queued);
+            await IdleAsync(s);
+        }
+
+        Assert.Equal(1, s.Embedder.Refused);
+
+        // A new version is tried again, by its write; it fails as well, and searches leave it again.
+        var current = (await s.Store.GetAsync(P("/Work/bad.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "alpha poison again\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        await IdleAsync(s);
+        Assert.Equal(2, s.Embedder.Refused);
+        await s.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+        Assert.Equal(0, s.Index.Queued);
+    }
+
+    [Fact]
+    public async Task Failures_are_forgotten_on_an_unlock_and_with_another_version()
+    {
+        // The index doesn't run: only what is noted here counts.
+        var s = await StartAsync(start: false);
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+
+        s.Index.NoteFailed(vault, P("/Work/a.md"));
+        Assert.True(s.Index.HasFailed(vault, P("/Work/a.md")));
+        s.Index.CatchUp(vault);
+        Assert.False(s.Index.HasFailed(vault, P("/Work/a.md")));
+
+        s.Index.NoteFailed(vault, P("/Work/a.md"));
+        var current = (await s.Store.GetAsync(P("/Work/a.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "alpha beta\n", Writers.Dev, WriterRef.Server, T0), Ct);
+        Assert.False(s.Index.HasFailed(vault, P("/Work/a.md")));
+    }
+
+    [Fact]
     public async Task Pieces_of_a_long_line_are_found_by_their_part()
     {
         var s = await StartAsync();
