@@ -42,6 +42,11 @@ public sealed record DamagedMemberSlot(ObjectId SlotId, string VaultId, byte[] O
 /// open has its old values as the new ones: it is left as it is, but still counted among the user's.</summary>
 public sealed record MetaReseal(string Id, byte[] OldMeta, byte[]? OldNameId, byte[] NewMeta, byte[]? NewNameId);
 
+/// <summary>The user's list of discreet vaults sealed again under the new user key, written only if it is still
+/// <c>Old</c>; null <c>Old</c>: she had none, and must still have none. One that didn't open has its old value as the
+/// new one: it is left as it is.</summary>
+public sealed record ListReseal(byte[]? Old, byte[]? New);
+
 /// <summary>
 /// Everything a rotation writes, computed by <see cref="UserKeyRotation.PrepareAsync"/>; <see cref="UserKeyRotation.ApplyAsync"/>
 /// writes it only where each document still holds the value it was prepared from. <c>RecoveryUsed</c>: in a recovery,
@@ -73,6 +78,9 @@ public sealed record PreparedRotation(
 
     /// <summary>Her WebDAV shares' metas, sealed again under the new user key, as <see cref="ApiKeys"/>' are.</summary>
     public IReadOnlyList<MetaReseal> DavShareMetas { get; init; } = [];
+
+    /// <summary>Her list of discreet vaults, sealed again under the new user key.</summary>
+    public ListReseal DiscreetList { get; init; } = new(null, null);
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -161,7 +169,23 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             DamagedMemberSlots = damaged,
             Notices = await Sharing.MemberNotices.PrepareResealAsync(db, userId, oldUserKey, newUserKey, ct),
             DavShareMetas = shares,
+            DiscreetList = await PrepareDiscreetListAsync(userId, oldUserKey, newUserKey, ct),
         };
+    }
+
+    /// <summary>The list of discreet vaults sealed again under the new key; one that doesn't open with the old key is
+    /// left as it is (it counts as unreadable before and after).</summary>
+    private async Task<ListReseal> PrepareDiscreetListAsync(string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
+    {
+        var old = await Users.Find(u => u.Id == userId).Project(u => u.DiscreetVaults).FirstOrDefaultAsync(ct);
+        if (old is null) return new ListReseal(null, null);
+        if (DiscreetVaults.OpenList(userId, oldUserKey, old, out var failure) is not { } ids)
+        {
+            log.LogWarning("The discreet vaults of user {UserId} do not open: {Reason}; they are left as they are", userId, failure);
+            return new ListReseal(old, old);
+        }
+
+        return new ListReseal(old, DiscreetVaults.SealList(userId, newUserKey, ids));
     }
 
     /// <summary>
@@ -259,6 +283,11 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             users.Eq(u => u.Id, userId) & (keypair.OldPrivateKey is { } oldPrivate ? users.Eq(u => u.PrivateKey, oldPrivate) : users.Exists(u => u.PrivateKey, false)),
             Builders<UserDocument>.Update.Set(u => u.PublicKey, keypair.NewPublicKey).Set(u => u.PrivateKey, keypair.NewPrivateKey),
             cancellationToken: ct));
+        // The list of discreet vaults, only over the one prepared from: a mark meanwhile, under the old key, would be lost.
+        var list = rotation.DiscreetList;
+        var unchanged = users.Eq(u => u.Id, userId) & users.Eq(u => u.DiscreetVaults, list.Old);
+        if (list.New is { } resealed) Require(await Users.UpdateOneAsync(session, unchanged, Builders<UserDocument>.Update.Set(u => u.DiscreetVaults, resealed), cancellationToken: ct));
+        else if (!await Users.Find(session, unchanged).AnyAsync(ct)) throw new RotationConflictException();
 
         await ApplyUserSlotsAsync(session, rotation, stamp, ct);
         // The lookups first, then the member slots' wrapping: the lookup's update is conditional on the old wrapping.
