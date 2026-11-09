@@ -89,36 +89,105 @@ export function renameTarget(path: string, content: string, root: TreeFolder): s
   return `${folder}/${file}`;
 }
 
+/** How long the tree and the move may each take: Write mode for the note waits on them. */
+const RENAME_TIMEOUT = 15_000;
+
+class TimedOut extends Error {}
+
+/** `run` with a signal that aborts after the timeout; a timeout rejects with `TimedOut`, whatever the request does then. */
+async function timed<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new TimedOut());
+    }, RENAME_TIMEOUT);
+  });
+  try {
+    return await Promise.race([run(controller.signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Renames go one after another, each looking at the folder afresh: two notes may want the same name. */
+let queue: Promise<void> = Promise.resolve();
+/** Counted up by `resetRenames`: what was queued before doesn't run. */
+let generation = 0;
+/** The renames waiting for the editor's unmount to settle, by path. */
+const pending = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Write mode on `path` ended with `saved` saved: the rename runs once the unmount has settled, unless an editor for
+ * the note mounts again first (StrictMode does so at once), which `cancelRename` stands for.
+ */
+export function scheduleRename(queryClient: QueryClient, path: string, saved: string) {
+  if (!isUntitled(path) || headingName(saved) === null) return;
+  cancelRename(path);
+  pending.set(
+    path,
+    setTimeout(() => {
+      pending.delete(path);
+      void renameFromHeading(queryClient, path, saved);
+    }, 0),
+  );
+}
+
+export function cancelRename(path: string) {
+  clearTimeout(pending.get(path));
+  pending.delete(path);
+}
+
+/** Forgets every rename waiting or queued (tests: none outlives its test). */
+export function resetRenames() {
+  for (const timer of pending.values()) clearTimeout(timer);
+  pending.clear();
+  queue = Promise.resolve();
+  generation++;
+}
+
 /**
  * Names an untitled note from the heading of `saved`, the text its editor last saved, once Write mode has ended with
  * everything saved (spec §2): through the move, which rewrites the links to it. Nothing is sent without such a
- * heading; nor without write permission, while anyone else edits the note (renamed under them, it would be gone for
- * them) or while another rename is under way. The open note, the recent notes and the URL follow it at once, also when
- * the editor's page is gone by then. A failure is said and left as it is: not tried again by itself.
+ * heading; nor without write permission or a session, while anyone else edits the note (renamed under them, it would
+ * be gone for them), or once the note is no longer where it was (moved by hand meanwhile). Queued behind any rename
+ * under way; Write mode waits for it. The open note, the recent notes and the URL follow it at once, also when the
+ * editor's page is gone by then. A failure is said and left as it is: not tried again by itself.
  */
-export async function renameFromHeading(queryClient: QueryClient, path: string, saved: string): Promise<void> {
-  if (!isUntitled(path) || headingName(saved) === null) return;
-  const editor = useEditor.getState();
-  if (!useSession.getState().user || editor.renaming !== null || editor.refused?.path === path) return;
+export function renameFromHeading(queryClient: QueryClient, path: string, saved: string): Promise<void> {
+  if (!isUntitled(path) || headingName(saved) === null || useEditor.getState().renaming.includes(path)) return Promise.resolve();
+  useEditor.getState().setRenaming(path, true);
+  const at = generation;
+  const run = queue.then(() => (at === generation ? renameNow(queryClient, path, saved) : undefined)).finally(() => useEditor.getState().setRenaming(path, false));
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function renameNow(queryClient: QueryClient, path: string, saved: string) {
+  if (!useSession.getState().user || useEditor.getState().refused?.path === path) return;
   const vault = vaultOf(path);
   if (!mayChange(levelOf(queryClient.getQueryData<VaultView[]>(["vaults"])?.find((v) => v.name === vault)), path)) return;
   if (useSyncStatus.getState().editors[presenceKey(vault, inVault(path))]?.length) return;
-  editor.setRenaming(path);
   try {
     // Asked afresh: the names taken beside it are what decides.
-    const tree = await queryClient.fetchQuery({
-      queryKey: ["tree", vault],
-      queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault } } })),
-      staleTime: 0,
-    });
+    const tree = await timed((signal) =>
+      queryClient.fetchQuery({
+        queryKey: ["tree", vault],
+        queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault } }, signal })),
+        staleTime: 0,
+      }),
+    );
+    if (!findFolder(tree.root, folderOf(path))?.notes.some((n) => n.path === path)) return;
     const to = renameTarget(path, saved, tree.root);
-    if (!to) return;
-    await moveNote(queryClient, path, to);
+    // Signed out meanwhile: the move would only be refused.
+    if (!to || !useSession.getState().user) return;
+    // Exact: a folder of that name made meanwhile would otherwise take the note in.
+    await timed((signal) => moveNote(queryClient, path, to, { exact: true, signal }));
     useEditor.getState().moved(path, to);
     useEditor.getState().follow?.(path, to);
   } catch (e) {
-    useEditor.getState().setRenameProblem(`Couldn't name the note from its heading: ${errorText(e)}`);
-  } finally {
-    useEditor.getState().setRenaming(null);
+    const why = e instanceof TimedOut ? "The server didn't answer in time." : errorText(e);
+    useEditor.getState().setRenameProblem({ path, text: `Couldn't name the note from its heading: ${why}` });
   }
 }

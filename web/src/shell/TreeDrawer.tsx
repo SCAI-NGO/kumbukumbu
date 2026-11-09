@@ -218,9 +218,11 @@ function FileMenu({
   const note = row.fileKind === "note";
   const { path, version } = row;
   const changes = mayChange(level, path);
+  // Not while the note is being named from its heading: a name given by hand must not lose that race.
+  const renaming = useEditor((s) => s.renaming.includes(path));
   const items: MenuItem[] = [
     ...copyItems(path, names, note, copy),
-    ...(changes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
+    ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
     ...entriesOf(publishing, path, note),
     ...(!changes

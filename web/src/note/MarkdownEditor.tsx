@@ -11,11 +11,8 @@ import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
-import { renameFromHeading } from "./nameFromHeading";
+import { cancelRename, scheduleRename } from "./nameFromHeading";
 import { useAutosave } from "./useAutosave";
-
-/** The editors mounted per note path: StrictMode mounts one again at once, which is no leaving Write mode. */
-const mounted = new Map<string, number>();
 
 /**
  * Write mode (MOBILE_EDITOR §4, §7): the raw Markdown in a plain textarea (16 px, so iOS doesn't zoom), saved as
@@ -128,18 +125,12 @@ export default function MarkdownEditor({
   }, [path, unsaved]);
 
   useEffect(() => {
-    mounted.set(path, (mounted.get(path) ?? 0) + 1);
+    // Mounted again at once (StrictMode): that was no leaving Write mode.
+    cancelRename(path);
     return () => {
-      const left = mounted.get(path)! - 1;
-      if (left) mounted.set(path, left);
-      else mounted.delete(path);
       // Write mode ended (Read, another note, another page) with everything saved: an untitled note takes its name
       // from the heading it was saved with. Never with text unsaved: the move would leave it behind.
-      const saved = !unresolved() && !goneRef.current ? savedText() : null;
-      if (saved === null) return;
-      setTimeout(() => {
-        if (!mounted.has(path)) void renameFromHeading(queryClient, path, saved);
-      }, 0);
+      if (!unresolved() && !goneRef.current) scheduleRename(queryClient, path, savedText());
     };
   }, [path, unresolved, savedText, queryClient]);
 

@@ -291,8 +291,8 @@ export type MoveResult = components["schemas"]["MovedView"];
  * Moves (or renames) a note, or a folder with every note below it (`from` ending in `/`), within its vault. The
  * server rewrites the links the move would break, in one batch with the move, and says so in `message`.
  */
-export async function moveNote(queryClient: QueryClient, from: string, to: string): Promise<MoveResult> {
-  const result = await call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact: false } }));
+export async function moveNote(queryClient: QueryClient, from: string, to: string, { exact = false, signal }: { exact?: boolean; signal?: AbortSignal } = {}): Promise<MoveResult> {
+  const result = await call(api.POST("/api/move", { body: { from, to, keepLinks: false, exact }, signal }));
   const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
   for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
   // Rewritten links changed other notes' text: every note, link and backlink is asked again.

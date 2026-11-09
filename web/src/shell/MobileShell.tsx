@@ -209,13 +209,16 @@ export default function MobileShell() {
   const shownPath = useRef(path);
   shownPath.current = path;
   useEffect(() => {
-    useEditor.getState().setFollow((from, to) => {
+    const follow = (from: string, to: string) => {
       if (shownPath.current === from) navigate(noteUrl(to), { replace: true });
-    });
-    return () => useEditor.getState().setFollow(null);
+    };
+    useEditor.getState().setFollow(follow);
+    return () => {
+      if (useEditor.getState().follow === follow) useEditor.getState().setFollow(null);
+    };
   }, [navigate]);
-  const renaming = useEditor((s) => s.renaming);
-  const renameProblem = useEditor((s) => s.renameProblem);
+  const renaming = useEditor((s) => !!path && s.renaming.includes(path));
+  const renameProblem = useEditor((s) => (s.renameProblem && s.renameProblem.path === s.currentPath ? s.renameProblem.text : null));
 
   // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field), and
   // Rename or move finds its dialog loaded.
@@ -281,7 +284,7 @@ export default function MobileShell() {
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
-      <TopBar path={path} writable={!readOnlyNote && renaming !== path} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />
@@ -326,7 +329,8 @@ export default function MobileShell() {
                       ...publishingActions,
                       ...(noteChanges
                         ? [
-                            { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                            // Not while it is being named from its heading: a name given by hand must not lose that race.
+                            ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
                           ]
                         : []),
