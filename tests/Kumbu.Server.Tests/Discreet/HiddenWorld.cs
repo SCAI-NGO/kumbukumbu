@@ -23,8 +23,8 @@ internal sealed record HiddenWorld(RestClient Alice, RestClient Bob, string Tage
 
     public const string FamilieWord = "Erbschaftsstreit";
 
-    /// <summary>A name Alice never had: what a hidden vault must answer as.</summary>
-    public const string Nowhere = "Nowhere";
+    /// <summary>A name Alice never had, and no word of any answer: what a hidden vault must answer as.</summary>
+    public const string Nowhere = "Nowhere-7f3a";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

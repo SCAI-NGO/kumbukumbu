@@ -389,8 +389,9 @@ public static class NoteApi
             throw new ApiException(StatusCodes.Status409Conflict, "The vault Skills can't be deleted: it holds your skills. Remove single skills instead.");
         }
 
+        var hidden = await caller.HiddenIdsAsync(ct);
         // A wrong password throws; null is a right one and no such vault (or one the session hides).
-        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct, await caller.HiddenIdsAsync(ct));
+        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, hidden, ct);
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         return deleted is not null ? TypedResults.NoContent() : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
@@ -399,7 +400,8 @@ public static class NoteApi
     /// she shares it with. Owner-only: a member's alias answers 404, and she sees no member list (collab design §8.6).</summary>
     private static async Task<Ok<VaultAccessView>> AccessAsync(string vault, RequestCaller caller, Rekeying rekeying, CancellationToken ct)
     {
-        var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct, await caller.HiddenIdsAsync(ct))
+        var hidden = await caller.HiddenIdsAsync(ct);
+        var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, hidden, ct)
             ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.DeviceKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
             m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
@@ -415,12 +417,14 @@ public static class NoteApi
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
-        // A wrong password throws; null is a right one and no such vault.
+        // Before the try: a failure to open the vaults has checked no password, so it drops no pairing.
+        var hidden = await caller.HiddenIdsAsync(ct);
+        // A wrong password throws; null is a right one and no such vault (or one the session hides).
         RekeySummary? summary;
         var passwordRight = true;
         try
         {
-            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct, await caller.HiddenIdsAsync(ct));
+            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, hidden, ct);
         }
         catch (WrongPasswordException)
         {

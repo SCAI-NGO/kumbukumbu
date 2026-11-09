@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.OAuth;
@@ -21,6 +22,11 @@ public enum CallerKind
 /// </summary>
 public sealed class RequestCaller : ICaller
 {
+    private static readonly IReadOnlySet<string> NoneHidden = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>The users whose unreadable discreet list was logged: once per process, not on every request.</summary>
+    private static readonly ConcurrentDictionary<string, byte> UnreadableLogged = new(StringComparer.Ordinal);
+
     private readonly VaultCatalog _catalog;
     private readonly bool _human;
 
@@ -138,14 +144,15 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, WriterRef.Server, new FixedCredential(devToken), catalog);
 
-    /// <summary>The credential of a web session, the only one that hides discreet vaults; null for every other caller.</summary>
+    /// <summary>The credential of a web session; null for every other caller. Only <see cref="ForSession"/> gives it a
+    /// filter, so it is the only credential that hides discreet vaults.</summary>
     internal UserCredential? Session => Kind == CallerKind.Session ? Credential as UserCredential : null;
 
     /// <summary>The ids of the vaults this session hides (opening its vaults first): those of the discreet vaults while
     /// it doesn't show them. None for every other caller, which sees every vault it has.</summary>
     internal async Task<IReadOnlySet<string>> HiddenIdsAsync(CancellationToken ct)
     {
-        if (Session is not { } session) return new HashSet<string>(StringComparer.Ordinal);
+        if (Session is not { } session) return NoneHidden;
         await OpenVaultsAsync(ct);
         return session.HiddenIds;
     }
@@ -159,12 +166,13 @@ public sealed class RequestCaller : ICaller
     {
         if (Session is not { } session) return false;
         await OpenVaultsAsync(ct);
+        // Relies on OpenForUserAsync opening exactly her active memberships: they are all a session can hide.
         return session.Hidden.Any(a => a.Membership?.Id == membershipId);
     }
 
     /// <summary>A web session; with <paramref name="discreet"/>, its discreet vaults are left out while it doesn't show
     /// them (none hidden without). A sealed list that doesn't open hides every vault but the vault Skills, and is logged
-    /// to <paramref name="log"/> by the exception's type.</summary>
+    /// to <paramref name="log"/> by the exception's type, once per process for each user.</summary>
     internal static RequestCaller ForSession(
         User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog, SessionDiscreet? discreet = null, ILogger? log = null)
     {
@@ -172,7 +180,7 @@ public sealed class RequestCaller : ICaller
         if (discreet is not null)
         {
             var ids = DiscreetVaults.OpenList(user.Id, userKey, discreet.SealedList, out var failure);
-            if (ids is null)
+            if (ids is null && UnreadableLogged.TryAdd(user.Id, 0))
             {
                 log?.LogWarning("The discreet vaults of user {UserId} could not be read: {Reason}; every vault but Skills counts as discreet", user.Id, failure);
             }

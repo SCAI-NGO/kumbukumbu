@@ -40,41 +40,41 @@ public sealed class UserCredential(string userId, byte[] userKey, DiscreetFilter
 {
     private static readonly IReadOnlySet<string> None = new HashSet<string>(StringComparer.Ordinal);
 
-    private IReadOnlyList<VaultAccess>? _opened;
-    private IReadOnlyList<VaultAccess> _hidden = [];
-    private IReadOnlySet<string> _hiddenIds = None;
-    private IReadOnlySet<string> _skillsIds = None;
+    /// <summary>What the opening saw, assigned in one step, so that nobody reads its vaults without its hidden ids.</summary>
+    private sealed record Opened(
+        IReadOnlyList<VaultAccess> Visible, IReadOnlyList<VaultAccess> Hidden, IReadOnlySet<string> HiddenIds, IReadOnlySet<string> SkillsIds);
+
+    private Opened? _opened;
 
     public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct)
     {
-        if (_opened is not null) return _opened;
+        if (_opened is { } opened) return opened.Visible;
         var all = await catalog.OpenForUserAsync(userId, userKey, ct);
-        _skillsIds = all.Where(a => a.IsSkillsVault).Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
-        var hidden = discreet is null || discreet.Revealed ? None
-            : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !_skillsIds.Contains(id)).ToHashSet(StringComparer.Ordinal);
-        _hiddenIds = hidden;
-        _hidden = [.. all.Where(a => hidden.Contains(a.Id))];
-        return _opened = [.. all.Where(a => !hidden.Contains(a.Id))];
+        var skillsIds = all.Where(a => a.IsSkillsVault).Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+        IReadOnlySet<string> hidden = discreet is null || discreet.Revealed ? None
+            : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !skillsIds.Contains(id)).ToHashSet(StringComparer.Ordinal);
+        _opened = new Opened([.. all.Where(a => !hidden.Contains(a.Id))], [.. all.Where(a => hidden.Contains(a.Id))], hidden, skillsIds);
+        return _opened.Visible;
     }
 
     /// <summary>Whether the session shows the discreet vaults now.</summary>
     public bool Revealed => discreet?.Revealed ?? false;
 
     /// <summary>Whether <paramref name="vaultId"/> is marked discreet, shown now or not; for a list that didn't open,
-    /// every vault but the vault Skills. Answers from the vaults opened, so it is asked after <see cref="OpenAsync"/>.</summary>
+    /// every vault but the vault Skills. Answers from the vaults opened: false before <see cref="OpenAsync"/>.</summary>
     public bool IsDiscreet(string vaultId) =>
-        discreet is not null && !_skillsIds.Contains(vaultId) && (discreet.Ids is not { } ids || ids.Contains(vaultId));
+        discreet is not null && _opened is { } opened && !opened.SkillsIds.Contains(vaultId) && (discreet.Ids is not { } ids || ids.Contains(vaultId));
 
     /// <summary>The vaults opened and left out, after <see cref="OpenAsync"/>; none before.</summary>
-    public IReadOnlyList<VaultAccess> Hidden => _hidden;
+    public IReadOnlyList<VaultAccess> Hidden => _opened?.Hidden ?? [];
 
     /// <summary>The ids this session hides, after <see cref="OpenAsync"/>: the discreet list's while not shown, those of
     /// vaults that are gone included, or every vault opened but the vault Skills for a list that didn't open.</summary>
-    public IReadOnlySet<string> HiddenIds => _hiddenIds;
+    public IReadOnlySet<string> HiddenIds => _opened?.HiddenIds ?? None;
 
-    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Visible, vault);
 
-    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened?.Visible, vault);
 
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.

@@ -87,7 +87,7 @@ public sealed class Deletion(
     /// (those a web session doesn't show) counts as none of that name.
     /// </summary>
     public async Task<DeletionSummary?> DeleteVaultAsync(
-        User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct, IReadOnlySet<string>? hidden = null)
+        User user, byte[] userKey, string name, string password, string confirm, IReadOnlySet<string>? hidden, CancellationToken ct)
     {
         if (!string.Equals(confirm, name, StringComparison.Ordinal)) throw new ArgumentException("Type the vault's name exactly to confirm.", nameof(confirm));
         // Before the lookup: without the password, nobody learns whether a vault of that name exists.

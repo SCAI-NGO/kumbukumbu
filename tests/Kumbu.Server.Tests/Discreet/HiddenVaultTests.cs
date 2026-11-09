@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using Kumbu.Server.Accounts;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -58,42 +61,49 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         Assert.Equal([("Skills", false), ("Work", false)], await w.VaultsAsync());
     }
 
-    public static TheoryData<string, string> Reads() => new()
-    {
-        { "GET", "/api/vaults/{v}/tree" },
-        { "GET", "/api/vaults/{v}/archive" },
-        { "GET", "/api/notes/{v}/geheim.md" },
-        { "GET", "/api/links/{v}/geheim.md" },
-        { "GET", "/api/backlinks/{v}/geheim.md" },
-        { "GET", "/api/history/{v}/geheim.md" },
-        { "GET", "/api/version/{v}/geheim.md" },
-        { "GET", "/api/vaults/{v}/trash" },
-        { "GET", "/api/vaults/{v}/checkpoints" },
-        { "GET", "/api/vaults/{v}/activity" },
-        { "GET", "/api/vaults/{v}/board" },
-        { "GET", "/api/vaults/{v}/versions" },
-        { "GET", "/api/files/{v}/bild.png" },
-        { "GET", "/api/tags?path=/{v}" },
-        { "GET", "/api/tags/notes?tag=privat&path=/{v}" },
-        { "GET", "/api/search?q=Geheim&path=/{v}" },
-        { "GET", "/api/search/earlier?q=Geheim&path=/{v}" },
-        { "GET", "/api/vaults/{v}/publications" },
-        { "GET", "/api/publications/{v}/geheim.md" },
-        { "DELETE", "/api/notes/{v}/geheim.md" },
-        { "DELETE", "/api/files/{v}/bild.png" },
-        { "POST", "/api/vaults/{v}/checkpoints" },
-        { "POST", "/api/publications/{v}/geheim.md" },
-    };
+    private static readonly (string Method, string Path)[] Reads =
+    [
+        ("GET", "/api/vaults/{v}/tree"),
+        ("GET", "/api/vaults/{v}/archive"),
+        ("GET", "/api/notes/{v}/geheim.md"),
+        ("GET", "/api/links/{v}/geheim.md"),
+        ("GET", "/api/backlinks/{v}/geheim.md"),
+        ("GET", "/api/history/{v}/geheim.md"),
+        ("GET", "/api/version/{v}/geheim.md"),
+        ("GET", "/api/vaults/{v}/trash"),
+        ("GET", "/api/vaults/{v}/checkpoints"),
+        ("GET", "/api/vaults/{v}/activity"),
+        ("GET", "/api/vaults/{v}/board"),
+        ("GET", "/api/vaults/{v}/versions"),
+        ("GET", "/api/files/{v}/bild.png"),
+        ("GET", "/api/tags?path=/{v}"),
+        ("GET", "/api/tags/notes?tag=privat&path=/{v}"),
+        ("GET", "/api/search?q=Geheim&path=/{v}"),
+        ("GET", "/api/search/earlier?q=Geheim&path=/{v}"),
+        ("GET", "/api/vaults/{v}/publications"),
+        ("GET", "/api/publications/{v}/geheim.md"),
+        ("DELETE", "/api/notes/{v}/geheim.md"),
+        ("DELETE", "/api/files/{v}/bild.png"),
+        ("POST", "/api/vaults/{v}/checkpoints"),
+        ("POST", "/api/publications/{v}/geheim.md"),
+    ];
 
-    [Theory]
-    [MemberData(nameof(Reads))]
-    public async Task A_hidden_vault_answers_as_a_name_she_never_had(string method, string path)
+    // One world for every request: none of them changes anything, which the last lines check.
+    [Fact]
+    public async Task A_hidden_vault_answers_as_a_name_she_never_had()
     {
         var w = await HiddenWorld.NewAsync(Api);
         await w.HideAsync();
 
-        await w.AsNowhereAsync("Tagebuch", new HttpMethod(method), path, _ => method == "GET" ? null : new { });
-        await w.AsNowhereAsync("Familie", new HttpMethod(method), path, _ => method == "GET" ? null : new { });
+        foreach (var (method, path) in Reads)
+        {
+            await w.AsNowhereAsync("Tagebuch", new HttpMethod(method), path, _ => method == "GET" ? null : new { });
+            await w.AsNowhereAsync("Familie", new HttpMethod(method), path, _ => method == "GET" ? null : new { });
+        }
+
+        await w.RevealAsync();
+        Assert.Equal(["/Tagebuch/alt.md", "/Tagebuch/geheim.md"], await TreeAsync(w, "Tagebuch"));
+        Assert.Contains(HiddenWorld.FamilieWord, (await w.In("Familie").ReadAsync("geheim.md"))["content"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -116,6 +126,38 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         Assert.Contains(HiddenWorld.FamilieWord, (await w.In("Familie").ReadAsync("geheim.md"))["content"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_session_marks_nothing_discreet_before_it_opens_its_vaults()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        var discreet = new SessionDiscreet(false, null, DiscreetVaults.SealList(w.Alice.User.Id, w.Alice.UserKey, [w.TagebuchId]), null);
+        var caller = RequestCaller.ForSession(w.Alice.User, w.Alice.UserKey, DateTime.UtcNow, windowOpen: true, Api.Services.GetRequiredService<VaultCatalog>(), discreet);
+
+        Assert.False(caller.Session!.IsDiscreet(w.TagebuchId));
+        Assert.Empty(caller.Session.HiddenIds);
+        await caller.OpenVaultsAsync(Ct);
+        Assert.True(caller.Session.IsDiscreet(w.TagebuchId));
+        Assert.Equal([w.TagebuchId], caller.Session.HiddenIds);
+    }
+
+    [Fact]
+    public async Task An_unreadable_list_is_logged_once_per_user()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        var log = new CapturedLog();
+        var logger = log.CreateLogger("Discreet");
+        var spoiled = new SessionDiscreet(false, null, System.Security.Cryptography.RandomNumberGenerator.GetBytes(80), null);
+
+        for (var i = 0; i < 3; i++)
+        {
+            var caller = RequestCaller.ForSession(
+                w.Alice.User, w.Alice.UserKey, DateTime.UtcNow, windowOpen: true, Api.Services.GetRequiredService<VaultCatalog>(), spoiled, logger);
+            Assert.Equal(["Skills"], (await caller.OpenVaultsAsync(Ct)).Select(v => v.Name));
+        }
+
+        Assert.Single(log.Lines, l => l.Contains(w.Alice.User.Id, StringComparison.Ordinal));
+    }
+
     private static async Task<string[]> TreeAsync(HiddenWorld w, string vault)
     {
         using var response = await w.Alice.GetAsync($"/api/vaults/{vault}/tree");
@@ -136,12 +178,21 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
     {
         var w = await HiddenWorld.NewAsync(Api);
         var before = DateTime.UtcNow.AddMinutes(-5);
-        // What her agents wrote is what /api/changes lists.
+        // What her agents wrote is what /api/changes lists; what they replaced, what the earlier search finds.
         foreach (var (vault, client) in new[] { ("Work", w.Alice), ("Tagebuch", w.In("Tagebuch")) })
         {
             var key = await client.KeyAsync("Agent " + vault, Kumbu.Server.Accounts.KeyRight.Write);
             var written = await w.Alice.ToolAsync("write", new Dictionary<string, object?> { ["path"] = $"/{vault}/agent.md", ["content"] = "vom Agenten\n" }, key);
             Assert.False(written.IsError ?? false);
+        }
+
+        var tagebuchKey = await w.In("Tagebuch").KeyAsync("Agent Früher", Kumbu.Server.Accounts.KeyRight.Write);
+        await ReplacedAsync(w.In("Tagebuch"), TagebuchEarlier, tagebuchKey);
+        // In Familie, Alice's own edit replaces Bob's version.
+        var bobs = await w.Bob.CreateAsync("frueher.md", $"# Früher\n\n{FamilieEarlier}\n");
+        using (var replaced = await w.Alice.SendAsync(HttpMethod.Put, w.In("Familie").Url("frueher.md"), new { content = "# Früher\n\nvergessen\n", version = bobs }))
+        {
+            Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
         }
 
         await IndexedAsync();
@@ -150,8 +201,9 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         foreach (var word in new[] { HiddenWorld.TagebuchWord, HiddenWorld.FamilieWord })
         {
             Assert.DoesNotContain(await SearchPathsAsync(w, word), p => !p.StartsWith("/Work/", StringComparison.Ordinal));
-            Assert.Empty((await JsonAsync(w, $"/api/search/earlier?q={word}")).AsArray());
         }
+
+        foreach (var word in new[] { TagebuchEarlier, FamilieEarlier }) Assert.Empty(await EarlierPathsAsync(w, word));
 
         var changes = (await JsonAsync(w, $"/api/changes?since={Uri.EscapeDataString(before.ToString("O"))}")).AsArray().Select(c => c!["path"]!.GetValue<string>()).ToList();
         Assert.Contains("/Work/agent.md", changes);
@@ -169,11 +221,30 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         // Shown again, the same requests find them: the filter is the session's, not the vaults'.
         await w.RevealAsync();
         Assert.Contains("/Tagebuch/geheim.md", await SearchPathsAsync(w, HiddenWorld.TagebuchWord));
+        Assert.Contains("/Familie/geheim.md", await SearchPathsAsync(w, HiddenWorld.FamilieWord));
+        Assert.Equal(["/Tagebuch/frueher.md"], await EarlierPathsAsync(w, TagebuchEarlier));
+        Assert.Equal(["/Familie/frueher.md"], await EarlierPathsAsync(w, FamilieEarlier));
         Assert.Contains(
             "/Tagebuch/agent.md",
             (await JsonAsync(w, $"/api/changes?since={Uri.EscapeDataString(before.ToString("O"))}")).AsArray().Select(c => c!["path"]!.GetValue<string>()));
         Assert.Contains("privat", (await JsonAsync(w, "/api/tags")).AsArray().Select(t => t!["tag"]!.GetValue<string>()));
     }
+
+    /// <summary>Words only an earlier version holds: in <c>frueher.md</c> of <c>Tagebuch</c> and of <c>Familie</c>.</summary>
+    private const string TagebuchEarlier = "Jugendliebe";
+
+    private const string FamilieEarlier = "Mitgift";
+
+    /// <summary><c>frueher.md</c> with <paramref name="word"/>, replaced by the agent's write: an earlier version holds it.</summary>
+    private static async Task ReplacedAsync(RestClient vault, string word, string agent)
+    {
+        var first = await vault.CreateAsync("frueher.md", $"# Früher\n\n{word}\n");
+        using var replaced = await vault.SendAsync(HttpMethod.Put, vault.Url("frueher.md"), new { content = "# Früher\n\nvergessen\n", version = first }, bearer: agent);
+        Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+    }
+
+    private static async Task<string[]> EarlierPathsAsync(HiddenWorld w, string word) =>
+        [.. (await JsonAsync(w, $"/api/search/earlier?q={word}")).AsArray().Select(r => r!["path"]!.GetValue<string>())];
 
     private static async Task<string[]> SearchPathsAsync(HiddenWorld w, string word) =>
         [.. (await JsonAsync(w, $"/api/search?q={word}"))["results"]!.AsArray().Select(r => r!["path"]!.GetValue<string>())];
@@ -189,27 +260,35 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
     public async Task The_console_shows_nothing_of_a_hidden_vault()
     {
         var w = await HiddenWorld.NewAsync(Api);
+        using (var published = await w.Alice.SendAsync(HttpMethod.Post, "/api/publications/Tagebuch/geheim.md", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        }
+
         await IndexedAsync();
         await w.HideAsync();
 
         var ls = await w.ConsoleAsync("ls /");
         Assert.Contains("Work", ls, StringComparison.Ordinal);
-        foreach (var command in new[]
+        // Each command with what it shows of the vault once it is revealed.
+        var commands = new (string Command, string Shown)[]
         {
-            "ls /", $"rg {HiddenWorld.TagebuchWord} /", $"rg {HiddenWorld.FamilieWord} /", $"semsearch {HiddenWorld.TagebuchWord}", "history /", "publish ls", "tags /",
-        })
+            ("ls /", "Tagebuch"), ($"rg {HiddenWorld.TagebuchWord} /", HiddenWorld.TagebuchWord), ($"rg {HiddenWorld.FamilieWord} /", HiddenWorld.FamilieWord),
+            ($"semsearch {HiddenWorld.TagebuchWord}", "/Tagebuch/geheim.md"), ("history /", "/Tagebuch/"), ("publish ls", "/Tagebuch/geheim.md"), ("tags /", "privat"),
+        };
+        foreach (var (command, _) in commands)
         {
             var text = await w.ConsoleAsync(command);
-            Assert.DoesNotContain("Tagebuch", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("Familie", text, StringComparison.Ordinal);
-            Assert.DoesNotContain(HiddenWorld.TagebuchWord, text, StringComparison.Ordinal);
-            Assert.DoesNotContain(HiddenWorld.FamilieWord, text, StringComparison.Ordinal);
+            foreach (var word in new[] { "Tagebuch", "Familie", HiddenWorld.TagebuchWord, HiddenWorld.FamilieWord, "privat" })
+            {
+                Assert.DoesNotContain(word, text, StringComparison.Ordinal);
+            }
         }
 
         Assert.Equal(await w.ConsoleAsync($"cat /{HiddenWorld.Nowhere}/geheim.md"), (await w.ConsoleAsync("cat /Tagebuch/geheim.md")).Replace("Tagebuch", HiddenWorld.Nowhere, StringComparison.Ordinal));
 
+        // Positive controls: revealed, each command shows what it left out.
         await w.RevealAsync();
-        Assert.Contains("Tagebuch", await w.ConsoleAsync("ls /"), StringComparison.Ordinal);
-        Assert.Contains(HiddenWorld.TagebuchWord, await w.ConsoleAsync($"rg {HiddenWorld.TagebuchWord} /"), StringComparison.Ordinal);
+        foreach (var (command, shown) in commands) Assert.Contains(shown, await w.ConsoleAsync(command), StringComparison.Ordinal);
     }
 }

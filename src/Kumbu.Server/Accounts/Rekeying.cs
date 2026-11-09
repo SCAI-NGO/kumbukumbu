@@ -82,7 +82,7 @@ public sealed class Rekeying(
     /// (<see cref="WrongPasswordException"/> if it is wrong). Cancelling the wait leaves the run going.
     /// </summary>
     public async Task<RekeySummary?> RekeyVaultAsync(
-        User user, byte[] userKey, string vaultName, string password, CancellationToken ct, IReadOnlySet<string>? hidden = null)
+        User user, byte[] userKey, string vaultName, string password, IReadOnlySet<string>? hidden, CancellationToken ct)
     {
         if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId || hidden?.Contains(vaultId) == true) return null;
@@ -148,7 +148,7 @@ public sealed class Rekeying(
     /// slot on it, and connections that list it and aren't revoked, with the device keys among the keys named apart; and who the vault is shared with (collab design §8.6), with the
     /// members' credentials on it, and who left it since its last re-encryption (§6.4). Null if the user has no such vault: a vault shared with her is not hers to list,
     /// and one among <paramref name="hidden"/> (those a web session doesn't show) is as none.</summary>
-    internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct, IReadOnlySet<string>? hidden = null)
+    internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, IReadOnlySet<string>? hidden, CancellationToken ct)
     {
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId || hidden?.Contains(vaultId) == true) return null;
         var (keyIds, connectionIds, shareIds) = await catalog.AccessAsync(vaultId, ct);
