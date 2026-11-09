@@ -339,6 +339,13 @@ public sealed class SearchIndex : BackgroundService
         // another vector under another model. Under another scheme it gives the same, so chunking anew keeps them.
         var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
         var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
+        // The chunker keeps every text within the bound; a last check, counted afresh, so that a slip shows in the log.
+        var over = Oversized(Bound, missing.Select(i => chunks[i].Text));
+        if (over > 0)
+        {
+            _log.LogWarning("Vault {VaultId}: {Count} chunks of {PathId} exceed the bound {Scheme}; embedded as they are", vault.Id, over, vault.PathId(path), scheme);
+        }
+
         // A deletion or a re-keying of the vault cancels a call under way: it waits for this gate, and a provider
         // that hangs with retries would hold it up for minutes.
         using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.InterruptToken(vault.Id));
@@ -406,6 +413,9 @@ public sealed class SearchIndex : BackgroundService
         var until = DateTime.UtcNow + timeout;
         while (Queued > 0 && DateTime.UtcNow < until) await Task.Delay(50, ct);
     }
+
+    /// <summary>How many of <paramref name="texts"/> don't fit <paramref name="bound"/> (<see cref="ChunkBound.Fits"/>).</summary>
+    internal static int Oversized(ChunkBound bound, IEnumerable<string> texts) => texts.Count(t => !bound.Fits(t));
 
     private static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
 

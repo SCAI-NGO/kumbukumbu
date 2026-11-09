@@ -27,12 +27,13 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     /// <summary>A server on <paramref name="world"/>'s database; with <paramref name="start"/> false the index
     /// never runs, so whatever the unlock queues stays queued.</summary>
-    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null, ChunkTokenizer? tokenizer = null)
+    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true, EmbeddingProvider[]? external = null, ChunkTokenizer? tokenizer = null,
+        Microsoft.Extensions.Logging.ILogger<SearchIndex>? log = null)
     {
         world ??= new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
         embedder ??= new FakeEmbedder();
-        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), NullLogger<SearchIndex>.Instance, tokenizer: tokenizer);
+        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, external ?? []), log ?? NullLogger<SearchIndex>.Instance, tokenizer: tokenizer);
         if (start) await index.StartAsync(Ct);
         if ((await catalog.OpenAsync(Token, Ct)).Count == 0) await catalog.CreateAsync("Work", Token, null, Ct);
         return new Setup(world, catalog, index, new EncryptedNoteStore(catalog, new FixedCredential(Token), index), embedder);
@@ -441,6 +442,22 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         var current = (await s.Store.GetAsync(P("/Work/a.md"), Ct))!;
         await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "alpha beta\n", Writers.Dev, WriterRef.Server, T0), Ct);
         Assert.False(s.Index.HasFailed(vault, P("/Work/a.md")));
+    }
+
+    [Fact]
+    public async Task Texts_over_the_bound_are_counted_and_normal_notes_stay_quiet()
+    {
+        Assert.Equal(1, SearchIndex.Oversized(ChunkBound.Fallback, [new string('a', ChunkBound.FallbackMaxChars + 1), "short"]));
+        Assert.Equal(0, SearchIndex.Oversized(ChunkBound.Unbounded, [new string('a', 10_000)]));
+
+        var log = new CapturedLog();
+        using var logs = new Microsoft.Extensions.Logging.LoggerFactory([log]);
+        var s = await StartAsync(log: Microsoft.Extensions.Logging.LoggerFactoryExtensions.CreateLogger<SearchIndex>(logs));
+        await s.Store.TryCreateAsync(New("/Work/a.md", "# A\n" + string.Join('\n', Enumerable.Range(0, 200).Select(i => $"line {i} of a long note"))), Ct);
+        await IdleAsync(s);
+
+        Assert.True(Assert.Single(await StoredEmbeddingsAsync(s)).Chunks.Count > 1);
+        Assert.DoesNotContain(log.Lines, l => l.Contains("exceed the bound"));
     }
 
     [Fact]
