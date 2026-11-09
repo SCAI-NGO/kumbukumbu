@@ -26,6 +26,9 @@ public sealed class DavDestinationTests
     [InlineData("https://kumbu.example.org/DAV/Work/b.md", "/Work/b.md")]
     [InlineData("https://kumbu.example.org/dav/Work/b.md?x=1", "/Work/b.md")]
     [InlineData("/dav/Work/b.md", "/Work/b.md")]
+    // KDE's KIO (Dolphin) keeps the username of the mounted URL in the Destination of a rename or move.
+    [InlineData("https://alice.k7qm@kumbu.example.org/dav/Work/b.md", "/Work/b.md")]
+    [InlineData("https://alice.k7qm:secret@kumbu.example.org/dav/Work/b.md", "/Work/b.md")]
     public void A_destination_on_the_same_origin_below_dav_is_read(string header, string path)
     {
         var target = DavDestination.Parse(Request(), header);
@@ -36,6 +39,7 @@ public sealed class DavDestinationTests
 
     [Theory]
     [InlineData("https://evil.example/dav/Work/b.md")]
+    [InlineData("https://kumbu.example.org@evil.example/dav/Work/b.md")]
     [InlineData("http://kumbu.example.org/dav/Work/b.md")]
     [InlineData("https://kumbu.example.org:8443/dav/Work/b.md")]
     [InlineData("https://kumbu.example.org/api/notes/Work/b.md")]
