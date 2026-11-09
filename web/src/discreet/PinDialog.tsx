@@ -13,7 +13,8 @@ const timeoutLabel = (t: DiscreetTimeout) => (t === "never" ? "Never" : `${t} mi
 /**
  * "More vaults": the PIN, and how long the discreet vaults stay shown, preselected with this device's last choice. It
  * looks and answers the same whether or not she has a PIN or discreet vaults (spec §3.6): a wrong PIN and none set are
- * one sentence, and the field is cleared for the next try.
+ * one sentence, and the field is cleared for the next try. Below the field, the same for everyone, where the PIN is
+ * set; following that link calls `onSettings` if given, else `onClose`.
  */
 export default function PinDialog({ onClose, onSettings }: { onClose(): void; onSettings?(): void }) {
   const id = useId();
@@ -82,7 +83,7 @@ export default function PinDialog({ onClose, onSettings }: { onClose(): void; on
             {/* For everyone, before and after a wrong PIN: it says nothing about whether one is set. */}
             <p className="text-sm text-muted">
               The PIN is set in{" "}
-              <Link to="/settings#discreet-vaults" onClick={onSettings ?? onClose} className="text-accent-text underline">
+              <Link to="/settings#discreet-vaults" onClick={onSettings ?? onClose} className="font-medium text-accent-text underline underline-offset-2">
                 Settings → Discreet vaults
               </Link>
               .
