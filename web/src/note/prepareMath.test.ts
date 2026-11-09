@@ -34,6 +34,13 @@ describe("prepareMath", () => {
     ["see https://x/$5 and $x$", "see https://x/$5 and $x$", true],
     ["$a $ b$", "$a " + hidden + " b$", true],
     ["# Price $5\n$y$ costs", "# Price " + hidden + "5\n$y$ costs", true],
+    ["[[A$B]] and [[C$D]]", "[[A" + hidden + "B]] and [[C" + hidden + "D]]", false],
+    ["[[Plan$x$]] and $y$", "[[Plan" + hidden + "x" + hidden + "]] and $y$", true],
+    ["$a [[b]] c$", hide("$a [[b]] c$"), false],
+    ["#a$b and #c$d", hide("#a$b and #c$d"), false],
+    ["[$x][a] and y$", hide("[$x][a] and y$"), false],
+    ["> ```\n> $x$\n\n$y$", "> ```\n> $x$\n\n$y$", true],
+    ["> ```\n> code\n\nprice $5\n```\n$y$ ```", "> ```\n> code\n\nprice " + hidden + "5\n```\n$y$ ```", false],
   ])("%j", (input, source, maths) => {
     const prepared = prepareMath(input);
     expect(prepared).toEqual({ source, maths });
@@ -41,8 +48,25 @@ describe("prepareMath", () => {
     expect(prepared.source.split("\n")).toHaveLength(input.split("\n").length);
   });
 
-  it("leaves a source alone that already holds the placeholder", () => {
-    expect(prepareMath(`a${hidden} $5`)).toEqual({ source: `a${hidden} $5`, maths: true });
-    expect(prepareMath(`a${hidden}`)).toEqual({ source: `a${hidden}`, maths: false });
+  it("leaves a source alone that already holds the placeholder, without maths", () => {
+    expect(prepareMath(`a${hidden} $x$`)).toEqual({ source: `a${hidden} $x$`, maths: false });
+  });
+
+  it("returns a source without $ or \\[ as it is", () => {
+    expect(prepareMath("plain [[link]] #tag")).toEqual({ source: "plain [[link]] #tag", maths: false });
+  });
+
+  describe("takes time in proportion to the note", () => {
+    const quick = (source: string) => {
+      const started = performance.now();
+      const prepared = prepareMath(source);
+      expect(performance.now() - started).toBeLessThan(1500);
+      expect(prepared.source).toHaveLength(source.length);
+    };
+    it("a long table of amounts", () => quick("| a | b |\n|---|---|\n" + "| $5 | $6 |\n".repeat(8000)));
+    it("long prose with links and amounts", () =>
+      quick("Alice paid $5 for [seeds](/Home/Garden/seeds.md) and `code` <https://x/$1> then $x$ and $3 [[plan]] #veg ".repeat(4000)));
+    it("unclosed $$ fences on every line", () => quick("$$ x\n".repeat(70000)));
+    it("unclosed code spans", () => quick("a ` b $5 ".repeat(40000)));
   });
 });

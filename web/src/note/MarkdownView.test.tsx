@@ -598,13 +598,23 @@ describe("Maths", () => {
     "> Alice: keep the paths clear.",
   ].join("\n");
 
-  it("renders a note without $ as before maths came", async () => {
-    show(rich, [link(5, "[[plan]]", "note", "/Work/plan.md"), mdLink(10, "[the guide](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")], {}, { lines: new Set([5]), writer: "Bob" });
-    await expect(document.body.innerHTML).toMatchFileSnapshot("__snapshots__/rich-note.html");
-  });
-
   /** Waits for KaTeX, which loads on its own once a note has maths. */
   const typeset = () => waitFor(() => expect(document.querySelector(".katex")).not.toBeNull());
+
+  it("renders a note without $ the same with the maths plugins as without them", async () => {
+    const links = [link(5, "[[plan]]", "note", "/Work/plan.md"), mdLink(10, "[the guide](/Work/plan.md)", "note", "/Work/plan.md", "/Work/plan.md")];
+    const highlight = { lines: new Set([5, 17]), writer: "Bob" };
+    const html = () => document.body.innerHTML.trim();
+    show(rich, links, {}, highlight);
+    const without = html();
+    cleanup();
+
+    // The same note with a formula after it: maths loaded, the plugins run over all of it.
+    show(`${rich}\n\n$x$`, links, {}, highlight);
+    await typeset();
+    document.querySelector(".katex")!.closest("p")!.remove();
+    expect(html().replace(/\s+(<\/div><\/div>)$/, "$1")).toBe(without);
+  });
 
   it("typesets inline maths and keeps the text around it", async () => {
     show("Bed area: $A = \\pi r^2$");
@@ -620,13 +630,6 @@ describe("Maths", () => {
     expect(screen.getByText("It costs $5 and $10.")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("\\");
     expect(document.querySelectorAll(".katex")).toHaveLength(1);
-  });
-
-  it("loads no maths for a note with only currency in it", async () => {
-    show("Price per kilo: $3");
-    await new Promise((r) => setTimeout(r, 50));
-    expect(screen.getByText("Price per kilo: $3")).toBeInTheDocument();
-    expect(document.querySelector(".katex")).toBeNull();
   });
 
   it("typesets a $$ block, aligned environments included", async () => {
@@ -684,6 +687,22 @@ describe("Maths", () => {
       warn.mockRestore();
       error.mockRestore();
     }
+  });
+
+  it("never takes a $ in a wiki link or a tag for maths", async () => {
+    show("[[A$B]] and [[C$D]] and [[Plan$x$]]\n\n#a$b and #c$d\n\nArea: $y$", [
+      link(1, "[[A$B]]", "note", "/Work/A$B.md"),
+      link(1, "[[C$D]]", "note", "/Work/C$D.md"),
+      link(1, "[[Plan$x$]]", "note", "/Work/Plan$x$.md"),
+    ]);
+    await typeset();
+    expect(document.querySelectorAll(".katex")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "A$B" })).toHaveAttribute("href", "/notes/Work/A%24B.md");
+    expect(screen.getByRole("link", { name: "C$D" })).toHaveAttribute("href", "/notes/Work/C%24D.md");
+    expect(screen.getByRole("link", { name: "Plan$x$" })).toHaveAttribute("href", "/notes/Work/Plan%24x%24.md");
+    expect(screen.getByRole("button", { name: "Notes tagged #a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notes tagged #c" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notes tagged #a" }).parentElement).toHaveTextContent("#a$b and #c$d");
   });
 
   it("keeps the agent's highlight on a maths block", async () => {

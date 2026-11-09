@@ -443,7 +443,7 @@ function useMath(wanted: boolean): MathPlugins | null {
       live = false;
     };
   }, [wanted, math]);
-  return wanted ? math : null;
+  return wanted ? (math ?? mathLoaded) : null;
 }
 
 function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
@@ -468,7 +468,7 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
         ...(math ? [math.remarkDisplayParagraph, math.remarkMathBlocks] : []),
         [remarkChanged, { highlight }],
       ] as const,
-    [links, highlight, query, current, math, source],
+    [links, highlight, query, current, math, math ? source : null],
   );
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
