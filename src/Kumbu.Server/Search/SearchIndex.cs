@@ -290,7 +290,7 @@ public sealed class SearchIndex : BackgroundService
         var title = path.Name[..^".pdf".Length];
         var bound = Bound;
         await EmbedAsync(vault, path, filter, configured, state.Version,
-            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText(title, i + 1))))],
+            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText)))],
             ct);
     }
 

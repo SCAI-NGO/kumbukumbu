@@ -159,7 +159,8 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
 
     /// <summary>
     /// The whole text of every page analysed (index 0 = page 1), for the search index, which splits each page into
-    /// chunks: all of it is held, but the parts are read one at a time. Read at one point in time with part 0, as
+    /// chunks: all of it is held, but the parts are read one at a time and a page is built at a time. Read at one
+    /// point in time with part 0, as
     /// <see cref="TextAsync"/>. An empty list for a failed analysis (there is no text to search);
     /// null without an analysis, or if a part is missing or doesn't open.
     /// </summary>
@@ -169,7 +170,10 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         if (await ReadHeaderAsync(vault, blobId, session, ct) is not { } header) return null;
         if (header.Failure is not null || header.AnalysedPages == 0) return [];
 
-        var pages = Enumerable.Range(0, header.AnalysedPages).Select(_ => new StringBuilder()).ToArray();
+        // One page is built at a time, and held as a string once the next begins: the text isn't held twice.
+        var pages = new string?[header.AnalysedPages];
+        var page = new StringBuilder();
+        var at = 0;
         var wanted = header.Parts.Select(p => p.Part).ToList();
         var read = 0;
         using var cursor = await catalog.PdfParts.Find(session, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted), new FindOptions { BatchSize = 1 })
@@ -191,7 +195,16 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
                     return null;
                 }
 
-                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length)) pages[s.Page - 1].Append(s.Text);
+                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length))
+                {
+                    if (s.Page - 1 != at)
+                    {
+                        Flush();
+                        at = s.Page - 1;
+                    }
+
+                    page.Append(s.Text);
+                }
             }
         }
 
@@ -201,7 +214,14 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             return null;
         }
 
-        return [.. pages.Select(p => p.ToString())];
+        Flush();
+        return [.. pages.Select(p => p ?? "")];
+
+        void Flush()
+        {
+            if (page.Length > 0) pages[at] = pages[at] + page.ToString();
+            page.Clear();
+        }
     }
 
     /// <summary>

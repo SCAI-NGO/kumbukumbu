@@ -40,8 +40,11 @@ public sealed record Chunk(VaultPath Path, string Address, int StartLine, int En
 /// <param name="PostRoll">Likewise the lines after the core; "" at the end of the page.</param>
 public sealed record PageChunk(int Part, string Core, string PreRoll, string PostRoll)
 {
-    /// <summary>What gets embedded: the PDF's name and the page number, then the core.</summary>
-    public string EmbeddingText(string pdfTitle, int page) => Chunker.PageContext(pdfTitle, page) + "\n" + Core;
+    /// <summary>"{PDF's name} > p{page}", shortened as a note's context is if the name is very long.</summary>
+    public string Context { get; init; } = "";
+
+    /// <summary>What gets embedded: the context, then the core.</summary>
+    public string EmbeddingText => Context + "\n" + Core;
 }
 
 /// <summary>
@@ -93,8 +96,6 @@ public static class Chunker
         return chunks;
     }
 
-    internal static string PageContext(string pdfTitle, int page) => $"{pdfTitle} > p{page}";
-
     /// <summary>
     /// A page of a PDF in chunks, in order; none if it has no text. A page has no Markdown structure: its lines are
     /// packed greedily within <see cref="MaxWords"/> and the bound, and a chunk that would take the next line ends at
@@ -103,8 +104,7 @@ public static class Chunker
     public static IReadOnlyList<PageChunk> SplitPage(string pdfTitle, int page, string text, ChunkBound bound)
     {
         var lines = Lines.Split(text);
-        var context = PageContext(pdfTitle, page);
-        var contextCost = bound.Cost(context);
+        var (context, contextCost) = ChunkSplitter.Shortened($"{pdfTitle} > p{page}", bound);
         var words = lines.Select(Words).ToArray();
         var costs = lines.Select(bound.Cost).ToArray();
         var cores = new List<(int Start, int End, string Text)>();
@@ -117,7 +117,13 @@ public static class Chunker
             }
 
             var (end, cost, count) = (start, contextCost, 0);
-            while (end < lines.Count && count + words[end] <= MaxWords && cost + costs[end] <= bound.Budget) (cost, count, end) = (cost + costs[end], count + words[end], end + 1);
+            while (end < lines.Count && count + words[end] <= MaxWords && cost + costs[end] <= bound.Budget)
+            {
+                cost += costs[end];
+                count += words[end];
+                end++;
+            }
+
             if (end == start)
             {
                 foreach (var piece in ChunkSplitter.Pieces(lines[start], (context, contextCost), bound)) cores.Add((start, start + 1, piece));
@@ -132,12 +138,12 @@ public static class Chunker
                 if (blank > start && 2 * words[start..blank].Sum() >= count) end = blank;
             }
 
-            while (string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+            end = ChunkSplitter.Trimmed(lines, start, end).End;
             cores.Add((start, end, string.Join('\n', lines.Skip(start).Take(end - start))));
             start = end;
         }
 
-        return [.. cores.Select((c, i) => new PageChunk(i, c.Text, Roll(c.Start - 1, -1), Roll(c.End, 1)))];
+        return [.. cores.Select((c, i) => new PageChunk(i, c.Text, Roll(c.Start - 1, -1), Roll(c.End, 1)) { Context = context })];
 
         // Whole lines from the one at `from` on in `step`'s direction, while they stay within the roll's budget.
         string Roll(int from, int step)
@@ -150,8 +156,7 @@ public static class Chunker
             }
 
             var (first, end) = step > 0 ? (from, from + taken) : (from - taken + 1, from + 1);
-            while (first < end && string.IsNullOrWhiteSpace(lines[first])) first++;
-            while (end > first && string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+            (first, end) = ChunkSplitter.Trimmed(lines, first, end);
             return string.Join('\n', lines.Skip(first).Take(end - first));
         }
     }

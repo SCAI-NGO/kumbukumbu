@@ -517,8 +517,8 @@ public partial class ChunkerTests
         Assert.True(chunks.Count >= 3, $"{chunks.Count} chunks");
         Assert.Equal(Enumerable.Range(0, chunks.Count), chunks.Select(c => c.Part));
         Assert.Equal(Collapsed(page), Collapsed(string.Join(' ', chunks.Select(c => c.Core))));
-        Assert.All(chunks, c => Assert.StartsWith("Manual > p4\n", c.EmbeddingText("Manual", 4)));
-        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText("Manual", 4)), $"{c.EmbeddingText("Manual", 4).Length} characters"));
+        Assert.All(chunks, c => Assert.StartsWith("Manual > p4\n", c.EmbeddingText));
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText), $"{c.EmbeddingText.Length} characters"));
         Assert.All(chunks, c => Assert.True(Chunker.Words(c.Core) <= Chunker.MaxWords));
         Assert.All(chunks, c => Assert.Equal(c.Core.Trim('\n'), c.Core));
     }
@@ -552,7 +552,7 @@ public partial class ChunkerTests
             foreach (var roll in new[] { chunk.PreRoll, chunk.PostRoll })
             {
                 Assert.True(Chunker.Words(roll) <= Chunker.RollWords, $"{Chunker.Words(roll)} words");
-                Assert.True(roll.Length <= 1_000, $"{roll.Length} characters");
+                Assert.True(roll.Length <= Chunker.RollChars, $"{roll.Length} characters");
                 Assert.Equal(roll.Trim('\n'), roll);
             }
 
@@ -575,9 +575,48 @@ public partial class ChunkerTests
         var chunks = Chunker.SplitPage("Report", 2, "\n  \nFindings\nzebras migrate across the savannah\n\n", Bound(name));
 
         var chunk = Assert.Single(chunks);
-        Assert.Equal(new PageChunk(0, "Findings\nzebras migrate across the savannah", "", ""), chunk);
-        Assert.Equal("Report > p2\nFindings\nzebras migrate across the savannah", chunk.EmbeddingText("Report", 2));
+        Assert.Equal(new PageChunk(0, "Findings\nzebras migrate across the savannah", "", "") { Context = "Report > p2" }, chunk);
+        Assert.Equal("Report > p2\nFindings\nzebras migrate across the savannah", chunk.EmbeddingText);
         Assert.Empty(Chunker.SplitPage("Report", 3, " \n\t\n", Bound(name)));
+    }
+
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("tokenizer")]
+    public void A_long_PDF_name_is_shortened_and_leaves_room_for_the_page(string name)
+    {
+        var bound = Bound(name);
+        var title = string.Concat(Enumerable.Range(0, 60).Select(i => $"Bericht{i:D2} "))[..600];
+
+        var chunks = Chunker.SplitPage(title, 7, ChunkerFixtures.DensePage, bound);
+
+        Assert.True(chunks.Count >= 3, $"{chunks.Count} chunks");
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText), $"{c.EmbeddingText.Length} characters"));
+        Assert.All(chunks, c => Assert.True(bound.Cost(c.Context) <= bound.Budget / 4, $"context costs {bound.Cost(c.Context)}"));
+        Assert.All(chunks, c => Assert.StartsWith("Bericht00 ", c.Context));
+        Assert.Equal(Collapsed(ChunkerFixtures.DensePage), Collapsed(string.Join(' ', chunks.Select(c => c.Core))));
+    }
+
+    [Theory]
+    [InlineData("fallback")]
+    [InlineData("unbounded")]
+    [InlineData("tokenizer")]
+    public void The_pieces_of_a_long_line_have_the_lines_around_it_as_rolls(string name)
+    {
+        var bound = Bound(name);
+        var line = string.Join(' ', Enumerable.Range(0, 1_200).Select(i => $"Messwert{i}"));
+        var page = "Kopf eins\nKopf zwei\n" + line + "\nFuß eins\nFuß zwei\n";
+
+        var chunks = Chunker.SplitPage("Manual", 1, page, bound);
+
+        var pieces = chunks.Where(c => c.Core.StartsWith("Messwert", StringComparison.Ordinal)).ToList();
+        Assert.True(pieces.Count >= 3, $"{pieces.Count} pieces");
+        Assert.Equal(Enumerable.Range(0, chunks.Count), chunks.Select(c => c.Part));
+        Assert.Equal(Collapsed(page), Collapsed(string.Join(' ', chunks.Select(c => c.Core))));
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText)));
+        Assert.Equal("Kopf eins\nKopf zwei", chunks[0].Core);
+        Assert.Equal("Fuß eins\nFuß zwei", chunks[^1].Core);
+        Assert.All(pieces, p => Assert.Equal(("Kopf eins\nKopf zwei", "Fuß eins\nFuß zwei"), (p.PreRoll, p.PostRoll)));
     }
 
     [GeneratedRegex(@"\s+")]

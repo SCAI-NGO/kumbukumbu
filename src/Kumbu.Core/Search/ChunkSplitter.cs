@@ -97,10 +97,13 @@ internal sealed class ChunkSplitter
         return sections;
     }
 
-    private (int Start, int End) Trimmed(int start, int end)
+    private (int Start, int End) Trimmed(int start, int end) => Trimmed(_lines, start, end);
+
+    /// <summary>The lines [start, end) without the blank lines at both ends.</summary>
+    internal static (int Start, int End) Trimmed(IReadOnlyList<string> lines, int start, int end)
     {
-        while (end > start && string.IsNullOrWhiteSpace(_lines[end - 1])) end--;
-        while (start < end && string.IsNullOrWhiteSpace(_lines[start])) start++;
+        while (end > start && string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+        while (start < end && string.IsNullOrWhiteSpace(lines[start])) start++;
         return (start, end);
     }
 
@@ -183,15 +186,16 @@ internal sealed class ChunkSplitter
     /// <summary>The title and the heading path; its leading words only, if it would take more than a quarter of the budget.</summary>
     private (string Text, int Cost) Context(Heading? heading)
     {
-        if (heading is null) return _noteContext ??= Shortened(_title);
+        if (heading is null) return _noteContext ??= Shortened(_title, _bound);
         if (_contexts.TryGetValue(heading, out var known)) return known;
-        return _contexts[heading] = Shortened(_title + " > " + string.Join(" > ", heading.Chain().Reverse().Select(h => h.Text)));
+        return _contexts[heading] = Shortened(_title + " > " + string.Join(" > ", heading.Chain().Reverse().Select(h => h.Text)), _bound);
     }
 
-    private (string Text, int Cost) Shortened(string context)
+    /// <summary>The context, or its leading words only if it would take more than a quarter of the budget.</summary>
+    internal static (string Text, int Cost) Shortened(string context, ChunkBound bound)
     {
-        var limit = _bound.Budget / 4;
-        var cost = _bound.Cost(context);
+        var limit = bound.Budget / 4;
+        var cost = bound.Cost(context);
         if (cost <= limit) return (context, cost);
 
         // The costs of space-separated pieces add up to the whole's, for arctic-m and the fallback alike.
@@ -199,14 +203,14 @@ internal sealed class ChunkSplitter
         var sum = 0;
         foreach (var word in context.Split(' '))
         {
-            var next = _bound.Cost(word);
+            var next = bound.Cost(word);
             if (sum + next > limit) break;
             kept.Add(word);
             sum += next;
         }
 
-        var text = kept.Count > 0 ? string.Join(' ', kept) : context[..Prefix(_bound, context, limit, "")];
-        return (text, _bound.Cost(text));
+        var text = kept.Count > 0 ? string.Join(' ', kept) : context[..Prefix(bound, context, limit, "")];
+        return (text, bound.Cost(text));
     }
 
     // ---- Splitting a long section into parts ----
@@ -375,7 +379,7 @@ internal sealed class ChunkSplitter
             if (piece.Count == 0 && !Within(bound, context.Cost, wordCost, wordWords))
             {
                 var rest = word;
-                while (!Within(bound, context.Cost, bound.Cost(rest), Words(rest)))
+                while (rest.Length > 0 && !Within(bound, context.Cost, bound.Cost(rest), Words(rest)))
                 {
                     var length = Prefix(bound, rest, bound.Budget - context.Cost, context.Text + "\n");
                     pieces.Add(rest[..length]);
@@ -406,10 +410,11 @@ internal sealed class ChunkSplitter
     /// at most <see cref="Chunker.MaxWords"/> (a run without spaces can hold many, "a,b,c,…", and without a budget
     /// only the words limit it), by binary search; the word count grows with the prefix, but the token count isn't
     /// strictly monotonic, so the prefix is shortened while <paramref name="lead"/> and it don't fit. At least one
-    /// character (or surrogate pair).
+    /// character (or surrogate pair) of a text that has one.
     /// </summary>
     private static int Prefix(ChunkBound bound, string text, int room, string lead)
     {
+        if (text.Length == 0) return 0;
         var (low, high) = (1, text.Length);
         while (low < high)
         {
