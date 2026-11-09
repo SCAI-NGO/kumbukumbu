@@ -56,6 +56,9 @@ public sealed class CallerMiddleware(
 
     private readonly string? _devToken = string.IsNullOrEmpty(options.Value.DevToken) ? null : options.Value.DevToken;
 
+    /// <summary>What a late save's <c>Origin</c> must be, as <see cref="Api.Security.UseCallerRules"/> checks after this.</summary>
+    private readonly string? _ownOrigin = Api.Security.OwnOrigin(options.Value.PublicUrl);
+
     private readonly byte[]? _devTokenHash = string.IsNullOrEmpty(options.Value.DevToken) ? null : Hash(options.Value.DevToken);
 
     public async Task InvokeAsync(HttpContext context)
@@ -201,7 +204,9 @@ public sealed class CallerMiddleware(
             return null;
         }
 
-        if (context.GetEndpoint()?.Metadata.GetMetadata<Api.LateSaveMetadata>() is null) return null;
+        // A forged request (from a sibling subdomain, which SameSite=Strict lets through) is refused after this; it
+        // mustn't take the marker first, or the put-back would spend the tab's one more try.
+        if (context.GetEndpoint()?.Metadata.GetMetadata<Api.LateSaveMetadata>() is null || !Api.Security.FromOwnPages(context, _ownOrigin)) return null;
         if (context.Request.RouteValues["vault"] is not string vault
             || Api.LateSave.Of(vault, context.Request.RouteValues["path"] as string) is not { } note
             || Sessions.SubjectOf(secret) is not { } subject

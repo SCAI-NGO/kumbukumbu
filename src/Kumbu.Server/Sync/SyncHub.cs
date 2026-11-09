@@ -184,7 +184,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             if (!grant.Revealed && MarkedSince(grant))
             {
                 log.LogInformation("Closed the sync connection of {Subject}: its ticket was asked before a vault was marked discreet or not", Describe(grant.Subject));
-                await connection.CloseAsync(Hidden, "vault marked discreet, connect again");
+                await connection.CloseAsync(Hidden, "connect again");
                 return;
             }
 
@@ -351,7 +351,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             if (shown) return;
             Interlocked.Increment(ref closed);
             ClearPresence(connection, null);
-            await connection.CloseAsync(Hidden, "vault marked discreet, connect again");
+            await connection.CloseAsync(Hidden, "connect again");
         }));
         if (closed > 0) log.LogInformation("Closed {Count} sync connections of user {UserId}: a vault was marked discreet or not", closed, userId);
     }

@@ -31,9 +31,9 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
 
     private WebApplicationFactory<Program> Api => app.PublicApi;
 
-    private static async Task<string> CreateAsync(HiddenWorld world, Dictionary<string, string> vaults, string[]? publish = null)
+    private static async Task<string> CreateAsync(HiddenWorld world, Dictionary<string, string> vaults, string[]? publish = null, string name = "Agent")
     {
-        using var created = await world.Alice.SendAsync(HttpMethod.Post, "/api/connections", new { name = "Agent", vaults, publish });
+        using var created = await world.Alice.SendAsync(HttpMethod.Post, "/api/connections", new { name, vaults, publish });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         return (await RestClient.JsonAsync(created))["id"]!.GetValue<string>();
     }
@@ -156,6 +156,35 @@ public sealed class HiddenGrantsTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
         Assert.Equal("A connection needs at least one vault.", await RestClient.ErrorAsync(empty));
+    }
+
+    [Fact]
+    public async Task An_empty_edit_of_a_connection_that_also_holds_a_hidden_vault_answers_as_one_on_visible_vaults()
+    {
+        var world = await HiddenWorld.NewAsync(Api);
+        var workId = await world.In("Work").VaultIdAsync();
+        var mixed = await CreateAsync(world, new() { ["Work"] = "write", ["Tagebuch"] = "read" }, ["Tagebuch"]);
+        var visible = await CreateAsync(world, new() { ["Work"] = "write" }, name: "Laptop");
+        var access = await ConnectAsync(world, mixed);
+        await world.HideAsync();
+
+        var fromMixed = await EditAsync(mixed);
+        var fromVisible = await EditAsync(visible);
+
+        Assert.Equal(HttpStatusCode.BadRequest, fromVisible.Status);
+        Assert.Equal(fromVisible, fromMixed);
+        var stored = await StoredAsync(world, mixed);
+        Assert.Equal(
+            new Dictionary<string, KeyRight> { [workId] = KeyRight.Write, [world.TagebuchId] = KeyRight.Read },
+            stored.Vaults.ToDictionary(v => v.Key, v => v.Value));
+        Assert.Equal([world.TagebuchId], stored.Publish);
+        Assert.Equal(HttpStatusCode.OK, await InitializeAsync(mixed, access));
+
+        async Task<(HttpStatusCode Status, string Body)> EditAsync(string id)
+        {
+            using var response = await world.Alice.SendAsync(HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string>() });
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        }
     }
 
     [Fact]

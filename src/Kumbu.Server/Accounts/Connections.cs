@@ -246,19 +246,20 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// credentials changed at or after <paramref name="credentialReadAt"/>, or the user key isn't the one in force.
     /// "May publish" becomes <paramref name="publish"/>: without it, the connection may publish nowhere.
     /// The stored grants on the vaults of <paramref name="keep"/> (those a web session hides, discreet design §4), with
-    /// their right and "May publish", stay as stored; the connection needs at least one vault in the merged set. An edit
+    /// their right and "May publish", stay as stored; the edit names at least one vault, and the merged set keeps one. An edit
     /// that leaves the rights and "May publish" as stored writes nothing and leaves the tokens alone.
     /// </summary>
     public async Task<ConnectionInfo?> SetVaultsAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
         IReadOnlySet<string>? publish = null, IReadOnlySet<string>? keep = null)
     {
+        // Judged on what the session names, not on the merged set: an empty edit answers the same whether the
+        // connection holds grants on hidden vaults or not, so it can't tell that any exist.
+        if (vaults.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
         keep ??= new HashSet<string>();
-        if (vaults.Count == 0 && keep.Count == 0) throw new ArgumentException(NeedsAVault, nameof(vaults));
         publish ??= new HashSet<string>();
         await EnsureReadyAsync(ct);
-        // An empty edit of no live connection answers as without hidden vaults: nothing tells whether the user has any.
-        if (!await IsLiveAsync(user.Id, id, ct)) return vaults.Count == 0 ? throw new ArgumentException(NeedsAVault, nameof(vaults)) : null;
+        if (!await IsLiveAsync(user.Id, id, ct)) return null;
         await CheckVaultsAsync(user, userKey, vaults, publish, ct);
 
         bool changed;

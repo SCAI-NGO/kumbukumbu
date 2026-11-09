@@ -240,6 +240,8 @@ public sealed class DiscreetSocketTests(KumbuAppFactory app) : IAsyncDisposable
 
         // No hidden frame for a session that shows nothing discreet: it only takes a new ticket.
         Assert.Equal([ClosedHidden], await DrainAsync(hidden, Wait));
+        // Nor a reason that names the event: another device's devtools show it.
+        Assert.Equal("connect again", hidden.CloseStatusDescription);
         // A ticket asked after the mark, not in its very clock tick.
         _time.Advance(TimeSpan.FromSeconds(1));
         using var again = await OpenAsync(Api, other);
@@ -273,6 +275,7 @@ public sealed class DiscreetSocketTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal([ClosedHidden], await DrainAsync(late, Wait));
         Assert.Equal([ClosedHidden], await DrainAsync(lateOwn, Wait));
+        Assert.Equal("connect again", late.CloseStatusDescription);
         // One asked after the mark holds what the session shows now.
         _time.Advance(TimeSpan.FromSeconds(1));
         using var again = await OpenAsync(Api, other);

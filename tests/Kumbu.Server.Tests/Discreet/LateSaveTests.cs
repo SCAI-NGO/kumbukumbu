@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Tests.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -261,6 +263,36 @@ public sealed class LateSaveTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Conflict, first.Status);
         Assert.Equal(HttpStatusCode.Conflict, second.Status);
         Assert.Equal(HttpStatusCode.NotFound, correct.Status);
+    }
+
+    [Fact]
+    public async Task A_cross_origin_save_neither_takes_nor_spends_the_marker()
+    {
+        await using var api = Timed();
+        var (w, version) = await RevealedAsync(api);
+        Assert.Equal(HttpStatusCode.NoContent, await OpenNoteAsync(w, "Tagebuch", "geheim.md"));
+
+        // Within Sessions.IdleTimeout (30 minutes): the session itself lives on.
+        _time.Advance(TimeSpan.FromMinutes(6));
+        foreach (var origin in new[] { "https://sibling.localhost", null })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Put, w.In("Tagebuch").Url("geheim.md"))
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { content = "# Fremd\n", version }), Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={w.Alice.Session}");
+            if (origin is not null) request.Headers.Add("Origin", origin);
+            using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+            using var forged = await client.SendAsync(request, Ct);
+            Assert.Equal(HttpStatusCode.Forbidden, forged.StatusCode);
+        }
+
+        var slot = await SlotAsync(w);
+        Assert.NotNull(slot.LateSave);
+        Assert.False(slot.LateSaveRetried);
+        // The tab's own save still has its one more try.
+        Assert.Equal(HttpStatusCode.Conflict, (await SaveAsync(w, "geheim.md", "# Geheim\n\nFalsche Basis\n", "not-the-version")).Status);
+        Assert.Equal(HttpStatusCode.OK, (await SaveAsync(w, "geheim.md", "# Geheim\n\nRichtige Basis\n", version)).Status);
     }
 
     [Fact]
