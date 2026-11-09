@@ -205,9 +205,10 @@ public static class ConnectionApi
     private static async Task<Ok<ConnectionView[]>> ListAsync(HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var open = await caller.OpenVaultsAsync(ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
         var list = await connections.ListAsync(caller.User!, caller.UserKey!, ct);
         var origin = OAuthUrls.Origin(http, options.Value.PublicUrl);
-        return TypedResults.Ok(list.Select(c => View(c, open, origin)).ToArray());
+        return TypedResults.Ok(list.Where(c => !AccountApi.OnlyHidden(c.Vaults.Keys, hidden)).Select(c => View(c, open, origin)).ToArray());
     }
 
     private static async Task<Created<ConnectionView>> CreateAsync(

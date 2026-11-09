@@ -168,10 +168,16 @@ public static class SkillsApi
         var without = new List<string>();
         if (skillsVault is not null)
         {
+            // What covers only hidden vaults isn't named, as the lists of keys and connections don't list it.
+            var hidden = await caller.HiddenIdsAsync(ct);
             without.AddRange((await keys.ListAsync(caller.User!, caller.UserKey!, ct))
-                .Where(k => k.Kind == ApiKeyKind.Agent && k.RevokedAt is null && (k.ExpiresAt is null || k.ExpiresAt > now) && !k.Vaults.ContainsKey(skillsVault)).Select(k => k.Name));
+                .Where(k => k.Kind == ApiKeyKind.Agent && k.RevokedAt is null && (k.ExpiresAt is null || k.ExpiresAt > now) && !k.Vaults.ContainsKey(skillsVault)
+                    && !AccountApi.OnlyHidden(k.Vaults.Keys, hidden))
+                .Select(k => k.Name));
             without.AddRange((await connections.ListAsync(caller.User!, caller.UserKey!, ct))
-                .Where(c => c.State is ConnectionState.Waiting or ConnectionState.Connected or ConnectionState.NeedsReconnect && !c.Vaults.ContainsKey(skillsVault)).Select(c => c.Name));
+                .Where(c => c.State is ConnectionState.Waiting or ConnectionState.Connected or ConnectionState.NeedsReconnect && !c.Vaults.ContainsKey(skillsVault)
+                    && !AccountApi.OnlyHidden(c.Vaults.Keys, hidden))
+                .Select(c => c.Name));
         }
 
         return TypedResults.Ok(new SkillsView([.. await ViewsAsync(store, publishing, skills, ct)], [.. without]));

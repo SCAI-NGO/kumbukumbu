@@ -456,8 +456,9 @@ public static class AccountApi
     private static async Task<Ok<ApiKeyView[]>> ListKeysAsync(RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
         var list = await keys.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(list.Select(k => KeyView(k, names)).ToArray());
+        return TypedResults.Ok(list.Where(k => !OnlyHidden(k.Vaults.Keys, hidden)).Select(k => KeyView(k, names)).ToArray());
     }
 
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
@@ -488,8 +489,9 @@ public static class AccountApi
     private static async Task<Ok<DavSharesView>> ListDavSharesAsync(RequestCaller caller, DavShares shares, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
+        var hidden = await caller.HiddenIdsAsync(ct);
         var list = await shares.ListAsync(caller.User!, caller.UserKey!, ct);
-        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Select(s => DavShareView(s, names))]));
+        return TypedResults.Ok(new DavSharesView(options.Value.Dav.Enabled, [.. list.Where(s => !OnlyHidden(s.Vaults.Keys, hidden)).Select(s => DavShareView(s, names, hidden))]));
     }
 
     private static async Task<Created<CreatedDavShareView>> CreateDavShareAsync(CreateDavShareRequest body, RequestCaller caller, DavShares shares, CancellationToken ct)
@@ -497,7 +499,7 @@ public static class AccountApi
         var names = await VaultNamesAsync(caller, ct);
         var vaults = RightsByVaultId(body.Vaults, names);
         var (_, password, info) = await shares.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Label, vaults, ct, body.ExpiresInDays);
-        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names)));
+        return TypedResults.Created($"/api/dav-shares/{info.Id}", new CreatedDavShareView(password, DavShareView(info, names, await caller.HiddenIdsAsync(ct))));
     }
 
     private static async Task<NoContent> RevokeDavShareAsync(string id, RequestCaller caller, DavShares shares, CancellationToken ct) =>
@@ -699,6 +701,14 @@ public static class AccountApi
     internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Whether a key, share or connection covers only vaults the session hides (discreet design, Decision 9): such an
+    /// item isn't listed at all, as a device key's name holds its vault's. One that covers visible vaults too is listed
+    /// with those only; revoking it by id stays whole either way.
+    /// </summary>
+    internal static bool OnlyHidden(IEnumerable<string> vaultIds, IReadOnlySet<string> hidden) =>
+        hidden.Count > 0 && vaultIds.Any() && vaultIds.All(hidden.Contains);
+
     /// <summary>A vault the key was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
     private static ApiKeyView KeyView(ApiKeyInfo info, Dictionary<string, string> names) => new(
         info.Id,
@@ -713,8 +723,9 @@ public static class AccountApi
         PublishNames(info.Publish, names),
         InstructionsText(info.Instructions));
 
-    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name.</summary>
-    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names) => new(
+    /// <summary>As <see cref="KeyView"/>: a vault that no longer opens for the user isn't listed by name, nor a lost
+    /// vault the session hides by id.</summary>
+    private static DavShareView DavShareView(DavShareInfo info, Dictionary<string, string> names, IReadOnlySet<string> hidden) => new(
         info.Id,
         info.Username,
         info.Label,
@@ -723,7 +734,7 @@ public static class AccountApi
         info.LastUsedAt,
         info.RevokedAt,
         info.ExpiresAt,
-        [.. info.LostVaults]);
+        [.. info.LostVaults.Where(v => !hidden.Contains(v))]);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));
