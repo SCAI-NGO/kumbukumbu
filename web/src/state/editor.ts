@@ -52,6 +52,12 @@ interface EditorState {
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
+  /** Untitled notes being named from their headings (`/Home/Garden/Untitled.md`), or queued to be: no Write mode for them until then. */
+  renaming: string[];
+  /** Why naming the note at `path` from its heading failed; shown with that note until Write mode starts on it again. */
+  renameProblem: { path: string; text: string } | null;
+  /** Set by the shell: takes the URL along after a note was named from its heading, if it still shows `from`. */
+  follow: ((from: string, to: string) => void) | null;
   /** Find in the note: what is looked for, which match is the current one (0-based), and how many the note shows. */
   find: Find;
 
@@ -81,6 +87,9 @@ interface EditorState {
   searchByTag(tag: string): void;
   setShowAgentHighlights(show: boolean): void;
   setNoteTool(tool: NoteTool): void;
+  setRenaming(path: string, on: boolean): void;
+  setRenameProblem(problem: { path: string; text: string } | null): void;
+  setFollow(follow: ((from: string, to: string) => void) | null): void;
   setFind(find: Partial<Find>): void;
   /** A deleted note: it leaves the recent notes, and is no longer the open one. */
   forgetNote(path: string): void;
@@ -110,6 +119,9 @@ const initial = {
   scrollTarget: null,
   upload: null,
   noteTool: null as NoteTool,
+  renaming: [] as string[],
+  renameProblem: null as { path: string; text: string } | null,
+  follow: null as ((from: string, to: string) => void) | null,
   find: { query: "", index: 0, count: 0 } as Find,
 };
 
@@ -126,7 +138,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
       currentPath: path,
       selectedFolder: null,
       revealing: false,
-      mode: s.draft?.path === path ? "write" : mode,
+      // While the note is being named, a save would make it again at its old path.
+      mode: s.renaming.includes(path) ? "read" : s.draft?.path === path ? "write" : mode,
       overlay: "none",
       noteTool: s.currentPath === path ? s.noteTool : null,
       find: s.currentPath === path ? s.find : initial.find,
@@ -134,7 +147,14 @@ export const useEditor = create<EditorState>()((set, get) => ({
       expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(folderOf(path)).map((f) => [f, true])) },
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
     })),
-  setMode: (mode) => set(mode === "write" ? { mode, noteTool: null } : { mode }),
+  setMode: (mode) =>
+    set((s) =>
+      mode !== "write"
+        ? { mode }
+        : s.currentPath !== null && s.renaming.includes(s.currentPath)
+          ? {}
+          : { mode, noteTool: null, renameProblem: s.renameProblem?.path === s.currentPath ? null : s.renameProblem },
+    ),
   setRefused: (refused) => set({ refused }),
   endWrite: async () => {
     const guard = get().beforeRead;
@@ -156,6 +176,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
   searchByTag: (searchTag) => set({ searchTag, searchQuery: "", overlay: "search" }),
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
   setNoteTool: (noteTool) => set({ noteTool }),
+  setRenaming: (path, on) => set((s) => ({ renaming: on ? [...s.renaming.filter((p) => p !== path), path] : s.renaming.filter((p) => p !== path) })),
+  setRenameProblem: (renameProblem) => set({ renameProblem }),
+  setFollow: (follow) => set({ follow }),
   setFind: (find) => set((s) => ({ find: { ...s.find, ...find } })),
   forgetNote: (path) =>
     set((s) => ({ recentPaths: s.recentPaths.filter((p) => p !== path), currentPath: s.currentPath === path ? null : s.currentPath })),

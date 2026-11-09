@@ -59,11 +59,13 @@ const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap ag
 
 /**
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
- * are empty in it; leading blank lines go, but not indentation: four spaces make a code block, not a heading.
+ * are empty in it; leading blank lines go, but not indentation: four spaces make a code block, not a heading. An
+ * empty ATX H1 (a new note's `# `) is none: the page would show no title at all.
  */
 export const startsWithH1 = (body: string) => {
   const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
-  return /^ {0,3}#(?:[ \t]|$)/.test(first.split("\n", 1)[0]) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
+  const atx = /^ {0,3}#(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(first.split("\n", 1)[0].replace(/\r$/, ""));
+  return (!!atx?.[1] && !/^#+$/.test(atx[1])) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
 
 /** The notice under the title: a write that lost to a newer version, or one that failed. */
