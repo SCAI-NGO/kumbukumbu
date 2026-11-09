@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi } from "../test/app";
 import TextFile from "./TextFile";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   delete (window as unknown as { hit?: number }).hit;
 });
 
@@ -36,7 +38,14 @@ describe("TextFile", () => {
     fakeApi({ "GET /api/files/Work/_skills/x/run.py": () => text("print(1)\n") });
     render(<TextFile vault="Work" path="_skills/x/run.py" />);
     await screen.findByText(/print\(1\)/);
-    expect(screen.getByRole("link", { name: /download/i })).toHaveAttribute("href", "/api/files/Work/_skills/x/run.py?download=1");
+    // A button, so that no link names the vault for a middle click or a long press (spec §4).
+    expect(document.querySelector("[href]")).toBeNull();
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute("href") ?? "");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(clicked).toEqual(["/api/files/Work/_skills/x/run.py?download=1"]);
   });
 
   it("says so when the file can't be read", async () => {

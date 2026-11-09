@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { LinkView } from "./wikiLinks";
 import { useEditor } from "../state/editor";
 import MarkdownView from "./MarkdownView";
@@ -257,6 +257,22 @@ describe("MarkdownView", () => {
     expect(site).toHaveAttribute("target", "_blank");
     expect(site).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("bad").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
+  });
+
+  it("scrolls to a footnote in the page, leaving the URL as it is", () => {
+    const scrolled: string[] = [];
+    // jsdom has no scrollIntoView.
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    onTestFinished(() => void delete (Element.prototype as Partial<Element>).scrollIntoView);
+    show("Text.[^1]\n\n[^1]: The note.");
+    const ref = screen.getByRole("link", { name: "1" });
+    expect(fireEvent.click(ref)).toBe(false);
+    expect(scrolled).toEqual([ref.getAttribute("href")!.slice(1)]);
+    const back = screen.getByRole("link", { name: /back to reference/i });
+    expect(fireEvent.click(back)).toBe(false);
+    expect(scrolled).toEqual([ref.getAttribute("href")!.slice(1), ref.id]);
   });
 
   it("does not load images; it names them instead", () => {

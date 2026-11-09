@@ -23,8 +23,6 @@ export const LATE_SAVE = 5 * 60_000;
 const RETRY_AFTER = 30_000;
 const LAST_TRY_AHEAD = 1_000;
 
-export { vaultOfRoute };
-
 /**
  * Text of a discreet note that couldn't be saved on hiding (offline, say): out of view, not the editor's `draft`, and
  * tried once more within the late-save window, then forgotten either way.

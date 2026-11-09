@@ -263,6 +263,23 @@ describe("Lightbox", () => {
     expect(renders.map((r) => r.page)).toEqual([1, 2, 2]);
   });
 
+  it("downloads by a button, from the bar and the menu, with no link that names the vault", async () => {
+    api();
+    renderApp(opened("/W/shots/b.png"));
+    expect(await screen.findByRole("heading", { name: "b.png" })).toBeInTheDocument();
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute("href") ?? "");
+    });
+    const lightbox = screen.getByRole("heading", { name: "b.png" }).closest("[role=dialog]") ?? document.body;
+    for (const link of lightbox.querySelectorAll("[href]")) expect(link.getAttribute("href")).not.toContain("/W/");
+
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for b.png" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Download" }));
+    expect(clicked).toEqual(["/api/files/W/shots/b.png?download=1", "/api/files/W/shots/b.png?download=1"]);
+  });
+
   it("a pdf link opens in a new tab with noopener", async () => {
     api();
     // A page 600 × 800 pt; pdf.js's rectangles count from the bottom left.

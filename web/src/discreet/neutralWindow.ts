@@ -57,6 +57,10 @@ const newKey = () => Math.random().toString(36).substring(2, 10);
  * A `window` for React Router's browser history: its history writes `/discreet` into the browser for a URL in a
  * discreet vault, and only React Router's key and index into `history.state`, keeping the rest in `memory`; its
  * location reads the real URL back. Everything else the router asks of a window is the real one's.
+ *
+ * Two of React Router's features would write the real paths past it: view transitions (`viewTransition`, kept in
+ * `sessionStorage` as `remix-router-transitions`) and a `ScrollRestoration` whose `getKey` is the pathname. Neither
+ * is added without going through this first.
  */
 export function createNeutralWindow(real: Window): Window {
   const history = real.history;
@@ -79,6 +83,9 @@ export function createNeutralWindow(real: Window): Window {
     const same = url == null;
     const path = same ? currentPath() : pathOf(url);
     const discreet = discreetUrl(path) || (same && method === "replaceState" && !!remembered()?.url);
+    // A replaced entry can't come back: what is remembered of it goes, unless the new one keeps its key.
+    const replaced = method === "replaceState" ? (history.state as HistoryState | null)?.key : undefined;
+    if (typeof replaced === "string" && replaced !== given?.key) memory.delete(replaced);
     const keepUsr = discreet || (given?.usr != null && useDiscreet.getState().names.size > 0);
     if (!keepUsr) return history[method](state, "", url);
     const { usr, ...rest } = given ?? {};
@@ -135,7 +142,7 @@ export function createNeutralWindow(real: Window): Window {
   useDiscreet.subscribe((state, previous) => {
     if (state.names === previous.names || real.location.pathname === NEUTRAL) return;
     const path = currentPath();
-    if (discreetUrl(path)) write("replaceState", history.state, path);
+    if (discreetUrl(path)) write("replaceState", neutralHistory.state, path);
   });
   // A sign-out, a session that ended, another user: the next session starts hidden.
   useSession.subscribe((session, previous) => {

@@ -6,6 +6,7 @@ import { useCheckpointTree } from "../api/history";
 import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
 import { Menu } from "../components/Menu";
+import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
 import MoveDialog from "../shell/MoveDialog";
@@ -79,7 +80,6 @@ export default function Lightbox() {
   const [copy, setCopy] = useState<"copied" | "failed" | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pdf, setPdf] = useState<PdfStatus | null>(null);
-  const download = useRef<HTMLAnchorElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
 
   // Focus starts in the lightbox, on the way out of it.
@@ -139,6 +139,7 @@ export default function Lightbox() {
   };
 
   const fileHref = fileAtUrl(vault, inVault(path), source);
+  // Downloaded by a button: a link would put the file's path, vault and all, under a middle click or a long press.
   const downloadUrl = `${fileHref}${fileHref.includes("?") ? "&" : "?"}download=1`;
   // Deleted only at the version shown, so not before it is known.
   // Today's info only for today's file: read only, the cache may still hold it (the query is shared), but it isn't
@@ -146,7 +147,7 @@ export default function Lightbox() {
   const live = readOnly ? undefined : info.data;
   const current = live?.version;
   const actions: { label: string; icon: LucideIcon; onSelect(): void; disabled?: boolean }[] = [
-    { label: "Download", icon: Download, onSelect: () => download.current?.click() },
+    { label: "Download", icon: Download, onSelect: () => download(downloadUrl) },
     ...(readOnly
       ? []
       : [
@@ -251,9 +252,9 @@ export default function Lightbox() {
           </p>
         )}
         <div className="pointer-events-auto flex gap-2">
-          <a ref={download} href={downloadUrl} download={name} aria-label="Download" className={controlClass}>
+          <button type="button" aria-label="Download" onClick={() => download(downloadUrl)} className={controlClass}>
             <Download size={20} aria-hidden />
-          </a>
+          </button>
           {!readOnly && (
             <>
               {writes && (

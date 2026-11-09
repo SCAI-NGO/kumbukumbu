@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
 import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
-import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -310,6 +310,17 @@ function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldabl
   );
 }
 
+function scrollToFragment(e: MouseEvent<HTMLAnchorElement>, href: string) {
+  e.preventDefault();
+  let id = href.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // As written.
+  }
+  document.getElementById(id)?.scrollIntoView({ block: "start" });
+}
+
 const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
   aside: ({ node, children, ...props }) =>
@@ -390,11 +401,14 @@ const components: Components = {
     </div>
   ),
   // react-markdown's default urlTransform already drops dangerous protocols (javascript: and the like).
+  // A link within the page (a footnote and its way back) scrolls there and leaves the URL alone: a hash in the
+  // address bar would leave the router's location, and in a discreet note show the real path again.
   a: ({ node: _, href, children, ...props }) => (
     <a
       href={href}
       {...props}
       {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      {...(href?.startsWith("#") ? { onClick: (e: MouseEvent<HTMLAnchorElement>) => scrollToFragment(e, href) } : {})}
       className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
     >
       {children}

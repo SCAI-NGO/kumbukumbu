@@ -104,6 +104,35 @@ describe("the neutral window", () => {
     expect(window.history.state).toEqual({ key: "k0", idx: 0 });
   });
 
+  it("keeps an entry's state from memory when its vault becomes discreet", () => {
+    shown("Other");
+    neutralWindow.history.pushState({ usr: { paths: ["/Tagebuch/b.png"] }, key: "k1", idx: 1 }, "", "/view/Tagebuch/b.png");
+    expect(window.history.state).toEqual({ key: "k1", idx: 1 });
+    useDiscreet.getState().setFromVaults([{ name: "Other", discreet: true }, { name: "Tagebuch", discreet: true }]);
+
+    expect(window.location.pathname).toBe("/discreet");
+    expect(neutralWindow.history.state).toEqual({ usr: { paths: ["/Tagebuch/b.png"] }, key: "k1", idx: 1 });
+  });
+
+  it("forgets the entry a replace takes the place of", () => {
+    shown("Tagebuch");
+    neutralWindow.history.pushState({ usr: { paths: ["/Tagebuch/b.png"] }, key: "k1", idx: 1 }, "", "/view/Tagebuch/b.png");
+    neutralWindow.history.replaceState({ usr: null, key: "k2", idx: 1 }, "", "/notes/Work/a.md");
+    expect(window.location.pathname).toBe("/notes/Work/a.md");
+
+    // An entry of that key again (none can come back in a browser) reads /discreet: nothing is left of it.
+    window.history.replaceState({ key: "k1", idx: 1 }, "", "/discreet");
+    expect(neutralWindow.location.pathname).toBe("/discreet");
+    expect(neutralWindow.history.state).toEqual({ key: "k1", idx: 1 });
+  });
+
+  it("keeps what it remembers of an entry replaced under its own key", () => {
+    shown("Tagebuch");
+    neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/notes/Tagebuch/a.md");
+    neutralWindow.history.replaceState({ key: "k1", idx: 1 }, "", "/notes/Tagebuch/b.md");
+    expect(neutralWindow.location.pathname).toBe("/notes/Tagebuch/b.md");
+  });
+
   it("never loads a discreet URL as a page", () => {
     shown("Tagebuch");
     // jsdom can't navigate, nor can its location be stubbed: a window of the test's own sees where it would go.
