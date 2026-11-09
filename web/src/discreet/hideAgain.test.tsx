@@ -130,8 +130,13 @@ describe("hiding the discreet vaults again", () => {
   it("✕ saves the open note first, tells the server, forgets everything and goes back to Work", async () => {
     const { log, queryClient, router, requests } = await openDiary(inMinutes(10));
     const beforeRead = editorOn(log);
+    // The note the tab goes to is open by the time the hiding ends: the shell doesn't follow the URL meanwhile.
+    const openWhenDone: (string | null)[] = [];
+    const stop = useDiscreet.subscribe((s, previous) => void (previous.hiding && !s.hiding && openWhenDone.push(useEditor.getState().currentPath)));
     await userEvent.click(hideButton());
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    await waitFor(() => expect(openWhenDone).toEqual(["/Work/a.md"]));
+    stop();
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });
     expect(log).toEqual(["save", "hide"]);
     await waitFor(() => expectForgotten(queryClient));
