@@ -100,8 +100,11 @@ The browser's history can't be cleaned, so discreet paths must never get into it
 - **More vaults…** is the last entry of the vault menu, **always**, whether or not the user has discreet vaults or a PIN. Its presence gives nothing away. It is quieter than a button in the sidebar (maintainer's choice, mockup 1C).
 - The dialog: PIN digits, then **Hide again after** with 5 min, 10 min, 30 min, 60 min and Never, preselected with this device's last choice, and **Open** (mockup 3A).
 - **The right PIN:** discreet mode starts for the chosen time, with the frame and the pill, and shows the discreet vaults if there are any (§3.1).
-- **A wrong PIN, or no PIN set:** always the same answer, "You have no discreet vaults." It comes with the same status, the same shape of response and the same timing (the server runs the hash even when no PIN is set), so the cases are indistinguishable. The maintainer: "soft plausible deniability". A user who mistypes simply tries again.
+- **A wrong PIN, or no PIN set** (with or without discreet vaults): always the same answer, "You have no discreet vaults." It comes with the same status, the same shape of response and the same timing (the server runs the hash even when no PIN is set), so the cases are indistinguishable. The maintainer: "soft plausible deniability". A user who mistypes simply tries again.
 - **Guessing:** 4 digits are only 10,000 possibilities. PIN checks are rate-limited per account, like password checks (`AccountLimits`, `Security.cs:392`), and the limit applies to every account in the same way, with or without a PIN. Over the limit, the answer is "Too many attempts; try again in a minute", for everyone alike.
+
+- **Every PIN entry counts** (maintainer, 2026-11-09): right or wrong, every entry in the PIN dialog counts against the session, and the **tenth ends the session**, so the password is needed again. A right PIN doesn't reset the count. This stops a stolen session cookie from trying all 10,000 PINs within a remembered session's 30 days. It applies to every account alike, with or without a PIN.
+- **Setting or changing the PIN asks for the current password every time**, in the request itself, as the export ticket does (`ExportApi.cs:116-124`). The password window of a session is not enough: a normal session's window is always open.
 
 ### 3.7 While discreet vaults are shown (maintainer, mockup 2C)
 
@@ -116,6 +119,8 @@ By time-out or by ✕:
 - Drafts are saved first.
 - Every tab of the session closes its discreet tabs, drops their data from the in-memory caches (the query cache, the editor store: `forgetVault`, `editor.ts:89`), and returns to the last ordinary vault.
 - Other tabs of the same session hear it over their socket. Another device has its own session and its own state.
+- **Saving before the end** (maintainer, 2026-11-09): a tab saves an open discreet note shortly before the time runs out. If the device slept through the end, the server still accepts **one** save of the note that was open, from that session, up to **5 minutes** after the end; after that, nothing.
+- **The socket:** the server drops the discreet vaults from the session's sockets at the end, by ✕, time-out or the hub's regular check. It never relies on the browser to stop listening.
 
 ### 3.9 Room for the kill switch in 0.5.0
 
@@ -133,6 +138,19 @@ Alice has the vaults `Work`, `Garten` and `Tagebuch`, and Bob shares `Familie` w
 6. Twenty minutes later she types in that note. At thirty minutes the note is saved, its tab closes, and the app shows `Work`.
 
 ## 4. Claude's calls (the maintainer can override them)
+
+Added after the independent review of 2026-11-09:
+
+- **Key rotation:** the sealed list of discreet vaults is resealed with the user key wherever that key changes: re-encrypting her vaults (`UserKeyRotation`) and account recovery (`UserCatalog`). Otherwise it would become unreadable, and every hidden vault would reappear. This is a narrow change to the rotation, inside its existing transaction.
+- **The list keeps ids of vaults that are gone** (deleted, left, revoked), so notices and events about them stay filtered. Marks from two tabs at once use a conditional update.
+- **Neutral URL, strictly:**
+  - no discreet path in the router's state or `history.state`, and no discreet path in any link's `href`, so that a middle click can't put it into the history;
+  - the open discreet view lives in memory;
+  - reloading `/discreet` shows the vault list.
+- **Invitations:** joining a shared vault whose name clashes with a hidden vault answers neutrally, like creating or renaming (§3.4).
+- **Export file name:** an export of a discreet vault gets a neutral file name, so that the browser's downloads list doesn't name it. The web app exports vault by vault; there is no "all vaults" export to filter.
+- **The OAuth consent page for a connection that covers only hidden vaults** shows the connection's own name with no vaults; its grants stay as they are (§6).
+
 
 - **Where the mark lives:** a sealed list of vault ids on the user document (precedent: `UserDocument.SkillsNotice`), not a clear field on the vault slots, so the database doesn't show which vaults are discreet. The PIN verifier sits on the user document too.
 - **The menu entry's English text:** "More vaults…". The dialog says "You have no discreet vaults." The setting is "Discreet vaults", and a vault's switch is "Discreet".
@@ -160,6 +178,7 @@ Alice has the vaults `Work`, `Garten` and `Tagebuch`, and Bob shares `Familie` w
   - Discreet vaults are hidden from the web app's screen, not from the server's operator or the database. The PIN gates a view; it encrypts nothing.
   - The storage total and an admin's vault count include discreet vaults; neither names one.
 - **Name guessing:** someone who guesses a hidden vault's exact name and tries to create it gets "This name can't be used here", so a hidden name can be confirmed by guessing.
+- **A connection covering only hidden vaults** still shows its own name on the OAuth consent page when it renews.
 - **Agents and synced devices see discreet vaults as before.** Whoever gets hold of a synced Obsidian vault or a configured agent sees what those see.
 
 ## 7. Automated tests
