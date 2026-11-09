@@ -14,6 +14,7 @@ import { remarkTags } from "../tags/tags";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
+import { remarkComments, remarkHighlights } from "./highlights";
 import { section } from "./outline";
 import { splitFrontmatter } from "./properties";
 import { embedHeading, isExternalUrl, remarkWikiLinks, type LinkView } from "./wikiLinks";
@@ -340,9 +341,13 @@ const components: Components = {
   h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
   h5: ({ node, ...props }) => <h5 data-line={useLine(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
   h6: ({ node, ...props }) => <h6 data-line={useLine(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
-  mark: ({ node, ...props }) => (
-    <mark className={`rounded-[3px] ${node?.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
-  ),
+  // Find's matches take the accent, `==highlights==` (highlights.ts) a highlighter's yellow; the first match is 0.
+  mark: ({ node, ...props }) =>
+    node?.properties.dataFind !== undefined ? (
+      <mark className={`rounded-[3px] ${node.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
+    ) : (
+      <mark className="rounded-[3px] bg-highlight px-0.5 text-text" {...props} />
+    ),
   p: ({ node, children, ...props }) =>
     node?.properties.dataCalloutTitle ? (
       <p {...props} className="flex items-center gap-2">
@@ -422,7 +427,17 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
   const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
     () =>
-      [remarkGfm, remarkCallouts, remarkTags, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
+      [
+        remarkGfm,
+        remarkCallouts,
+        remarkTags,
+        [remarkWikiLinks, { links: links ?? [] }],
+        // After the links and tags, which find theirs by the text's positions; before find, which counts no hidden text.
+        remarkHighlights,
+        remarkComments,
+        [remarkFind, { query, current }],
+        [remarkChanged, { highlight }],
+      ] as const,
     [links, highlight, query, current],
   );
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.

@@ -4,9 +4,10 @@ import { linkLabel } from "./wikiLinks";
 /** A heading of the note: its level (1–6), its text as shown, and its 1-based source line. */
 export type Heading = { level: number; text: string; line: number };
 
-/** A heading's Markdown as it reads: wiki links by their label, emphasis and code marks and links' URLs gone. */
+/** A heading's Markdown as it reads: wiki links by their label, emphasis and code marks, links' URLs and comments gone. */
 export const headingText = (md: string) =>
   md
+    .replace(/%%.*?(%%|$)/g, "")
     .replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/(\*\*|__|\*|_|~~|`)(.+?)\1/g, "$2")
@@ -17,22 +18,29 @@ const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3
 
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
- * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code. The body keeps
- * the source's line numbers (front matter lines are empty).
+ * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
+ * (remarkComments hides those). The body keeps the source's line numbers (front matter lines are empty).
  */
 export function outline(body: string): Heading[] {
   const headings: Heading[] = [];
   let fence: string | null = null;
+  let comment = false;
   // The paragraph the current line continues: its first line (0-based) and its text so far.
   let para: { start: number; text: string[] } | null = null;
-  body.split("\n").forEach((line, i) => {
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+  body.split("\n").forEach((source, i) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source)?.[1];
     if (marker && (fence === null || (marker[0] === fence[0] && marker.length >= fence.length))) {
       fence = fence === null ? marker : null;
       para = null;
       return;
     }
     if (fence !== null) return;
+    // The line as it shows: what lies outside comments.
+    let line = "";
+    source.split("%%").forEach((piece, n) => {
+      if (n > 0) comment = !comment;
+      if (!comment) line += piece;
+    });
     const setext = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
     if (setext && para) {
       headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: headingText(para.text.join(" ")), line: para.start + 1 });

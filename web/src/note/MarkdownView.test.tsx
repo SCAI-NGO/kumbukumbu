@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +30,7 @@ function show(
   links: LinkView[] = [],
   handlers: Partial<{ onToggleTask(line: number): void; onCreateMissing(target: string): void }> = {},
   highlight: { lines: Set<number> | "all"; writer: string } | null = null,
+  find: { query: string; current: number } | null = null,
 ) {
   render(
     <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -40,6 +41,7 @@ function show(
         onToggleTask={handlers.onToggleTask ?? vi.fn()}
         onCreateMissing={handlers.onCreateMissing ?? vi.fn()}
         highlight={highlight}
+        find={find}
       />
     </MemoryRouter>,
   );
@@ -426,5 +428,106 @@ describe("tags in the text", () => {
     expect(screen.queryByRole("button", { name: /^Notes tagged/ })).not.toBeInTheDocument();
     expect(screen.getByText("#code")).toBeInTheDocument();
     expect(screen.getByText("#fenced")).toBeInTheDocument();
+  });
+});
+
+describe("highlights and comments", () => {
+  const marks = () => [...document.querySelectorAll<HTMLElement>("mark[data-highlight]")];
+
+  it("renders ==text== as a highlight and hides %%text%%", () => {
+    show("- ==Tomaten== %%die gelben%%");
+    expect(marks().map((m) => m.textContent)).toEqual(["Tomaten"]);
+    expect(marks()[0]).toHaveClass("bg-highlight");
+    expect(screen.queryByText(/die gelben/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("%%");
+  });
+
+  it("leaves comparisons and code as written", () => {
+    show("a == b and c == d\n\n`==x==`\n\n```\n==x== %%y%%\n```");
+    expect(marks()).toHaveLength(0);
+    expect(screen.getByText("a == b and c == d")).toBeInTheDocument();
+    expect(screen.getByText("==x==").tagName).toBe("CODE");
+    expect(screen.getByText("==x== %%y%%").tagName).toBe("CODE");
+  });
+
+  it("holds emphasis, links and tags inside one highlight", () => {
+    show("==a *b* [[c]]==\n\n==[[c]]==\n\n==#tag==\n\n==a #tag==", [link(1, "[[c]]", "note", "/W/c.md"), link(3, "[[c]]", "note", "/W/c.md")]);
+    const [first, second, third, fourth] = marks();
+    expect(marks()).toHaveLength(4);
+    expect(first).toHaveTextContent("a b c");
+    expect(within(first).getByText("b").tagName).toBe("EM");
+    expect(within(first).getByRole("link", { name: "c" })).toHaveAttribute("href", "/notes/W/c.md");
+    expect(within(second).getByRole("link", { name: "c" })).toHaveAttribute("href", "/notes/W/c.md");
+    // A tag needs whitespace before its `#`, as on the server.
+    expect(third).toHaveTextContent("#tag");
+    expect(within(third).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(fourth).getByRole("button", { name: "Notes tagged #tag" })).toBeInTheDocument();
+  });
+
+  it("never highlights across lines", () => {
+    show("==a\nb==");
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("works inside a callout", () => {
+    show("> [!note] T\n> ==x== %%y%%");
+    const box = document.querySelector("[data-callout]")!;
+    expect(box.querySelector("mark[data-highlight]")).toHaveTextContent("x");
+    expect(box).not.toHaveTextContent("y");
+  });
+
+  it("hides a comment over several blocks, and an unclosed one to the end", () => {
+    show("%%\n# Hidden\n\nmore\n%%\nShown");
+    expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
+    expect(screen.queryByText(/more/)).not.toBeInTheDocument();
+    expect(screen.getByText("Shown")).toBeInTheDocument();
+    expect(document.querySelector("[data-line]")).toBeNull();
+    cleanup();
+
+    // A `%%` in code ends no comment; the code goes with it.
+    show("%%\n```\n%% code\n```\nhidden %%shown");
+    expect(document.body).not.toHaveTextContent(/code|hidden/);
+    expect(screen.getByText("shown")).toBeInTheDocument();
+  });
+
+  it("keeps a table's cells where a comment is in it, and hides a table inside one", () => {
+    show("| a %%x%% | b |\n|---|---|\n| %%c | d%% |\n| e | f |");
+    expect([...document.querySelectorAll("th, td")].map((c) => c.textContent?.trim())).toEqual(["a", "b", "", "", "e", "f"]);
+    cleanup();
+
+    show("%%\n\n| a | b |\n|---|---|\n| c | d |\n\n%%\n\nafter");
+    expect(document.querySelector("table")).toBeNull();
+    expect(screen.getByText("after")).toBeInTheDocument();
+  });
+
+  it("hides the rest of the note after a %% without its pair", () => {
+    show("Before %%after\n\n- one\n- two\n\n## Gone");
+    expect(screen.getByText(/Before/)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/after|one|two|Gone/);
+  });
+
+  it("finds no hidden text, and marks a match inside a highlight as found", () => {
+    const source = "- ==Tomaten== %%die gelben%%";
+    show(source, [], {}, null, { query: "gelben", current: 0 });
+    expect(document.querySelector("mark[data-find]")).toBeNull();
+    cleanup();
+
+    // Hidden matches aren't counted: the first one shown is the first.
+    show("%%gelben%% gelben", [], {}, null, { query: "gelben", current: 0 });
+    expect([...document.querySelectorAll("mark[data-find]")].map((m) => [m.getAttribute("data-find"), m.hasAttribute("data-current")])).toEqual([["0", true]]);
+    cleanup();
+
+    show(source, [], {}, null, { query: "Tomaten", current: 0 });
+    const found = document.querySelector<HTMLElement>("mark[data-find]")!;
+    expect(found).toHaveAttribute("data-find", "0");
+    expect(found.parentElement).toHaveAttribute("data-highlight");
+    expect(found).toHaveClass("bg-accent");
+    expect(found).not.toHaveClass("bg-highlight");
+  });
+
+  it("keeps the agent's highlight on a highlighted line", () => {
+    show("==x==", [], {}, { lines: new Set([1]), writer: "Bob" });
+    expect(document.querySelector("[data-changed]")).toHaveTextContent("x");
+    expect(marks()).toHaveLength(1);
   });
 });

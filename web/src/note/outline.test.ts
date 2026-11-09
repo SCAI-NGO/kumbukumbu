@@ -24,6 +24,12 @@ describe("outline", () => {
   it("skips headings inside fenced code, with either fence", () => {
     expect(outline("```\n# no\n```\n~~~~\n## no\n```\n~~~~\n## yes").map((h) => h.text)).toEqual(["yes"]);
   });
+
+  it("leaves out headings inside %% comments, and a heading's own comment", () => {
+    expect(outline("%%\n# Hidden\n%%\n# Shown")).toEqual([{ level: 1, text: "Shown", line: 4 }]);
+    expect(outline("# A %%c%%")).toEqual([{ level: 1, text: "A", line: 1 }]);
+    expect(outline("```\n%%\n```\n# Kept\n%%\n```\n%%\n```\n# Gone").map((h) => h.text)).toEqual(["Kept"]);
+  });
 });
 
 describe("section", () => {
