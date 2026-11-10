@@ -9,7 +9,17 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   </head>
   <body class="bg-bg">
-    <noscript>This page needs JavaScript to show the note.</noscript>
+    <noscript>
+      <p>This page needs JavaScript to show the note.</p>
+      <!-- For fetch tools that run no script: they see this, browsers with scripts never do. -->
+      <p>
+        For AI agents and scripts: the code is the part of the link after "#". Send it as POST /api/s on this server, with
+        the headers "Content-Type: application/json" and "Origin: " followed by this server's origin (scheme and host, as
+        in https://kumbu.example.org), and the body {"code":"&lt;code&gt;"}. The answer is JSON: the note's title and its
+        Markdown. Example:
+      </p>
+      <pre>curl -s -X POST https://kumbu.example.org/api/s -H 'Content-Type: application/json' -H 'Origin: https://kumbu.example.org' -d '{"code":"K7QM-4XDA-…"}'</pre>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/reader/main.tsx"></script>
   </body>

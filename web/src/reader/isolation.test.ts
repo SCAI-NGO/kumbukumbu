@@ -29,3 +29,12 @@ it("imports nothing of the app", () => {
   };
   expect(imports.filter((i) => !allowed(i))).toEqual([]);
 });
+
+// Fetch tools of AI agents run no script and never send the fragment: the page's static HTML tells them how to read it.
+it("tells agents without scripts how to read the note", () => {
+  const page = readFileSync(resolve(import.meta.dirname, "../../s.html"), "utf8");
+  const noscript = /<noscript>([\s\S]*?)<\/noscript>/.exec(page)?.[1] ?? "";
+  expect(noscript).toContain("POST /api/s");
+  expect(noscript).toContain("Origin: ");
+  expect(noscript).toContain('{"code":"&lt;code&gt;"}');
+});

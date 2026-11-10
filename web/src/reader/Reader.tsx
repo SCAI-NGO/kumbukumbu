@@ -93,12 +93,44 @@ const components: Components = {
   img: ({ src, alt }) => <CopyImage src={typeof src === "string" ? src : undefined} alt={alt} />,
 };
 
+/** The copy as one Markdown text, title first, for pasting into an AI's chat: its fetch tools can't read this page. */
+export const copyMarkdown = (copy: ReaderCopy) => `# ${copy.title}\n\n${copy.markdown}`;
+
+/** Copies the copy's Markdown and says how that went for a few seconds (the app's `useCopied`, which this page can't import). */
+function CopyMarkdown({ copy }: { copy: ReaderCopy }) {
+  const [said, setSaid] = useState<{ text: string; n: number } | null>(null);
+  useEffect(() => {
+    if (!said) return;
+    const timer = setTimeout(() => setSaid(null), 3000);
+    return () => clearTimeout(timer);
+  }, [said]);
+  const say = (text: string) => setSaid((s) => ({ text, n: (s?.n ?? 0) + 1 }));
+  const copyText = () =>
+    navigator.clipboard.writeText(copyMarkdown(copy)).then(
+      () => say("Copied"),
+      () => say("Couldn't copy. Select the text and copy it by hand."),
+    );
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        onClick={() => void copyText()}
+        className="min-h-11 rounded-[8px] border border-line bg-surface px-4 text-[14px] text-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        Copy as Markdown
+      </button>
+      <div aria-live="polite">{said && <span key={said.n} className="text-[14px] text-muted">{said.text}</span>}</div>
+    </div>
+  );
+}
+
 function Copy({ copy }: { copy: ReaderCopy }) {
   const files = useMemo(() => ({ copy: copy.copy, indices: new Set(copy.files.map((f) => f.index)) }), [copy.copy, copy.files]);
   return (
     <article>
       <h1 className="text-[28px] leading-tight font-bold text-text">{copy.title}</h1>
-      <p className="mt-1 mb-6 font-mono text-[12px] text-muted">{snapshotText(copy.snapshotAt)}</p>
+      <p className="mt-1 mb-4 font-mono text-[12px] text-muted">{snapshotText(copy.snapshotAt)}</p>
+      <CopyMarkdown copy={copy} />
       <div className="text-[16px] leading-[1.6] break-words text-text-body">
         <Files.Provider value={files}>
           <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
