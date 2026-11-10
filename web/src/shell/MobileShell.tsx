@@ -252,7 +252,8 @@ export default function MobileShell() {
   useEffect(() => {
     if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
   }, [readOnlyNote, mode]);
-  const refusal = held ?? (path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null);
+  // Nothing of a note on its way out with its vault hidden again, a refusal's sentence naming it neither.
+  const refusal = gone ? null : held ?? (path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null);
 
   // A write the server refused for the level (a role lowered, the owner deactivated, the vault closing): the list is
   // read again, and the write actions and Write mode follow it.
@@ -312,7 +313,7 @@ export default function MobileShell() {
         {docked && <TreeDrawer docked hidden={collapsed} {...treeProps} />}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="pt-2 empty:hidden">
-            <SharedBanner vault={path ? vaultOf(path) : activeVault} refusal={refusal} />
+            <SharedBanner vault={path && !gone ? vaultOf(path) : activeVault} refusal={refusal} />
           </div>
           <main className="flex min-h-0 flex-1 flex-col">
             {gone ? <div className="flex-1" /> : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}

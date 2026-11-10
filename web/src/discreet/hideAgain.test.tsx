@@ -28,6 +28,8 @@ afterEach(async () => {
   useSession.getState().reset();
   useEditor.getState().reset();
   useDiscreet.getState().reset();
+  // Kept by a reset, as in the app; a test starts with no vault hidden before.
+  useDiscreet.setState({ gone: new Set() });
   useConsole.getState().reset();
   useSyncStatus.setState({ connected: false, editors: {} });
 });
@@ -581,7 +583,7 @@ describe("hiding the discreet vaults again", () => {
   it("✕ leaves an ordinary note's unsaved text to its own guard", async () => {
     const sent: string[] = [];
     const { router } = await openDiary(null, {
-      // There, as far as the editor asks: not gone elsewhere.
+      // The note is still there: the editor's version check finds no deletion.
       "GET /api/version/Work/a.md": () => json(200, { path: "/Work/a.md", version: "v1", lastWriter: "ada", lastWriteAt: "2026-11-09T09:00:00Z" }),
       "PUT /api/notes/Work/a.md": async (r) => {
         sent.push(((await r.clone().json()) as { content: string }).content);

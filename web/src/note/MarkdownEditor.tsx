@@ -176,15 +176,20 @@ export default function MarkdownEditor({
       if (currentLocation.pathname === nextLocation.pathname || nextLocation.pathname === "/signin" || !unresolved()) return false;
       // A discreet note on its way out with the vaults hidden again: the hide has held what is unsaved (`hold`), and
       // the note goes with its vault. Blocked, the hidden note would stay on screen, put back as the open note. An
-      // ordinary note keeps its guard.
+      // ordinary note keeps its guard, and so does this one until the hide has its text: until the mode is reset, its
+      // vault is still among the names shown (a vault hidden before, and shown again since, is in `gone` all along).
+      // Nothing is saved from here on: the editor going would send the held text a second time.
       const discreet = useDiscreet.getState();
-      if (discreet.hiding && discreet.gone.has(vaultOf(path))) return false;
+      if (discreet.hiding && discreet.gone.has(vaultOf(path)) && !discreet.names.has(vaultOf(path))) {
+        stop();
+        return false;
+      }
       const { currentPath, mode } = useEditor.getState();
       held.current = { currentPath, mode };
       useEditor.setState({ currentPath: path, mode: "write" });
       return true;
     },
-    [path, unresolved],
+    [path, unresolved, stop],
   );
   const blocker = useBlocker(shouldBlock);
   useEffect(() => {

@@ -32,6 +32,9 @@ afterEach(async () => {
     useSession.getState().reset();
     useEditor.getState().reset();
     useDiscreet.getState().reset();
+    // Kept by a reset, as in the app; a test starts with no vault hidden before.
+    useDiscreet.setState({ gone: new Set() });
+    for (const stop of watching.splice(0)) stop();
     useConsole.getState().reset();
     useSyncStatus.setState({ connected: false, editors: {} });
   }
@@ -285,7 +288,8 @@ describe("F9: text typed offline around the end of a reveal is saved", () => {
 const NAMES = /Tagebuch|Heute/;
 /**
  * The screen's text at every change after the tab's reveal ended (its mode reset), or after now (`fromNow`): what a
- * person could have seen meanwhile. `stop` ends the watch and answers what was seen.
+ * person could have seen meanwhile. `stop` ends the watch and answers what was seen. Seen as the observer is called:
+ * two renders in one task show as the last of them.
  */
 function watchScreen({ fromNow = false } = {}) {
   const seen: string[] = [];
@@ -298,13 +302,20 @@ function watchScreen({ fromNow = false } = {}) {
     // What the screen shows from then on; not at once, before React has rendered anything of it.
     if (previous.revealed && !s.revealed) ended = true;
   });
-  return () => {
+  const stop = () => {
     observer.disconnect();
     unsubscribe();
+  };
+  watching.push(stop);
+  return () => {
+    stop();
     look();
     return seen;
   };
 }
+
+/** The watches still on: a test that failed before ending its own leaves them to `afterEach`. */
+const watching: (() => void)[] = [];
 
 /** Nothing seen names the vault or the note. */
 const namesNothing = (seen: string[]) => expect(seen.filter((text) => NAMES.test(text))).toEqual([]);
@@ -392,10 +403,13 @@ describe("F10: after the end, nothing on screen names the discreet note", () => 
     t.offline();
     await typeInTunnel(t, 3);
     const watch = watchScreen();
+    const sent = t.puts();
     await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
     await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
     await wait(2_000);
     namesNothing(watch());
+    // The hide's own save tried once; the text is held from then on, and the editor going sends it no second time.
+    expect(t.puts()).toBe(sent + 1);
   });
 
   it("online all along (step 2.9): typing until the end, the note closes, Home is shown, everything is saved once", async () => {
@@ -442,6 +456,33 @@ describe("F10: after the end, nothing on screen names the discreet note", () => 
     });
     await act(() => t.router.navigate(`/notes${PATH}`));
     await screen.findByText("Liebes Tagebuch.");
+  });
+
+  it("hidden, shown again and hidden once more, the editor still keeps its text until the hide has it", async () => {
+    const t = await diary();
+    await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
+    await waitFor(() => expect(useDiscreet.getState().hiding).toBe(false));
+    t.shownAgain(Date.now() + 5 * 60_000);
+    await act(() => t.queryClient.refetchQueries({ queryKey: ["session"] }));
+    await act(() => t.queryClient.refetchQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(useDiscreet.getState().names.has("Tagebuch")).toBe(true));
+    await act(() => t.router.navigate(`/notes${PATH}`));
+    await t.u.click(await screen.findByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    await wait(1_000);
+    // A slow save: the second hide waits for it.
+    const slow = gate();
+    t.gates.write = slow.promise;
+    await t.type(" zwei");
+    await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
+    expect(useDiscreet.getState().hiding).toBe(true);
+    // Meanwhile the user goes to another note: the editor's guard holds it back, as the hide hasn't the text yet.
+    await act(() => t.router.navigate("/notes/Home/a.md"));
+    expect(t.router.state.location.pathname).toBe(`/notes${PATH}`);
+    t.gates.write = Promise.resolve();
+    slow.open();
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    expect(t.note().content).toBe("Liebes Tagebuch. zwei");
   });
 
   it("a hidden frame from another tab ends it the same way", async () => {
