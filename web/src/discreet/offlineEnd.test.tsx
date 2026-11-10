@@ -19,18 +19,22 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await waitFor(() => expect(useDiscreet.getState().hiding).toBe(false));
-  cleanup();
-  onlineManager.setOnline(true);
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  forgetHeld();
-  useSession.getState().reset();
-  useEditor.getState().reset();
-  useDiscreet.getState().reset();
-  useConsole.getState().reset();
-  useSyncStatus.setState({ connected: false, editors: {} });
+  try {
+    await waitFor(() => expect(useDiscreet.getState().hiding).toBe(false));
+  } finally {
+    // Also after a hide that never ended: the next test mustn't start offline or on fake timers.
+    cleanup();
+    onlineManager.setOnline(true);
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    forgetHeld();
+    useSession.getState().reset();
+    useEditor.getState().reset();
+    useDiscreet.getState().reset();
+    useConsole.getState().reset();
+    useSyncStatus.setState({ connected: false, editors: {} });
+  }
 });
 
 const PATH = "/Tagebuch/Heute.md";

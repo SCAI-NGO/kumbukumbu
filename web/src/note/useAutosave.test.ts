@@ -193,6 +193,21 @@ describe("autosave", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("online again while a save is in flight, and that save then fails: it is tried again with the latest text", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(calls).toHaveLength(1);
+    act(() => current().change("start ab"));
+    act(() => void window.dispatchEvent(new Event("online")));
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(calls.map((c) => c.content)).toEqual(["start a", "start ab"]);
+    calls[1].answer(saved("start ab", "v2"));
+    await settle();
+    expect(current().status).toBe("saved");
+  });
+
   it("flush waits for the saves and answers whether everything is saved", async () => {
     const { calls, current } = setup();
     act(() => current().change("one"));

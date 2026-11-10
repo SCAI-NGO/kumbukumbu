@@ -41,6 +41,8 @@ export function useAutosave(
     keepalive: false,
     conflict: null as Conflict | null,
     failed: false,
+    /** The browser came back online while a save was under way: should that save fail, it goes again at once. */
+    online: false,
     /** The note is gone from its path: nothing is saved any more (a save would answer 404, or make it again). */
     stopped: false,
   }).current;
@@ -83,9 +85,14 @@ export function useAutosave(
         s.inFlight = null;
         const again = s.again;
         s.again = false;
+        const online = s.online;
+        s.online = false;
         if (s.conflict) {
           setConflict(s.conflict);
           setStatus("conflict");
+        } else if (s.failed && online) {
+          s.failed = false;
+          void run();
         } else if (s.failed) setStatus("error");
         else if (again) void run();
         else setStatus(s.text === s.saved ? "saved" : "pending");
@@ -199,11 +206,13 @@ export function useAutosave(
     if (s.text !== s.saved) void run();
   }, [s, run]);
 
-  // Online again, a failed save goes with the latest text at once, not only at the next keystroke or the retry button.
-  // Nothing failed, nothing is sent early: a pending keystroke keeps its 800 ms.
+  // Online again, a failed save goes with the latest text at once, not only at the next keystroke or the retry button;
+  // one under way goes again if it fails after all. Nothing failed, nothing is sent early: a pending keystroke keeps
+  // its 800 ms. A note that is gone saves nothing, and keeps saying so.
   useEffect(() => {
     const online = () => {
-      if (!s.failed) return;
+      if (s.inFlight) s.online = true;
+      if (!s.failed || s.stopped) return;
       s.failed = false;
       void run();
     };
