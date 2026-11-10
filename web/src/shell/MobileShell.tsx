@@ -7,7 +7,7 @@ import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useTree, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
-import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
+import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -280,10 +280,10 @@ export default function MobileShell() {
   const publishEnabled = usePublishEnabled();
   const noteVault = path ? vaults.data?.find((v) => v.name === vaultOf(path)) : undefined;
   const ownNote = !!noteVault && noteVault.owner == null;
-  const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
-  const mayPublish = ownNote && publishEnabled === true && publication.data === null && publishableAsNote(noteVault, path ?? "");
-  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20).
+  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20), and what is published.
   const publications = usePublications(noteVault?.name ?? "", ownNote).data;
+  const mayPublish =
+    ownNote && publishEnabled === true && publications !== undefined && !publications.publications.some((p) => p.path === path) && publishableAsNote(noteVault, path ?? "");
   const marking = useMarking(publications?.publications.map((p) => p.path));
   const publishingActions =
     path && ownNote

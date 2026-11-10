@@ -60,6 +60,18 @@ export const usePublication = (path: string, enabled = true) =>
     },
   });
 
+/**
+ * The note's publication as its bar wants it: asked of its own only once the vault's list names it, so an unpublished
+ * note makes no request that answers 404. Undefined until the list is in (and while it fails), null when it doesn't
+ * name the note.
+ */
+export function useNotePublication(path: string, enabled = true): { data: PublicationView | null | undefined } {
+  const list = usePublications(vaultOf(path), enabled).data;
+  const listed = !!list?.publications.some((p) => p.path === path);
+  const publication = usePublication(path, enabled && listed);
+  return { data: !enabled || !list ? undefined : listed ? publication.data : null };
+}
+
 /** The publications of all the owner's own vaults, for the overview; never with a link. */
 export const useAllPublications = () => useQuery({ queryKey: ["publications"], queryFn: () => call(api.GET("/api/publications")) });
 

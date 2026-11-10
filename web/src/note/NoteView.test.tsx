@@ -350,7 +350,7 @@ describe("the note view", () => {
     const asked = () => fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname).filter((p) => p.includes("publications"));
     renderApp(planUrl);
     await screen.findByRole("heading", { name: "Goals" });
-    // The bar's own question, that it is published by the vault's owner; the dialog adds none.
+    // The bar's own questions, the shared vault's list and then that it is published by the vault's owner; the dialog adds none.
     expect(await screen.findByText("Published by the vault's owner")).toBeInTheDocument();
     const before = asked();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
@@ -359,7 +359,7 @@ describe("the note view", () => {
     expect(await within(dialog).findByText("inbox")).toBeInTheDocument();
     expect(within(dialog).queryByText(withdraws)).toBeNull();
     expect(asked()).toEqual(before);
-    expect(before).not.toContain("/api/vaults/Work/publications");
+    expect(before).toEqual(["/api/vaults/Work/publications", `/api/publications${PLAN}`]);
   });
 
   it("goes to the vaults after deleting the only note of a folder", async () => {

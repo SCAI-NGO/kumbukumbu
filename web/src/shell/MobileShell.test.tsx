@@ -883,13 +883,19 @@ describe("vaults shared with the user", () => {
   });
 
   describe("publishing", () => {
+    const listing = (path: string) => ({ path, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: "you", link: null });
     const publishApi = (publishEnabled: boolean, published: string[] = []) =>
       signedInApi({
         "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled }),
         "GET /api/vaults": () => json(200, sharedVaults),
         "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
-        // Publish… waits for her marks: one could cover the note.
-        "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+        // Publish… waits for her marks: one could cover the note. The list names what is published.
+        "GET /api/vaults/Work/publications": () => json(200, { publications: published.filter((p) => p.startsWith("/Work/")).map(listing), unpublishable: [] }),
+        "GET /api/vaults/Beete/publications": () => json(200, { publications: [], unpublishable: [] }),
+        "POST /api/publications/*": (r) => {
+          published.push(decodeURIComponent(new URL(r.url).pathname.slice("/api/publications".length)));
+          return json(201, { link: "https://kumbu.example.org/s#x", snapshotAt: "2026-11-05T14:32:00Z", plain: [] });
+        },
         "GET /api/publications/*": (r) => {
           const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/publications".length));
           return published.includes(path)
@@ -903,6 +909,41 @@ describe("vaults shared with the user", () => {
       await userEvent.keyboard("{Escape}");
       return items;
     };
+    const asked = (fetch: ReturnType<typeof fakeApi>, method: string, path: string) =>
+      fetch.mock.calls.filter(([r]) => (r as Request).method === method && new URL((r as Request).url).pathname === path).length;
+
+    it("offers Publish… for an unpublished note of her own vault, not for a published one, and asks no publication of the unpublished one", async () => {
+      const fetch = publishApi(true, ["/Work/readme.md"]);
+      renderApp("/notes/Work/inbox.md");
+      expect(await screen.findByRole("heading", { name: "inbox" })).toBeInTheDocument();
+      await waitFor(async () => expect(await noteMenu()).toContain("Publish…"));
+      expect(asked(fetch, "GET", "/api/publications/Work/inbox.md")).toBe(0);
+      cleanup();
+
+      publishApi(true, ["/Work/readme.md"]);
+      renderApp("/notes/Work/readme.md");
+      expect(await screen.findByText("Published, up to date")).toBeInTheDocument();
+      expect(await noteMenu()).not.toContain("Publish…");
+    });
+
+    it("asks the vault's list again after publishing from the menu, and shows the bar", async () => {
+      const fetch = publishApi(true);
+      renderApp("/notes/Work/inbox.md");
+      expect(await screen.findByRole("heading", { name: "inbox" })).toBeInTheDocument();
+      await waitFor(async () => expect(await noteMenu()).toContain("Publish…"));
+      const lists = asked(fetch, "GET", "/api/vaults/Work/publications");
+      await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Publish…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Publish this note" });
+      const publish = within(dialog).getByRole("button", { name: "Publish" });
+      await waitFor(() => expect(publish).toBeEnabled());
+      await userEvent.click(publish);
+      await userEvent.click(await within(dialog).findByRole("button", { name: "Done" }));
+      expect(await screen.findByText("Published, up to date")).toBeInTheDocument();
+      expect(asked(fetch, "GET", "/api/vaults/Work/publications")).toBeGreaterThan(lists);
+      expect(asked(fetch, "GET", "/api/publications/Work/inbox.md")).toBe(1);
+      expect(await noteMenu()).not.toContain("Publish…");
+    });
 
     it("offers Publish… for her own unpublished note, and opens the dialog", async () => {
       publishApi(true);
