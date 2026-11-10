@@ -17,6 +17,16 @@ Your password unlocks your vaults, and so does your recovery key, shown once whe
 
 An API key or a connection opens exactly the vaults, with exactly the rights, that you gave it, and stops the moment you revoke it on the Access page. Everything it writes carries its name.
 
+## Discreet vaults
+
+A discreet vault isn't there in the web app until a PIN shows it: for when Kumbu² is open at a family table, at work or on the train, and even a vault's name would say too much.
+
+1. Set a PIN in Settings → **Discreet vaults**: 4 to 6 digits, separate from your password.
+2. Open **More vaults…**, the last entry of the vault menu, and enter the PIN, with how long the vaults stay shown. An amber frame and a **Discreet** pill show that discreet mode is on; ✕ on the pill hides them again.
+3. While the amber frame is shown, mark a vault: the vault's ⋯ menu → **Discreet** (or **Not discreet**), or its switch in Settings.
+
+The PIN hides vaults in the web app; it doesn't encrypt them. Agents, synced devices, WebDAV, keys and connections see them as before.
+
 ## The honest limits
 
 - The running server works with your notes in memory; that is how search works. So whoever operates your Kumbu² server is trusted: choose who runs it.

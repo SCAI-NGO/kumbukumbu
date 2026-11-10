@@ -218,34 +218,42 @@ function DiscreetSection() {
   const [setting, setSetting] = useState(false);
   const [set, setSet] = useState(false);
   const revealed = useDiscreet((s) => s.revealed);
+  const { hash } = useLocation();
+  const section = useRef<HTMLDivElement>(null);
+  // More vaults… links here (`/settings#discreet-vaults`), as the install hint does to its section.
+  useEffect(() => {
+    if (hash === "#discreet-vaults") section.current?.scrollIntoView?.({ block: "start" });
+  }, [hash]);
   return (
-    <Section title="Discreet vaults">
-      <p className="text-text-body">
-        A PIN of its own shows the vaults you marked as discreet, from More vaults… in the vault menu, for the time you choose. Agents, synced devices,
-        keys, WebDAV and connections see them as before.
-      </p>
-      {revealed && <DiscreetSwitches />}
-      {set && <Done>The PIN is set.</Done>}
-      <button
-        type="button"
-        onClick={() => {
-          setSet(false);
-          setSetting(true);
-        }}
-        className={secondaryButtonClass}
-      >
-        Set or change PIN
-      </button>
-      {setting && (
-        <SetPinDialog
-          onDone={() => {
-            setSetting(false);
-            setSet(true);
+    <div ref={section}>
+      <Section title="Discreet vaults" id="discreet-vaults">
+        <p className="text-text-body">
+          A PIN of its own shows the vaults you marked as discreet, from More vaults… in the vault menu, for the time you choose. Agents, synced devices,
+          keys, WebDAV and connections see them as before.
+        </p>
+        {revealed && <DiscreetSwitches />}
+        {set && <Done>The PIN is set.</Done>}
+        <button
+          type="button"
+          onClick={() => {
+            setSet(false);
+            setSetting(true);
           }}
-          onClose={() => setSetting(false)}
-        />
-      )}
-    </Section>
+          className={secondaryButtonClass}
+        >
+          Set or change PIN
+        </button>
+        {setting && (
+          <SetPinDialog
+            onDone={() => {
+              setSetting(false);
+              setSet(true);
+            }}
+            onClose={() => setSetting(false)}
+          />
+        )}
+      </Section>
+    </div>
   );
 }
 

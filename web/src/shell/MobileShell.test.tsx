@@ -650,6 +650,34 @@ describe("the shell", () => {
   });
 });
 
+describe("the first vault", () => {
+  const skills = { name: "Skills", notes: 1, embeddings: "internal", kind: "skills" };
+  const welcome = { name: "Welcome", notes: 1, embeddings: "internal" };
+  const tree = (name: string) => () => json(200, { damaged: 0, root: { name, path: `/${name}`, folders: [], notes: [] } });
+  const vaultsApi = (vaults: object[]) =>
+    signedInApi({ "GET /api/vaults": () => json(200, vaults), "GET /api/vaults/Welcome/tree": tree("Welcome"), "GET /api/vaults/Skills/tree": tree("Skills") });
+
+  it("is the first vault that isn't the Skills vault, though Skills sorts first", async () => {
+    vaultsApi([skills, welcome]);
+    renderApp("/");
+    await waitFor(() => expect(useEditor.getState().activeVault).toBe("Welcome"));
+  });
+
+  it("is the Skills vault when there is no other", async () => {
+    vaultsApi([skills]);
+    renderApp("/");
+    await waitFor(() => expect(useEditor.getState().activeVault).toBe("Skills"));
+  });
+
+  it("leaves a vault the user chose", async () => {
+    vaultsApi([skills, welcome]);
+    useEditor.getState().setActiveVault("Skills");
+    renderApp("/");
+    await screen.findByRole("button", { name: /^Welcome/ });
+    expect(useEditor.getState().activeVault).toBe("Skills");
+  });
+});
+
 describe("vaults shared with the user", () => {
   const vault = (name: string, extra: Record<string, unknown> = {}) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false, ...extra });
   const sharedVaults = [
@@ -940,5 +968,27 @@ describe("discreet mode on a phone", () => {
     expect(screen.queryByRole("group", { name: "Discreet vaults shown" })).not.toBeInTheDocument();
     expect(frameOf(shell)).toBeNull();
     expect(frameOf(await openDrawer())).toBeNull();
+  });
+});
+
+describe("More vaults… on a phone", () => {
+  it("leads to where the PIN is set, leaving neither the dialog nor the drawer open", async () => {
+    signedInApi({
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
+      "GET /api/vault-events": () => json(200, []),
+      "GET /api/account/storage": () => json(200, { used: 4096, limit: null }),
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    const tree = await openDrawer();
+    await userEvent.click(await within(tree).findByRole("button", { name: "Switch vault: Work" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "More vaults…" }));
+    const pin = await screen.findByRole("dialog", { name: "More vaults" });
+    await userEvent.click(within(pin).getByRole("link", { name: "Settings → Discreet vaults" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    expect(router.state.location.hash).toBe("#discreet-vaults");
+    expect(screen.queryByRole("dialog", { name: "More vaults" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    // Settings is outside the shell, which unmounts: the drawer is closed in the store, not only out of sight.
+    expect(useEditor.getState().overlay).toBe("none");
   });
 });

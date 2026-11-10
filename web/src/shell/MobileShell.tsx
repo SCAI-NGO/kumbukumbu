@@ -233,8 +233,9 @@ export default function MobileShell() {
     void loadMoveDialog().catch(() => {});
   }, []);
 
+  // Skills sorts before Welcome, where a new user should start: the Skills vault only when there is no other.
   useEffect(() => {
-    if (!activeVault && vaults.data?.length) setActiveVault(vaults.data[0].name);
+    if (!activeVault && vaults.data?.length) setActiveVault((vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
   }, [activeVault, vaults.data, setActiveVault]);
 
   // A note the caller can't change (any more: her role was lowered) is only read. Not before the vaults are in, whose
