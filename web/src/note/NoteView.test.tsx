@@ -508,6 +508,34 @@ describe("the note view", () => {
   });
 });
 
+describe("a note that isn't there in a vault the list doesn't name", () => {
+  const HEUTE = "/Tagebuch/Heute.md";
+  const missing = () => json(404, { error: `There is no note at ${HEUTE} (if it was removed, it is in the trash).` });
+  const NO_SUCH_NOTE = "There is no such note (if it was removed, it is in the trash).";
+
+  it("is said without its path, and has no heading made from it", async () => {
+    noteApi({ "GET /api/vaults": () => json(200, [{ name: "Home", notes: 1 }]), [`GET /api/notes${HEUTE}`]: missing });
+    renderApp(`/notes${HEUTE}`);
+    expect(await screen.findByText(NO_SUCH_NOTE)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Heute" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("There is no note at");
+  });
+
+  it("is said so as well while the list is still loading", async () => {
+    noteApi({ "GET /api/vaults": () => new Promise<Response>(() => {}), [`GET /api/notes${HEUTE}`]: missing });
+    renderApp(`/notes${HEUTE}`);
+    expect(await screen.findByText(NO_SUCH_NOTE)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Heute" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the server's sentence and the heading in a vault the list names", async () => {
+    noteApi({ "GET /api/vaults": () => json(200, [{ name: "Home", notes: 1 }]), "GET /api/notes/Home/a.md": () => json(404, { error: "There is no note at /Home/a.md." }) });
+    renderApp("/notes/Home/a.md");
+    expect(await screen.findByText("There is no note at /Home/a.md.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "a" })).toBeInTheDocument();
+  });
+});
+
 describe("Embeds", () => {
   const ROADMAP = "/Work/projects/roadmap.md";
   const embedding = ["![[roadmap]]", "", "![[roadmap#Next]]", "", "Inline ![[roadmap]] here.", "", "![[plan]]", "", "![[chart.png]]", "", "![[roadmap#Nope]]"].join("\n");

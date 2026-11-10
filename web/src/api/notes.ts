@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { notifyManager, useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useDiscreet } from "../discreet/state";
 import { api, call, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
-import { isVaultBusy } from "./error-text";
+import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
@@ -127,15 +127,17 @@ const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet)
 
 /**
  * The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. While
- * this tab doesn't show the discreet vaults, none is listed, whatever the answer.
+ * this tab doesn't show the discreet vaults, none is listed, whatever the answer. `passive` only reads the list the
+ * app's other readers bring in, and never asks for it: for a hook used once per embed or sheet.
  */
-export const useVaults = () => {
+export const useVaults = ({ passive = false }: { passive?: boolean } = {}) => {
   const revealed = useDiscreet((s) => s.revealed);
   return useQuery({
     queryKey: ["vaults"],
     queryFn: () => call(api.GET("/api/vaults")),
     select: revealed ? undefined : withoutDiscreet,
-    refetchInterval: (query) => (query.state.data?.some((v) => v.pending) ? 5000 : false),
+    enabled: !passive,
+    refetchInterval: (query) => (!passive && query.state.data?.some((v) => v.pending) ? 5000 : false),
   });
 };
 
@@ -225,6 +227,14 @@ export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMoun
     refetchOnMount,
     refetchInterval: whileBusy,
   });
+
+/** Whether the note's read (`useNote`, the note view's) answered 404. Only looks: asks nothing of the server itself. */
+export function useNoteMissing(path: string | null): boolean {
+  const queryClient = useQueryClient();
+  // Batched as `useIsFetching` does: the cache changes while another component renders.
+  const subscribe = useCallback((changed: () => void) => queryClient.getQueryCache().subscribe(notifyManager.batchCalls(changed)), [queryClient]);
+  return useSyncExternalStore(subscribe, () => path !== null && isNotFound(queryClient.getQueryState(["note", path])?.error));
+}
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
 export const useLinks = (path: string, version: string | undefined) =>
