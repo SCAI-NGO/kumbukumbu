@@ -271,6 +271,21 @@ describe("Reader", () => {
     expect(screen.getByRole("heading", { name: "Six" }).tagName).toBe("H6");
   });
 
+  it("copies the note as Markdown, title first", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    stubFetch({ "GET /api/s": () => json(200, copy("1. Which way is shorter?\n2. Is there a list?")) });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy as Markdown" }));
+    expect(writeText).toHaveBeenCalledWith("# Questions on routing\n\n1. Which way is shorter?\n2. Is there a list?");
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await userEvent.click(screen.getByRole("button", { name: "Copy as Markdown" }));
+    expect(await screen.findByText("Couldn't copy. Select the text and copy it by hand.")).toBeInTheDocument();
+  });
+
   it("opens web links without a referrer", async () => {
     stubFetch({ "GET /api/s": () => json(200, copy("[the map](https://example.org/map) and [Bob](mailto:bob@example.org)")) });
     render(<Reader />);
