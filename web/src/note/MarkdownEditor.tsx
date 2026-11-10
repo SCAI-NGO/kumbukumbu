@@ -5,6 +5,7 @@ import { useBlocker, useNavigate, type BlockerFunction } from "react-router-dom"
 import { api, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
@@ -173,6 +174,11 @@ export default function MarkdownEditor({
     ({ currentLocation, nextLocation }) => {
       // A session that ended goes to sign-in regardless; the text can't be saved without one.
       if (currentLocation.pathname === nextLocation.pathname || nextLocation.pathname === "/signin" || !unresolved()) return false;
+      // A discreet note on its way out with the vaults hidden again: the hide has held what is unsaved (`hold`), and
+      // the note goes with its vault. Blocked, the hidden note would stay on screen, put back as the open note. An
+      // ordinary note keeps its guard.
+      const discreet = useDiscreet.getState();
+      if (discreet.hiding && discreet.gone.has(vaultOf(path))) return false;
       const { currentPath, mode } = useEditor.getState();
       held.current = { currentPath, mode };
       useEditor.setState({ currentPath: path, mode: "write" });

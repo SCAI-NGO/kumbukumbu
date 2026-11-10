@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
+import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
@@ -13,6 +14,7 @@ import { usePublications } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
@@ -56,6 +58,8 @@ function EditorLoadFailed() {
 const versionKey = (v: { version: string; lastWriteAt: string }) => `${v.version}@${v.lastWriteAt}`;
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
+/** A note of a discreet vault that isn't there: said without its path. */
+const NO_SUCH_NOTE = "There is no such note (if it was removed, it is in the trash).";
 
 /**
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
@@ -78,6 +82,9 @@ type Notice = { kind: "conflict" } | { kind: "error"; text: string };
 export default function NoteView({ path }: { path: string }) {
   const note = useNote(path);
   const mode = useEditor((s) => s.mode);
+  // The note API's 404 names the path, which mustn't be on screen for a discreet vault (spec §3).
+  const discreet = useDiscreet((s) => s.names.has(vaultOf(path)));
+  const noteError = discreet && note.error instanceof HttpError && note.error.status === 404 ? NO_SUCH_NOTE : errorText(note.error);
   // Every save is a new version; the links are only asked for once they are shown again.
   const links = useLinks(path, mode === "read" ? note.data?.version : undefined);
   const save = useSaveNote(path);
@@ -285,7 +292,7 @@ export default function NoteView({ path }: { path: string }) {
         </>
       );
     }
-    return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
+    return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{noteError}</p>}</div>;
   }
 
   // Files dropped on the note go into its folder, by way of the upload sheet (which asks before sending).
@@ -364,7 +371,7 @@ export default function NoteView({ path }: { path: string }) {
             {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.text}
           </p>
         )}
-        {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
+        {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
             {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}

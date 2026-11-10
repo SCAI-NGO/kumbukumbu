@@ -577,4 +577,30 @@ describe("hiding the discreet vaults again", () => {
     expect(beforeRead).toHaveBeenCalledTimes(2);
     expect(requests("POST", "/api/account/discreet/hide")).toHaveLength(1);
   });
+
+  it("✕ leaves an ordinary note's unsaved text to its own guard", async () => {
+    const sent: string[] = [];
+    const { router } = await openDiary(null, {
+      // There, as far as the editor asks: not gone elsewhere.
+      "GET /api/version/Work/a.md": () => json(200, { path: "/Work/a.md", version: "v1", lastWriter: "ada", lastWriteAt: "2026-11-09T09:00:00Z" }),
+      "PUT /api/notes/Work/a.md": async (r) => {
+        sent.push(((await r.clone().json()) as { content: string }).content);
+        return json(500, { error: "Broken." });
+      },
+    });
+    await act(() => router.navigate("/notes/Work/a.md"));
+    await headingShown("a");
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "Markdown source" }), "{Control>}{End}{/Control} Mehr.");
+    // After the 800 ms of the autosave.
+    await screen.findByRole("alert", { name: "Not saved" }, { timeout: 3_000 });
+    const failed = sent.length;
+    expect(sent.at(-1)).toBe("Text. Mehr.");
+    await userEvent.click(hideButton());
+    await doneHiding(router);
+    // The hide doesn't go away from an ordinary note; Read mode takes the editor, whose last save sends the text.
+    await waitFor(() => expect(sent).toHaveLength(failed + 1));
+    expect(sent.at(-1)).toBe("Text. Mehr.");
+    expect(router.state.location.pathname).toBe("/notes/Work/a.md");
+  });
 });

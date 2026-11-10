@@ -17,7 +17,7 @@ import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import { useTellOpenNote } from "../discreet/openNote";
-import { useDiscreet } from "../discreet/state";
+import { useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -135,6 +135,8 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
+  // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
+  const gone = useGoneWithVaults(path);
   const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const dockLevel = useLevel(activeVault);
@@ -294,7 +296,7 @@ export default function MobileShell() {
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {framed && <DiscreetFrame />}
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
-      <TopBar path={path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={gone ? null : path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       {framed && (
         <div className="flex-none px-3 pt-2">
           <DiscreetPill />
@@ -312,7 +314,9 @@ export default function MobileShell() {
           <div className="pt-2 empty:hidden">
             <SharedBanner vault={path ? vaultOf(path) : activeVault} refusal={refusal} />
           </div>
-          <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
+          <main className="flex min-h-0 flex-1 flex-col">
+            {gone ? <div className="flex-1" /> : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}
+          </main>
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
               {errorText(createUntitled.error)}

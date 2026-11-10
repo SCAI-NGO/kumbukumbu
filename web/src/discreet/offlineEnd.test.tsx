@@ -91,6 +91,8 @@ function server(until: number, ahead = 0) {
       await gates.read;
       return answer;
     },
+    // Any other note of the vault isn't there, shown or not: the note API's 404, with its path.
+    "GET /api/notes/Tagebuch/*": (r) => json(404, { error: `There is no note at ${decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length))} (if it was removed, it is in the trash).` }),
     "GET /api/notes/Home/a.md": () => json(200, { path: "/Home/a.md", content: "Einkaufen.", version: "h1", lastWriter: "alice", lastWriteAt: "2026-11-10T07:00:00Z" }),
     [`GET /api/version${PATH}`]: () => (shown() ? json(200, { path: PATH, version: note.version, lastWriter: note.lastWriter, lastWriteAt: note.lastWriteAt }) : noNote()),
     "GET /api/version/Home/a.md": () => json(200, { path: "/Home/a.md", version: "h1", lastWriter: "alice", lastWriteAt: "2026-11-10T07:00:00Z" }),
@@ -140,7 +142,12 @@ function server(until: number, ahead = 0) {
     marker = null;
     retried = false;
   };
-  return { fetch, net, gates, saves, puts, shownAgain, note: () => note };
+  /** Hidden from elsewhere (another tab's ✕), as the server's hide: the open note it was told is forgotten. */
+  const hide = () => {
+    hidden = true;
+    marker = null;
+  };
+  return { fetch, net, gates, saves, puts, shownAgain, hide, note: () => note };
 }
 
 /** The browser goes offline (or online again): the network, `navigator.onLine` and its events, as react-query hears them. */
@@ -269,3 +276,184 @@ describe("F9: text typed offline around the end of a reveal is saved", () => {
   });
 });
 
+
+/** What must not be on screen once the reveal has ended. */
+const NAMES = /Tagebuch|Heute/;
+/**
+ * The screen's text at every change after the tab's reveal ended (its mode reset), or after now (`fromNow`): what a
+ * person could have seen meanwhile. `stop` ends the watch and answers what was seen.
+ */
+function watchScreen({ fromNow = false } = {}) {
+  const seen: string[] = [];
+  let ended = fromNow || !useDiscreet.getState().revealed;
+  // The markup, so that a label or a title is seen as well as the text.
+  const look = () => void (ended && seen.push(document.body.innerHTML));
+  const observer = new MutationObserver(look);
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+  const unsubscribe = useDiscreet.subscribe((s, previous) => {
+    // What the screen shows from then on; not at once, before React has rendered anything of it.
+    if (previous.revealed && !s.revealed) ended = true;
+  });
+  return () => {
+    observer.disconnect();
+    unsubscribe();
+    look();
+    return seen;
+  };
+}
+
+/** Nothing seen names the vault or the note. */
+const namesNothing = (seen: string[]) => expect(seen.filter((text) => NAMES.test(text))).toEqual([]);
+
+describe("F10: after the end, nothing on screen names the discreet note", () => {
+  it("the spec's example: the note closes offline at the end, Home is shown, and nothing names it, also once online", async () => {
+    const t = await diary();
+    const watch = watchScreen();
+    await t.type(" Morgens.");
+    await wait(2_000);
+    await wait(t.until - Date.now() - 2 * 60_000);
+    t.offline();
+    await typeInTunnel(t, 30);
+    await wait(t.until - Date.now() + 2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    const sentBefore = t.puts();
+    await wait(3 * 60_000);
+    // Offline, nothing of the note leaves the tab: the held draft waits for the browser to be online again.
+    expect(t.puts()).toBe(sentBefore);
+    t.online();
+    await wait(5_000);
+    // Online again, the ordinary note the tab went to is read.
+    await screen.findByText("Einkaufen.");
+    await wait(10 * 60_000);
+    namesNothing(watch());
+    expect(useEditor.getState().currentPath).toBe("/Home/a.md");
+  });
+
+  it("the end while a save is in flight, with the note's read answering 404 meanwhile", async () => {
+    const t = await diary();
+    await t.type(" Morgens.");
+    await wait(2_000);
+    await wait(t.until - Date.now() - 3_000);
+    const slow = gate();
+    t.gates.write = slow.promise;
+    await t.type(" spät");
+    await wait(4_000);
+    const watch = watchScreen();
+    // The note is read again while the hide waits for the save: the server has hidden it.
+    await act(() => t.queryClient.invalidateQueries({ queryKey: ["note", PATH] }));
+    await wait(1_000);
+    t.gates.write = Promise.resolve();
+    slow.open();
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(5_000);
+    namesNothing(watch());
+  });
+
+  it("a 404 before the tab's end (the server's clock is ahead) shows no path, and the hide that follows names nothing", async () => {
+    const t = await diary({ write: false, ahead: 20_000 });
+    await screen.findByText("Liebes Tagebuch.");
+    await wait(t.until - Date.now() - 10_000);
+    const all = watchScreen({ fromNow: true });
+    const watch = watchScreen();
+    // The server's reveal has ended; the tab's hasn't. Read again (the window regains focus, say), the note answers 404.
+    await act(() => t.queryClient.refetchQueries({ queryKey: ["note", PATH], exact: true }));
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(15_000);
+    namesNothing(watch());
+    expect(all().filter((text) => text.includes("There is no note at"))).toEqual([]);
+  });
+
+  it("a 404 that arrives after the hide names nothing", async () => {
+    // The server's reveal ends 2 s before the tab's: the read under way at the end is answered 404.
+    const t = await diary({ write: false, ahead: 2_000 });
+    await screen.findByText("Liebes Tagebuch.");
+    await wait(t.until - Date.now() - 1_000);
+    // A read of the note under way at the end, answered after the tab has hidden the vault.
+    const late = gate();
+    t.gates.read = late.promise;
+    void t.queryClient.refetchQueries({ queryKey: ["note", PATH], exact: true });
+    const watch = watchScreen();
+    await wait(2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    t.gates.read = Promise.resolve();
+    late.open();
+    await wait(5_000);
+    namesNothing(watch());
+  });
+
+  it("✕ while offline with text unsaved goes to Home and names nothing", async () => {
+    const t = await diary();
+    await t.type(" Morgens.");
+    await wait(2_000);
+    t.offline();
+    await typeInTunnel(t, 3);
+    const watch = watchScreen();
+    await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(2_000);
+    namesNothing(watch());
+  });
+
+  it("online all along (step 2.9): typing until the end, the note closes, Home is shown, everything is saved once", async () => {
+    const t = await diary();
+    const watch = watchScreen();
+    let typed = "";
+    while (Date.now() < t.until - 1_000) {
+      await t.type(" w");
+      typed += " w";
+      await wait(5_000);
+    }
+    await wait(t.until - Date.now() + 2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(10 * 60_000);
+    expect(t.note().content).toBe("Liebes Tagebuch." + typed);
+    expect(new Set(t.saves).size).toBe(t.saves.length);
+    namesNothing(watch());
+  });
+
+  it("a note that isn't there in a shown discreet vault: the 404 names no path", async () => {
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    const all = watchScreen({ fromNow: true });
+    await act(() => t.router.navigate("/notes/Tagebuch/Fehlt.md"));
+    await screen.findByText("There is no such note (if it was removed, it is in the trash).");
+    expect(all().filter((text) => text.includes("There is no note at"))).toEqual([]);
+  });
+
+  it("shown again after a hide, the vault's notes render again", async () => {
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
+    await waitFor(() => {
+      expect(t.router.state.location.pathname).toBe("/notes/Home/a.md");
+      expect(useDiscreet.getState().hiding).toBe(false);
+    });
+    // Shown again, as after the PIN: the session and the vault list read again say so.
+    t.shownAgain(Date.now() + 5 * 60_000);
+    await act(() => t.queryClient.refetchQueries({ queryKey: ["session"] }));
+    await act(() => t.queryClient.refetchQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => {
+      expect(useDiscreet.getState().revealed).toBe(true);
+      expect(useDiscreet.getState().names.has("Tagebuch")).toBe(true);
+    });
+    await act(() => t.router.navigate(`/notes${PATH}`));
+    await screen.findByText("Liebes Tagebuch.");
+  });
+
+  it("a hidden frame from another tab ends it the same way", async () => {
+    const t = await diary();
+    await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    FakeSocket.all.at(-1)!.open();
+    await t.type(" Morgens.");
+    await wait(2_000);
+    t.offline();
+    await typeInTunnel(t, 3);
+    const watch = watchScreen();
+    // Another tab hid them; its frame arrives here (the socket outlives a short loss of the network, say).
+    t.hide();
+    FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(2_000);
+    namesNothing(watch());
+  });
+});
