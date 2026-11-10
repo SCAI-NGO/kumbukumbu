@@ -90,6 +90,7 @@ function server(until: number, ahead = 0) {
     "GET /api/vaults": () => json(200, shown() ? [vault("Home"), vault("Tagebuch", true)] : [vault("Home")]),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Home/tree": () => tree("Home", "a.md"),
+    "GET /api/vaults/Tagebuch/access": () => (shown() ? json(200, { apiKeys: [], deviceKeys: [], connections: [], members: [], left: [] }) : gone()),
     "GET /api/vaults/Tagebuch/tree": () => (shown() ? tree("Tagebuch", "Heute.md") : gone()),
     "GET /api/vaults/Home/publications": () => json(200, { publications: [], unpublishable: [] }),
     "GET /api/vaults/Tagebuch/publications": () => (shown() ? json(200, { publications: [], unpublishable: [] }) : gone()),
@@ -486,6 +487,32 @@ describe("F10: after the end, nothing on screen names the discreet note", () => 
     await wait(2_000);
     expect(screen.queryByRole("dialog", { name: "Rename Tagebuch" })).not.toBeInTheDocument();
     namesNothing(watch());
+  });
+
+  it("the active vault's dialog of the docked sidebar (Share) closes at the end, rather than going on with Home", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    await t.u.click(await screen.findByRole("button", { name: "Actions for Tagebuch" }));
+    await t.u.click(screen.getByRole("menuitem", { name: "Share…" }));
+    await screen.findByRole("dialog", { name: "Who has access to Tagebuch" });
+    await wait(t.until - Date.now() + 2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(2_000);
+    expect(screen.queryByRole("dialog", { name: /Who has access/ })).not.toBeInTheDocument();
+  });
+
+  it("a note of the hidden vault reached again later (a bookmark) says there is no such note, without its path", async () => {
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));
+    await waitFor(() => {
+      expect(t.router.state.location.pathname).toBe("/notes/Home/a.md");
+      expect(useDiscreet.getState().hiding).toBe(false);
+    });
+    await act(() => t.router.navigate("/notes/Tagebuch/Morgen.md"));
+    await screen.findByText("There is no such note (if it was removed, it is in the trash).");
+    expect(document.body.textContent).not.toContain("There is no note at");
   });
 
   it("hidden, shown again and hidden once more, the editor still keeps its text until the hide has it", async () => {

@@ -17,7 +17,8 @@ import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import { useTellOpenNote } from "../discreet/openNote";
-import { useDiscreet, useGoneWithVaults } from "../discreet/state";
+import { NO_SUCH_NOTE } from "../discreet/errorText";
+import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -137,6 +138,7 @@ export default function MobileShell() {
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
   // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
   const gone = useGoneWithVaults(path);
+  const hiding = useDiscreet((s) => s.hiding);
   const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const dockLevel = useLevel(activeVault);
@@ -164,14 +166,13 @@ export default function MobileShell() {
     () =>
       useDiscreet.subscribe((s, previous) => {
         if (s.gone === previous.gone && s.names === previous.names) return;
-        const goneVault = (vault: string) => s.gone.has(vault) && !s.names.has(vault);
-        const gonePath = (path: string | null | undefined) => !!path && goneVault(vaultOf(path));
+        const gonePath = (path: string | null | undefined) => !!path && goneVault(s, vaultOf(path));
         setFolderDialog((folder) => (gonePath(folder) ? null : folder));
         setDeleting((subject) => (gonePath(subject?.path) ? null : subject));
         setMoving((subject) => (gonePath(subject?.path) ? null : subject));
         setHistory((path) => (gonePath(path) ? null : path));
         setPublishing((path) => (gonePath(path) ? null : path));
-        setVaultSheet((sheet) => (sheet && goneVault(sheet.vault) ? null : sheet));
+        setVaultSheet((sheet) => (sheet && goneVault(s, sheet.vault) ? null : sheet));
       }),
     [],
   );
@@ -332,7 +333,10 @@ export default function MobileShell() {
             <SharedBanner vault={path && !gone ? vaultOf(path) : activeVault} refusal={refusal} />
           </div>
           <main className="flex min-h-0 flex-1 flex-col">
-            {gone ? <div className="flex-1" /> : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}
+            {gone ? (
+              // Empty while the hide goes on; reached again later (a bookmark, say), said as a discreet note's 404 is.
+              <div className="flex-1 px-[22px] pt-[22px]">{!hiding && <p className="text-text-body">{NO_SUCH_NOTE}</p>}</div>
+            ) : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}
           </main>
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">

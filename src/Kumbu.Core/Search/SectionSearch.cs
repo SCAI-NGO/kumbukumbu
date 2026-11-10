@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -151,12 +152,12 @@ public static class SectionSearch
     public static string Snippet(Chunk chunk, string query)
     {
         var terms = Bm25.QueryTerms(query);
-        var whole = query.Normalize(System.Text.NormalizationForm.FormKC);
+        var whole = query.Normalize(NormalizationForm.FormKC);
         string? best = null;
         var most = 0;
         foreach (var line in Body(chunk).Select(l => l.Trim()).Where(l => l.Length > 0))
         {
-            if (line.Normalize(System.Text.NormalizationForm.FormKC).Contains(whole, StringComparison.OrdinalIgnoreCase)) return Shorten(line);
+            if (line.Normalize(NormalizationForm.FormKC).Contains(whole, StringComparison.OrdinalIgnoreCase)) return Shorten(line);
             var count = Bm25.Terms(line).Where(terms.Contains).Distinct().Count();
             if (count > most) (best, most) = (line, count);
         }

@@ -23,7 +23,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useMarkDiscreet } from "../discreet/api";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import PinDialog from "../discreet/PinDialog";
-import { useDiscreet } from "../discreet/state";
+import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
@@ -481,11 +481,20 @@ export default function TreeDrawer(props: {
     () =>
       useDiscreet.subscribe((s, previous) => {
         if (s.gone === previous.gone && s.names === previous.names) return;
-        const goneVault = (vault: string | null | undefined) => !!vault && s.gone.has(vault) && !s.names.has(vault);
-        setRenamingVault((vault) => (goneVault(vault) ? null : vault));
-        setDeletingVault((vault) => (goneVault(vault) ? null : vault));
-        setLeaving((left) => (goneVault(left?.vault) ? null : left));
-        setPublishing((path) => (path && goneVault(vaultOf(path)) ? null : path));
+        setRenamingVault((vault) => (goneVault(s, vault) ? null : vault));
+        setDeletingVault((vault) => (goneVault(s, vault) ? null : vault));
+        setLeaving((left) => (goneVault(s, left?.vault) ? null : left));
+        setPublishing((path) => (path && goneVault(s, vaultOf(path)) ? null : path));
+        // The dialogs of the active vault: as the hide begins it is still the one being hidden (the drawer then moves to
+        // an ordinary vault, and an open dialog would carry on with that one instead).
+        const active = useEditor.getState().activeVault;
+        if (active && s.gone.has(active) && !previous.gone.has(active)) {
+          setSharing(false);
+          setMember(false);
+          setConnecting(false);
+          setExporting(false);
+          setChoosingEmbeddings(false);
+        }
       }),
     [],
   );

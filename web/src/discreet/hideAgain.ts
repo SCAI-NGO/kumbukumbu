@@ -169,8 +169,9 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     const vault = ordinary ? vaultOf(ordinary) : editor.activeVault && !names.has(editor.activeVault) ? editor.activeVault : fallback;
     const shown = vaultOfRoute(pathname);
 
-    // From here on a view of these vaults that renders once more shows nothing of them, and the editor's guard lets
-    // the navigation away from such a note pass: what it had unsaved is held above.
+    // From here on a view of these vaults that renders once more shows nothing of them, and once the mode is reset the
+    // editor's guard lets the navigation away from such a note pass: what it had unsaved is saved or held above, and
+    // the editor saves nothing more (text typed in the moment since, as the server is told of a ✕, isn't kept).
     useDiscreet.setState({ gone: new Set([...useDiscreet.getState().gone, ...names]) });
     for (const name of names) useEditor.getState().forgetVault(name);
     // What was looked for, and the note's tools, may name what was in them.

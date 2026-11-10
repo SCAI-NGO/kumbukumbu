@@ -5,7 +5,7 @@ import { useBlocker, useNavigate, type BlockerFunction } from "react-router-dom"
 import { api, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
-import { useDiscreet } from "../discreet/state";
+import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
@@ -180,7 +180,7 @@ export default function MarkdownEditor({
       // vault is still among the names shown (a vault hidden before, and shown again since, is in `gone` all along).
       // Nothing is saved from here on: the editor going would send the held text a second time.
       const discreet = useDiscreet.getState();
-      if (discreet.hiding && discreet.gone.has(vaultOf(path)) && !discreet.names.has(vaultOf(path))) {
+      if (discreet.hiding && goneVault(discreet, vaultOf(path))) {
         stop();
         return false;
       }

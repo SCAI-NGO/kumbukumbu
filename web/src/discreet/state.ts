@@ -76,9 +76,7 @@ useSession.subscribe((session, previous) => {
 });
 
 /** Whether `path` is in a vault this tab hid again and that isn't shown now: its view shows nothing of it. */
-export const useGoneWithVaults = (path: string | null): boolean =>
-  useDiscreet((s) => {
-    if (path === null) return false;
-    const vault = vaultOf(path);
-    return s.gone.has(vault) && !s.names.has(vault);
-  });
+export const useGoneWithVaults = (path: string | null): boolean => useDiscreet((s) => path !== null && goneVault(s, vaultOf(path)));
+
+/** Whether `vault` is one this tab hid again and that isn't shown now: nothing of it may be on screen. */
+export const goneVault = (s: Pick<DiscreetState, "gone" | "names">, vault: string | null | undefined): boolean => !!vault && s.gone.has(vault) && !s.names.has(vault);
