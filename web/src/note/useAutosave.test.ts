@@ -160,6 +160,39 @@ describe("autosave", () => {
     expect(current().status).toBe("saved");
   });
 
+  it("a save that failed is tried again when the browser is online again, with the latest text", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("mine"));
+    act(() => current().saveNow());
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(current().status).toBe("error");
+    act(() => current().change("mine, and more"));
+
+    act(() => void window.dispatchEvent(new Event("online")));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ content: "mine, and more", version: "v1" });
+    calls[1].answer(saved("mine, and more", "v2"));
+    await settle();
+    expect(current().status).toBe("saved");
+
+    act(() => void window.dispatchEvent(new Event("online")));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(calls).toHaveLength(2);
+  });
+
+  it("online again saves nothing early when nothing failed", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    act(() => void window.dispatchEvent(new Event("online")));
+    expect(calls).toHaveLength(0);
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(calls).toHaveLength(0);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(calls).toHaveLength(1);
+  });
+
   it("flush waits for the saves and answers whether everything is saved", async () => {
     const { calls, current } = setup();
     act(() => current().change("one"));

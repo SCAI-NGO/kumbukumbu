@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { onlineManager } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  onlineManager.setOnline(true);
 });
 
 const PLAN = "/Work/projects/plan.md";
@@ -227,6 +229,34 @@ describe("the note view", () => {
     expect(screen.getByRole("checkbox", { name: "added by liz" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "write the roadmap" })).toHaveAttribute("aria-checked", "false");
     expect(puts).toBe(1);
+  });
+
+  it("offline, a task's box ticked fails at once with its notice, and nothing is sent later", async () => {
+    let online = false;
+    let puts = 0;
+    noteApi({
+      [`PUT /api/notes${PLAN}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts++;
+        if (!online) throw new TypeError("Failed to fetch");
+        return json(200, noteView(PLAN, body.content, "v2"));
+      },
+    });
+    renderApp(planUrl);
+    const box = await screen.findByRole("checkbox", { name: "write the roadmap" });
+    onlineManager.setOnline(false);
+    await userEvent.click(box);
+    expect(await screen.findByRole("alert")).toHaveTextContent("The server can't be reached right now. Try again in a moment.");
+    expect(puts).toBe(1);
+
+    online = true;
+    act(() => {
+      onlineManager.setOnline(true);
+      window.dispatchEvent(new Event("online"));
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(puts).toBe(1);
+    expect(screen.getByRole("checkbox", { name: "write the roadmap" })).toHaveAttribute("aria-checked", "false");
   });
 
   it("lists the notes linking here below the note, and opens one on tap", async () => {

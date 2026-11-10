@@ -16,6 +16,7 @@ export type AutosaveStatus = "saved" | "pending" | "saving" | "conflict" | "erro
  * own version at once, so a newer write meanwhile ends in the conflict toast. Saves go one at a time, each on the version the previous one returned
  * (never one only read from the cache, which may already hold an agent's newer write). A 409 pauses saving and
  * keeps the user's text until they choose: `reload` takes the newer text, `keepMine` writes theirs on top of it.
+ * A save that failed is tried again once the browser is online again.
  */
 export function useAutosave(
   initial: { content: string; version: string },
@@ -196,6 +197,18 @@ export function useAutosave(
 
   useEffect(() => {
     if (s.text !== s.saved) void run();
+  }, [s, run]);
+
+  // Online again, a failed save goes with the latest text at once, not only at the next keystroke or the retry button.
+  // Nothing failed, nothing is sent early: a pending keystroke keeps its 800 ms.
+  useEffect(() => {
+    const online = () => {
+      if (!s.failed) return;
+      s.failed = false;
+      void run();
+    };
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
   }, [s, run]);
 
   // Leaving without the guards (signed out, say): what can still be saved is sent.
