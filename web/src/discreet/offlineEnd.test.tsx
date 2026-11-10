@@ -472,6 +472,22 @@ describe("F10: after the end, nothing on screen names the discreet note", () => 
     namesNothing(watch());
   });
 
+  it("a dialog of the docked sidebar's open on the vault at the end (Rename vault) closes with it", async () => {
+    // A desktop: the sidebar is docked, and stays mounted across the end.
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    await t.u.click(await screen.findByRole("button", { name: "Actions for Tagebuch" }));
+    await t.u.click(screen.getByRole("menuitem", { name: "Rename vault…" }));
+    await screen.findByRole("dialog", { name: "Rename Tagebuch" });
+    const watch = watchScreen();
+    await wait(t.until - Date.now() + 2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(2_000);
+    expect(screen.queryByRole("dialog", { name: "Rename Tagebuch" })).not.toBeInTheDocument();
+    namesNothing(watch());
+  });
+
   it("hidden, shown again and hidden once more, the editor still keeps its text until the hide has it", async () => {
     const t = await diary();
     await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));

@@ -254,7 +254,7 @@ export default function NoteView({ path }: { path: string }) {
         },
       );
     },
-    [note.data, save],
+    [note.data, save, errorFor],
   );
 
   const createMissing = useCallback(
@@ -268,7 +268,7 @@ export default function NoteView({ path }: { path: string }) {
         onError: (err) => setNotice({ kind: "error", text: errorFor(err) }),
       });
     },
-    [path, createNote, openNote, navigate],
+    [path, createNote, openNote, navigate, errorFor],
   );
 
   if (mode === "write") {

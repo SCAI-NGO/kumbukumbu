@@ -90,7 +90,7 @@ export function useAutosave(
         if (s.conflict) {
           setConflict(s.conflict);
           setStatus("conflict");
-        } else if (s.failed && online) {
+        } else if (s.failed && online && !s.stopped) {
           s.failed = false;
           void run();
         } else if (s.failed) setStatus("error");

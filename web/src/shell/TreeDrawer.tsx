@@ -23,6 +23,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useMarkDiscreet } from "../discreet/api";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import PinDialog from "../discreet/PinDialog";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
@@ -475,6 +476,19 @@ export default function TreeDrawer(props: {
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.gone === previous.gone && s.names === previous.names) return;
+        const goneVault = (vault: string | null | undefined) => !!vault && s.gone.has(vault) && !s.names.has(vault);
+        setRenamingVault((vault) => (goneVault(vault) ? null : vault));
+        setDeletingVault((vault) => (goneVault(vault) ? null : vault));
+        setLeaving((left) => (goneVault(left?.vault) ? null : left));
+        setPublishing((path) => (path && goneVault(vaultOf(path)) ? null : path));
+      }),
+    [],
+  );
   const publishingActions: Publishing | null = ownVault
     ? {
         marks: publications.data?.unpublishable,

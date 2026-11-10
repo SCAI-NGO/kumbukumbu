@@ -208,6 +208,18 @@ describe("autosave", () => {
     expect(current().status).toBe("saved");
   });
 
+  it("a note gone while its save was in flight says Not saved when that save fails, online again or not", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    act(() => current().stop());
+    act(() => void window.dispatchEvent(new Event("online")));
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(current().status).toBe("error");
+  });
+
   it("flush waits for the saves and answers whether everything is saved", async () => {
     const { calls, current } = setup();
     act(() => current().change("one"));
