@@ -32,11 +32,12 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
     /// Bob, another user, from github:…): description [warning: …]", where "from …" gives way to "origin edited" or
     /// "unverified origin" unless the sealed origin agrees. A name that breaks the rules is quoted,
     /// control and format characters are stripped and line breaks become spaces, so no line can pass for another origin;
-    /// with <paramref name="maxDescription"/> a longer description is cut and ends with "…".
+    /// with <paramref name="maxDescription"/> a longer description, a longer name or folder path, and the warnings (all
+    /// together) are each cut to it and end with "…".
     /// </summary>
     public string Line(int? maxDescription = null)
     {
-        var name = Clean(Name);
+        var name = Cut(Clean(Name), maxDescription);
         var line = new StringBuilder(SkillManifest.IsValidName(Name) ? name : $"\"{name.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
         var origin = new List<string>();
         if (Folder is null)
@@ -45,7 +46,7 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
         }
         else
         {
-            origin.Add(Clean(Folder.Value));
+            origin.Add(Cut(Clean(Folder.Value), maxDescription));
             if (SharedBy is not null) origin.Add($"shared by {Clean(SharedBy)}");
             if (LastEditor is not null) origin.Add($"last changed by {Clean(LastEditor)}");
             if (ByOther) origin.Add("another user");
@@ -54,17 +55,18 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
         }
 
         line.Append(" (").AppendJoin(", ", origin).Append(')');
-        var description = Clean(Description);
-        if (maxDescription is { } max && description.Length > max)
-        {
-            var cut = Math.Max(0, max - 1);
-            if (cut > 0 && char.IsHighSurrogate(description[cut - 1])) cut--;
-            description = description[..cut].TrimEnd() + "…";
-        }
-
+        var description = Cut(Clean(Description), maxDescription);
         if (description.Length > 0) line.Append(": ").Append(description);
-        if (Warnings.Count > 0) line.Append(" [warning: ").AppendJoin("; ", Warnings.Select(Clean)).Append(']');
+        if (Warnings.Count > 0) line.Append(" [warning: ").Append(Cut(string.Join("; ", Warnings.Select(Clean)), maxDescription)).Append(']');
         return line.ToString();
+    }
+
+    private static string Cut(string text, int? max)
+    {
+        if (max is not { } bound || text.Length <= bound) return text;
+        var cut = Math.Max(0, bound - 1);
+        if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut].TrimEnd() + "…";
     }
 
     /// <summary>Line breaks as spaces, controls (Cc) and format characters (Cf: bidi and zero-width marks) dropped.</summary>
