@@ -206,12 +206,22 @@ const vault = (name: string, discreet = false) => ({ name, notes: 2, embeddings:
 const tree = (name: string) =>
   json(200, { damaged: 0, root: { name, path: `/${name}`, folders: [], notes: ["a.md", "b.md"].map((n) => ({ name: n, path: `/${name}/${n}`, size: 4 })) } });
 
-/** Alice's server: `Work` and the discreet `Tagebuch`, shown until a hide; `/api/session` answers 401 once `ended`. */
+/**
+ * Alice's server: `Work` and the discreet `Tagebuch`, shown until a hide; `/api/session` answers 401 once `ended`. A
+ * sign-in starts a new session, with the discreet vaults hidden.
+ */
 function server() {
   const at = { hidden: false, ended: false };
   fakeApi({
     "GET /api/session": () =>
       at.ended ? json(401, { error: "not signed in" }) : json(200, { user, previousSignInAt: null, discreet: { revealed: !at.hidden, until: null } }),
+    "POST /api/session": () => {
+      at.ended = false;
+      at.hidden = true;
+      return json(200, { user, previousSignInAt: null, discreet: { revealed: false, until: null } });
+    },
+    "GET /api/tags": () => json(200, []),
+    "GET /api/search": () => json(200, { results: [], notIndexed: 0, notice: null }),
     "GET /api/vaults": () => json(200, at.hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => tree("Work"),
@@ -298,6 +308,102 @@ describe("the app on the neutral window", () => {
 });
 
 describe("signing in", () => {
+  /** Records the URLs this tab writes into its history from now on. */
+  function recordHistory() {
+    const written: string[] = [];
+    for (const method of ["pushState", "replaceState"] as const) {
+      const real = window.history[method].bind(window.history);
+      vi.spyOn(window.history, method).mockImplementation((...args: Parameters<History["pushState"]>) => {
+        written.push(String(args[2] ?? ""));
+        real(...args);
+      });
+    }
+    return written;
+  }
+
+  /** The paths of the requests the tab sent from call `from` on. */
+  const requested = (from: number) => vi.mocked(fetch).mock.calls.slice(from).map(([r]) => decodeURIComponent(new URL((r as Request).url).pathname));
+
+  /**
+   * After a word was looked for in `Tagebuch` and text of its note was left unsaved, the session ends there: what the
+   * tab writes into its history from then on, and the draft it keeps.
+   */
+  async function endInDiary() {
+    const { at, router } = await openDiary();
+    act(() => useEditor.getState().setOverlay("search"));
+    await userEvent.type(await screen.findByRole("searchbox", { name: "Search" }), "Gartenhaus");
+    act(() => useEditor.getState().setOverlay("none"));
+    const draft = { username: user.username, path: "/Tagebuch/b.md", text: "Not saved yet.", version: "v1" };
+    act(() => useEditor.setState({ draft }));
+    const written = recordHistory();
+    at.ended = true;
+    act(() => useSession.getState().end());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    return { router, draft, written };
+  }
+
+  async function signInAgain() {
+    await userEvent.type(screen.getByLabelText("Username"), user.username);
+    await userEvent.type(screen.getByLabelText("Password"), "secret");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  }
+
+  it("after the session ends, signing in again opens none of the notes a discreet vault showed", async () => {
+    const { router, written } = await endInDiary();
+    const from = vi.mocked(fetch).mock.calls.length;
+    await signInAgain();
+    // Work's note, read before the discreet ones, is the one opened again.
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+    act(() => useEditor.getState().setOverlay("search"));
+    const recent = await screen.findByRole("list", { name: "Recent notes" });
+    expect(within(recent).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("searchbox", { name: "Search" })).toHaveValue("");
+    expect(written.join()).not.toContain("Tagebuch");
+    expect(document.body.textContent).not.toContain("Tagebuch");
+    expect(requested(from).join()).not.toContain("Tagebuch");
+    expect(useEditor.getState()).toMatchObject({ recentPaths: ["/Work/a.md"], activeVault: "Work" });
+  });
+
+  it("after the session ends in a discreet vault, with no other note read, signing in again shows an ordinary vault", async () => {
+    const at = server();
+    const router = renderBrowser("/notes/Tagebuch/a.md");
+    expect(await screen.findByRole("heading", { name: "a" })).toBeInTheDocument();
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    const written = recordHistory();
+    at.ended = true;
+    act(() => useSession.getState().end());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    const from = vi.mocked(fetch).mock.calls.length;
+    await signInAgain();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(useEditor.getState().activeVault).toBe("Work"));
+    expect(written.join()).not.toContain("Tagebuch");
+    expect(document.body.textContent).not.toContain("Tagebuch");
+    expect(requested(from).join()).not.toContain("Tagebuch");
+  });
+
+  it("after the session ends, signing in again opens the note of an ordinary vault read last", async () => {
+    const at = server();
+    useEditor.setState({ recentPaths: ["/Work/b.md", "/Work/a.md"] });
+    const router = renderBrowser("/notes/Work/b.md");
+    expect(await screen.findByRole("heading", { name: "b" })).toBeInTheDocument();
+    at.ended = true;
+    act(() => useSession.getState().end());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    await signInAgain();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/b.md"));
+    expect(useEditor.getState().recentPaths).toEqual(["/Work/b.md", "/Work/a.md"]);
+  });
+
+  it("keeps the unsaved text of a discreet note when the session ends, for once the vault is shown again", async () => {
+    const { router, draft } = await endInDiary();
+    expect(useEditor.getState().draft).toEqual(draft);
+    await signInAgain();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/a.md"));
+    expect(useEditor.getState().draft).toEqual(draft);
+  });
+
   it("never follows a next of /discreet", () => {
     expect(safeNext("/discreet")).toBe("/");
     expect(safeNext("/discreet?x=1")).toBe("/");
