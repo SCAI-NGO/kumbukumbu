@@ -160,6 +160,66 @@ describe("autosave", () => {
     expect(current().status).toBe("saved");
   });
 
+  it("a save that failed is tried again when the browser is online again, with the latest text", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("mine"));
+    act(() => current().saveNow());
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(current().status).toBe("error");
+    act(() => current().change("mine, and more"));
+
+    act(() => void window.dispatchEvent(new Event("online")));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ content: "mine, and more", version: "v1" });
+    calls[1].answer(saved("mine, and more", "v2"));
+    await settle();
+    expect(current().status).toBe("saved");
+
+    act(() => void window.dispatchEvent(new Event("online")));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(calls).toHaveLength(2);
+  });
+
+  it("online again saves nothing early when nothing failed", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    act(() => void window.dispatchEvent(new Event("online")));
+    expect(calls).toHaveLength(0);
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(calls).toHaveLength(0);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(calls).toHaveLength(1);
+  });
+
+  it("online again while a save is in flight, and that save then fails: it is tried again with the latest text", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(calls).toHaveLength(1);
+    act(() => current().change("start ab"));
+    act(() => void window.dispatchEvent(new Event("online")));
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(calls.map((c) => c.content)).toEqual(["start a", "start ab"]);
+    calls[1].answer(saved("start ab", "v2"));
+    await settle();
+    expect(current().status).toBe("saved");
+  });
+
+  it("a note gone while its save was in flight says Not saved when that save fails, online again or not", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("start a"));
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    act(() => current().stop());
+    act(() => void window.dispatchEvent(new Event("online")));
+    calls[0].answer(new TypeError("Failed to fetch"));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(current().status).toBe("error");
+  });
+
   it("flush waits for the saves and answers whether everything is saved", async () => {
     const { calls, current } = setup();
     act(() => current().change("one"));

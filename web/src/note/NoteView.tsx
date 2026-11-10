@@ -13,6 +13,7 @@ import { usePublications } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import { useErrorTextFor } from "../discreet/errorText";
 import { useEditor } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
@@ -78,6 +79,8 @@ type Notice = { kind: "conflict" } | { kind: "error"; text: string };
 export default function NoteView({ path }: { path: string }) {
   const note = useNote(path);
   const mode = useEditor((s) => s.mode);
+  const errorFor = useErrorTextFor(path);
+  const noteError = errorFor(note.error);
   // Every save is a new version; the links are only asked for once they are shown again.
   const links = useLinks(path, mode === "read" ? note.data?.version : undefined);
   const save = useSaveNote(path);
@@ -247,11 +250,11 @@ export default function NoteView({ path }: { path: string }) {
         {
           // On a conflict the cache already holds the newer version; the tap is not repeated on top of it.
           onSuccess: (result) => setNotice("conflict" in result ? { kind: "conflict" } : null),
-          onError: (err) => setNotice({ kind: "error", text: errorText(err) }),
+          onError: (err) => setNotice({ kind: "error", text: errorFor(err) }),
         },
       );
     },
-    [note.data, save],
+    [note.data, save, errorFor],
   );
 
   const createMissing = useCallback(
@@ -262,10 +265,10 @@ export default function NoteView({ path }: { path: string }) {
           openNote(created, "write");
           navigate(noteUrl(created));
         },
-        onError: (err) => setNotice({ kind: "error", text: errorText(err) }),
+        onError: (err) => setNotice({ kind: "error", text: errorFor(err) }),
       });
     },
-    [path, createNote, openNote, navigate],
+    [path, createNote, openNote, navigate, errorFor],
   );
 
   if (mode === "write") {
@@ -285,7 +288,7 @@ export default function NoteView({ path }: { path: string }) {
         </>
       );
     }
-    return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
+    return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{noteError}</p>}</div>;
   }
 
   // Files dropped on the note go into its folder, by way of the upload sheet (which asks before sending).
@@ -364,7 +367,7 @@ export default function NoteView({ path }: { path: string }) {
             {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.text}
           </p>
         )}
-        {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
+        {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
             {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}

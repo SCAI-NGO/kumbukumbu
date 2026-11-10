@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState } from "react";
 import { errorText } from "../api/error-text";
-import { usePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
+import { useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -26,7 +26,7 @@ function olderText(snapshotAt: string, changedAt: string | null) {
  * published (§3.10). Switched off, only Unpublish is left: withdrawing always works.
  */
 export default function PublicationBar({ path, owner }: { path: string; owner: boolean }) {
-  const publication = usePublication(path);
+  const publication = useNotePublication(path);
   const enabled = usePublishEnabled();
   const update = useUpdatePublication(path);
   const withdraw = useWithdraw(path);

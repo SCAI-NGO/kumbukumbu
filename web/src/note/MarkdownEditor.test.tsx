@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
@@ -20,6 +20,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  onlineManager.setOnline(true);
 });
 
 const PLAN = "/Work/projects/plan.md";
@@ -333,6 +334,40 @@ describe("Write mode", () => {
     await u.click(within(notSaved).getByRole("button", { name: "retry" }));
     await waitFor(() => expect(puts[1]).toEqual({ content: `${source} mine`, version: "v1" }));
     await waitFor(() => expect(screen.queryByRole("alert", { name: "Not saved" })).not.toBeInTheDocument());
+  });
+
+  it("offline, a save fails at once, says Not saved, and online again saves the latest text once", async () => {
+    let online = false;
+    const tried: Put[] = [];
+    editorApi([ok], undefined, {
+      [`PUT /api/notes${PLAN}`]: async (r) => {
+        const body = (await r.json()) as Put;
+        tried.push(body);
+        if (!online) throw new TypeError("Failed to fetch");
+        return ok(body);
+      },
+    });
+    const { u } = await openInWrite();
+    onlineManager.setOnline(false);
+    await u.type(editorBox(), "a");
+    await wait(1000);
+    expect(await screen.findByRole("alert", { name: "Not saved" })).toHaveTextContent("Not saved — retry");
+    expect(tried).toHaveLength(1);
+
+    await u.type(editorBox(), "b");
+    await wait(800);
+    expect(tried).toHaveLength(2);
+    expect(tried[1].content).toBe(`${source}ab`);
+
+    online = true;
+    act(() => {
+      onlineManager.setOnline(true);
+      window.dispatchEvent(new Event("online"));
+    });
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "Not saved" })).not.toBeInTheDocument());
+    await wait(5000);
+    expect(tried).toHaveLength(3);
+    expect(tried[2]).toEqual({ content: `${source}ab`, version: "v1" });
   });
 });
 

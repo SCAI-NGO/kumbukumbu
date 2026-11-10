@@ -157,7 +157,8 @@ describe("publishing in the tree", () => {
       for (const item of publishingItems) expect(items).not.toContain(item);
     }
     expect(within(drawer()).queryByRole("img", { name: "Unpublishable" })).toBeNull();
-    expect(requests(fetch, "GET", "/api/vaults/Work/publications")).toHaveLength(0);
+    // Only the open note's bar asks the vault's list, which names what is published and holds no marks for her.
+    expect(requests(fetch, "GET", "/api/vaults/Work/publications")).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: "Close file tree" }));
     for (const item of publishingItems) expect((await noteMenu()).map((i) => i.label)).not.toContain(item);
   });
@@ -250,9 +251,10 @@ describe("publishing in the tree", () => {
     const { fetch } = api({ marksFail: true });
     renderApp("/notes/Work/inbox.md");
     await screen.findByRole("heading", { name: "inbox" });
-    await waitFor(() => expect(requests(fetch, "GET", "/api/publications/Work/inbox.md")).toHaveLength(1));
     await waitFor(() => expect(requests(fetch, "GET", "/api/vaults/Work/publications").length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 50));
+    // Without the list nothing says the note is published: it isn't asked of its own.
+    expect(requests(fetch, "GET", "/api/publications/Work/inbox.md")).toHaveLength(0);
     const actions = (await noteMenu()).map((i) => i.label);
     expect(actions).not.toContain("Publish…");
     expect(actions).not.toContain("Publish… (unpublishable)");

@@ -276,6 +276,10 @@ export function useSaveNote(path: string) {
   return useMutation({
     // Known to the change bar: while a save is under way, the version it brings is no change made elsewhere.
     mutationKey: ["save", path],
+    // A save sends the text it was started with. Held while the browser is offline (react-query's default), it would
+    // be sent later with that old text (after a reveal has ended even, as the one late save allowed), and every later
+    // save would wait behind it. Failing at once, the editor keeps the text and saves the latest when it can.
+    networkMode: "always",
     mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
       const body = { content, version };
       const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;

@@ -7,7 +7,7 @@ import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useTree, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
-import { usePublication, usePublications, usePublishEnabled } from "../api/publications";
+import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -17,7 +17,8 @@ import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import { useTellOpenNote } from "../discreet/openNote";
-import { useDiscreet } from "../discreet/state";
+import { NO_SUCH_NOTE } from "../discreet/errorText";
+import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -135,6 +136,9 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
+  // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
+  const gone = useGoneWithVaults(path);
+  const hiding = useDiscreet((s) => s.hiding);
   const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const dockLevel = useLevel(activeVault);
@@ -157,6 +161,21 @@ export default function MobileShell() {
   const [history, setHistory] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<VaultSheet | null>(null);
+  // A sheet or dialog about a vault hidden again goes with it: its title and its answers name the note or the vault.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.gone === previous.gone && s.names === previous.names) return;
+        const gonePath = (path: string | null | undefined) => !!path && goneVault(s, vaultOf(path));
+        setFolderDialog((folder) => (gonePath(folder) ? null : folder));
+        setDeleting((subject) => (gonePath(subject?.path) ? null : subject));
+        setMoving((subject) => (gonePath(subject?.path) ? null : subject));
+        setHistory((path) => (gonePath(path) ? null : path));
+        setPublishing((path) => (gonePath(path) ? null : path));
+        setVaultSheet((sheet) => (sheet && goneVault(s, sheet.vault) ? null : sheet));
+      }),
+    [],
+  );
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
     overlay === "tree",
@@ -250,7 +269,8 @@ export default function MobileShell() {
   useEffect(() => {
     if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
   }, [readOnlyNote, mode]);
-  const refusal = held ?? (path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null);
+  // Nothing of a note on its way out with its vault hidden again, a refusal's sentence naming it neither.
+  const refusal = gone ? null : held ?? (path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null);
 
   // A write the server refused for the level (a role lowered, the owner deactivated, the vault closing): the list is
   // read again, and the write actions and Write mode follow it.
@@ -261,10 +281,10 @@ export default function MobileShell() {
   const publishEnabled = usePublishEnabled();
   const noteVault = path ? vaults.data?.find((v) => v.name === vaultOf(path)) : undefined;
   const ownNote = !!noteVault && noteVault.owner == null;
-  const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
-  const mayPublish = ownNote && publishEnabled === true && publication.data === null && publishableAsNote(noteVault, path ?? "");
-  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20).
+  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20), and what is published.
   const publications = usePublications(noteVault?.name ?? "", ownNote).data;
+  const mayPublish =
+    ownNote && publishEnabled === true && publications !== undefined && !publications.publications.some((p) => p.path === path) && publishableAsNote(noteVault, path ?? "");
   const marking = useMarking(publications?.publications.map((p) => p.path));
   const publishingActions =
     path && ownNote
@@ -294,7 +314,7 @@ export default function MobileShell() {
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {framed && <DiscreetFrame />}
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
-      <TopBar path={path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={gone ? null : path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       {framed && (
         <div className="flex-none px-3 pt-2">
           <DiscreetPill />
@@ -310,9 +330,14 @@ export default function MobileShell() {
         {docked && <TreeDrawer docked hidden={collapsed} {...treeProps} />}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="pt-2 empty:hidden">
-            <SharedBanner vault={path ? vaultOf(path) : activeVault} refusal={refusal} />
+            <SharedBanner vault={path && !gone ? vaultOf(path) : activeVault} refusal={refusal} />
           </div>
-          <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
+          <main className="flex min-h-0 flex-1 flex-col">
+            {gone ? (
+              // Empty while the hide goes on; reached again later (a bookmark, say), said as a discreet note's 404 is.
+              <div className="flex-1 px-[22px] pt-[22px]">{!hiding && <p className="text-text-body">{NO_SUCH_NOTE}</p>}</div>
+            ) : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}
+          </main>
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
               {errorText(createUntitled.error)}

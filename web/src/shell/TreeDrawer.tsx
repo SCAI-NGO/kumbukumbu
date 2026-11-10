@@ -23,6 +23,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useMarkDiscreet } from "../discreet/api";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import PinDialog from "../discreet/PinDialog";
+import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
@@ -475,6 +476,28 @@ export default function TreeDrawer(props: {
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.gone === previous.gone && s.names === previous.names) return;
+        setRenamingVault((vault) => (goneVault(s, vault) ? null : vault));
+        setDeletingVault((vault) => (goneVault(s, vault) ? null : vault));
+        setLeaving((left) => (goneVault(s, left?.vault) ? null : left));
+        setPublishing((path) => (path && goneVault(s, vaultOf(path)) ? null : path));
+        // The dialogs of the active vault: as the hide begins it is still the one being hidden (the drawer then moves to
+        // an ordinary vault, and an open dialog would carry on with that one instead).
+        const active = useEditor.getState().activeVault;
+        if (active && s.gone.has(active) && !previous.gone.has(active)) {
+          setSharing(false);
+          setMember(false);
+          setConnecting(false);
+          setExporting(false);
+          setChoosingEmbeddings(false);
+        }
+      }),
+    [],
+  );
   const publishingActions: Publishing | null = ownVault
     ? {
         marks: publications.data?.unpublishable,

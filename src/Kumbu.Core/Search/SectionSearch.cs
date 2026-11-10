@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -142,17 +143,26 @@ public static class SectionSearch
     }
 
     /// <summary>
-    /// The first line of the section, below its heading, that contains the query or one of its words (ignoring
-    /// case), trimmed like <see cref="Snippet"/>; the start of the section if no line does.
+    /// The line of the section, below its heading, that matched best, trimmed like <see cref="Snippet"/>: the first
+    /// that contains the whole query (ignoring case; a substring, so "Pumpe 5" is in "Pumpe 50"), else the first
+    /// with the most distinct words of the query (<see cref="Bm25.QueryTerms"/>); the start of the section if no line
+    /// holds any of them. Both are compared as <see cref="Bm25.Terms"/> reads them (FormKC), so a note written
+    /// decomposed matches as well.
     /// </summary>
     public static string Snippet(Chunk chunk, string query)
     {
         var terms = Bm25.QueryTerms(query);
-        var first = Body(chunk)
-            .Select(l => l.Trim())
-            .FirstOrDefault(l => l.Length > 0
-                && (l.Contains(query, StringComparison.OrdinalIgnoreCase) || Bm25.Terms(l).Any(t => terms.Contains(t))));
-        return first is null ? Snippet(chunk) : Shorten(first);
+        var whole = query.Normalize(NormalizationForm.FormKC);
+        string? best = null;
+        var most = 0;
+        foreach (var line in Body(chunk).Select(l => l.Trim()).Where(l => l.Length > 0))
+        {
+            if (line.Normalize(NormalizationForm.FormKC).Contains(whole, StringComparison.OrdinalIgnoreCase)) return Shorten(line);
+            var count = Bm25.Terms(line).Where(terms.Contains).Distinct().Count();
+            if (count > most) (best, most) = (line, count);
+        }
+
+        return best is null ? Snippet(chunk) : Shorten(best);
     }
 
     /// <summary>The non-blank lines of a chunk that aren't headings (a merged chunk holds several; a table part starts

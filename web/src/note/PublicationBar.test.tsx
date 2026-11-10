@@ -25,6 +25,15 @@ const asMember = { path: NOTE, snapshotAt: null, older: null, changedAt: null, p
 
 const session = (publishEnabled = true) => () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true, publishEnabled });
 
+// The vault's list, which names the note's publication (without its link) or doesn't.
+const LIST = "GET /api/vaults/Work/publications";
+const listed =
+  (named = () => true) =>
+  () =>
+    json(200, { publications: named() ? [{ path: NOTE, snapshotAt, older: false, changedAt: null, publishedBy: "you", link: null }] : [], unpublishable: [] });
+const asked = (fetch: ReturnType<typeof fakeApi>, path: string) =>
+  fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === path).length;
+
 function renderBar(owner = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(
@@ -46,7 +55,7 @@ function stubClipboard() {
 describe("PublicationBar", () => {
   it("is green when up to date", async () => {
     const writeText = stubClipboard();
-    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, current) });
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, current) });
     renderBar();
     const region = await bar();
     expect(region).toHaveAttribute("data-tone", "green");
@@ -58,7 +67,7 @@ describe("PublicationBar", () => {
   });
 
   it("is yellow with both times when older", async () => {
-    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, older) });
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, older) });
     renderBar();
     const region = await bar();
     expect(region).toHaveAttribute("data-tone", "yellow");
@@ -78,7 +87,7 @@ describe("PublicationBar", () => {
       [`GET ${API}`]: () => json(200, updated ? { ...current, snapshotAt: changedAt } : older),
       [`PUT ${API}`]: put,
       "GET /api/publications": () => json(200, []),
-      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      [LIST]: listed(),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderBar();
@@ -95,7 +104,7 @@ describe("PublicationBar", () => {
       [`GET ${API}`]: () => json(200, older),
       [`PUT ${API}`]: () => json(200, { link, snapshotAt: changedAt, plain: [] }),
       "GET /api/publications": () => json(200, []),
-      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      [LIST]: listed(),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -112,7 +121,7 @@ describe("PublicationBar", () => {
   });
 
   it("reads older, never up to date, also without the times", async () => {
-    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, { ...older, snapshotAt: null, changedAt: null }) });
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, { ...older, snapshotAt: null, changedAt: null }) });
     renderBar();
     const region = await bar();
     expect(region).toHaveAttribute("data-tone", "yellow");
@@ -127,7 +136,7 @@ describe("PublicationBar", () => {
       [`GET ${API}`]: () => json(200, current),
       [`DELETE ${API}`]: () => json(409, { error: "Work/Questions.md changed meanwhile." }),
       "GET /api/publications": () => json(200, []),
-      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      [LIST]: listed(),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderBar();
@@ -141,7 +150,7 @@ describe("PublicationBar", () => {
   });
 
   it("is neutral for a member", async () => {
-    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, asMember) });
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, asMember) });
     renderBar(false);
     const region = await bar();
     expect(region).toHaveTextContent(/^Published by the vault's owner$/);
@@ -151,19 +160,54 @@ describe("PublicationBar", () => {
   });
 
   it("shows a member no times even if the server sent them", async () => {
-    fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(200, older) });
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, older) });
     renderBar(false);
     const region = await bar();
     expect(region).toHaveTextContent(/^Published by the vault's owner$/);
     expect(within(region).queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("is absent when not published", async () => {
-    const fetch = fakeApi({ "GET /api/session": session(), [`GET ${API}`]: () => json(404, { error: "Work/Questions.md is not published." }) });
+  it("asks for no publication of its own for an unpublished note", async () => {
+    for (const owner of [true, false]) {
+      const fetch = fakeApi({ "GET /api/session": session(), [LIST]: listed(() => false), [`GET ${API}`]: () => json(404, { error: "Work/Questions.md is not published." }) });
+      const container = renderBar(owner);
+      await waitFor(() => expect(asked(fetch, "/api/vaults/Work/publications")).toBe(1));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(asked(fetch, API)).toBe(0);
+      expect(container).toBeEmptyDOMElement();
+      cleanup();
+    }
+  });
+
+  it("shows no bar and asks nothing of the note while the vault's list hasn't answered", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: () => new Promise<Response>(() => {}), [`GET ${API}`]: () => json(200, current) });
     const container = renderBar();
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringContaining(API) })));
-    await waitFor(() => expect(container).toBeEmptyDOMElement());
-    expect(screen.queryByRole("region", { name: "Publication" })).not.toBeInTheDocument();
+    await waitFor(() => expect(asked(fetch, "/api/vaults/Work/publications")).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked(fetch, API)).toBe(0);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("takes a published note's bar from its own read once the vault's list names it", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, older) });
+    renderBar();
+    const region = await bar();
+    for (const name of ["Update copy", "Copy link", "Unpublish"]) expect(within(region).getByRole("button", { name })).toBeInTheDocument();
+    expect(asked(fetch, API)).toBe(1);
+  });
+
+  it("gives a member the bar of a note the shared vault's list names", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, asMember) });
+    renderBar(false);
+    expect(await bar()).toHaveTextContent(/^Published by the vault's owner$/);
+    expect(asked(fetch, "/api/vaults/Work/publications")).toBe(1);
+  });
+
+  it("still offers Unpublish for a published note while switched off", async () => {
+    fakeApi({ "GET /api/session": session(false), [LIST]: listed(), [`GET ${API}`]: () => json(200, current) });
+    renderBar();
+    const region = await bar();
+    await waitFor(() => expect(within(region).getAllByRole("button").map((b) => b.textContent)).toEqual(["Unpublish"]));
   });
 
   it("asks before unpublishing", async () => {
@@ -172,12 +216,17 @@ describe("PublicationBar", () => {
       withdrawn = true;
       return noContent();
     });
+    const readsAfter = vi.fn();
     fakeApi({
       "GET /api/session": session(),
-      [`GET ${API}`]: () => (withdrawn ? json(404, { error: "Work/Questions.md is not published." }) : json(200, current)),
+      [`GET ${API}`]: () => {
+        if (!withdrawn) return json(200, current);
+        readsAfter();
+        return json(404, { error: "Work/Questions.md is not published." });
+      },
       [`DELETE ${API}`]: del,
       "GET /api/publications": () => json(200, []),
-      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      [LIST]: listed(() => !withdrawn),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderBar();
@@ -192,6 +241,8 @@ describe("PublicationBar", () => {
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Unpublish" }));
     expect(del).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("region", { name: "Publication" })).not.toBeInTheDocument());
+    // Withdrawn, the list says so first: the note's own publication isn't asked again (it would answer 404).
+    expect(readsAfter).not.toHaveBeenCalled();
   });
 
   it("offers only Unpublish while switched off", async () => {
@@ -201,7 +252,7 @@ describe("PublicationBar", () => {
       [`GET ${API}`]: () => json(200, older),
       [`DELETE ${API}`]: del,
       "GET /api/publications": () => json(200, []),
-      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
+      [LIST]: listed(),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
     });
     renderBar();
