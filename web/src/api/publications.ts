@@ -62,24 +62,24 @@ export const usePublication = (path: string, enabled = true) =>
 
 /**
  * The note's publication as its bar wants it: asked of its own only once the vault's list names it, so an unpublished
- * note makes no request that answers 404. Undefined until the list is in (and while it fails), null when it doesn't
- * name the note.
+ * note makes no request that answers 404. Undefined until the list is in (and while it fails: no bar then, not even
+ * Unpublish, the price of asking nothing that answers 404), null when it doesn't name the note.
  */
-export function useNotePublication(path: string, enabled = true): { data: PublicationView | null | undefined } {
-  const list = usePublications(vaultOf(path), enabled).data;
+export function useNotePublication(path: string): { data: PublicationView | null | undefined } {
+  const list = usePublications(vaultOf(path)).data;
   const listed = !!list?.publications.some((p) => p.path === path);
-  const publication = usePublication(path, enabled && listed);
-  return { data: !enabled || !list ? undefined : listed ? publication.data : null };
+  const publication = usePublication(path, listed);
+  return { data: !list ? undefined : listed ? publication.data : null };
 }
 
 /** The publications of all the owner's own vaults, for the overview; never with a link. */
 export const useAllPublications = () => useQuery({ queryKey: ["publications"], queryFn: () => call(api.GET("/api/publications")) });
 
-/** After any change: the note's state, the lists, and the tree, whose marks follow. */
-function invalidate(queryClient: QueryClient, path: string) {
+/** After any change: the note's state (unless it is known), the lists, and the tree, whose marks follow. */
+function invalidate(queryClient: QueryClient, path: string, { note = true } = {}) {
   const vault = vaultOf(path);
   return Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["publication", path] }),
+    ...(note ? [queryClient.invalidateQueries({ queryKey: ["publication", path] })] : []),
     // A prefix: the overview and every vault's list.
     queryClient.invalidateQueries({ queryKey: ["publications"] }),
     queryClient.invalidateQueries({ queryKey: ["tree", vault] }),
@@ -115,7 +115,9 @@ export function useWithdraw(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => void (await call(api.DELETE("/api/publications/{vault}/{path}", { params: params(path) }))),
-    onSettled: () => invalidate(queryClient, path),
+    // Withdrawn, it is known not to be published: asked again, it would answer 404 until the list says so.
+    onSuccess: () => queryClient.setQueryData(["publication", path], null),
+    onSettled: (_, error) => invalidate(queryClient, path, { note: !!error }),
   });
 }
 

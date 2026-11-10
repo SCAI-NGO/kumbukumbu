@@ -216,9 +216,14 @@ describe("PublicationBar", () => {
       withdrawn = true;
       return noContent();
     });
+    const readsAfter = vi.fn();
     fakeApi({
       "GET /api/session": session(),
-      [`GET ${API}`]: () => (withdrawn ? json(404, { error: "Work/Questions.md is not published." }) : json(200, current)),
+      [`GET ${API}`]: () => {
+        if (!withdrawn) return json(200, current);
+        readsAfter();
+        return json(404, { error: "Work/Questions.md is not published." });
+      },
       [`DELETE ${API}`]: del,
       "GET /api/publications": () => json(200, []),
       [LIST]: listed(() => !withdrawn),
@@ -236,6 +241,8 @@ describe("PublicationBar", () => {
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Unpublish" }));
     expect(del).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("region", { name: "Publication" })).not.toBeInTheDocument());
+    // Withdrawn, the list says so first: the note's own publication isn't asked again (it would answer 404).
+    expect(readsAfter).not.toHaveBeenCalled();
   });
 
   it("offers only Unpublish while switched off", async () => {
