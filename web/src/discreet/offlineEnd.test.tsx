@@ -458,6 +458,20 @@ describe("F10: after the end, nothing on screen names the discreet note", () => 
     await screen.findByText("Liebes Tagebuch.");
   });
 
+  it("a sheet open on the note at the end (its history) closes with it", async () => {
+    const t = await diary({ write: false });
+    await screen.findByText("Liebes Tagebuch.");
+    await t.u.click(screen.getByRole("button", { name: "Note actions" }));
+    await t.u.click(screen.getByRole("menuitem", { name: "History" }));
+    await screen.findByRole("dialog", { name: "History" });
+    const watch = watchScreen();
+    await wait(t.until - Date.now() + 2_000);
+    await waitFor(() => expect(t.router.state.location.pathname).toBe("/notes/Home/a.md"));
+    await wait(2_000);
+    expect(screen.queryByRole("dialog", { name: "History" })).not.toBeInTheDocument();
+    namesNothing(watch());
+  });
+
   it("hidden, shown again and hidden once more, the editor still keeps its text until the hide has it", async () => {
     const t = await diary();
     await t.u.click(screen.getByRole("button", { name: "Hide discreet vaults" }));

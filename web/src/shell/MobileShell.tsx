@@ -159,6 +159,22 @@ export default function MobileShell() {
   const [history, setHistory] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<VaultSheet | null>(null);
+  // A sheet or dialog about a vault hidden again goes with it: its title and its answers name the note or the vault.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.gone === previous.gone && s.names === previous.names) return;
+        const goneVault = (vault: string) => s.gone.has(vault) && !s.names.has(vault);
+        const gonePath = (path: string | null | undefined) => !!path && goneVault(vaultOf(path));
+        setFolderDialog((folder) => (gonePath(folder) ? null : folder));
+        setDeleting((subject) => (gonePath(subject?.path) ? null : subject));
+        setMoving((subject) => (gonePath(subject?.path) ? null : subject));
+        setHistory((path) => (gonePath(path) ? null : path));
+        setPublishing((path) => (gonePath(path) ? null : path));
+        setVaultSheet((sheet) => (sheet && goneVault(sheet.vault) ? null : sheet));
+      }),
+    [],
+  );
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
     overlay === "tree",

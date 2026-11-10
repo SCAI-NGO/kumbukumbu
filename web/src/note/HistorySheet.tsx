@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Thumbnail from "../attachments/Thumbnail";
 import { HttpError } from "../api/client";
-import { errorText } from "../api/error-text";
+import { useErrorTextFor } from "../discreet/errorText";
 import { useRestoreNote } from "../api/history";
 import { useHistory, useMayChange, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
 import { isAttachment, titleOf, vaultOf, viewUrl, type LightboxState } from "../api/paths";
@@ -46,6 +46,7 @@ const rowText = (v: HistoryEntry) => (
 
 function NoteHistory({ path, onClose, onRestored = onClose }: Props) {
   const history = useHistory(path, true);
+  const errorFor = useErrorTextFor(path);
   const [chosen, setChosen] = useState<HistoryEntry | null>(null);
 
   // One dialog for both steps, so the focus stays in it on the way to a version and back.
@@ -63,7 +64,7 @@ function NoteHistory({ path, onClose, onRestored = onClose }: Props) {
         the current version again; the version it replaces stays here.
       </p>
       {history.isPending && <p className="text-sm text-muted">Loading the versions …</p>}
-      {history.isError && <FormError>{errorText(history.error)}</FormError>}
+      {history.isError && <FormError>{errorFor(history.error)}</FormError>}
       {history.data && (
         <ul aria-label="Versions" className="flex flex-col gap-1.5">
           {history.data.map((v, i) => (
@@ -93,6 +94,7 @@ const lineClass = {
 /** `expected`: the current version as the list says; a restore never goes on top of a newer one it hasn't shown. */
 function VersionView({ path, entry, expected, onBack, onRestored }: { path: string; entry: HistoryEntry; expected: string | undefined; onBack(): void; onRestored(): void }) {
   const version = useNoteVersion(path, entry.version);
+  const errorFor = useErrorTextFor(path);
   // The text shown, as it is: a read now would replace it under the reader.
   const current = useNote(path, { refetchOnMount: false });
   const [tab, setTab] = useState<"rendered" | "changes">("rendered");
@@ -120,7 +122,7 @@ function VersionView({ path, entry, expected, onBack, onRestored }: { path: stri
           Changes since
         </button>
       </div>
-      {version.isError && <FormError>{errorText(version.error)}</FormError>}
+      {version.isError && <FormError>{errorFor(version.error)}</FormError>}
       {tab === "rendered" && version.data && (
         <article aria-label="This version" className="rounded-[12px] border border-line bg-bg px-4 py-3">
           <MarkdownView source={body} links={undefined} tasksDisabled onToggleTask={noop} onCreateMissing={noop} />
@@ -168,6 +170,7 @@ function RestoreBar({
   onBack(): void;
   onRestored(): void;
 }) {
+  const errorFor = useErrorTextFor(path);
   const queryClient = useQueryClient();
   const restore = useRestoreNote();
   // Restoring is a write: none below the level (for the board's definition, `maintain`).
@@ -178,7 +181,7 @@ function RestoreBar({
         <FormError>
           {restore.error instanceof HttpError && restore.error.status === 409
             ? "A newer version arrived meanwhile, so nothing was restored. The list of versions shows it now; look again before restoring."
-            : errorText(restore.error)}
+            : errorFor(restore.error)}
         </FormError>
       )}
       {!entry.current && writes && (
@@ -219,6 +222,7 @@ function RestoreBar({
  */
 function FileHistory({ path, onClose, onRestored = onClose }: Props) {
   const history = useHistory(path, true);
+  const errorFor = useErrorTextFor(path);
   const [chosen, setChosen] = useState<HistoryEntry | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -260,7 +264,7 @@ function FileHistory({ path, onClose, onRestored = onClose }: Props) {
         again; the version it replaces stays here.
       </p>
       {history.isPending && <p className="text-sm text-muted">Loading the versions …</p>}
-      {history.isError && <FormError>{errorText(history.error)}</FormError>}
+      {history.isError && <FormError>{errorFor(history.error)}</FormError>}
       {history.data && (
         <ul aria-label="Versions" className="flex flex-col gap-1.5">
           {history.data.map((v, i) => (

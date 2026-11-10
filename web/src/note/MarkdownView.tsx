@@ -5,7 +5,7 @@ import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, use
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { errorText } from "../api/error-text";
+import { useErrorTextFor } from "../discreet/errorText";
 import { useLinks, useNote } from "../api/notes";
 import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
@@ -137,6 +137,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
  */
 function EmbeddedNote({ path, heading }: { path: string; heading: string | null }) {
   const note = useNote(path);
+  const errorFor = useErrorTextFor(path);
   const links = useLinks(path, note.data?.version);
   const { onCreateMissing } = useContext(NoteContext);
   const body = useMemo(() => {
@@ -157,7 +158,7 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
         <span className="sr-only">(open the note)</span>
       </Link>
       {note.isPending && <p className="text-sm text-muted">Loading …</p>}
-      {note.isError && <p className="text-sm text-muted">{errorText(note.error)}</p>}
+      {note.isError && <p className="text-sm text-muted">{errorFor(note.error)}</p>}
       {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
       {body !== null && (
         <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
