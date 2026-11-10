@@ -34,6 +34,56 @@ public class SearchTests
         Assert.Equal("# start the pump", SectionSearch.Snippet(script, "pump"));
     }
 
+    /// <summary>A part of a long table of error codes, as a chunk of it holds it: the header row, then rows 28 to 55;
+    /// <paramref name="row"/> may say something else in a row.</summary>
+    private static Chunk Codes(Func<int, string?>? row = null, string before = "", string after = "")
+    {
+        var rows = Enumerable.Range(28, 28).Select(i => row?.Invoke(i) ?? $"| E{200 + i} | Pumpe {i} | Druck zu niedrig |");
+        var text = before + "| Code | Teil | Fehler |\n|------|------|--------|\n" + string.Join('\n', rows) + after;
+        return new Chunk(P("/Work/Pumpen.md"), "#Fehlercodes", 46, 74, text, "Pumpen > Fehlercodes");
+    }
+
+    [Fact]
+    public void Snippet_prefers_the_line_with_the_whole_query()
+    {
+        Assert.Equal("Pumpe 51 Druck prüfen", SectionSearch.Snippet(Codes(after: "\nPumpe 51 Druck prüfen"), "Pumpe 51 Druck"));
+
+        // Written decomposed (ü as u and a combining diaeresis), the whole query is still found, before a line that
+        // holds all its words in another order.
+        var decomposed = "Pumpe 51 pru\u0308fen";
+        Assert.Equal(decomposed, SectionSearch.Snippet(Codes(before: "prüfen Pumpe 51\n", after: "\n" + decomposed), "Pumpe 51 prüfen"));
+    }
+
+    [Fact]
+    public void Snippet_prefers_the_line_with_the_most_terms()
+    {
+        // A line that repeats one term holds one distinct term.
+        var chunk = Codes(before: "Pumpe Pumpe Pumpe\n");
+        Assert.Equal("| E251 | Pumpe 51 | Druck zu niedrig |", SectionSearch.Snippet(chunk, "Pumpe 51 Druck"));
+    }
+
+    [Fact]
+    public void Snippet_takes_the_most_terms_when_the_row_says_something_else()
+    {
+        // Row 51 holds "pumpe" and "51", every other row "pumpe" and "druck": the first of them wins.
+        var chunk = Codes(i => i == 51 ? "| E251 | Pumpe 51 | Dichtung undicht |" : null);
+        Assert.Equal("| E228 | Pumpe 28 | Druck zu niedrig |", SectionSearch.Snippet(chunk, "Pumpe 51 Druck"));
+    }
+
+    [Fact]
+    public void Snippet_takes_the_first_line_among_equals()
+    {
+        var chunk = new Chunk(P("/Home/Garten.md"), "#Garten", 0, 4, "# Garten\nAlice gießt die Rosen.\nBob schneidet die Hecke.", "Garten");
+        Assert.Equal("Alice gießt die Rosen.", SectionSearch.Snippet(chunk, "Rosen Hecke"));
+    }
+
+    [Fact]
+    public void Snippet_without_any_term_is_the_start_of_the_section()
+    {
+        var chunk = Codes();
+        Assert.Equal(SectionSearch.Snippet(chunk), SectionSearch.Snippet(chunk, "xyz"));
+    }
+
     [Fact]
     public async Task Locate_finds_a_piece_by_its_part()
     {
