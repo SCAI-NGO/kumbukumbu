@@ -218,6 +218,9 @@ public sealed class UserCatalog(
             && CryptographicOperations.FixedTimeEquals(opened, userKey);
     }
 
+    /// <summary>Whether the user exists and their account is active.</summary>
+    internal Task<bool> IsActiveAsync(string userId, CancellationToken ct) => Users.Find(u => u.Id == userId && u.Active).AnyAsync(ct);
+
     /// <summary>The user's "Ask for my password when downloading several files"; true for a user it never touched.</summary>
     internal async Task<bool> AsksPasswordForDownloadsAsync(string userId, CancellationToken ct) =>
         (await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct))?.AskPasswordForDownloads ?? true;

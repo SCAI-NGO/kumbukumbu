@@ -2,6 +2,7 @@
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Skills;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Publishing;
@@ -23,7 +24,8 @@ public sealed record SkillUpdateState(VaultPath Folder, string State, string? So
 /// <c>skills ls</c> and the list tell of them without fetching. The share code reaches no log and no answer.
 /// </summary>
 internal sealed class SkillUpdates(
-    EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller, bool marketplaces)
+    EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
+    RequestCaller caller, bool marketplaces)
 {
     public const string Current = "current", Available = "available", Gone = "gone", Skipped = "skipped", OriginEdited = "origin-edited";
 
@@ -125,10 +127,10 @@ internal sealed class SkillUpdates(
     }
 
     /// <summary>The hash of the files behind the link the sealed <paramref name="code"/> opens; null when there is no code,
-    /// the link was withdrawn, or a file of it doesn't open.</summary>
+    /// the link was withdrawn, its owner's account isn't active, or a file of it doesn't open.</summary>
     private async Task<string?> LinkHashAsync(string? code, CancellationToken ct)
     {
-        if (code is null || await publishing.OpenSkillAsync(code, ct) is not { } opened) return null;
+        if (code is null || await publishing.OpenSkillAsync(code, ct) is not { } opened || !await users.IsActiveAsync(opened.Owner, ct)) return null;
         var files = new List<(string, ReadOnlyMemory<byte>)>(opened.Copy.Files.Count);
         foreach (var file in opened.Copy.Files)
         {

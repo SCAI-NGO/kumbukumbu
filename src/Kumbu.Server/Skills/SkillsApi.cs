@@ -118,9 +118,9 @@ public static class SkillsApi
     /// <summary>Check for updates (skills spec §3.10): asked only here, by her session, when the Skills screen opens or
     /// she presses the button; never in the background, never by <c>sh</c>.</summary>
     private static async Task<Ok<SkillUpdateView[]>> CheckUpdatesAsync(
-        RequestCaller caller, EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, IOptions<KumbuOptions> options,
-        CancellationToken ct) =>
-        TypedResults.Ok((await new SkillUpdates(store, github, publishing, limits, caller, options.Value.Skills.Marketplaces.Enabled).CheckAsync(ct))
+        RequestCaller caller, EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
+        IOptions<KumbuOptions> options, CancellationToken ct) =>
+        TypedResults.Ok((await new SkillUpdates(store, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled).CheckAsync(ct))
             .Select(s => new SkillUpdateView(s.Folder.Value, s.State, s.Source, s.Commit)).ToArray());
 
     /// <summary>
