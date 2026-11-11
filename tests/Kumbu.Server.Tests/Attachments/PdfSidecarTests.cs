@@ -50,7 +50,7 @@ public sealed class PdfSidecarTests
     /// <summary>The sidecar's answer for two pages, as <c>pdf/src/analyse.ts</c> shapes it.</summary>
     private static JsonObject TwoPages() => JsonNode.Parse("""
         {
-          "analyser": "pdfjs-dist@6.4.299+rules.1", "pageCount": 5, "analysedPages": 2, "title": "Report", "author": null,
+          "analyser": "pdfjs-dist@6.5.438+rules.1", "pageCount": 5, "analysedPages": 2, "title": "Report", "author": null,
           "pages": [
             { "n": 1, "width": 595, "height": 842, "rotation": 0, "chars": 12, "text": "Hello world.",
               "type": "text", "textCoverage": 0.31, "imageCoverage": 0, "vectorCoverage": 0, "images": 0, "regions": [] },
@@ -195,7 +195,7 @@ public sealed class PdfSidecarTests
         Assert.Equal("http://pdf.test:8090/analyse?maxPages=2", request.RequestUri!.ToString());
         Assert.Equal(Pdf, body);
         var a = result.Analysis;
-        Assert.Equal(("pdfjs-dist@6.4.299+rules.1", 5, 2, "Report", (string?)null), (a.Analyser, a.PageCount, a.AnalysedPages, a.Title, a.Author));
+        Assert.Equal(("pdfjs-dist@6.5.438+rules.1", 5, 2, "Report", (string?)null), (a.Analyser, a.PageCount, a.AnalysedPages, a.Title, a.Author));
         Assert.Equal(new PdfPage(1, 595, 842, 0, PageType.Text, 12, 0.31, 0, 0, 0, []), a.Pages[0] with { Regions = [] });
         var two = a.Pages[1];
         Assert.Equal((2, 842d, 595d, 90, PageType.Mixed, 0.35, 1), (two.Number, two.Width, two.Height, two.Rotation, two.Type, two.VectorCoverage, two.Images));

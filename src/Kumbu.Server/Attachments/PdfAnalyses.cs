@@ -39,7 +39,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     public const int MaxPages = 2000;
 
     /// <summary>The sidecar's <c>ANALYSER</c> (<c>pdf/src/analyse.ts</c>): an analysis by another counts as outdated.</summary>
-    public const string Analyser = "pdfjs-dist@6.4.299+rules.1";
+    public const string Analyser = "pdfjs-dist@6.5.438+rules.1";
 
     /// <summary>Regions kept per page: <c>pdf info</c> shows a few, and part 0 must stay small however many a page has.</summary>
     public const int MaxRegions = 32;
