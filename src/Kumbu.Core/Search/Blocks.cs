@@ -107,7 +107,7 @@ internal static partial class Blocks
 
     private static int Indent(string line) => line.Length - line.TrimStart().Length;
 
-    [GeneratedRegex(@"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")]
+    [GeneratedRegex(@"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$", RegexOptions.NonBacktracking)]
     private static partial Regex SeparatorRegex();
 
     [GeneratedRegex(@"^\s*([-*+]|\d+[.)])\s")]

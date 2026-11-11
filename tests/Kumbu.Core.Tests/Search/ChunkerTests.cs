@@ -246,6 +246,55 @@ public partial class ChunkerTests
         Assert.NotEmpty(await Task.Run(() => Chunker.Split(Manual(content), ChunkBound.Unbounded), ct).WaitAsync(TimeSpan.FromSeconds(5), ct));
     }
 
+    /// <summary>About 1 MiB of ordinary Markdown: prose, a list and a table under many headings.</summary>
+    private static string Ordinary()
+    {
+        var text = new System.Text.StringBuilder("# Manual\n\n");
+        for (var s = 0; text.Length < 1_000_000; s++)
+        {
+            text.Append($"## Section {s}\n\nThe pump P-{s} runs at {s % 90} bar; check the seal every week and log it.\n\n");
+            text.Append("- first item\n- second item with more words\n\n| Code | Meaning |\n|------|---------|\n");
+            for (var r = 0; r < 20; r++) text.Append($"| E{s:000}{r:00} | Sensor drift {r} |\n");
+            text.Append('\n');
+        }
+
+        return text.ToString();
+    }
+
+    [Theory]
+    // 262,144 spaces: linear, a few milliseconds; a backtracking separator row takes half a minute.
+    [InlineData("unbounded")]
+    [InlineData("fallback")]
+    [InlineData("tokenizer")]
+    public async Task A_table_row_over_a_long_line_of_spaces_is_split_within_seconds(string name)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var bound = Bound(name);
+        var ordinary = Ordinary();
+        Assert.NotEmpty(await Task.Run(() => Chunker.Split(Manual(ordinary), bound), ct).WaitAsync(TimeSpan.FromSeconds(10), ct));
+
+        var content = "# T\n" + string.Join(' ', Enumerable.Repeat("word", 400)) + "\na | b\n" + new string(' ', 262_144) + "x\n";
+        Assert.NotEmpty(await Task.Run(() => Chunker.Split(Manual(content), bound), ct).WaitAsync(TimeSpan.FromSeconds(10), ct));
+    }
+
+    [Fact]
+    public async Task The_rolls_of_a_chunk_after_a_long_line_of_spaces_come_within_seconds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ordinary = Manual(Ordinary());
+        var some = Chunker.Split(ordinary, ChunkBound.Fallback)[100];
+        await Task.Run(() => Chunker.Rolls(ordinary, some), ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // Lines: "# T", "a | b", the spaces ending in "x", "after", "more"; the line of spaces is too long to roll in.
+        var note = Manual("# T\na | b\n" + new string(' ', 262_144) + "x\nafter\nmore\n");
+        var rolls = await Task.Run(() =>
+        {
+            var after = Chunker.Split(note, ChunkBound.Unbounded).Single() with { StartLine = 3, EndLine = 4, Text = "after" };
+            return Chunker.Rolls(note, after);
+        }, ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.Equal(("", "more"), rolls);
+    }
+
     [Theory]
     [InlineData("unbounded")]
     [InlineData("fallback")]

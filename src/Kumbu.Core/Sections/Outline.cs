@@ -134,7 +134,7 @@ public static partial class Outline
     }
 
     // Up to three spaces, 1-6 hashes, then a space and the text, or nothing; a closing hash run is dropped.
-    [GeneratedRegex(@"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")]
+    [GeneratedRegex(@"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$", RegexOptions.NonBacktracking)]
     internal static partial Regex HeadingRegex();
 
     // CommonMark: a backslash before ASCII punctuation makes it literal.
