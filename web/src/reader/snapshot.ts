@@ -14,3 +14,8 @@ export function snapshotText(iso: string, timeZone?: string): string {
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   return `Snapshot of ${part("day")} ${part("month")} ${part("year")}, ${part("hour")}:${part("minute")}`;
 }
+
+/** "21:40", in the reader's own time zone (or `timeZone`). */
+export function untilText(iso: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone }).format(new Date(iso));
+}
