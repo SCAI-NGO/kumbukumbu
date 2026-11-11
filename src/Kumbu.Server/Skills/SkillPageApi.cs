@@ -27,6 +27,7 @@ public static class SkillPageApi
     public const string Cookie = "kumbu_skill";
     public const string CookiePath = "/api/k";
     public const string NotFoundSentence = "This link doesn't open a shared skill: the code is wrong, or the skill is no longer shared.";
+    public const string ChangedSentence = "This skill was changed since it was shown; look at it again before adding.";
     public const string OffSentence = "Shared skills can't be opened on this server.";
 
     private static readonly string[] ScriptExtensions = [".py", ".sh", ".js", ".mjs", ".ts"];
@@ -135,7 +136,8 @@ public static class SkillPageApi
     /// <summary>A session cookie (no Max-Age), sent only to this endpoint, apart from the reader's.</summary>
     private static CookieOptions CookieOptions() => new() { Path = CookiePath, Secure = true, SameSite = SameSiteMode.Strict, HttpOnly = true };
 
-    private static SkillPageView View(string code, PublishedSkillCopy copy) =>
+    /// <summary>The skill as the page and Add to my skills' preview (<see cref="SkillsApi"/>) show it.</summary>
+    internal static SkillPageView View(string code, PublishedSkillCopy copy) =>
         new(copy.Name, copy.Description, copy.Manifest, copy.SnapshotAt,
             [.. copy.Files.Select(f => new SkillPageFileView(f.Index, f.Path, f.MediaType, f.Size))], HasScripts(copy.Files.Select(f => f.Path)), ShareCode.CopyId(code));
 }

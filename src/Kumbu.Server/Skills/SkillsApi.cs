@@ -42,11 +42,12 @@ public sealed record SharedSkillView(string Id, string Path, DateTime SnapshotAt
 /// <summary>When the copy behind a skill's link was taken.</summary>
 public sealed record SkillSnapshotView(DateTime SnapshotAt);
 
-/// <summary>Add to my skills: the code from the skill's link, the name of a vault she may write, and the folder's name
-/// there, by default the publication's. Not logged: <see cref="ToString"/> leaves out the code.</summary>
-public sealed record SkillAddRequest(string Code, string Vault, string? Name = null)
+/// <summary>Add to my skills: the code from the skill's link, the name of a vault she may write, the folder's name there,
+/// by default the publication's, and <c>Shown</c>, the snapshot time of the copy the dialog showed (the preview's
+/// <see cref="SkillPageView.SnapshotAt"/>). Not logged: <see cref="ToString"/> leaves out the code.</summary>
+public sealed record SkillAddRequest(string Code, string Vault, string? Name = null, DateTime? Shown = null)
 {
-    public override string ToString() => $"SkillAddRequest {{ Vault = {Vault}, Name = {Name} }}";
+    public override string ToString() => $"SkillAddRequest {{ Vault = {Vault}, Name = {Name}, Shown = {Shown:O} }}";
 }
 
 /// <summary>A copy's state after Check for updates (<see cref="SkillUpdates"/>): its folder, <c>current</c>, <c>available</c>,
@@ -65,6 +66,9 @@ public sealed record SkillHitView(int Rank, double Score, SkillView Skill);
 /// </summary>
 public static class SkillsApi
 {
+    /// <summary>The type of an add refused because the link's copy changed since the dialog showed it.</summary>
+    public const string SkillChanged = "skill-changed";
+
     public static void MapSkillsApi(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/skills").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
@@ -73,6 +77,7 @@ public static class SkillsApi
         group.MapPost("/copy", CopyAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
         group.MapPost("/add", AddAsync).Errors(400, 401, 403, 404, 409, 429, 503, 507);
+        group.MapPost("/add/preview", PreviewAsync).WithMetadata(new RequestSizeLimitAttribute(1024)).Errors(400, 401, 403, 404, 413, 429);
         group.MapPost("/updates/check", CheckUpdatesAsync).Errors(401, 403, 429, 503);
         group.MapGet("/zip", ZipAsync).Produces(StatusCodes.Status200OK, typeof(byte[]), "application/zip").WithMetadata(FileContentMetadata.Instance).Errors(400, 401, 403, 404, 503);
         MapSharing(group);
@@ -101,9 +106,24 @@ public static class SkillsApi
         TypedResults.Ok(new SkillCopiedView((await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).MoveAsync(body, ct)).Value));
 
     /// <summary>
+    /// What Add to my skills would add, for its dialog to show before Add: the skill as its page shows it, opened by the
+    /// code the same way and under the same limits, but without the page's cookie, which belongs to <c>/api/k</c>.
+    /// </summary>
+    private static async Task<Ok<SkillPageView>> PreviewAsync(
+        ReaderCodeRequest body, HttpContext http, PublicationStore publishing, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options,
+        ILoggerFactory logs, CancellationToken ct)
+    {
+        var (code, opened) = await SkillPageApi.OpenCodeAsync(body.Code ?? "", http, publishing, users, limits, options, logs, ct)
+            ?? throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        return TypedResults.Ok(SkillPageApi.View(code, opened.Copy));
+    }
+
+    /// <summary>
     /// Add to my skills (skills design §3.12): the code opens the skill as on its page, under the same limits, so a session
-    /// guesses no faster than a stranger, and a wrong one answers the page's 404. The answer names the new folder, never
-    /// the code.
+    /// guesses no faster than a stranger, and a wrong one answers the page's 404. A link's copy can be updated behind the
+    /// same code: one taken at another time than <c>Shown</c> is refused, so what is added is what the dialog showed (an add
+    /// without <c>Shown</c> is not compared), and files read that aren't the copy's are refused alike (<see cref="SkillCopier.AddAsync"/>).
+    /// The answer names the new folder, never the code.
     /// </summary>
     private static async Task<Created<SkillCopiedView>> AddAsync(
         SkillAddRequest body, HttpContext http, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, PublicationStore publishing, UserCatalog users,
@@ -111,6 +131,11 @@ public static class SkillsApi
     {
         var (code, opened) = await SkillPageApi.OpenCodeAsync(body.Code ?? "", http, publishing, users, limits, options, logs, ct)
             ?? throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        if (body.Shown is { } shown && shown != opened.Copy.SnapshotAt)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, SkillPageApi.ChangedSentence, type: SkillChanged);
+        }
+
         var folder = await new SkillCopier(store, writer, publishing, caller, logs.CreateLogger<SkillCopier>()).AddAsync(code, opened, body.Vault ?? "", body.Name, ct);
         return TypedResults.Created((string?)null, new SkillCopiedView(folder.Value));
     }

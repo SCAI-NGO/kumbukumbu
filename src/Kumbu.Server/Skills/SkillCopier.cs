@@ -124,6 +124,12 @@ internal sealed class SkillCopier(EncryptedNoteStore store, NoteWriter writer, P
         }
 
         if (!received.Any(f => f.Path == SkillPaths.Manifest)) throw ApiErrors.NotFound(SkillPageApi.NotFoundSentence);
+        // An update between opening the copy and reading its files would mix two copies: what was shown is added, or nothing.
+        if (SkillHash.Of(received.Select(f => (f.Path, (ReadOnlyMemory<byte>)f.Bytes))) != opened.Copy.Hash)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, SkillPageApi.ChangedSentence, type: SkillsApi.SkillChanged);
+        }
+
         await ReceiveAsync(target, folder, received, "link:" + Convert.ToHexStringLower(ShareCode.Lookup(code)), code, ct);
         return folder;
     }
