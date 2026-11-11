@@ -157,6 +157,7 @@ Added after the independent review of 2026-11-09:
 - **Per-device time choice:** in `localStorage` (`kumbu.discreetTimeout`). It holds a number, no vault name.
 - **Neutral URL:** inside a discreet vault, the URL is `/discreet` without anything after it. The app keeps the open note in memory.
 - **The OAuth consent page** (`ConnectionApi.cs:173`, `Consent.tsx:135`) leaves out hidden vaults. A connection's existing grants on them stay as they are and are neither dropped nor renewed differently.
+  - Changed by the 0.4.0 fixes: a code issued while hidden carries only the listed vaults.
 - **Editing a key, share or connection while hidden keeps its grants on hidden vaults.** The server merges the edit into the stored grants, so that an agent never silently loses access. Revoking revokes the whole item, as today.
 - **The export** (`GET /api/export` without a vault, `ExportApi.cs:50`) follows the filter: while hidden, a full export leaves the discreet vaults out without naming them, and its `MISSING.txt` and logs say nothing of them. The README says that a full backup includes discreet vaults only while they are shown. (This moves the export from "not touched" to "filtered like every web endpoint".)
 - **An admin's counts:** `GET /api/admin/users` counts vaults per user (`AccountApi.cs:118-120`). An admin's own row includes her discreet vaults. The counts name nothing, so they stay as they are (§6).
