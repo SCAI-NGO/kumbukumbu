@@ -105,10 +105,36 @@ From the 0.4.0 audit (report §6, L-02; open item of 2026-11-11). A copy added f
 
 **Why** (Chris): honesty is part of the security architecture. Answering "source gone" when the source isn't gone would be dishonest, close to security by obscurity, and a user might detach a copy that will work again tomorrow. Leaving it as it is would be one of the exceptions that end with a product "not quite as consistent as promised". The skills design §3.10 and security-architecture §4 "Skills" get the rule.
 
+## 5a. End to end
+
+1. Alice publishes `/Work/Pump/Ruling.md`, which embeds two images, and sends Bob the ordinary link `https://kumbu.example.org/s#K7QM-4XDA-…` in a chat. The chat's preview shows nothing of the content, as before.
+2. Bob opens it in his browser. The reader page shows the note, Copy as Markdown and, beside it, **Link for your AI**.
+3. Bob presses it. The page shows `https://kumbu.example.org/s/t/3XQ9…` (32 characters after `/s/t/`), "valid until 21:40", and the sentence of §3.2. He copies it into a conversation with his own Claude: "Read this and tell me what you think of the ruling."
+4. Bob's Claude fetches the link with a plain `GET`: `200`, `text/markdown`, the title as a heading, the "published note, snapshot of …" line, the filtered text, and two image links `…/s/t/3XQ9…/files/0` and `…/files/1` with their media types. It fetches the first image as well, and answers.
+5. Half an hour later Bob asks a follow-up and Claude fetches the link again: still `200`.
+6. Alice withdraws the publication. Bob's Claude, fetching again: `404`, "This link for AIs has expired or the note is no longer published. Ask for a new one on the note's page." So does every image URL. The ordinary link is dead too, as before.
+7. Had Alice not withdrawn it, the link would answer the same `404` from 21:40 on; Bob, back from a phone call, opens the reader page again (its cookie still works) and presses the button for a new link.
+
+## 5b. Out of scope
+
+- Anything about the ordinary link, the share code, the reader cookie, the reader page's CSP and isolation, beyond the new button and its request.
+- An owner's AI link (publish dialog, `sh publish`, MCP); a long-lived or reusable AI link; a read-once link.
+- PDFs in published copies (not published today).
+- Markdown as an export format for e-mail or other tools.
+- Recognising link-preview bots.
+- The rest of the skills' update logic beyond §5's publishing-off answer; the deactivated-owner rule of L-02 stays as the audit fixed it.
+- Everything else in `docs/superpowers/open-items.md`.
+
+## 5c. Security boundary
+
+- **New:** the token endpoints under `/s/t/` (anonymous, rate-limited, the reader's headers), the token documents and their key derivation, and the request that makes a token from the reader endpoint. These need the security review of §7 and the documentation of §6.
+- **Not touched:** authentication and sessions (`Auth/`, `CallerMiddleware`), vault keys and the slot model (`Crypto/`), the share code's derivation and the reader cookie (`ShareCode`, `ReaderApi`'s existing endpoints, apart from adding the new request beside them), the publication documents' format, the fair copy (`Kumbu.Core/Publishing/FairCopies.cs`), WebDAV, OAuth, the MCP surface.
+- The token never opens more than the publication's copy and its images; it never reaches the vault, its key, its record, or another publication.
+
 ## 6. Amendments and documentation
 
 - **Publish design** (`2026-11-05-publish-design.md`): §2's anti-goal on link previews gains "(of the ordinary link; an AI link, made by a reader on purpose, shows its content to whatever fetches it within its hour: §3.6 of the AI link design)"; §3.12 gains a pointer to this design. A short dated note at the top names the amendment.
-- **security-architecture.md**: the threat table gains "someone holding an AI link" (reads that one copy and its images for at most an hour; nothing else; dies with the publication); §5.6 "What is in the clear" gains the token documents (lookup id, publication, expiry, count); §7 the new endpoints, their limits and headers, and that the token is in the path by design and may reach a proxy's access log; §4 "Skills" the L-02 rule.
+- **security-architecture.md**: the threat table gains "someone holding an AI link" (reads that one copy and its images for at most an hour; nothing else; dies with the publication); §5.6 "What is in the clear" gains the token documents (lookup id, vault, publication, expiry, count); §7 the new endpoints, their limits and headers, and that the token is in the path by design and may reach a proxy's access log; §4 "Skills" the L-02 rule.
 - **README**: "Publishing a note" → "For an AI" describes the button; the skills section the publishing-off sentence.
 - **concept.md**: the publishing paragraph, one sentence.
 - `CHANGELOG.md` at the release, from the version diary.
