@@ -39,6 +39,12 @@ public sealed partial class UnigramTokenizer
     /// <summary>More distinct words than notes ordinarily hold; the memo starts afresh when it is full.</summary>
     private const int WordMemoLimit = 200_000;
 
+    /// <summary>Longer words aren't memoised: ordinary words are far shorter, and a run without spaces would fill the
+    /// memo with prefixes of itself while it is split.</summary>
+    internal const int LongestMemoisedLength = 64;
+
+    internal int LongestMemoisedWord => _wordCounts.Keys.Select(w => w.Length).DefaultIfEmpty().Max();
+
     /// <param name="collapseSpaces">The Replace normalizer " {2,}" to " ", applied after the precompiled map.</param>
     /// <param name="metaspaceOnly">Metaspace without WhitespaceSplit: only spaces separate words, and a trailing
     /// space leaves a "▁" of its own.</param>
@@ -202,6 +208,7 @@ public sealed partial class UnigramTokenizer
 
     private (int Count, bool UnkFirst, bool UnkLast) WordCount(ReadOnlySpan<char> word)
     {
+        if (word.Length > LongestMemoisedLength) return CountWord(word);
         if (_wordLookup.TryGetValue(word, out var known)) return known;
         known = CountWord(word);
         if (Interlocked.Increment(ref _wordsMemoised) >= WordMemoLimit)
