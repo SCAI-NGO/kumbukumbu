@@ -169,7 +169,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     private static string WrongCode() => ShareCode.New();
 
     /// <summary>Status, every header but <c>Date</c>, and the body: what makes two answers alike.</summary>
-    private static async Task<string> FingerprintAsync(HttpResponseMessage response)
+    internal static async Task<string> FingerprintAsync(HttpResponseMessage response)
     {
         var headers = response.Headers.Concat(response.Content.Headers)
             .Where(h => h.Key != "Date")

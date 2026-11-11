@@ -314,6 +314,7 @@ app.MapSkillsApi();
 app.MapMarketplaceApi();
 app.MapSkillUpdatesApi();
 app.MapReaderApi();
+app.MapAiLinks();
 app.MapSkillPageApi();
 // The reader page (publish spec §3.12) and the skill page (skills design §3.12), entries of their own: the code is in
 // the fragment, which reaches no server. HEAD too, which would otherwise fall through to the web app's shell.
