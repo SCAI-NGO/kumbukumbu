@@ -11,3 +11,9 @@
   text-decoration: underline dotted;
   cursor: help;
 }
+
+/* Only a formula's own box takes pointer events: taps reach what lies under the boxes KaTeX draws beyond it, and a
+   link around maths still works where the formula sits. */
+.katex * {
+  pointer-events: none;
+}

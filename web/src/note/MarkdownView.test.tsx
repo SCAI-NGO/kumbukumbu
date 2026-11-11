@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -728,6 +730,13 @@ describe("Maths", () => {
     show("text\n\n$$\nx^2\n$$", [], {}, { lines: new Set([4]), writer: "Bob" });
     await typeset();
     expect(document.querySelector("[data-changed] .katex-display")).not.toBeNull();
+  });
+
+  // jsdom doesn't hit-test, so this reads the stylesheet the maths module loads.
+  it("lets a formula's inner boxes take no pointer events", () => {
+    const read = (name: string) => readFileSync(resolve(import.meta.dirname, name), "utf8");
+    expect(read("math.ts")).toContain('import "./math.css";');
+    expect(read("math.css")).toMatch(/(^|\}|\*\/)\s*\.katex \*\s*\{[^}]*pointer-events:\s*none;/);
   });
 });
 
