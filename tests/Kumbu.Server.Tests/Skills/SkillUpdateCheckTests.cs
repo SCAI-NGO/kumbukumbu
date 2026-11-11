@@ -48,12 +48,17 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         return fake;
     }
 
-    private WebApplicationFactory<Program> Api(bool marketplaces = true) => app.PublicApi.WithWebHostBuilder(b => (marketplaces ? b : b.UseSetting("Kumbu:Skills:Marketplaces:Enabled", "false")).ConfigureServices(s =>
+    private WebApplicationFactory<Program> Api(bool marketplaces = true, bool publishing = true) => app.PublicApi.WithWebHostBuilder(b =>
     {
-        s.AddHttpClient(GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _github);
-        s.RemoveAll<TimeProvider>();
-        s.AddSingleton<TimeProvider>(_time);
-    }));
+        if (!marketplaces) b.UseSetting("Kumbu:Skills:Marketplaces:Enabled", "false");
+        if (!publishing) b.UseSetting("Kumbu:Publish:Enabled", "false");
+        b.ConfigureServices(s =>
+        {
+            s.AddHttpClient(GitHubServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _github);
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(_time);
+        });
+    });
 
     /// <summary>Alice, with skills/pdf of the marketplace installed at <see cref="Sha"/> into Work.</summary>
     private static async Task<RestClient> InstalledAsync(WebApplicationFactory<Program> api)
@@ -441,5 +446,65 @@ public sealed class SkillUpdateCheckTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, take.StatusCode);
         Assert.Equal("current", StateOf(await CheckAsync(dave), folder)["state"]!.GetValue<string>());
         Assert.Empty(_github.Requests);
+    }
+
+    [Fact]
+    public async Task Publishing_off_keeps_a_link_copys_update_and_says_so()
+    {
+        await using var on = Api();
+        var (alice, dave, id) = await LinkCopyAsync(on);
+        await UpdateLinkAsync(alice, id);
+        const string folder = "/Writing/_skills/write-as-alice";
+        Assert.Equal("available", StateOf(await CheckAsync(dave), folder)["state"]!.GetValue<string>());
+        Assert.Equal([folder], (await RecordAsync(dave, "Writing")).Updates);
+
+        await using var off = Api(publishing: false);
+        var daveOff = dave.On(off);
+        var state = StateOf(await CheckAsync(daveOff), folder);
+        Assert.Equal(SkillUpdates.PublishingOff, state["state"]!.GetValue<string>());
+        Assert.Equal("publishing-off", SkillUpdates.PublishingOff);
+        Assert.StartsWith("link:", state["source"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal([folder], (await RecordAsync(daveOff, "Writing")).Updates);
+        Assert.Equal("available", (await ViewAsync(daveOff, folder))["update"]!.GetValue<string>());
+
+        using var review = await daveOff.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(folder));
+        var reviewError = await RestClient.JsonAsync(review);
+        using var take = await daveOff.SendAsync(HttpMethod.Post, "/api/skills/updates/take", new { path = folder, hash = "sha256:" + new string('0', 64) });
+        var takeError = await RestClient.JsonAsync(take);
+        foreach (var (response, error) in new[] { (review, reviewError), (take, takeError) })
+        {
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Equal("publishing-off", error["type"]?.GetValue<string>());
+            Assert.Equal("Publishing is switched off on this server, so updates from links can't be checked right now.", error["error"]?.GetValue<string>());
+        }
+
+        Assert.Equal([folder], (await RecordAsync(daveOff, "Writing")).Updates);
+        Assert.Equal("available", StateOf(await CheckAsync(dave), folder)["state"]!.GetValue<string>());
+        Assert.Equal([folder], (await RecordAsync(dave, "Writing")).Updates);
+    }
+
+    [Fact]
+    public async Task Publishing_off_still_checks_a_GitHub_copy()
+    {
+        await using var on = Api();
+        var (_, dave, _) = await LinkCopyAsync(on);
+        MarketplaceApiTests.Shown(on, Repo, Sha);
+        using (var installed = await dave.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = Repo, commit = Sha, path = "skills/pdf", vault = "Writing" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
+        }
+
+        await using var off = Api(publishing: false);
+        var daveOff = dave.On(off);
+        _github.Commit = Newer;
+        _github.Archives[Repo]["skills/pdf/SKILL.md"] = Encoding.UTF8.GetBytes(Manifest + "More.\n");
+
+        var states = await CheckAsync(daveOff);
+
+        Assert.Equal(SkillUpdates.PublishingOff, StateOf(states, "/Writing/_skills/write-as-alice")["state"]!.GetValue<string>());
+        var github = StateOf(states, "/Writing/_skills/pdf");
+        Assert.Equal("available", github["state"]!.GetValue<string>());
+        Assert.Equal(Newer, github["commit"]!.GetValue<string>());
+        Assert.Equal(["/Writing/_skills/pdf"], (await RecordAsync(daveOff, "Writing")).Updates);
     }
 }

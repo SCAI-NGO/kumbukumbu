@@ -33,7 +33,7 @@ internal sealed record SkillFileChange(string Path, string Change, IReadOnlyList
 /// </summary>
 internal sealed partial class SkillUpdateTaker(
     EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
-    RequestCaller caller, bool marketplaces)
+    RequestCaller caller, bool marketplaces, bool publishingEnabled)
 {
     /// <summary>The <see cref="ApiError.Type"/> of a Take whose source changed since it was reviewed.</summary>
     public const string MovedOn = "moved-on";
@@ -164,13 +164,14 @@ internal sealed partial class SkillUpdateTaker(
     }
 
     /// <summary>The source as it is now: a link's publication opened with the sealed code (gone while its owner's account
-    /// isn't active), or the GitHub skill at the commit the default branch points to now, which counts against her GitHub
+    /// isn't active; refused, 404 <see cref="SkillUpdates.PublishingOff"/>, while publishing is switched off), or the GitHub skill at the commit the default branch points to now, which counts against her GitHub
     /// limit; with marketplaces switched off, a GitHub copy answers as the marketplace routes do and nothing is fetched
     /// (skills spec §3.9).</summary>
     private async Task<SkillUpstream> UpstreamAsync(Copy copy, CancellationToken ct)
     {
         if (copy.Origin.Source.StartsWith("link:", StringComparison.Ordinal))
         {
+            if (!publishingEnabled) throw new ApiException(StatusCodes.Status404NotFound, SkillUpdates.PublishingOffSentence, type: SkillUpdates.PublishingOff);
             var code = copy.Record.SkillCodes.FirstOrDefault(c => c.Path == copy.Stored)?.Code;
             if (code is null || await publishing.OpenSkillAsync(code, ct) is not { } opened || !await users.IsActiveAsync(opened.Owner, ct)) throw SourceGone(copy);
             var files = new List<(string, byte[])>(opened.Copy.Files.Count);
