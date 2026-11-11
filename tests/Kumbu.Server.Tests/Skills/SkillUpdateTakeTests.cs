@@ -26,6 +26,7 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
     private const string Newest = "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd";
     private const string Repo = "alice-example/skills";
     private const string Folder = "/Work/_skills/pdf";
+    private const string LinkFolder = "/Writing/_skills/write-as-alice";
     private const string Manifest = "---\nname: pdf\ndescription: Reads PDFs.\n---\n# PDF\n\nRead the file.\n";
     private const string NewManifest = "---\nname: pdf\ndescription: Reads PDFs.\n---\n# PDF\n\nRead the whole file.\n";
     private static readonly byte[] Run = "print('hi')\n"u8.ToArray();
@@ -371,10 +372,10 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
         Assert.Equal("available", StateOf(await CheckAsync(alice), Folder));
     }
 
-    [Fact]
-    public async Task A_link_copy_takes_the_updated_publication()
+    /// <summary>Alice's skill shared by link, Dave's copy of it at <see cref="LinkFolder"/>, and the link updated since
+    /// with a new file, <c>examples/post.md</c>; with the code the link holds.</summary>
+    private static async Task<(RestClient Alice, RestClient Dave, string Code)> LinkCopyWithUpdateAsync(WebApplicationFactory<Program> api)
     {
-        await using var api = Api();
         var alice = await RestClient.NewAsync(api, vault: "Work");
         await PutNoteAsync(alice, "/Skills/write-as-alice/SKILL.md", "---\nname: write-as-alice\ndescription: Writes posts.\n---\n# Write\n");
         using var shared = await alice.SendAsync(HttpMethod.Post, "/api/skills/shared", new { path = "/Skills/write-as-alice" });
@@ -388,7 +389,15 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
         var id = (await RestClient.JsonAsync(list)).AsArray().Single()!["id"]!.GetValue<string>();
         using var updated = await alice.SendAsync(HttpMethod.Post, $"/api/skills/shared/{id}/update");
         Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
-        const string folder = "/Writing/_skills/write-as-alice";
+        return (alice, dave, code);
+    }
+
+    [Fact]
+    public async Task A_link_copy_takes_the_updated_publication()
+    {
+        await using var api = Api();
+        var (_, dave, code) = await LinkCopyWithUpdateAsync(api);
+        const string folder = LinkFolder;
 
         using var reviewed = await dave.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(folder));
         var text = await reviewed.Content.ReadAsStringAsync(Ct);
@@ -412,6 +421,37 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
         Assert.Equal(review["hash"]!.GetValue<string>(), Assert.Single(record.Origins).Hash);
         Assert.Equal(sealedCode, Assert.Single(record.SkillCodes).Code);
         Assert.Empty(_github.Requests);
+    }
+
+    [Fact]
+    public async Task A_link_copy_gets_no_update_while_the_links_owner_is_deactivated()
+    {
+        await using var api = Api();
+        var (alice, dave, _) = await LinkCopyWithUpdateAsync(api);
+        const string folder = LinkFolder;
+        var admin = await RestClient.NewAsync(api, vault: "Admin", role: Roles.Admin);
+        var accounts = api.Services.GetRequiredService<Admin>();
+
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, false, Ct));
+
+        using (var gone = await dave.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(folder)))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+            Assert.Equal(SkillUpdateTaker.Gone, (await RestClient.JsonAsync(gone))["type"]!.GetValue<string>());
+        }
+
+        using (var gone = await TakeAsync(dave, Assert.Single((await RecordAsync(dave, "Writing")).Origins).Hash, folder))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+            Assert.Equal(SkillUpdateTaker.Gone, (await RestClient.JsonAsync(gone))["type"]!.GetValue<string>());
+        }
+
+        Assert.Equal(SkillUpdates.Gone, StateOf(await CheckAsync(dave), folder));
+
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, true, Ct));
+
+        Assert.Equal("added", FileOf(await ReviewAsync(dave, folder), "examples/post.md")["change"]!.GetValue<string>());
+        Assert.Equal(SkillUpdates.Available, StateOf(await CheckAsync(dave), folder));
     }
 
     [Fact]

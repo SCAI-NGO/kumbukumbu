@@ -4,7 +4,7 @@ import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
-import { errorText } from "../api/error-text";
+import { errorText, isNotFound } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
 import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
@@ -13,7 +13,7 @@ import { usePublications } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
-import { useErrorTextFor } from "../discreet/errorText";
+import { useErrorTextFor, useUnnamedVault } from "../discreet/errorText";
 import { useEditor } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
@@ -87,6 +87,7 @@ export default function NoteView({ path }: { path: string }) {
   // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
   const vaults = useVaults();
   const vault = vaults.data?.find((v) => v.name === vaultOf(path));
+  const unnamed = useUnnamedVault(path);
   const changes = !vaults.data || mayChange(levelOf(vault), path);
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
@@ -358,7 +359,8 @@ export default function NoteView({ path }: { path: string }) {
       )}
       <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
-        {!(note.data && startsWithH1(parts.body)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
+        {/* Nor one made from the path of a missing note whose vault the list doesn't name (a hidden one's bookmark). */}
+        {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
         {notice && (
           <p
             role={notice.kind === "conflict" ? "status" : "alert"}

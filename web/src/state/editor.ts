@@ -104,6 +104,12 @@ interface EditorState {
    * a scroll target in it go, an upload sheet for it closes, and it is no longer active.
    */
   forgetVault(vault: string): void;
+  /**
+   * A session that ended with `vaults` shown (the next one starts with them hidden): what `forgetVault` forgets of them
+   * except the draft, which opens again with its vault; and what was looked for (query, tag, find in the note) and the
+   * note's tools, as these may name what was in them.
+   */
+  forgetShown(vaults: Iterable<string>): void;
   reset(): void;
 }
 
@@ -206,25 +212,33 @@ export const useEditor = create<EditorState>()((set, get) => ({
         upload: s.upload && { ...s.upload, folder: mapFolder(s.upload.folder) },
       };
     }),
-  forgetVault: (vault) =>
+  forgetVault: (vault) => set((s) => forgotten(s, vault, false)),
+  forgetShown: (vaults) =>
     set((s) => {
-      const outside = (path: string | null | undefined) => path != null && vaultOf(path) !== vault;
-      // An upload sheet for a folder of the vault would send its files to a vault that is gone.
-      const upload = s.upload && !outside(s.upload.folder) ? { upload: null, overlay: s.overlay === "upload" ? ("none" as Overlay) : s.overlay } : {};
-      return {
-        ...upload,
-        recentPaths: s.recentPaths.filter(outside),
-        currentPath: outside(s.currentPath) ? s.currentPath : null,
-        draft: outside(s.draft?.path) ? s.draft : null,
-        selectedFolder: outside(s.selectedFolder) ? s.selectedFolder : null,
-        refused: outside(s.refused?.path) ? s.refused : null,
-        scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
-        activeVault: s.activeVault === vault ? null : s.activeVault,
-        expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
-      };
+      let left: EditorState | null = null;
+      for (const vault of vaults) left = { ...(left ?? s), ...forgotten(left ?? s, vault, true) };
+      return left ? { ...left, searchQuery: "", searchTag: null, find: initial.find, noteTool: null } : {};
     }),
   reset: () => set(initial),
 }));
+
+/** What a vault's notes and folders leave in the store once it is forgotten; its draft too, unless `keepDraft`. */
+function forgotten(s: EditorState, vault: string, keepDraft: boolean): Partial<EditorState> {
+  const outside = (path: string | null | undefined) => path != null && vaultOf(path) !== vault;
+  // An upload sheet for a folder of the vault would send its files to a vault that is gone.
+  const upload = s.upload && !outside(s.upload.folder) ? { upload: null, overlay: s.overlay === "upload" ? ("none" as Overlay) : s.overlay } : {};
+  return {
+    ...upload,
+    recentPaths: s.recentPaths.filter(outside),
+    currentPath: outside(s.currentPath) ? s.currentPath : null,
+    draft: keepDraft || outside(s.draft?.path) ? s.draft : null,
+    selectedFolder: outside(s.selectedFolder) ? s.selectedFolder : null,
+    refused: outside(s.refused?.path) ? s.refused : null,
+    scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
+    activeVault: s.activeVault === vault ? null : s.activeVault,
+    expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
+  };
+}
 
 /** Where `path` is after moving `from` to `to`: a note (`/W/a.md`) or a folder (`/W/a/`, with everything below it). */
 export function movedPath(path: string, from: string, to: string) {

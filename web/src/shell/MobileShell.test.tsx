@@ -91,6 +91,26 @@ describe("the shell", () => {
     expect(useEditor.getState().currentPath).toBe("/My Vault/a b/c%25?.md");
   });
 
+  it("names nothing of a missing note's path in a vault the list doesn't name (a bookmark of a hidden one)", async () => {
+    signedInApi({
+      "GET /api/notes/Tagebuch/Heute.md": () => json(404, { error: "There is no note at /Tagebuch/Heute.md (if it was removed, it is in the trash)." }),
+      "GET /api/vaults/Tagebuch/tree": () => json(404, { error: "You have no vault named Tagebuch." }),
+    });
+    renderApp("/notes/Tagebuch/Heute.md");
+    expect(await screen.findByText("There is no such note (if it was removed, it is in the trash).")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Tagebuch");
+    expect(document.body.textContent).not.toContain("Heute");
+  });
+
+  it("keeps the place and title of a missing note in a vault the list names", async () => {
+    signedInApi({ "GET /api/notes/Work/fehlt.md": () => json(404, { error: "There is no note at /Work/fehlt.md." }) });
+    renderApp("/notes/Work/fehlt.md");
+    expect(await screen.findByText("There is no note at /Work/fehlt.md.")).toBeInTheDocument();
+    const topBar = screen.getByRole("button", { name: "Show this note in the file tree" });
+    expect(topBar).toHaveTextContent("Work");
+    expect(topBar).toHaveTextContent("fehlt");
+  });
+
   it("opens the drawer on an edge swipe, closes it on a swipe left, and ignores vertical scrolling", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");

@@ -6,6 +6,7 @@ using Kumbu.Core.Diffs;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Skills;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Publishing;
@@ -31,7 +32,8 @@ internal sealed record SkillFileChange(string Path, string Change, IReadOnlyList
 /// in <c>SKILL.md</c> and sealed. The share code of a link copy is only read from the record: it reaches no answer and no log.
 /// </summary>
 internal sealed partial class SkillUpdateTaker(
-    EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing, AccountLimits limits, RequestCaller caller, bool marketplaces)
+    EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
+    RequestCaller caller, bool marketplaces)
 {
     /// <summary>The <see cref="ApiError.Type"/> of a Take whose source changed since it was reviewed.</summary>
     public const string MovedOn = "moved-on";
@@ -161,15 +163,16 @@ internal sealed partial class SkillUpdateTaker(
         return new Copy(access, folder, stored, record, origin);
     }
 
-    /// <summary>The source as it is now: a link's publication opened with the sealed code, or the GitHub skill at the commit
-    /// the default branch points to now, which counts against her GitHub limit; with marketplaces switched off, a GitHub
-    /// copy answers as the marketplace routes do and nothing is fetched (skills spec §3.9).</summary>
+    /// <summary>The source as it is now: a link's publication opened with the sealed code (gone while its owner's account
+    /// isn't active), or the GitHub skill at the commit the default branch points to now, which counts against her GitHub
+    /// limit; with marketplaces switched off, a GitHub copy answers as the marketplace routes do and nothing is fetched
+    /// (skills spec §3.9).</summary>
     private async Task<SkillUpstream> UpstreamAsync(Copy copy, CancellationToken ct)
     {
         if (copy.Origin.Source.StartsWith("link:", StringComparison.Ordinal))
         {
             var code = copy.Record.SkillCodes.FirstOrDefault(c => c.Path == copy.Stored)?.Code;
-            if (code is null || await publishing.OpenSkillAsync(code, ct) is not { } opened) throw SourceGone(copy);
+            if (code is null || await publishing.OpenSkillAsync(code, ct) is not { } opened || !await users.IsActiveAsync(opened.Owner, ct)) throw SourceGone(copy);
             var files = new List<(string, byte[])>(opened.Copy.Files.Count);
             foreach (var file in opened.Copy.Files.OrderBy(f => f.Index))
             {

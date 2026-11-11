@@ -23,6 +23,9 @@ export function errorText(err: unknown): string {
   return "Something went wrong. Try again.";
 }
 
+/** A 404: what was asked for isn't there, or isn't the caller's to know of. */
+export const isNotFound = (err: unknown): boolean => err instanceof HttpError && err.status === 404;
+
 /** A vault being re-encrypted: the one 503 with a sentence of the API's own (a proxy's 503 has none). Over in seconds. */
 export function isVaultBusy(err: unknown): boolean {
   return err instanceof HttpError && err.status === 503 && !!err.message;

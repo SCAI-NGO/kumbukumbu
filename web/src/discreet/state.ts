@@ -3,6 +3,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { vaultOf } from "../api/paths";
 import type { components } from "../api/schema";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 
 export type DiscreetView = components["schemas"]["DiscreetView"];
@@ -67,9 +68,11 @@ export function followVaults(queryClient: QueryClient): () => void {
   });
 }
 
-// As the console: a sign-out, a session that ended, and one user replacing another forget the mode.
+// As the console: a sign-out, a session that ended, and one user replacing another forget the mode. The next session
+// starts with the discreet vaults hidden, so nothing the tab kept of them opens again in it.
 useSession.subscribe((session, previous) => {
   if (session.user?.id !== previous.user?.id && previous.user !== null) {
+    useEditor.getState().forgetShown(useDiscreet.getState().names);
     useDiscreet.getState().reset();
     useDiscreet.setState({ unsent: false, gone: new Set() });
   }

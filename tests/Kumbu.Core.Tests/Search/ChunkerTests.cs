@@ -218,6 +218,37 @@ public partial class ChunkerTests
     [Theory]
     [InlineData("unbounded")]
     [InlineData("fallback")]
+    public void Sections_merge_below_their_parent_only(string name)
+    {
+        List<(string, int, int)> Split(string content) =>
+            [.. Chunker.Split(Manual(content), Bound(name)).Select(c => (c.Address, c.StartLine, c.EndLine))];
+
+        // A2a joins A2, but A3, a child of A, doesn't join them; B, under the note, doesn't join A3.
+        Assert.Equal(
+            [("", 0, 1), ("#A", 1, 5), ("#A#A2", 5, 9), ("#A#A3", 9, 11), ("#B", 11, 13)],
+            Split("Intro line.\n# A\nx\n## A1\ny\n## A2\nz\n### A2a\nw\n## A3\nv\n# B\nu\n"));
+        Assert.Equal(
+            [("#", 0, 4), ("##[2]", 4, 8), ("#-", 8, 12)],
+            Split("#\nalpha\n##\nbeta\n##\ngamma\n###\ndelta\n# -\nepsilon\n## -\nzeta\n"));
+        Assert.Equal(
+            [("", 0, 3), ("#Q", 3, 5), ("#Q#Q1", 5, 11), ("#Q#Q2", 11, 13), ("#R", 13, 15)],
+            Split("Lead.\n# P\np\n# Q\nq\n## Q1\nq1\n### Q1a\nqa\n### Q1b\nqb\n## Q2\nq2\n# R\nr\n"));
+    }
+
+    [Theory]
+    // 65,536 headings: linear, a fraction of a second; a quadratic merging takes over a minute.
+    [InlineData("# -\n")]
+    [InlineData("#\n")]
+    public async Task A_note_of_many_headings_without_words_is_split_within_seconds(string line)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var content = string.Concat(Enumerable.Repeat(line, 65_536));
+        Assert.NotEmpty(await Task.Run(() => Chunker.Split(Manual(content), ChunkBound.Unbounded), ct).WaitAsync(TimeSpan.FromSeconds(5), ct));
+    }
+
+    [Theory]
+    [InlineData("unbounded")]
+    [InlineData("fallback")]
     [InlineData("tokenizer")]
     public void Small_sections_merge_up_to_the_target(string name)
     {

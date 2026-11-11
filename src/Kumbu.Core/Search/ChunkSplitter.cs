@@ -139,7 +139,7 @@ internal sealed class ChunkSplitter
     /// in a chunk under <see cref="MinWords"/> that would otherwise stand alone), within the budget, and below one parent.</summary>
     private bool Joins(List<Section> group, Section next, Section? after)
     {
-        if (Common([.. group, next]) is not (true, var shared)) return false;
+        if (CommonWith(group, next) is not (true, var shared)) return false;
         var first = group[0];
         var words = WordsOf(first.Start, next.End);
         if (!LinesWithin(Context(shared).Cost, first.Start, next.End)) return false;
@@ -166,6 +166,19 @@ internal sealed class ChunkSplitter
         var allowed = (first.Heading is null ? shared is null : ReferenceEquals(first.Heading, shared) || ReferenceEquals(first.Heading.Parent, shared))
             && sections.Skip(1).All(s => s.Heading is not null && ReferenceEquals(s.Heading.Parent, shared));
         return (allowed, shared);
+    }
+
+    /// <summary>
+    /// <see cref="Common"/> of <paramref name="group"/> and <paramref name="next"/>, for a group <see cref="Joins"/> built.
+    /// A group of two or more passed <see cref="Common"/>, so every section after its first is a child of its shared
+    /// heading: that heading stays shared, only another child of it joins, and wherever the join is allowed the shared
+    /// heading is <see cref="Common"/>'s.
+    /// </summary>
+    private static (bool Allowed, Heading? Shared) CommonWith(List<Section> group, Section next)
+    {
+        if (group.Count == 1) return Common([group[0], next]);
+        var shared = group[1].Heading!.Parent;
+        return (next.Heading is not null && ReferenceEquals(next.Heading.Parent, shared), shared);
     }
 
     private static Heading? Ancestor(Heading? a, Heading? b)

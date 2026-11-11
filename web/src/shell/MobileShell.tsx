@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useTree, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
@@ -17,7 +17,7 @@ import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import { useTellOpenNote } from "../discreet/openNote";
-import { NO_SUCH_NOTE } from "../discreet/errorText";
+import { NO_SUCH_NOTE, useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
@@ -138,6 +138,9 @@ export default function MobileShell() {
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
   // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
   const gone = useGoneWithVaults(path);
+  // A missing note whose vault the list doesn't name (a hidden one's bookmark after a reload): its path isn't shown either.
+  const unnamed = useUnnamedVault(path);
+  const missing = useNoteMissing(path);
   const hiding = useDiscreet((s) => s.hiding);
   const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
@@ -314,7 +317,7 @@ export default function MobileShell() {
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {framed && <DiscreetFrame />}
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
-      <TopBar path={gone ? null : path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={gone || (unnamed && missing) ? null : path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       {framed && (
         <div className="flex-none px-3 pt-2">
           <DiscreetPill />
