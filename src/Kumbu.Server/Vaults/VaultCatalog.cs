@@ -875,6 +875,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 deleted += (await collection.DeleteManyAsync(Builders<SealedDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None)).DeletedCount;
             }
 
+            // As the content above, and on purpose beside the transaction's: a link made from a copy opened just before
+            // the commit would otherwise stay until its hour is up.
             await AiLinks.DeleteManyAsync(Builders<AiLinkDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None);
 
             return deleted;

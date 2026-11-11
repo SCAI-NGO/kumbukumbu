@@ -15,7 +15,6 @@ namespace Kumbu.Server.Publishing;
 public static class AiLinkToken
 {
     public const int Length = 32;
-    private const int MaxTyped = 64;
     public const string LookupLabel = "kumbu/v1/ai-link-lookup";
     public const string KeyLabel = "kumbu/v1/ai-link-key";
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
@@ -25,17 +24,8 @@ public static class AiLinkToken
     /// <summary>As <see cref="ShareCode.New"/>: the generation is the same, the derivations are not.</summary>
     public static string New() => ShareCode.New();
 
-    /// <summary>The normalised token, or null if it isn't one.</summary>
-    public static string? Parse(string typed)
-    {
-        if (typed.Length > MaxTyped)
-        {
-            return null;
-        }
-
-        var normal = Pairings.Normalise(typed);
-        return normal.Length == Length && normal.All(c => Pairings.Alphabet.Contains(c)) ? normal : null;
-    }
+    /// <summary>The normalised token, or null if it isn't one: read as a share code is, the same length and alphabet.</summary>
+    public static string? Parse(string typed) => ShareCode.Parse(typed);
 
     public static byte[] Lookup(string normalised) => VaultCrypto.Derive(normalised, LookupLabel, []);
 

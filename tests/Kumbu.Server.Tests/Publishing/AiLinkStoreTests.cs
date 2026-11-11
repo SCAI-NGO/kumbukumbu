@@ -194,6 +194,9 @@ public sealed class AiLinkStoreTests(KumbuAppFactory app)
         var linked = await LinkedAsync();
         var vaultId = await linked.Published.Alice.VaultIdAsync();
         var admin = Api.Services.GetRequiredService<Admin>();
+        // The note's embeddings count towards storage: written in the background, they would land between the two figures.
+        await app.IndexedAsync();
+        Assert.DoesNotContain(Api.Services.GetRequiredService<VaultCatalog>().ContentCollections, c => c.CollectionNamespace.CollectionName == "ai_links");
         var before = await admin.BytesByVaultAsync([vaultId], Ct);
 
         for (var i = 1; i < 10; i++) Assert.NotNull(await Store.CreateAiLinkAsync(linked.Opened, Ct));

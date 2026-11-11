@@ -332,17 +332,21 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         var token = AiLinkToken.New();
         var lookup = AiLinkToken.Lookup(token);
         var key = AiLinkToken.Key(token);
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new AiLinkSlot(opened.Key, opened.Owner));
         byte[] slot;
         try
         {
-            slot = VaultCrypto.Seal(key, JsonSerializer.SerializeToUtf8Bytes(new AiLinkSlot(opened.Key, opened.Owner)), AiLinkContext(Convert.ToHexStringLower(lookup), opened.Id));
+            slot = VaultCrypto.Seal(key, plain, AiLinkContext(Convert.ToHexStringLower(lookup), opened.Id));
         }
         finally
         {
             CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(plain);
         }
 
-        var expiresAt = catalog.Now + AiLinkToken.Lifetime;
+        // In whole milliseconds, as MongoDB keeps it: the answer names the expiry the document has.
+        var now = catalog.Now + AiLinkToken.Lifetime;
+        var expiresAt = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
         try
         {
             await catalog.AiLinks.InsertOneAsync(
@@ -358,7 +362,7 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         return (token, expiresAt);
     }
 
-    /// <summary>The copy an AI link opens, with the link's document id; null if no unexpired document has the token's
+    /// <summary>The copy the AI link <paramref name="token"/> (normalised, <see cref="AiLinkToken.Parse"/>) opens, with the link's document id; null if no unexpired document has the token's
     /// lookup, its slot doesn't open, or the publication is gone, a skill's, or its copy doesn't open. The request count
     /// is <see cref="CountAiLinkAsync"/>'s.</summary>
     public async Task<(OpenedPublication Opened, ObjectId Id)?> OpenAiLinkAsync(string token, CancellationToken ct)
@@ -383,27 +387,32 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         if (slot?.Key is not { } publicationKey || slot.Owner is not { } owner) return null;
         // A note's copy has no kind.
         var doc = await catalog.Publications.Find(P.Eq(d => d.Id, link.Publication)).FirstOrDefaultAsync(ct);
-        if (doc is null || doc.Kind is not null) return null;
+        if (doc is null || doc.Kind is not null)
+        {
+            CryptographicOperations.ZeroMemory(publicationKey);
+            return null;
+        }
+
         try
         {
-            return JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(publicationKey, doc.Blob, CopyContext(Convert.ToHexStringLower(doc.Lookup)))) is { } copy
-                ? (new OpenedPublication(doc.Id, owner, copy, publicationKey, doc.Lookup), link.Id)
-                : null;
+            if (JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(publicationKey, doc.Blob, CopyContext(Convert.ToHexStringLower(doc.Lookup)))) is { } copy)
+                return (new OpenedPublication(doc.Id, owner, copy, publicationKey, doc.Lookup), link.Id);
         }
         catch (Exception e) when (e is CryptographicException or JsonException)
         {
-            return null;
         }
+
+        CryptographicOperations.ZeroMemory(publicationKey);
+        return null;
     }
 
     /// <summary>Counts a request of the AI link <paramref name="id"/>, in one update, only while it is unexpired and under
     /// <paramref name="ceiling"/>; returns whether it was.</summary>
     public async Task<bool> CountAiLinkAsync(ObjectId id, int ceiling, CancellationToken ct) =>
-        await catalog.AiLinks.FindOneAndUpdateAsync(
+        (await catalog.AiLinks.UpdateOneAsync(
             A.Eq(d => d.Id, id) & A.Gt(d => d.ExpiresAt, catalog.Now) & A.Lt(d => d.Count, ceiling),
             Builders<AiLinkDocument>.Update.Inc(d => d.Count, 1),
-            new FindOneAndUpdateOptions<AiLinkDocument, BsonDocument> { Projection = Builders<AiLinkDocument>.Projection.Include(d => d.Id) },
-            ct) is not null;
+            cancellationToken: ct)).ModifiedCount == 1;
 
     private async Task InsertFilesAsync(IClientSessionHandle session, string vaultId, ObjectId publication, string l, byte[] key, IReadOnlyList<byte[]> files, CancellationToken ct)
     {
