@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Mvc.Testing.Handlers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -145,8 +146,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task A_reader_makes_a_link_an_AI_reads_as_Markdown()
     {
-        using var linked = await LinkedAsync(Api, "198.18.1.1");
-        using var ai = new Fetcher(Api, "198.18.1.2");
+        using var linked = await LinkedAsync(Api, "100.70.1.1");
+        using var ai = new Fetcher(Api, "100.70.1.2");
 
         using var response = await ai.GetAsync(linked.Link);
 
@@ -162,8 +163,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task Its_image_URLs_serve_the_pages_images_and_nothing_else()
     {
-        using var linked = await LinkedAsync(Api, "198.18.2.1");
-        using var ai = new Fetcher(Api, "198.18.2.2");
+        using var linked = await LinkedAsync(Api, "100.70.2.1");
+        using var ai = new Fetcher(Api, "100.70.2.2");
         using var page = await linked.Reader.FileAsync(0);
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
 
@@ -186,41 +187,51 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     {
         var time = Now();
         await using var api = Timed(time);
-        using var ai = new Fetcher(api, "198.18.3.1");
+        using var ai = new Fetcher(api, "100.70.3.1");
         var octet = 1;
         async Task<HttpResponseMessage> FetchAsync(string url)
         {
-            ai.Address = $"198.18.3.{octet++}";
+            ai.Address = $"100.70.3.{octet++}";
             return await ai.GetAsync(url);
         }
 
         var answers = new List<(string What, HttpResponseMessage Response)>();
 
-        using var ceiling = await LinkedAsync(api, "198.18.3.200");
-        var allowed = AiLinkToken.Ceiling(1);
-        for (var i = 1; i <= allowed; i++)
+        using var ceiling = await LinkedAsync(api, "100.70.3.200");
+        // Its one image's five allowed among the requests: they count too.
+        var images = 5;
+        for (var i = 1; i <= AiLinkToken.Ceiling(1); i++)
         {
+            if (i % 10 == 0 && images-- > 0)
+            {
+                using var image = await FetchAsync($"{ceiling.Link}/files/0");
+                Assert.True(image.StatusCode == HttpStatusCode.OK, $"image request {i} answered {(int)image.StatusCode}");
+                continue;
+            }
+
             using var read = await FetchAsync(ceiling.Link);
             await AssertMarkdownAsync(read, $"request {i}");
         }
 
+        Assert.Equal(0, images);
+
         answers.Add(("past the ceiling", await FetchAsync(ceiling.Link)));
 
-        using var owner = await LinkedAsync(api, "198.18.3.201");
+        using var owner = await LinkedAsync(api, "100.70.3.201");
         using (var read = await FetchAsync(owner.Link)) await AssertMarkdownAsync(read);
         await SetActiveAsync(owner.Published.Alice, false);
         answers.Add(("owner deactivated", await FetchAsync(owner.Link)));
         await SetActiveAsync(owner.Published.Alice, true);
         using (var read = await FetchAsync(owner.Link)) await AssertMarkdownAsync(read, "owner reactivated");
 
-        using var withdrawn = await LinkedAsync(api, "198.18.3.202");
+        using var withdrawn = await LinkedAsync(api, "100.70.3.202");
         using (var read = await FetchAsync(withdrawn.Link)) await AssertMarkdownAsync(read);
         var (notes, access) = await OpenAsync(withdrawn.Published.Alice);
         await api.Services.GetRequiredService<Publications>().WithdrawAsync(access, notes, P(Plan), withdrawn.Published.Alice.Username, BySession, Ct);
         answers.Add(("withdrawn", await FetchAsync(withdrawn.Link)));
         using (var image = await FetchAsync($"{withdrawn.Link}/files/0")) await AssertGoneAsync(image, "withdrawn image");
 
-        using var vault = await LinkedAsync(api, "198.18.3.203");
+        using var vault = await LinkedAsync(api, "100.70.3.203");
         using (var read = await FetchAsync(vault.Link)) await AssertMarkdownAsync(read);
         var alice = vault.Published.Alice;
         Assert.NotNull(await api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(alice.User, alice.UserKey, "Work", RestClient.Password, "Work", null, Ct));
@@ -230,7 +241,7 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         answers.Add(("unknown", await FetchAsync($"/s/t/{AiLinkToken.New()}")));
 
         // Last, so the clock moved on spoils nothing before.
-        using var hour = await LinkedAsync(api, "198.18.3.204");
+        using var hour = await LinkedAsync(api, "100.70.3.204");
         using (var read = await FetchAsync(hour.Link)) await AssertMarkdownAsync(read);
         time.Advance(AiLinkToken.Lifetime);
         answers.Add(("after the hour", await FetchAsync(hour.Link)));
@@ -247,8 +258,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task An_update_serves_the_new_copy()
     {
-        using var linked = await LinkedAsync(Api, "198.18.4.200");
-        using var ai = new Fetcher(Api, "198.18.4.1");
+        using var linked = await LinkedAsync(Api, "100.70.4.200");
+        using var ai = new Fetcher(Api, "100.70.4.1");
         using (var read = await ai.GetAsync(linked.Link)) await AssertMarkdownAsync(read);
         var alice = linked.Published.Alice;
         await alice.CreateFileAsync("Beds/flow-2.jpg", Attachments.ImageMetadataTests.JpegWithGps(6));
@@ -264,7 +275,7 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         // One request so far; the ceiling follows the copy's two images.
         for (var i = 2; i <= AiLinkToken.Ceiling(2); i++)
         {
-            ai.Address = $"198.18.4.{i}";
+            ai.Address = $"100.70.4.{i}";
             using var read = await ai.GetAsync(linked.Link);
             var text = await AssertMarkdownAsync(read, $"request {i}");
             if (i == 2)
@@ -281,11 +292,11 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task Publishing_off_pauses_and_on_again_resumes()
     {
-        using var linked = await LinkedAsync(Api, "198.18.5.1");
-        using var ai = new Fetcher(Api, "198.18.5.2");
+        using var linked = await LinkedAsync(Api, "100.70.5.1");
+        using var ai = new Fetcher(Api, "100.70.5.2");
         using (var read = await ai.GetAsync(linked.Link)) await AssertMarkdownAsync(read);
         await using var off = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Publish:Enabled", "false"));
-        using var offAi = new Fetcher(off, "198.18.5.3");
+        using var offAi = new Fetcher(off, "100.70.5.3");
 
         using (var paused = await offAi.GetAsync(linked.Link))
         {
@@ -312,9 +323,9 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     {
         var published = await ReaderApiTests.PublishedAsync(Api);
         await using var api = ReaderApiTests.Limited(Api);
-        using var expired = await LinkedAsync(api, "198.18.6.200", published);
-        using var usedUp = await LinkedAsync(api, "198.18.6.201", published);
-        using var ai = new Fetcher(api, "198.18.6.1");
+        using var expired = await LinkedAsync(api, "100.70.6.200", published);
+        using var usedUp = await LinkedAsync(api, "100.70.6.201", published);
+        using var ai = new Fetcher(api, "100.70.6.1");
         foreach (var linked in new[] { expired, usedUp })
         {
             using var read = await ai.GetAsync(linked.Link);
@@ -331,12 +342,12 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         for (var i = 0; i < 10; i++) dead.Add(i % 3 == 0 ? expired.Link : i % 3 == 1 ? usedUp.Link : $"/s/t/{AiLinkToken.New()}");
         for (var i = 0; i < dead.Count; i++)
         {
-            ai.Address = $"198.18.6.{10 + i}";
+            ai.Address = $"100.70.6.{10 + i}";
             using var refused = await ai.GetAsync(dead[i]);
             await AssertGoneAsync(refused, dead[i]);
         }
 
-        using var reader = new ReaderApiTests.Reader(api, "198.18.6.50");
+        using var reader = new ReaderApiTests.Reader(api, "100.70.6.50");
         using var read2 = await reader.PostAsync(published.Formatted);
         Assert.Equal(HttpStatusCode.OK, read2.StatusCode);
     }
@@ -346,11 +357,11 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     {
         var x = await ReaderApiTests.PublishedAsync(Api);
         var y = await ReaderApiTests.PublishedAsync(Api);
-        using var reader = new ReaderApiTests.Reader(Api, "198.18.7.1");
+        using var reader = new ReaderApiTests.Reader(Api, "100.70.7.1");
         (await reader.PostAsync(x.Formatted)).Dispose();
         using (var made = await MakeAiLinkAsync(Api, reader, x.Copy)) Assert.Equal(HttpStatusCode.OK, made.StatusCode);
 
-        using var stranger = new ReaderApiTests.Reader(Api, "198.18.7.2");
+        using var stranger = new ReaderApiTests.Reader(Api, "100.70.7.2");
         using (var none = await MakeAiLinkAsync(Api, stranger, x.Copy)) await AssertReaderNotFoundAsync(none);
 
         // The cookie is Y's now: X's copy id makes nothing, and the cookie stays.
@@ -384,8 +395,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task A_share_code_in_the_path_and_a_token_as_a_code_open_nothing()
     {
-        using var linked = await LinkedAsync(Api, "198.18.8.1");
-        using var ai = new Fetcher(Api, "198.18.8.2");
+        using var linked = await LinkedAsync(Api, "100.70.8.1");
+        using var ai = new Fetcher(Api, "100.70.8.2");
         using (var read = await ai.GetAsync(linked.Link)) await AssertMarkdownAsync(read);
 
         foreach (var code in new[] { linked.Published.Code, linked.Published.Formatted })
@@ -394,7 +405,7 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
             await AssertGoneAsync(refused, code);
         }
 
-        using var reader = new ReaderApiTests.Reader(Api, "198.18.8.3");
+        using var reader = new ReaderApiTests.Reader(Api, "100.70.8.3");
         using var asCode = await reader.PostAsync(linked.Token);
         Assert.Equal(HttpStatusCode.NotFound, asCode.StatusCode);
         Assert.Equal(ReaderApi.NotFoundSentence, (await RestClient.JsonAsync(asCode))["error"]!.GetValue<string>());
@@ -403,8 +414,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task Its_answers_carry_the_readers_headers()
     {
-        using var linked = await LinkedAsync(Api, "198.18.9.1");
-        using var ai = new Fetcher(Api, "198.18.9.2");
+        using var linked = await LinkedAsync(Api, "100.70.9.1");
+        using var ai = new Fetcher(Api, "100.70.9.2");
 
         foreach (var url in new[] { linked.Link, $"{linked.Link}/files/0", $"/s/t/{AiLinkToken.New()}" })
         {
@@ -428,8 +439,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         {
             await File.WriteAllTextAsync(Path.Combine(webRoot, "index.html"), "<!doctype html><title>Kumbu test shell</title>", Ct);
             await using var api = Api.WithWebHostBuilder(b => b.UseWebRoot(webRoot));
-            using var linked = await LinkedAsync(api, "198.18.10.200");
-            using var ai = new Fetcher(api, "198.18.10.1");
+            using var linked = await LinkedAsync(api, "100.70.10.200");
+            using var ai = new Fetcher(api, "100.70.10.1");
             using var get = await ai.GetAsync(linked.Link);
             await AssertMarkdownAsync(get);
             var length = (await get.Content.ReadAsByteArrayAsync(Ct)).Length;
@@ -437,7 +448,7 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
             // The GET counted one; HEADs use up the rest.
             for (var i = 2; i <= AiLinkToken.Ceiling(1); i++)
             {
-                ai.Address = $"198.18.10.{i}";
+                ai.Address = $"100.70.10.{i}";
                 using var head = await ai.SendAsync(HttpMethod.Head, linked.Link);
                 Assert.True(head.StatusCode == HttpStatusCode.OK, $"HEAD {i} answered {(int)head.StatusCode}");
                 Assert.Equal("text/markdown; charset=utf-8", head.Content.Headers.ContentType?.ToString());
@@ -445,7 +456,7 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
                 Assert.Empty(await head.Content.ReadAsByteArrayAsync(Ct));
             }
 
-            ai.Address = "198.18.10.100";
+            ai.Address = "100.70.10.100";
             using (var spent = await ai.GetAsync(linked.Link)) await AssertGoneAsync(spent, "GET past HEADs");
             using (var spentHead = await ai.SendAsync(HttpMethod.Head, linked.Link))
             {
@@ -453,8 +464,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
                 Assert.Equal(PlainText, spentHead.Content.Headers.ContentType?.ToString());
             }
 
-            using var fresh = await LinkedAsync(api, "198.18.10.201");
-            ai.Address = "198.18.10.101";
+            using var fresh = await LinkedAsync(api, "100.70.10.201");
+            ai.Address = "100.70.10.101";
             using (var read = await ai.GetAsync(fresh.Link)) await AssertMarkdownAsync(read);
             var unknown = $"/s/t/{AiLinkToken.New()}";
             var refusals = new (HttpMethod Method, string Url)[]
@@ -488,8 +499,8 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     public async Task Fetches_count_against_the_reader_limits()
     {
         await using var api = ReaderApiTests.Limited(Api);
-        using var linked = await LinkedAsync(api, "198.18.11.1");
-        using var ai = new Fetcher(api, "198.18.11.2");
+        using var linked = await LinkedAsync(api, "100.70.11.1");
+        using var ai = new Fetcher(api, "100.70.11.2");
         for (var i = 0; i < ReaderApiTests.ReadsPerAddress; i++)
         {
             using var read = await ai.GetAsync(linked.Link);
@@ -519,20 +530,20 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     public async Task A_blocked_network_is_refused_at_the_AI_link_too()
     {
         await using var api = ReaderApiTests.Limited(Api);
-        using var linked = await LinkedAsync(api, "198.18.13.1");
-        using var ai = new Fetcher(api, "198.18.12.1");
+        using var linked = await LinkedAsync(api, "100.70.13.1");
+        using var ai = new Fetcher(api, "100.70.12.1");
         using (var read = await ai.GetAsync(linked.Link)) await AssertMarkdownAsync(read);
-        using var guesser = new ReaderApiTests.Reader(api, "198.18.12.2");
+        using var guesser = new ReaderApiTests.Reader(api, "100.70.12.2");
         for (var i = 0; i <= ReaderApiTests.FailuresPerNetwork; i++)
         {
-            guesser.Address = $"198.18.12.{10 + i}";
+            guesser.Address = $"100.70.12.{10 + i}";
             (await guesser.PostAsync(ShareCode.New())).Dispose();
         }
 
-        ai.Address = "198.18.12.50";
+        ai.Address = "100.70.12.50";
         using (var blocked = await ai.GetAsync(linked.Link)) await AssertGoneAsync(blocked, "blocked network");
 
-        ai.Address = "198.18.14.1";
+        ai.Address = "100.70.14.1";
         using var elsewhere = await ai.GetAsync(linked.Link);
         await AssertMarkdownAsync(elsewhere, "another network");
     }
@@ -540,12 +551,12 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     [Fact]
     public async Task The_token_reaches_no_log()
     {
-        var log = new CapturedLog();
+        var log = new CapturedLog(scopes: true);
         var time = Now();
         await using var api = ReaderApiTests.Limited(Timed(time), log);
-        using var linked = await LinkedAsync(api, "198.18.15.1");
-        using var spent = await LinkedAsync(api, "198.18.15.2", linked.Published);
-        using var ai = new Fetcher(api, "198.18.15.3");
+        using var linked = await LinkedAsync(api, "100.70.15.1");
+        using var spent = await LinkedAsync(api, "100.70.15.2", linked.Published);
+        using var ai = new Fetcher(api, "100.70.15.3");
         var unknown = AiLinkToken.New();
         var statuses = new List<int>();
         async Task SendAsync(HttpMethod method, string url)
@@ -562,13 +573,17 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         await SendAsync(HttpMethod.Post, linked.Link);
         await UseUpAsync(spent.Token);
         await SendAsync(HttpMethod.Get, spent.Link);
-        // The address's reads used up: a 429.
+        // Four reads of a copy so far (the GET, the HEAD, the unknown and the spent token): the rest of the address's
+        // reads, then a 429.
+        const int reads = 4;
+        for (var i = reads; i < ReaderApiTests.ReadsPerAddress; i++) await SendAsync(HttpMethod.Get, linked.Link);
         await SendAsync(HttpMethod.Get, linked.Link);
-        ai.Address = "198.18.15.4";
+        ai.Address = "100.70.15.4";
         time.Advance(AiLinkToken.Lifetime);
         await SendAsync(HttpMethod.Get, linked.Link);
 
-        Assert.Equal([200, 200, 200, 404, 404, 404, 404, 429, 404], statuses);
+        int[] expected = [200, 200, 200, 404, 404, 404, 404, .. Enumerable.Repeat(200, ReaderApiTests.ReadsPerAddress - reads), 429, 404];
+        Assert.Equal(expected, statuses);
         var tokens = new[] { linked.Token, spent.Token, unknown };
         var secrets = tokens
             .Concat(tokens.Select(t => Convert.ToHexStringLower(AiLinkToken.Lookup(t))))
@@ -582,11 +597,43 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_fault_answers_a_plain_500_and_logs_no_token()
+    {
+        var log = new CapturedLog(scopes: true);
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        using var linked = await LinkedAsync(api, "100.70.16.1");
+        using var ai = new Fetcher(api, "100.70.16.2");
+        // A document the store can't read: its lookup throws.
+        Assert.Equal(1, (await AiLinks.UpdateOneAsync(
+            new BsonDocument("lookup", AiLinkToken.Lookup(linked.Token)), new BsonDocument("$set", new BsonDocument("count", "many")), cancellationToken: Ct)).ModifiedCount);
+
+        foreach (var url in new[] { linked.Link, $"{linked.Link}/files/0" })
+        {
+            using var response = await ai.GetAsync(url);
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal(PlainText, response.Content.Headers.ContentType?.ToString());
+            Assert.Equal(AiLinkApi.FaultSentence, await response.Content.ReadAsStringAsync(Ct));
+        }
+
+        // Logged from a task of its own.
+        var category = typeof(AiLinkApi).FullName!;
+        for (var i = 0; i < 100 && log.Lines.Count(l => l.Contains(category, StringComparison.Ordinal)) < 2; i++) await Task.Delay(50, Ct);
+        var faults = log.Lines.Where(l => l.Contains(category, StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, faults.Count);
+        Assert.All(faults, l => Assert.StartsWith($"Error {category}: A fetch of an AI link failed: System.FormatException", l, StringComparison.Ordinal));
+        foreach (var secret in new[] { linked.Token, AiLinkApi.Path + "/" })
+        {
+            Assert.DoesNotContain(log.Lines, l => l.Contains(secret, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
     public void Markdown_leaves_out_an_image_not_in_the_copy_and_keeps_code()
     {
         var copy = new PublishedCopy(
             "Two\nlines",
-            "See ![a](f/0 \"title\") here\r\n![b](f/3)\n```\n![c](f/0)\n```\n`![d](f/0)` and ![e](<f/0>) and ![f](f/x)\n",
+            "See ![a](f/0 \"title\") here\r\n![b](f/3)\n```\n![c](f/0)\n```\n`![d](f/0)` and ![e](<f/0>) and ![f](f/x)\n"
+            + "![a](f/0) and ![b](f/0)\n![\\[x\\]](f/0)\n",
             new DateTime(2026, 11, 11, 8, 30, 5, DateTimeKind.Utc),
             [new PublishedCopyFile(0, "image/png")]);
 
@@ -594,7 +641,10 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
 
         Assert.Equal(
             "# Two lines\n\nA published note, snapshot of 2026-11-11 08:30 UTC; links to other notes are plain text.\n\n"
-            + "See ![a](https://kumbu.test/s/t/TOKEN/files/0 \"title\") (image/png) here\r\n\n```\n![c](f/0)\n```\n`![d](f/0)` and ![e](<f/0>) and ![f](f/x)\n",
+            + "See ![a](https://kumbu.test/s/t/TOKEN/files/0 \"title\") (image/png) here\r\n\n```\n![c](f/0)\n```\n`![d](f/0)` and "
+            + "![e](https://kumbu.test/s/t/TOKEN/files/0) (image/png) and ![f](f/x)\n"
+            + "![a](https://kumbu.test/s/t/TOKEN/files/0) (image/png) and ![b](https://kumbu.test/s/t/TOKEN/files/0) (image/png)\n"
+            + "![\\[x\\]](https://kumbu.test/s/t/TOKEN/files/0) (image/png)\n",
             markdown);
     }
 }
