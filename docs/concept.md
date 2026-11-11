@@ -12,7 +12,7 @@
 
 ## 1. What it is
 
-A self-hostable, encrypted-at-rest **second brain for humans that AI agents may use**. A note can be published on its own behind a secret link, as a filtered, encrypted copy that anyone with the link reads without an account (0.3.2, `docs/superpowers/specs/2026-11-05-publish-design.md`).
+A self-hostable, encrypted-at-rest **second brain for humans that AI agents may use**. A note can be published on its own behind a secret link, as a filtered, encrypted copy that anyone with the link reads without an account (0.3.2, `docs/superpowers/specs/2026-11-05-publish-design.md`). A reader who wants their AI to read it makes, on the reader page, a link of its own that a fetch tool reads as Markdown for an hour, and that dies with the publication (0.5.0, `docs/superpowers/specs/2026-11-11-ai-link-design.md`).
 
 - Notes are plain Markdown. Structure grows bottom-up from headings and `[[wikilinks]]`, not from an imposed schema.
 - Agents access it via **MCP** (Claude, ChatGPT, Grok, Claude Code, opencode, Hermes, Chatsundere …).
