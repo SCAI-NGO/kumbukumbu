@@ -579,6 +579,72 @@ public partial class ChunkerTests
         AssertEveryLineInOneCore(content, chunks);
     }
 
+    /// <summary>Long runs without spaces, each a shape that once made splitting a line quadratic.</summary>
+    private static string Run(string shape) => shape switch
+    {
+        "hex" => string.Concat(Enumerable.Range(0, 1_000_000 / 8).Select(i => i.ToString("x8"))),
+        "symbols" => string.Concat(Enumerable.Repeat("→∑≈€", 262_144 / 4)),
+        // Unknown characters between zero-width spaces, which normalise to spaces: a word of its own each.
+        "hieroglyphs" => string.Concat(Enumerable.Range(0, 1_000_000 / 3).Select(i => char.ConvertFromUtf32(0x13000 + i % 1000) + "​")),
+        // "‗" normalises to a space and a combining mark.
+        "low lines" => new string('‗', 262_144),
+        // One grapheme cluster each, a million characters long.
+        "combining marks" => "a" + new string('́', 1_000_000),
+        "jamo" => new string('ᄀ', 1_000_000),
+        "emoji" => string.Concat(Enumerable.Repeat("👩‍", 1_000_000 / 3)),
+        // Many words without a space between them, which only the word limit cuts.
+        "commas" => string.Concat(Enumerable.Repeat("a,", 2_000_000)),
+        _ => throw new ArgumentException(shape),
+    };
+
+    public static TheoryData<string, string> EveryRunAndBound() =>
+        new([.. new[] { "hex", "symbols", "hieroglyphs", "low lines", "combining marks", "jamo", "emoji", "commas" }
+            .SelectMany(r => new[] { "fallback", "unbounded", "tokenizer" }.Select(b => (r, b)))]);
+
+    // Seconds at most on a busy machine; counting the whole rest of the line for every piece took minutes.
+    [Theory]
+    [MemberData(nameof(EveryRunAndBound))]
+    public async Task A_long_line_without_spaces_is_split_within_seconds(string run, string name)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var bound = Bound(name);
+        var content = "# T\n" + Run(run) + "\n";
+
+        var chunks = await Task.Run(() => Chunker.Split(Manual(content), bound), ct).WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText)));
+        AssertEveryLineInOneCore(content, chunks);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRunAndBound))]
+    public async Task A_page_with_a_long_run_without_spaces_is_split_within_seconds(string run, string name)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var bound = Bound(name);
+        var text = Run(run);
+
+        var chunks = await Task.Run(() => Chunker.SplitPage("Manual", 1, text, bound), ct).WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        Assert.Equal(text, string.Concat(chunks.Select(c => c.Core)));
+        Assert.All(chunks, c => Assert.True(bound.Fits(c.EmbeddingText)));
+    }
+
+    [Fact]
+    public async Task Splitting_a_long_run_without_spaces_memoises_no_long_words()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.SkipUnless(TestTokenizer.Load() is not null, TestTokenizer.SkipReason);
+        // A tokenizer of its own: the memo of the shared one holds what other tests counted.
+        UnigramTokenizer tokenizer;
+        using (var stream = File.OpenRead(Environment.GetEnvironmentVariable("KUMBU_TOKENIZER")!)) tokenizer = UnigramTokenizer.Load(stream);
+        var text = Run("hex")[..262_144];
+
+        await Task.Run(() => Chunker.SplitPage("Manual", 1, text, ChunkBound.Of(tokenizer, TestTokenizer.Sha256)), ct).WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        Assert.InRange(tokenizer.LongestMemoisedWord, 1, UnigramTokenizer.LongestMemoisedLength);
+    }
+
     // ---- Pages of PDFs ----
 
     private static string Collapsed(string text) => Spaces().Replace(text, " ").Trim();

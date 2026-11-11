@@ -332,7 +332,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         await s.Store.TryCreateAsync(New("/Work/log.md", "# Log\n" + line + "\n"), Ct);
         await IdleAsync(s);
         var before = (await StoredEmbeddingsAsync(s)).SelectMany(e => e.Chunks).Select(c => c.Hash).ToHashSet();
-        Assert.Equal("2/fallback", Assert.Single((await StoredEmbeddingsAsync(s)).Select(e => e.Scheme).Distinct()));
+        Assert.Equal("3/fallback", Assert.Single((await StoredEmbeddingsAsync(s)).Select(e => e.Scheme).Distinct()));
 
         var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
         try
@@ -349,7 +349,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
             Assert.NotEmpty(changed);
             Assert.Equal(changed.Count, later.Embedder.Embedded);
             Assert.DoesNotContain(later.Embedder.Seen, t => t.Text.Contains("A few words only."));
-            Assert.All(await StoredEmbeddingsAsync(later), e => Assert.Equal("2/words", e.Scheme));
+            Assert.All(await StoredEmbeddingsAsync(later), e => Assert.Equal("3/words", e.Scheme));
         }
         finally
         {
@@ -483,7 +483,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         var s = await StartAsync();
         await s.Store.TryCreateAsync(New("/Work/a.md", "# A\nalpha\n"), Ct);
         await IdleAsync(s);
-        Assert.Equal("2/fallback", Assert.Single(await StoredEmbeddingsAsync(s)).Scheme);
+        Assert.Equal("3/fallback", Assert.Single(await StoredEmbeddingsAsync(s)).Scheme);
 
         var models = Directory.CreateTempSubdirectory("kumbu-models-").FullName;
         try
@@ -502,16 +502,16 @@ public sealed class SearchIndexTests(MongoFixture fixture)
             // Unlocked while the bound is still the fallback: the note looks current then.
             var later = await StartAsync(s.World, tokenizer: tokenizer);
             await Task.Delay(200, Ct);
-            Assert.Equal("2/fallback", (await StoredEmbeddingsAsync(later)).Single().Scheme);
+            Assert.Equal("3/fallback", (await StoredEmbeddingsAsync(later)).Single().Scheme);
 
             await tokenizer.StartAsync(Ct);
             await tokenizer.WhenSettledAsync(Ct);
             var vault = Assert.Single(await later.Catalog.OpenAsync(Token, Ct)).Vault;
             // The index's catch-up follows the settling a moment later.
-            for (var until = DateTime.UtcNow.AddSeconds(10); vault.Embeddings[P("/Work/a.md")].Scheme == "2/fallback" && DateTime.UtcNow < until;) await Task.Delay(50, Ct);
+            for (var until = DateTime.UtcNow.AddSeconds(10); vault.Embeddings[P("/Work/a.md")].Scheme == "3/fallback" && DateTime.UtcNow < until;) await Task.Delay(50, Ct);
             await IdleAsync(later);
 
-            var expected = real is not null && File.Exists(real) ? "2/tok-f1cc44ad7faa" : "2/words";
+            var expected = real is not null && File.Exists(real) ? "3/tok-f1cc44ad7faa" : "3/words";
             Assert.Equal(expected, later.Index.Bound.Scheme);
             Assert.Equal(expected, Assert.Single(await StoredEmbeddingsAsync(later)).Scheme);
         }

@@ -73,9 +73,9 @@ public class ChunkBoundTests
     {
         var tokenizer = new UnigramTokenizer([("<s>", 0), ("<pad>", 0), ("</s>", 0), ("<unk>", 0)], unkId: 3, precompiledCharsMap: null);
         var bound = ChunkBound.Of(tokenizer, TestTokenizer.Sha256);
-        Assert.Equal("2/tok-f1cc44ad7faa", bound.Scheme);
+        Assert.Equal("3/tok-f1cc44ad7faa", bound.Scheme);
         Assert.Equal(ChunkBound.MaxTokens - 2, bound.Budget);
-        Assert.Equal("2/fallback", ChunkBound.Fallback.Scheme);
+        Assert.Equal("3/fallback", ChunkBound.Fallback.Scheme);
     }
 
     [Fact]

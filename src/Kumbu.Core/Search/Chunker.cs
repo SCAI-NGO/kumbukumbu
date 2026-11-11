@@ -63,7 +63,7 @@ public sealed record PageChunk(int Part, string Core, string PreRoll, string Pos
 public static class Chunker
 {
     /// <summary>The version of the chunking, part of <see cref="ChunkBound.Scheme"/>.</summary>
-    public const int SchemeVersion = 2;
+    public const int SchemeVersion = 3;
 
     /// <summary>Short sections merge while they stay within this many words together.</summary>
     public const int TargetWords = 250;

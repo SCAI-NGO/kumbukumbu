@@ -379,8 +379,16 @@ internal sealed class ChunkSplitter
 
     private static bool Within(ChunkBound bound, int context, int cost, int words) => words <= MaxWords && context + cost <= bound.Budget;
 
+    /// <summary>
+    /// The longest run without spaces that is counted whole. Longer runs are cut into pieces of at most this many
+    /// characters, so cutting stays linear in the run's length whatever it holds; a piece of hex or base64 that fits
+    /// the tokens' budget is shorter, so ordinary runs are cut as before.
+    /// </summary>
+    internal const int RunWindow = 1024;
+
     /// <summary>A line too long for a chunk with <paramref name="context"/>: pieces of whole words, as many as fit;
-    /// a run without spaces that doesn't fit alone is cut at the longest prefix that does.</summary>
+    /// a run without spaces that doesn't fit alone is cut at the longest prefix that does within its next
+    /// <see cref="RunWindow"/> characters.</summary>
     internal static List<string> Pieces(string line, (string Text, int Cost) context, ChunkBound bound)
     {
         var pieces = new List<string>();
@@ -388,19 +396,28 @@ internal sealed class ChunkSplitter
         var (cost, words) = (0, 0);
         foreach (var word in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
-            var (wordCost, wordWords) = (bound.Cost(word), Words(word));
-            if (piece.Count > 0 && !Within(bound, context.Cost, cost + wordCost, words + wordWords)) Piece();
-            if (piece.Count == 0 && !Within(bound, context.Cost, wordCost, wordWords))
+            var run = word.Length > RunWindow;
+            var (wordCost, wordWords) = run ? (0, 0) : (bound.Cost(word), Words(word));
+            if (piece.Count > 0 && (run || !Within(bound, context.Cost, cost + wordCost, words + wordWords))) Piece();
+            if (piece.Count == 0 && (run || !Within(bound, context.Cost, wordCost, wordWords)))
             {
-                var rest = word;
-                while (rest.Length > 0 && !Within(bound, context.Cost, bound.Cost(rest), Words(rest)))
+                var start = 0;
+                while (start < word.Length && (word.Length - start > RunWindow || !Within(bound, context.Cost, bound.Cost(word[start..]), Words(word[start..]))))
                 {
-                    var length = Prefix(bound, rest, bound.Budget - context.Cost, context.Text + "\n");
-                    pieces.Add(rest[..length]);
-                    rest = rest[length..];
+                    var window = Math.Min(RunWindow, word.Length - start);
+                    if (char.IsHighSurrogate(word[start + window - 1]) && start + window < word.Length) window--;
+                    var text = word.Substring(start, window);
+                    var length = Prefix(bound, text, bound.Budget - context.Cost, context.Text + "\n");
+                    pieces.Add(text[..length]);
+                    start += length;
                 }
 
-                if (rest.Length > 0) (piece, cost, words) = ([rest], bound.Cost(rest), Words(rest));
+                if (start < word.Length)
+                {
+                    var rest = word[start..];
+                    (piece, cost, words) = ([rest], bound.Cost(rest), Words(rest));
+                }
+
                 continue;
             }
 
