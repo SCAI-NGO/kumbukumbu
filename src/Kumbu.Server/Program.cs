@@ -113,6 +113,7 @@ builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<DavShares>();
 builder.Services.AddSingleton<DavParking>();
+builder.Services.AddSingleton<DavParkingBudget>();
 builder.Services.AddSingleton<DavLocks>();
 builder.Services.AddSingleton<DavHolds>();
 builder.Services.AddHostedService<ExpiredKeySweep>();

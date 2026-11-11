@@ -262,7 +262,8 @@ public static class DavEndpoints
     }
 
     private static DavWrites Writes(HttpContext http) =>
-        new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavLocks>(),
+        new(http, DavCaller.Of(http), Tree(http), http.RequestServices.GetRequiredService<DavParking>(), http.RequestServices.GetRequiredService<DavParkingBudget>(),
+            http.RequestServices.GetRequiredService<DavLocks>(),
             http.RequestServices.GetRequiredService<NoteWriter>(), http.RequestServices.GetRequiredService<TreeWriter>(), http.RequestServices.GetRequiredService<NoteMover>(),
             http.RequestServices.GetRequiredService<DavHolds>(), http.RequestServices.GetRequiredService<Publishing.Publications>(),
             http.RequestServices.GetRequiredService<ILogger<DavWrites>>());
