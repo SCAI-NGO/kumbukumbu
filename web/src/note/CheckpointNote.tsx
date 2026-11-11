@@ -7,6 +7,7 @@ import { secondaryButtonClass } from "../components/form";
 import { aiPrompt } from "./copyForAi";
 import MarkdownView from "./MarkdownView";
 import { Properties, startsWithH1 } from "./NoteView";
+import { maskedBody } from "./comments";
 import { splitFrontmatter } from "./properties";
 
 const noop = () => {};
@@ -19,6 +20,7 @@ const noop = () => {};
 export default function CheckpointNote({ vault, name, createdAt, path }: { vault: string; name: string; createdAt: string; path: string }) {
   const note = useCheckpointNote(vault, name, path);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  const shown = useMemo(() => maskedBody(note.data?.content ?? ""), [note.data?.content]);
   const [copy, setCopy] = useState<"copied" | "failed" | null>(null);
   // A note it holds opens in it; an image or PDF in the lightbox, as the checkpoint held it.
   const checkpointLink = useMemo(() => (p: string) => (isAttachment(p) ? viewUrl(p, { checkpoint: name }) : checkpointUrl(vault, name, p)), [vault, name]);
@@ -57,7 +59,8 @@ export default function CheckpointNote({ vault, name, createdAt, path }: { vault
         <article className="mt-4">
           {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={null} still />}
           <MarkdownView
-            source={parts.body}
+            source={shown.body}
+            mask={shown.mask}
             links={note.data.links}
             tasksDisabled
             onToggleTask={noop}

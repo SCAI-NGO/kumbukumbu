@@ -41,7 +41,7 @@ const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
  * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
- * (remarkComments hides those). The body keeps the source's line numbers (front matter lines are empty).
+ * (the view hides those, comments.ts). The body keeps the source's line numbers (front matter lines are empty).
  */
 export function outline(body: string): Heading[] {
   const headings: Heading[] = [];

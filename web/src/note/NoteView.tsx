@@ -27,6 +27,7 @@ import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
+import { maskedBody } from "./comments";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
 import { createdPath } from "./wikiLinks";
@@ -97,6 +98,7 @@ export default function NoteView({ path }: { path: string }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  const shown = useMemo(() => maskedBody(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
   const elsewhere = useChangedElsewhere(path, note.data);
@@ -374,7 +376,8 @@ export default function NoteView({ path }: { path: string }) {
           <article ref={article} className="mt-4">
             {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}
             <MarkdownView
-              source={parts.body}
+              source={shown.body}
+              mask={shown.mask}
               links={links.data}
               tasksDisabled={save.isPending || !changes}
               onToggleTask={toggleTask}

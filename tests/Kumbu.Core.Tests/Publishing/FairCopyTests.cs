@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text.Json;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
 
@@ -60,8 +61,45 @@ public class FairCopyTests
         Assert.Equal("b", Text("<!-- x -->\nb"));
         Assert.Equal("a\nb", Text("a\n%% one\ntwo\nthree %%\nb"));
         Assert.Equal("a", Text("a\n%% never closed\n[[Private/Plan]]"));
-        // A fence inside a comment makes no code of what follows it.
-        Assert.Equal("a\nPlan b", Text("a\n%%\n```\n%%\n[[Private/Plan]] %%x%%b"));
+        // A fence never closed inside a comment would be code to the end of the note: the comment takes all of it.
+        Assert.Equal("a", Text("a\n%%\n```\n%%\n[[Private/Plan]] %%x%%b"));
+    }
+
+    private sealed record CommentCase(string Name, string Note, int[][] Ranges, string FairCopy);
+
+    // The note view reads its comments from the same cases (web/src/note/commentRanges.test.tsx).
+    private static readonly Dictionary<string, CommentCase> SharedCases = JsonSerializer
+        .Deserialize<List<CommentCase>>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Publishing", "comments.cases.json")), new JsonSerializerOptions(JsonSerializerDefaults.Web))!
+        .ToDictionary(c => c.Name);
+
+    public static TheoryData<string> SharedCaseNames => [.. SharedCases.Keys];
+
+    [Theory]
+    [MemberData(nameof(SharedCaseNames))]
+    public void Comments_are_read_as_the_shared_cases_say(string name)
+    {
+        var c = SharedCases[name];
+        Assert.Equal(c.Ranges.Select(r => (r[0], r[1])), FairCopies.Comments(c.Note));
+        Assert.Equal(c.FairCopy, Text(c.Note));
+    }
+
+    [Theory]
+    // About 1 MiB each: linear, well under a second; reading a comment's text again for each `%%` or pass takes minutes.
+    [InlineData("%", "", "")]
+    [InlineData("`", "", "")]
+    [InlineData("```\n", "", "")]
+    [InlineData("%%`", "", "")]
+    [InlineData("%%\n```\n", "", "")]
+    [InlineData("`%%", "", "")]
+    [InlineData("<!", "<!---->", "---->")]
+    [InlineData("%%<!--", "", "")]
+    public async Task Comments_are_read_within_seconds(string before, string middle, string after)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var n = (1 << 20) / (before.Length + after.Length);
+        var content = string.Concat(Enumerable.Repeat(before, n)) + middle + string.Concat(Enumerable.Repeat(after, n));
+        await Task.Run(() => FairCopies.Comments(content), ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+        await Task.Run(() => Text(content), ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
     }
 
     [Theory]

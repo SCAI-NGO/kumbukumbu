@@ -468,18 +468,21 @@ describe("highlights and comments", () => {
     expect(marks()).toHaveLength(0);
   });
 
-  it("leaves %% and == in a bare URL alone", () => {
-    show("See https://x.com/a%%20b and more\n\nAnd https://x.com/?a==b== too");
-    expect(screen.getByRole("link", { name: "https://x.com/a%%20b" })).toBeInTheDocument();
-    expect(document.body).toHaveTextContent("and more");
+  it("leaves == in a bare URL alone, and reads a %% in one as the fair copy does", () => {
+    show("See https://x.com/a%%20b and more %% after\n\nAnd https://x.com/?a==b== too");
+    expect(screen.getByRole("link", { name: "https://x.com/a" })).toHaveAttribute("href", "https://x.com/a");
+    expect(document.body).not.toHaveTextContent(/20b|more/);
+    expect(document.body).toHaveTextContent("after");
     expect(screen.getByRole("link", { name: "https://x.com/?a==b==" })).toBeInTheDocument();
     expect(marks()).toHaveLength(0);
   });
 
-  it("keeps escaped delimiters as written", () => {
+  it("keeps escaped delimiters as written, and reads an escaped %% as the fair copy does", () => {
     show("\\==x== and \\=\\=y\\=\\=\n\n\\%%a\\%% and \\%\\%b\\%\\%\n\n\\\\==z==");
     expect(document.body).toHaveTextContent("==x== and ==y==");
-    expect(document.body).toHaveTextContent("%%a%% and %%b%%");
+    // `\%%` opens a comment, `\%\%` doesn't.
+    expect(document.body).not.toHaveTextContent(/%%a/);
+    expect(document.body).toHaveTextContent("and %%b%%");
     // An escaped backslash escapes no delimiter.
     expect(marks().map((m) => m.textContent)).toEqual(["z"]);
   });

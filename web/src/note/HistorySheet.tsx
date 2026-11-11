@@ -14,7 +14,7 @@ import { CompareFiles } from "../shell/CompareVersions";
 import { ago } from "./AgentBanner";
 import { lineDiff } from "./lineDiff";
 import MarkdownView from "./MarkdownView";
-import { splitFrontmatter } from "./properties";
+import { maskedBody } from "./comments";
 
 const noop = () => {};
 
@@ -98,7 +98,7 @@ function VersionView({ path, entry, expected, onBack, onRestored }: { path: stri
   // The text shown, as it is: a read now would replace it under the reader.
   const current = useNote(path, { refetchOnMount: false });
   const [tab, setTab] = useState<"rendered" | "changes">("rendered");
-  const body = useMemo(() => splitFrontmatter(version.data?.content ?? "").body, [version.data?.content]);
+  const shown = useMemo(() => maskedBody(version.data?.content ?? ""), [version.data?.content]);
   const diff = useMemo(
     () => (version.data && current.data && tab === "changes" ? lineDiff(version.data.content, current.data.content) : null),
     [version.data, current.data, tab],
@@ -125,7 +125,7 @@ function VersionView({ path, entry, expected, onBack, onRestored }: { path: stri
       {version.isError && <FormError>{errorFor(version.error)}</FormError>}
       {tab === "rendered" && version.data && (
         <article aria-label="This version" className="rounded-[12px] border border-line bg-bg px-4 py-3">
-          <MarkdownView source={body} links={undefined} tasksDisabled onToggleTask={noop} onCreateMissing={noop} />
+          <MarkdownView source={shown.body} mask={shown.mask} links={undefined} tasksDisabled onToggleTask={noop} onCreateMissing={noop} />
         </article>
       )}
       {tab === "changes" &&
