@@ -22,7 +22,8 @@ public static partial class FairCopies
 {
     public const string FilePrefix = "f/";
 
-    // Past this many passes, comments go wherever they stand, code or not.
+    // Past this many passes, comments go wherever they stand, code or not; past twice as many, everything from the
+    // first comment that opens goes.
     private const int CommentPasses = 8;
 
     // A longer destination is no link: the safety net then takes it out.
@@ -36,9 +37,8 @@ public static partial class FairCopies
     /// ownOrigin: the server's own origin ("https://kumbu.example.org"), whose links count as vault links; null for none.
     public static FairCopy Make(VaultPath note, string content, Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? ownOrigin = null)
     {
+        var lines = Body(content).Lines;
         content = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var all = Lines.Split(content);
-        var lines = WithoutComments([.. all.Skip(Outline.FrontmatterEnd(all))]);
         var code = CodeLines(lines);
         var own = Own.Of(ownOrigin);
         var (references, definitions) = References(lines, code, own);
@@ -93,9 +93,41 @@ public static partial class FairCopies
         return new FairCopy(title, markdown, copier.Files, copier.Plain);
     }
 
-    private static bool[] CodeLines(IReadOnlyList<string> lines)
+    /// <summary>
+    /// Where the note's <c>%%comments%%</c> stand in <paramref name="content"/>, start and end as UTF-16 offsets, in
+    /// order and apart: what the copy takes out as such, and what the note view hides (web/src/note/commentRanges.ts
+    /// reads them the same way). A <c>%%</c> opens and closes one anywhere but in code.
+    /// </summary>
+    public static IReadOnlyList<(int Start, int End)> Comments(string content) => Body(content).Comments;
+
+    /// <summary>The lines below the frontmatter without comments, and where the <c>%%comments%%</c> stood.</summary>
+    private static (List<string> Lines, List<(int Start, int End)> Comments) Body(string content)
     {
-        var (fenced, html) = FencesAndHtml(lines);
+        // "\r\n" and "\r" read as "\n"; at[k] is where the text's k-th character stands in content.
+        var text = new StringBuilder(content.Length);
+        var at = new int[content.Length + 1];
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\r' && i + 1 < content.Length && content[i + 1] == '\n') continue;
+            at[text.Length] = i;
+            text.Append(content[i] == '\r' ? '\n' : content[i]);
+        }
+
+        at[text.Length] = content.Length;
+        var all = Lines.Split(text.ToString());
+        var skip = Outline.FrontmatterEnd(all);
+        var start = 0;
+        for (var i = 0; i < skip; i++) start += all[i].Length + 1;
+        return WithoutComments([.. all.Skip(skip)], at[start..], content.Length);
+    }
+
+    private static bool[] CodeLines(IReadOnlyList<string> lines) => CodeLines(lines, out _);
+
+    /// <param name="unclosed">The line of a fence never closed, or -1.</param>
+    private static bool[] CodeLines(IReadOnlyList<string> lines, out int unclosed)
+    {
+        var (fenced, html, never) = FencesAndHtml(lines);
+        unclosed = never;
         var indented = TagReader.IndentedCode(lines, 0, fenced);
         var code = new bool[lines.Count];
         for (var i = 0; i < code.Length; i++) code[i] = fenced[i] || (indented[i] && !html[i]);
@@ -108,7 +140,7 @@ public static partial class FairCopies
     /// is text to the copy: where it ends depends on the container, so the copy reads what it holds. A fence never
     /// closed is text too.
     /// </summary>
-    private static (bool[] Fenced, bool[] Html) FencesAndHtml(IReadOnlyList<string> lines)
+    private static (bool[] Fenced, bool[] Html, int Unclosed) FencesAndHtml(IReadOnlyList<string> lines)
     {
         var fenced = new bool[lines.Count];
         var html = new bool[lines.Count];
@@ -170,8 +202,9 @@ public static partial class FairCopies
             afterBlank = line.Trim().Length == 0;
         }
 
-        if (fence is not null) Array.Fill(fenced, false, opened, lines.Count - opened);
-        return (fenced, html);
+        if (fence is null) return (fenced, html, -1);
+        Array.Fill(fenced, false, opened, lines.Count - opened);
+        return (fenced, html, opened);
     }
 
     /// <summary>What ends the raw HTML block <paramref name="line"/> starts (CommonMark's seven kinds), or null if it
@@ -188,29 +221,50 @@ public static partial class FairCopies
         return afterBlank && HtmlLoneTagRegex().IsMatch(line) ? "" : null;
     }
 
-    /// <summary>The lines without <c>%%…%%</c> and <c>&lt;!-- … --&gt;</c> outside code, and without the lines they
-    /// leave empty. Repeated until nothing changes, as a removed comment can hide a fence that made code of what
-    /// followed it.</summary>
-    private static List<string> WithoutComments(List<string> lines)
+    /// <summary>
+    /// The lines without <c>%%…%%</c> and <c>&lt;!-- … --&gt;</c> outside code, and without the lines they leave
+    /// empty; and where the <c>%%</c> comments stood in the note, by <paramref name="at"/> (each character's place in
+    /// it, line ends included, in the order of the lines) and the note's length <paramref name="length"/>. Repeated
+    /// until nothing changes, as a removed comment can hide a fence that made code of what followed it. Code inside a
+    /// <c>%%</c> comment goes with it, a fence never closed with the rest of the note.
+    /// </summary>
+    private static (List<string> Lines, List<(int Start, int End)> Comments) WithoutComments(List<string> lines, int[] at, int length)
     {
+        var found = new List<(int Start, int End)>();
         for (var pass = 0; ; pass++)
         {
             var anywhere = pass >= CommentPasses;
-            var code = anywhere ? new bool[lines.Count] : CodeLines(lines);
+            var unclosed = -1;
+            var code = anywhere ? new bool[lines.Count] : CodeLines(lines, out unclosed);
+            var reader = new CommentReader(found, last: pass == 2 * CommentPasses);
             var result = new List<string>(lines.Count);
-            string? comment = null;
+            var places = new int[at.Length];
+            var n = 0;
+            var starts = new int[lines.Count + 1];
+            for (var i = 0; i < lines.Count; i++) starts[i + 1] = starts[i] + lines[i].Length + 1;
+
+            void Keep(string line, int[] from, int offset)
+            {
+                result.Add(line);
+                Array.Copy(from, offset, places, n, line.Length + 1);
+                n += line.Length + 1;
+            }
+
             for (var i = 0; i < lines.Count;)
             {
-                var open = comment is not null;
+                var open = reader.Closer is not null;
+                // To Markdown a fence never closed is code to the end of the note, which an open %% comment takes.
+                if (reader.Closer == "%%" && i == unclosed) break;
                 if (!open && code[i])
                 {
-                    result.Add(lines[i++]);
+                    Keep(lines[i], at, starts[i]);
+                    i++;
                     continue;
                 }
 
-                if (lines[i].Trim().Length == 0)
+                if (lines[i].Trim().Length == 0 || (reader.Closer == "%%" && code[i]))
                 {
-                    if (!open) result.Add(lines[i]);
+                    if (!open) Keep(lines[i], at, starts[i]);
                     i++;
                     continue;
                 }
@@ -219,58 +273,130 @@ public static partial class FairCopies
                 var end = i + 1;
                 while (end < lines.Count && !code[end] && lines[end].Trim().Length > 0 && !Breaks(lines[end - 1], lines[end])) end++;
                 var block = lines.GetRange(i, end - i);
-                var parts = StripComments(string.Join('\n', block), ref comment, anywhere).Split('\n');
+                reader.Strip(string.Join('\n', block), at, starts[i], anywhere);
+                var text = reader.Text.ToString();
+                var parts = text.Split('\n');
                 var aligned = parts.Length == block.Count;
+                var from = 0;
                 for (var k = 0; k < parts.Length; k++)
                 {
-                    if (Empty(parts[k]) && !(aligned && parts[k] == block[k])) continue;
-                    result.Add(parts[k]);
+                    if (!Empty(parts[k]) || (aligned && parts[k] == block[k])) Keep(parts[k], reader.At, from);
+                    from += parts[k].Length + 1;
                 }
 
                 i = end;
             }
 
-            if (result.SequenceEqual(lines)) return result;
+            reader.Finish(length);
+            if (pass == 2 * CommentPasses || result.SequenceEqual(lines)) return (result, Merged(found));
             lines = result;
+            at = places[..n];
         }
     }
 
-    private static string StripComments(string line, ref string? comment, bool anywhere)
+    /// <summary>The comments' places in order, those that overlap or touch as one.</summary>
+    private static List<(int Start, int End)> Merged(List<(int Start, int End)> found)
     {
-        if (comment is null && !line.Contains("%%", StringComparison.Ordinal) && !line.Contains("<!--", StringComparison.Ordinal)) return line;
-        var spans = anywhere ? [] : CodeSpans(line);
-        var result = new StringBuilder(line.Length);
-        var p = 0;
-        while (p < line.Length)
+        found.Sort();
+        var merged = new List<(int Start, int End)>(found.Count);
+        foreach (var (start, end) in found)
         {
-            if (comment is not null)
-            {
-                var close = line.IndexOf(comment, p, StringComparison.Ordinal);
-                if (close < 0) break;
-                p = close + comment.Length;
-                comment = null;
-                continue;
-            }
-
-            if (spans.TryGetValue(p, out var end))
-            {
-                result.Append(line, p, end - p);
-                p = end;
-            }
-            else if (string.CompareOrdinal(line, p, "<!--", 0, 4) == 0)
-            {
-                comment = "-->";
-                p += 4;
-            }
-            else if (string.CompareOrdinal(line, p, "%%", 0, 2) == 0)
-            {
-                comment = "%%";
-                p += 2;
-            }
-            else result.Append(line[p++]);
+            if (merged.Count > 0 && start <= merged[^1].End) merged[^1] = (merged[^1].Start, Math.Max(end, merged[^1].End));
+            else merged.Add((start, end));
         }
 
-        return result.ToString();
+        return merged;
+    }
+
+    /// <summary>
+    /// One pass's reading of comments, block by block, a comment open from one block into the next. Each block's text
+    /// without them lands in <see cref="Text"/>, the place in the note of each of its characters (and of its end) in
+    /// <see cref="At"/>, and where each <c>%%</c> comment stood in <paramref name="found"/>. In the last pass
+    /// (<paramref name="last"/>) nothing closes a comment.
+    /// </summary>
+    private sealed class CommentReader(List<(int Start, int End)> found, bool last)
+    {
+        /// <summary>What closes the comment open here, <c>%%</c> or <c>--&gt;</c>; null outside one.</summary>
+        public string? Closer { get; private set; }
+
+        public StringBuilder Text { get; } = new();
+
+        public int[] At { get; private set; } = [];
+
+        // Where the open %% comment starts in the note.
+        private int _opened;
+
+        public void Strip(string s, int[] at, int offset, bool anywhere)
+        {
+            Text.Clear();
+            if (Closer is null && !s.Contains("%%", StringComparison.Ordinal) && !s.Contains("<!--", StringComparison.Ordinal))
+            {
+                Text.Append(s);
+                At = at[offset..(offset + s.Length + 1)];
+                return;
+            }
+
+            var places = new List<int>(s.Length + 1);
+
+            var spans = anywhere ? [] : CodeSpans(s);
+            var p = 0;
+            while (p < s.Length)
+            {
+                if (Closer is not null)
+                {
+                    if (last) break;
+                    // A code span inside a %% comment goes with it, whatever it holds.
+                    if (Closer == "%%" && spans.TryGetValue(p, out var skip))
+                    {
+                        p = skip;
+                        continue;
+                    }
+
+                    if (string.CompareOrdinal(s, p, Closer, 0, Closer.Length) != 0)
+                    {
+                        p++;
+                        continue;
+                    }
+
+                    p += Closer.Length;
+                    if (Closer == "%%") found.Add((_opened, at[offset + p - 1] + 1));
+                    Closer = null;
+                    continue;
+                }
+
+                if (spans.TryGetValue(p, out var end))
+                {
+                    Text.Append(s, p, end - p);
+                    for (var q = p; q < end; q++) places.Add(at[offset + q]);
+                    p = end;
+                }
+                else if (string.CompareOrdinal(s, p, "<!--", 0, 4) == 0)
+                {
+                    Closer = "-->";
+                    p += 4;
+                }
+                else if (string.CompareOrdinal(s, p, "%%", 0, 2) == 0)
+                {
+                    Closer = "%%";
+                    _opened = at[offset + p];
+                    p += 2;
+                }
+                else
+                {
+                    Text.Append(s[p]);
+                    places.Add(at[offset + p++]);
+                }
+            }
+
+            places.Add(at[offset + s.Length]);
+            At = [.. places];
+        }
+
+        /// <summary>A %% comment still open at the end runs to the note's end, <paramref name="length"/>.</summary>
+        public void Finish(int length)
+        {
+            if (Closer == "%%") found.Add((_opened, length));
+        }
     }
 
     /// <summary>

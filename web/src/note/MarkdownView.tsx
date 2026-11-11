@@ -14,7 +14,8 @@ import { remarkTags } from "../tags/tags";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
-import { remarkComments, remarkHighlights } from "./highlights";
+import { maskComments, remarkMaskedComments } from "./comments";
+import { remarkHighlights } from "./highlights";
 import { section } from "./outline";
 import { prepareMath, remarkRestoreDollars } from "./prepareMath";
 import { splitFrontmatter } from "./properties";
@@ -76,6 +77,11 @@ function taskChecked(node: HastNode): boolean {
 
 interface Props {
   source: string;
+  /**
+   * The character `source`'s comments are masked with (maskComments, on the whole note before its frontmatter was
+   * split off), null if it has none; left out, `source` is read as a whole note and masked here.
+   */
+  mask?: string | null;
   /** The API's links of this note; until they are in, wiki links show as plain text. */
   links: LinkView[] | undefined;
   /** While a tick is being saved, the next waits: it would be written on top of a version the app doesn't know. */
@@ -99,7 +105,7 @@ interface Props {
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find"> & { attachments: string[] }>({
+const NoteContext = createContext<Omit<Props, "source" | "mask" | "highlight" | "find"> & { attachments: string[] }>({
   links: undefined,
   attachments: [],
   tasksDisabled: true,
@@ -142,8 +148,10 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
   const { onCreateMissing } = useContext(NoteContext);
   const body = useMemo(() => {
     if (!note.data) return null;
-    const { body } = splitFrontmatter(note.data.content);
-    return heading === null ? body : section(body, heading);
+    const masked = maskComments(note.data.content);
+    const { body } = splitFrontmatter(masked.source);
+    const shown = heading === null ? body : section(body, heading);
+    return shown === null ? null : { source: shown, mask: masked.mask };
   }, [note.data, heading]);
   const title = heading ? `${titleOf(path)} › ${heading}` : titleOf(path);
 
@@ -161,7 +169,7 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
       {note.isError && <p className="text-sm text-muted">{errorFor(note.error)}</p>}
       {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
       {body !== null && (
-        <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
+        <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
       )}
     </section>
   );
@@ -503,9 +511,11 @@ function useMath(wanted: boolean): MathPlugins | null {
   return wanted ? (math ?? mathLoaded) : null;
 }
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
+function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
+  // Comments masked as the server's fair copy reads them, so the view hides exactly what the copy leaves out.
+  const { source, mask } = useMemo(() => (givenMask === undefined ? maskComments(given) : { source: given, mask: givenMask }), [given, givenMask]);
   const prepared = useMemo(() => prepareMath(source), [source]);
   const math = useMath(prepared.maths);
   const remarkPlugins = useMemo(
@@ -514,18 +524,18 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
         remarkGfm,
         // The prepared source keeps the original's offsets and lines, so positions, links and tags hold.
         ...(math ? [math.remarkMath, [remarkRestoreDollars, { original: source }]] : []),
+        // Before the tags, which would take the mask for a tag's character.
+        [remarkMaskedComments, { mask }],
         remarkCallouts,
         remarkTags,
         [remarkWikiLinks, { links: links ?? [] }],
-        // After the links and tags, which find theirs by the text's positions; before find, which counts no hidden text.
-        remarkComments,
         remarkHighlights,
         [remarkFind, { query, current }],
         // Before the agent's highlights, which land on the `div` a display gets.
         ...(math ? [math.remarkDisplayParagraph, math.remarkMathBlocks] : []),
         [remarkChanged, { highlight }],
       ] as const,
-    [links, highlight, query, current, math, math ? source : null],
+    [links, highlight, query, current, math, math ? source : null, mask],
   );
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
