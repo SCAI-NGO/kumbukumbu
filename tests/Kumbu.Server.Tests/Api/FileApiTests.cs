@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
@@ -53,7 +54,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
         }
     }
 
-    private static readonly byte[] Pdf = "%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"u8.ToArray();
+    internal static readonly byte[] Pdf = "%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"u8.ToArray();
 
     private async Task<long> BlobCountAsync(RestClient user)
     {
@@ -143,6 +144,48 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
         Assert.Contains("15 MB", await RestClient.ErrorAsync(response), StringComparison.Ordinal);
         Assert.Equal(0, await BlobCountAsync(user));
+    }
+
+    /// <summary><paramref name="size"/> bytes of a PDF, sent in 64 KiB pieces, with or without a Content-Length.</summary>
+    private sealed class PdfContent(long size, bool declare) : HttpContent
+    {
+        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+        {
+            if (stream is MemoryStream) throw new InvalidOperationException("The body is to go out as it is, not buffered on the client.");
+            var piece = new byte[64 * 1024];
+            Pdf.CopyTo(piece, 0);
+            for (var sent = 0L; sent < size; sent += piece.Length)
+            {
+                await stream.WriteAsync(piece.AsMemory(0, (int)Math.Min(piece.Length, size - sent)));
+                // Zeros after that.
+                if (sent == 0) Array.Clear(piece);
+            }
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = size;
+            return declare;
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_file_of_exactly_15_MB_is_stored_and_one_byte_more_is_a_413(bool declare)
+    {
+        var user = await UserAsync();
+
+        using var limit = await user.SendContentAsync(HttpMethod.Put, user.Url("limit.pdf", "files"), new PdfContent(AttachmentFormat.MaxBytes, declare), followRedirects: false);
+        using var over = await user.SendContentAsync(HttpMethod.Put, user.Url("over.pdf", "files"), new PdfContent(AttachmentFormat.MaxBytes + 1, declare), followRedirects: false);
+
+        Assert.True(limit.StatusCode == HttpStatusCode.Created, await limit.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(AttachmentFormat.MaxBytes, (await JsonAsync(limit))["size"]!.GetValue<long>());
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, over.StatusCode);
+        Assert.Contains("15 MB", await RestClient.ErrorAsync(over), StringComparison.Ordinal);
+        using var get = await user.GetAsync(user.Url("over.pdf", "files"));
+        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
+        Assert.Equal(1, await BlobCountAsync(user));
     }
 
     [Fact]

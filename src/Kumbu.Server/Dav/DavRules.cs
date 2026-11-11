@@ -31,6 +31,21 @@ public static class DavRules
     /// refusal would abort every share's Finder copy rather than one share's leftovers.</summary>
     public const long ParkingTotalCap = 512L * 1024 * 1024;
 
+    /// <summary>The bytes of parked bodies the server may be receiving at a time (<see cref="DavParkingBudget"/>). A body
+    /// is read into memory whole before it is parked, so its <c>Content-Length</c>, or without one a whole
+    /// <see cref="ParkingCap"/>, is taken from this before it is read, and a request that finds no room waits for it
+    /// rather than being refused (a refusal would abort a Finder copy). Four users' full <see cref="ParkingReadPerUser"/>:
+    /// a body being received was measured to hold its length and little more, so this bounds what bodies on their way
+    /// hold to half of <see cref="ParkingTotalCap"/>, while four users sending large files, or files without a length,
+    /// still go ahead together.</summary>
+    public const long ParkingReadBudget = 4 * ParkingReadPerUser;
+
+    /// <summary>What the shares of one user may take of <see cref="ParkingReadBudget"/> at a time, so that her slow
+    /// uploads hold back her own parked writes, never another user's. One body without a length takes all of it, so
+    /// one user's parked writes without a length are read one at a time. Not less than <see cref="ParkingCap"/>, or
+    /// such a body could never be read.</summary>
+    public const long ParkingReadPerUser = ParkingCap;
+
     /// <summary>What every parked entry is charged beyond its bytes and its name: roughly what its objects take on the
     /// heap (the entry, its item, two index nodes, the strings). Without it, a share's empty files and folders would
     /// cost nothing against <see cref="ParkingCap"/> and could fill memory one MKCOL at a time.</summary>

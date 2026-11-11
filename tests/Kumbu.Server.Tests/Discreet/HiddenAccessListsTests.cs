@@ -9,6 +9,9 @@ using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -17,7 +20,8 @@ namespace Kumbu.Server.Tests.Discreet;
 /// <summary>
 /// What the session's lists of access say while it hides vaults (Decisions 9 and 15): a key, device key, WebDAV share or
 /// connection that covers only hidden vaults isn't listed, nor named among those without the vault Skills; one that
-/// covers both kinds lists its visible vaults only; the consent page leaves hidden vaults out; revoking stays whole.
+/// covers both kinds lists its visible vaults only; the consent page leaves hidden vaults out, and Allow gives the app
+/// only the vaults listed; revoking stays whole.
 /// The id of what covers only hidden vaults answers every other request as an id she doesn't have.
 /// While shown, a discreet vault's ZIP is named as an export of several vaults, never by the vault.
 /// </summary>
@@ -233,7 +237,7 @@ public sealed class HiddenAccessListsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_consent_page_leaves_hidden_vaults_out_and_Allow_keeps_their_grants()
+    public async Task The_consent_page_leaves_hidden_vaults_out_and_Allow_gives_the_app_only_the_listed_vaults()
     {
         var (world, workId) = await WorldWithAccessAsync();
         var stored = Api.Services.GetRequiredService<Connections>();
@@ -256,12 +260,101 @@ public sealed class HiddenAccessListsTests(KumbuAppFactory app)
         Assert.DoesNotContain(world.TagebuchId, bothBody + tagebuchBody, StringComparison.Ordinal);
 
         await both.AllowAsync();
-        using var token = await both.TokenAsync();
-        Assert.Equal(HttpStatusCode.OK, token.StatusCode);
+        var access = await AccessAsync(both);
+        Assert.Equal([workId], (await OAuthFlow.OpenedAsync(Api, bothId, access)).Select(v => v.Id));
+        await using (var mcp = await McpAsync(bothId, access))
+        {
+            var listed = await ShAsync(mcp, "ls /");
+            Assert.Contains("Work", listed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tagebuch", listed, StringComparison.Ordinal);
+            Assert.DoesNotContain(HiddenWorld.TagebuchWord, await ShAsync(mcp, "cat /Tagebuch/geheim.md"), StringComparison.Ordinal);
+        }
+
+        // The stored grant stays whole: an Allow while shown gives the app every vault again.
         Assert.Equal(
             new Dictionary<string, KeyRight> { [workId] = KeyRight.Write, [world.TagebuchId] = KeyRight.Read },
             (await stored.ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Id == bothId).Vaults.ToDictionary(v => v.Key, v => v.Value));
     }
+
+    [Fact]
+    public async Task Allow_while_shown_gives_the_app_every_vault_of_the_connection()
+    {
+        var (world, workId) = await WorldWithAccessAsync();
+        var bothId = (await Api.Services.GetRequiredService<Connections>().ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Name == "Both connection").Id;
+        var client = await OAuthFlow.RegisterAsync(Api, Callback);
+        var both = await OAuthFlow.StartAsync(Api, world.Alice, bothId, client, Callback);
+        await world.HideAsync();
+        await world.RevealAsync();
+
+        await both.AllowAsync();
+        var access = await AccessAsync(both);
+
+        Assert.Equal(new[] { workId, world.TagebuchId }.Order(StringComparer.Ordinal), (await OAuthFlow.OpenedAsync(Api, bothId, access)).Select(v => v.Id).Order(StringComparer.Ordinal));
+        await using var mcp = await McpAsync(bothId, access);
+        Assert.Contains(HiddenWorld.TagebuchWord, await ShAsync(mcp, "cat /Tagebuch/geheim.md"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Allow_on_a_connection_of_hidden_vaults_only_answers_as_any_Allow_and_gives_the_app_no_vault()
+    {
+        var (world, _) = await WorldWithAccessAsync();
+        var tagebuchId = (await Api.Services.GetRequiredService<Connections>().ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Name == "Tagebuch connection").Id;
+        var client = await OAuthFlow.RegisterAsync(Api, Callback);
+        var tagebuch = await OAuthFlow.StartAsync(Api, world.Alice, tagebuchId, client, Callback);
+        await world.HideAsync();
+
+        // A redirect with a code, as on any connection.
+        await tagebuch.AllowAsync();
+        using var token = await tagebuch.TokenAsync();
+
+        // The code carries no vault, and the exchange refuses it.
+        Assert.Equal(HttpStatusCode.BadRequest, token.StatusCode);
+        Assert.Equal("invalid_grant", (await RestClient.JsonAsync(token))["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_connection_with_no_vaults_left_cannot_be_allowed_while_hidden()
+    {
+        var (world, _) = await WorldWithAccessAsync();
+        var bothId = (await Api.Services.GetRequiredService<Connections>().ListAsync(world.Alice.User, world.Alice.UserKey, Ct)).Single(c => c.Name == "Both connection").Id;
+        var client = await OAuthFlow.RegisterAsync(Api, Callback);
+        var both = await OAuthFlow.StartAsync(Api, world.Alice, bothId, client, Callback);
+        await world.HideAsync();
+        // Its vaults gone from its clear list, as a deletion leaves it before the connection is revoked.
+        await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>(Connections.CollectionName)
+            .UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", bothId), Builders<BsonDocument>.Update.Set("vaults", new BsonArray()), cancellationToken: Ct);
+
+        using var allowed = await both.DecideAsync(allow: true);
+
+        Assert.Equal(HttpStatusCode.Conflict, allowed.StatusCode);
+        Assert.Contains("no vaults left", await allowed.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
+    /// <summary>The access token of <paramref name="flow"/>'s code, which must exchange.</summary>
+    private static async Task<string> AccessAsync(OAuthFlow flow)
+    {
+        using var token = await flow.TokenAsync();
+        Assert.Equal(HttpStatusCode.OK, token.StatusCode);
+        return (await RestClient.JsonAsync(token))["access_token"]!.GetValue<string>();
+    }
+
+    /// <summary>An MCP client on the connection's URL with <paramref name="access"/>, as the app connects.</summary>
+    private async Task<McpClient> McpAsync(string connectionId, string access)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(OAuthFlow.ResourceOf(connectionId)),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {access}" },
+            },
+            Api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        return await McpClient.CreateAsync(transport, cancellationToken: Ct);
+    }
+
+    private static async Task<string> ShAsync(McpClient client, string command) =>
+        Assert.IsType<TextContentBlock>((await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct)).Content[0]).Text;
 
     private static async Task<string> TicketAsync(RestClient user)
     {

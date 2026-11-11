@@ -1,36 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import { useMarketplaceSkill } from "../api/skills";
-import { sizeText } from "../components/Sheet";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import SkillContents from "./SkillContents";
 import TargetDialog from "./TargetDialog";
 
-/** The sentence of a skill with scripts (skills design §3.9). */
-export const scriptNotice = "This skill contains scripts. Kumbu² never runs them; a harness you give the skill to may.";
-
-const remarkPlugins = [remarkGfm];
-
-// A third party's text: no raw HTML (react-markdown drops it), no image fetched (its alt text instead), links as their text.
-const components: Components = {
-  h1: ({ node: _, ...props }) => <h3 className="mt-3 mb-1 text-base font-bold text-text" {...props} />,
-  h2: ({ node: _, ...props }) => <h4 className="mt-3 mb-1 text-base font-bold text-text" {...props} />,
-  h3: ({ node: _, ...props }) => <h5 className="mt-3 mb-1 text-sm font-bold text-text" {...props} />,
-  h4: ({ node: _, ...props }) => <h6 className="mt-3 mb-1 text-sm font-bold text-text" {...props} />,
-  h5: ({ node: _, ...props }) => <h6 className="mt-3 mb-1 text-sm font-bold text-text" {...props} />,
-  h6: ({ node: _, ...props }) => <h6 className="mt-3 mb-1 text-sm font-semibold text-muted" {...props} />,
-  p: ({ node: _, ...props }) => <p className="my-2" {...props} />,
-  ul: ({ node: _, ...props }) => <ul className="my-2 list-disc pl-6" {...props} />,
-  ol: ({ node: _, ...props }) => <ol className="my-2 list-decimal pl-6" {...props} />,
-  pre: ({ node: _, ...props }) => <pre className="my-2 overflow-x-auto rounded-[10px] border border-line bg-surface px-3 py-2 font-mono text-xs" {...props} />,
-  code: ({ node: _, ...props }) => <code className="font-mono text-[0.85em]" {...props} />,
-  a: ({ children }) => <>{children}</>,
-  img: ({ alt }) => (alt ? <span className="font-mono text-[0.85em] text-muted">{alt}</span> : null),
-};
+export { scriptNotice } from "./SkillContents";
 
 type Props = { repo: string; commit: string; path: string; name: string; onClose(): void; onInstalled(path: string): void };
 
@@ -74,43 +52,7 @@ export default function InstallDialog({ repo, commit, path, name, onClose, onIns
         ) : skill.isError ? (
           <FormError>{errorText(skill.error)}</FormError>
         ) : (
-          data && (
-            <>
-              {data.hasScripts && <p className="text-text">{scriptNotice}</p>}
-              <section className="flex flex-col gap-1">
-                <h3 className={labelClass}>Files</h3>
-                <ul className="flex flex-col">
-                  {data.files.map((f) => (
-                    <li key={f.path} className="flex justify-between gap-3 font-mono text-sm text-text-body">
-                      <span className="break-all">{f.path}</span>
-                      <span className="shrink-0">{sizeText(Number(f.size))}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-              {data.skipped.length > 0 && (
-                <section className="flex flex-col gap-1">
-                  <h3 className={labelClass}>Not installed</h3>
-                  <p className="text-text-body">These files are skipped: they are not text, or too large.</p>
-                  <ul className="flex flex-col">
-                    {data.skipped.map((s) => (
-                      <li key={s} className="font-mono text-sm break-all text-text-body">
-                        {s}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-              <section className="flex flex-col gap-1">
-                <h3 className={labelClass}>SKILL.md</h3>
-                <div className="max-h-72 overflow-y-auto rounded-[10px] border border-line p-3 text-sm text-text-body">
-                  <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
-                    {data.manifest}
-                  </ReactMarkdown>
-                </div>
-              </section>
-            </>
-          )
+          data && <SkillContents hasScripts={data.hasScripts} files={data.files} skipped={data.skipped} manifest={data.manifest} />
         )}
         <div className="flex gap-3">
           <button type="button" data-autofocus onClick={onClose} className={`${secondaryButtonClass} flex-1`}>

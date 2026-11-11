@@ -30,7 +30,7 @@ namespace Kumbu.Server.Dav;
 /// ignored everywhere else (§3.7).
 /// </summary>
 internal sealed partial class DavWrites(
-    HttpContext http, DavCaller caller, DavTree tree, DavParking parking, DavLocks locks, NoteWriter writer, TreeWriter trees, NoteMover mover,
+    HttpContext http, DavCaller caller, DavTree tree, DavParking parking, DavParkingBudget budget, DavLocks locks, NoteWriter writer, TreeWriter trees, NoteMover mover,
     DavHolds holds, Publications publications, ILogger<DavWrites> log)
 {
     /// <summary>A note's bytes are UTF-8 or refused (WebDAV design §3.5): an invalid byte throws rather than becoming
@@ -61,8 +61,15 @@ internal sealed partial class DavWrites(
             return;
         }
 
-        var bytes = await DavBody.ReadLimitedAsync(Request, DavRules.ParkingCap, ct)
-            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A parked file can have at most {DavRules.ParkingCap / 1024 / 1024} MiB.");
+        // Refused by its length before it takes room, never after waiting for it; one without a length takes all it may need.
+        static DavException TooLarge() => new(StatusCodes.Status413PayloadTooLarge, $"A parked file can have at most {DavRules.ParkingCap / 1024 / 1024} MiB.");
+        if (Request.ContentLength > DavRules.ParkingCap) throw TooLarge();
+        byte[] bytes;
+        using (await budget.TakeAsync(caller.UserId, Request.ContentLength ?? DavRules.ParkingCap, ct))
+        {
+            bytes = await DavBody.ReadSizedAsync(Request, DavRules.ParkingCap, ct) ?? throw TooLarge();
+        }
+
         var (item, created) = parking.Put(caller.ShareId, place.VaultId, place.Path, bytes);
         Response.Headers.ETag = $"\"{item.Version}\"";
         Response.StatusCode = created ? StatusCodes.Status201Created : StatusCodes.Status204NoContent;

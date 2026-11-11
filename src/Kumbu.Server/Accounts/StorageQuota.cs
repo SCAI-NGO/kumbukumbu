@@ -40,6 +40,26 @@ public static partial class QuotaSize
 /// id, and the limit that applies (null: none).</summary>
 public sealed record StorageFigure(long Used, long? Limit, IReadOnlyDictionary<string, long> ByVault);
 
+/// <summary>A write's pass through <see cref="StorageQuota.Require"/>: the owner it counts against and the bytes it adds,
+/// held in her figure until <see cref="StorageQuota.Commit"/> counts them or <see cref="StorageQuota.Release"/> gives them
+/// back. Nothing is held while her figure isn't known.</summary>
+internal sealed class QuotaReservation
+{
+    internal QuotaReservation(string owner, long bytes, long held)
+    {
+        Owner = owner;
+        Bytes = bytes;
+        Held = held;
+    }
+
+    public string Owner { get; }
+
+    public long Bytes { get; }
+
+    /// <summary>What is held now; 0 once committed or released. Under the quota's lock.</summary>
+    internal long Held;
+}
+
 /// <summary>
 /// The storage quota (WebDAV design §3.10): what a user's own vaults take in the database, exactly the figure of the
 /// admin's user list (<see cref="Admin.BytesByVaultAsync"/>, from what MongoDB holds in the clear), against her limit: her
@@ -51,8 +71,10 @@ public sealed record StorageFigure(long Used, long? Limit, IReadOnlyDictionary<s
 /// read in the background, and the write is allowed meanwhile. Every write adjusts the figure; the write path recounts an
 /// owner whose figure is ten minutes old (<see cref="RecountAfter"/>), which corrects what the cache doesn't see: the
 /// trash's TTL, history trimmed, embeddings, a write by another process. A count or lookup that fails is tried again
-/// after the same ten minutes, not on every write. The check is against the usage plus what is about to be written, and
-/// may be off by a write's worth under concurrency, which is accepted.
+/// after the same ten minutes, not on every write. The check is against the usage, the space the owner's writes under way
+/// hold, and what is about to be written; a write holds its space from the check until it commits or gives up
+/// (<see cref="QuotaReservation"/>), so writes at once can't pass the limit together. Only while the figure isn't known
+/// (right after a start) may a write's worth get past the limit, which is accepted.
 /// </para>
 /// <para>
 /// A server whose admin set no default and no override behaves as before (brief, "breaks nothing"): the cache then asks
@@ -146,6 +168,9 @@ public sealed class StorageQuota
         /// <summary>Null while unknown, and for an owner without a limit, who isn't counted.</summary>
         public long? Used;
 
+        /// <summary>What writes under way hold (<see cref="QuotaReservation"/>); no count touches it.</summary>
+        public long Reserved;
+
         public DateTime ReadAt;
 
         /// <summary>When the last count failed; the write path tries again only <see cref="RecountAfter"/> later.</summary>
@@ -229,15 +254,51 @@ public sealed class StorageQuota
         lock (_lock) return _accounts.TryGetValue(ownerId, out var account) ? account.Used : null;
     }
 
+    /// <summary>For tests: what the owner's writes under way hold.</summary>
+    internal long ReservedBy(string ownerId)
+    {
+        lock (_lock) return _accounts.TryGetValue(ownerId, out var account) ? account.Reserved : 0;
+    }
+
     /// <summary>What a write or a removal changed, as far as it knows; the recount corrects the rest.</summary>
     public void Adjust(string ownerId, long delta)
     {
+        lock (_lock) AdjustUnderLock(ownerId, delta);
+    }
+
+    /// <summary>A write committed: its bytes go into the figure and what it held is let go, at once, so there is no
+    /// moment where neither counts.</summary>
+    internal void Commit(QuotaReservation reservation)
+    {
         lock (_lock)
         {
-            if (!_accounts.TryGetValue(ownerId, out var account)) return;
-            if (account.Used is { } used) account.Used = Math.Max(0, used + delta);
-            if (account.Counting > 0) account.Pending += delta;
+            AdjustUnderLock(reservation.Owner, reservation.Bytes);
+            ReleaseUnderLock(reservation);
         }
+    }
+
+    /// <summary>A write gave up (refused, cancelled, failed, or it added nothing): what it held is given back. A
+    /// reservation already committed or released, or one that held nothing, changes nothing.</summary>
+    internal void Release(QuotaReservation? reservation)
+    {
+        if (reservation is null) return;
+        lock (_lock) ReleaseUnderLock(reservation);
+    }
+
+    /// <summary>Under the lock: <see cref="Adjust"/>.</summary>
+    private void AdjustUnderLock(string ownerId, long delta)
+    {
+        if (!_accounts.TryGetValue(ownerId, out var account)) return;
+        if (account.Used is { } used) account.Used = Math.Max(0, used + delta);
+        if (account.Counting > 0) account.Pending += delta;
+    }
+
+    /// <summary>Under the lock: <see cref="Release"/>.</summary>
+    private void ReleaseUnderLock(QuotaReservation reservation)
+    {
+        if (reservation.Held == 0) return;
+        if (_accounts.TryGetValue(reservation.Owner, out var account)) account.Reserved = Math.Max(0, account.Reserved - reservation.Held);
+        reservation.Held = 0;
     }
 
     /// <summary>Counts <paramref name="ownerId"/>'s usage again, in the background, now: a sweep freed space, the trash was
@@ -316,11 +377,12 @@ public sealed class StorageQuota
 
     /// <summary>
     /// The check of a write that adds <paramref name="incoming"/> bytes to the vault of <paramref name="access"/>, from the
-    /// cache alone: <see cref="QuotaExceededException"/> if it doesn't fit its owner's limit, else the owner to adjust after
-    /// the commit (null: no limit can apply, or a vault without an owner, the dev token's, which is never limited). The
-    /// vault's owner is checked, never the caller; the exception says whether the caller is that owner.
+    /// cache alone: <see cref="QuotaExceededException"/> if it doesn't fit its owner's limit beside what her writes under
+    /// way hold, else its reservation, which holds the bytes until the write commits (<see cref="Commit"/>) or gives up
+    /// (<see cref="Release"/>); null: no limit can apply, or a vault without an owner, the dev token's, which is never
+    /// limited. The vault's owner is checked, never the caller; the exception says whether the caller is that owner.
     /// </summary>
-    internal string? Require(VaultAccess access, long incoming)
+    internal QuotaReservation? Require(VaultAccess access, long incoming)
     {
         lock (_lock)
         {
@@ -328,9 +390,10 @@ public sealed class StorageQuota
             if ((access.Membership?.Owner ?? OwnerOf(access.Id)) is not { } owner) return null;
             var account = AccountOf(owner);
             Freshen(owner, account);
-            if (!account.Known || account.Limit is not { } limit || account.Used is not { } used) return owner;
-            if (limit == 0 || used + incoming > limit) throw new QuotaExceededException(access.IsOwner);
-            return owner;
+            if (!account.Known || account.Limit is not { } limit || account.Used is not { } used) return new QuotaReservation(owner, incoming, 0);
+            if (limit == 0 || used + account.Reserved + incoming > limit) throw new QuotaExceededException(access.IsOwner);
+            account.Reserved += incoming;
+            return new QuotaReservation(owner, incoming, incoming);
         }
     }
 

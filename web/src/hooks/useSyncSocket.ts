@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, type NavigateFunction } from "react-router-dom";
+import { useLocation, useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
+import { leaveVaults } from "../discreet/leftElsewhere";
 import { presenceKey, useSyncStatus } from "../state/sync";
 
 /** The server closed the socket for a newer one of this session (more than four tabs): reconnecting would replace that one. */
@@ -94,11 +95,19 @@ export function useSyncSocket() {
   const navigateNow = useNavigate();
   const navigate = useRef(navigateNow);
   navigate.current = navigateNow;
+  const { pathname } = useLocation();
+  const at = useRef(pathname);
+  at.current = pathname;
   const vaults = useVaults();
   const [generation, setGeneration] = useState(0);
   /** The vault names when the ticket was asked for, null before the list is in. */
   const held = useRef<Set<string> | null>(null);
   const opened = useRef(false);
+  /**
+   * The vault list when the socket last closed (`ordinary`: the names not discreet then), until a list read once it is
+   * open again (`since`) is compared with it.
+   */
+  const before = useRef<{ all: Set<string>; ordinary: Set<string>; since: number } | null>(null);
 
   useEffect(() => {
     if (typeof WebSocket === "undefined") return;
@@ -140,6 +149,7 @@ export function useSyncSocket() {
           },
         });
         // Hints sent while there was no socket are lost: everything they would have asked again is.
+        if (before.current) before.current.since = Date.now();
         if (opened.current) for (const key of ["session", "tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
         opened.current = true;
       };
@@ -150,6 +160,13 @@ export function useSyncSocket() {
         useSyncStatus.setState(down);
         // What the session shows changed: its discreet mode, and the vault list with it.
         if (e.code === HIDDEN) void queryClient.invalidateQueries({ queryKey: ["session"] });
+        // What the list held, for once it is read again; a second close before that adds to the first.
+        const listed = queryClient.getQueryData<{ name: string; discreet?: boolean }[]>(["vaults"]);
+        if (listed?.length) {
+          const all = new Set([...(before.current?.all ?? []), ...listed.map((v) => v.name)]);
+          const ordinary = new Set([...(before.current?.ordinary ?? []), ...listed.filter((v) => !v.discreet).map((v) => v.name)]);
+          before.current = { all, ordinary, since: Infinity };
+        }
         // At once only for a socket that was up, and not again soon: a server that closes every socket gets the back-off.
         if (e.code === HIDDEN && wasOpen && Date.now() - hiddenAt >= HIDDEN_AGAIN) {
           hiddenAt = Date.now();
@@ -169,6 +186,24 @@ export function useSyncSocket() {
       useSyncStatus.setState(down);
     };
   }, [queryClient, generation]);
+
+  // A vault the list no longer has once the socket is open again: another session of the user marked it discreet,
+  // which closes the socket (or the socket was down then), or it was taken from her, and its view goes. Only a list read
+  // with the socket open again counts, and only one that names a vault: a removal or a hide resets it to none. A vault
+  // renamed meanwhile, its frame missed, is one lost and one gained: as long as no more are lost than gained, none goes;
+  // with more, which were renamed can't be told, and all go. The list carries no vault id, so a vault hidden while
+  // another was gained in the same gap reads as a rename too, and its view stays.
+  const listed = vaults.isSuccess ? vaults.data : undefined;
+  const updated = vaults.dataUpdatedAt;
+  useEffect(() => {
+    const was = before.current;
+    if (!was || !listed?.length || updated < was.since) return;
+    before.current = null;
+    const now = new Set(listed.map((v) => v.name));
+    const lost = [...was.ordinary].filter((n) => !now.has(n));
+    const gained = [...now].filter((n) => !was.all.has(n));
+    if (lost.length > gained.length) leaveVaults(queryClient, navigate.current, at.current, new Set(lost));
+  }, [listed, updated, queryClient]);
 
   // A vault the ticket didn't hold: the socket is opened again, with a ticket that holds it.
   const names = vaults.data?.map((v) => v.name).join("\n");

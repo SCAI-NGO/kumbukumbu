@@ -137,7 +137,7 @@ public static class ConnectionApi
         string code;
         try
         {
-            code = await tokens.IssueCodeAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, request, ct);
+            code = await tokens.IssueCodeAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, request, await caller.HiddenIdsAsync(ct), ct);
         }
         catch (ConnectionUnavailableException e)
         {

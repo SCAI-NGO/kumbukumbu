@@ -41,6 +41,16 @@ public class OutlineTests
     public void HeadingText(string line, string text) => Assert.Equal(text, Assert.Single(Parse(line)).Text);
 
     [Fact]
+    // A 1 MiB line: linear, a few milliseconds; a backtracking heading pattern takes half a minute.
+    public async Task AHeadingOverALongRunOfSpacesIsReadWithinSeconds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var spaces = new string(' ', 1_048_576);
+        var heading = Assert.Single(await Task.Run(() => Parse("# a" + spaces + "b\n"), ct).WaitAsync(TimeSpan.FromSeconds(10), ct));
+        Assert.Equal("a" + spaces + "b", heading.Text);
+    }
+
+    [Fact]
     public void HeadingAfterFrontmatterAndFenceCounts() =>
         Assert.Equal("#Real 5-6/6", Summary("---\na: 1\n---\n```\n```\n# Real\n"));
 

@@ -25,9 +25,17 @@ export const copySkill = (from: string, to: string, name?: string) =>
 export const moveSkill = (from: string, to: string, name?: string) =>
   call(api.POST("/api/skills/move", { body: { from, to, ...(name ? { name } : {}) } }));
 
-/** The skill behind a link's `code` into the vault `vault`; `name` when the folder's name is taken there. Gives the new folder. */
-export const addSkill = (code: string, vault: string, name?: string) =>
-  call(api.POST("/api/skills/add", { body: { code, vault, ...(name ? { name } : {}) } }));
+export type SkillPreview = components["schemas"]["SkillPageView"];
+
+/** The skill behind a link's `code`, which Add to my skills shows before Add. Only her session asks; the code goes in the body. */
+export const previewSkill = (code: string) => call(api.POST("/api/skills/add/preview", { body: { code } }));
+
+/**
+ * The skill behind a link's `code` into the vault `vault`, if its copy is still the one taken at `shown` (the preview's
+ * `snapshotAt`, else a 409 `skill-changed`); `name` when the folder's name is taken there. Gives the new folder.
+ */
+export const addSkill = (code: string, vault: string, shown: string, name?: string) =>
+  call(api.POST("/api/skills/add", { body: { code, vault, shown, ...(name ? { name } : {}) } }));
 
 export type SharedSkillView = components["schemas"]["SharedSkillView"];
 

@@ -118,11 +118,13 @@ public sealed class OAuthTokens(
     /// URI, PKCE challenge) and the grant sealed under the code. In one transaction, which also seals the client into
     /// the connection's meta and checks again that the connection is the user's, neither revoked nor expired, with the
     /// rights the slots were made from, and that the user's credentials haven't changed since
-    /// <paramref name="credentialReadAt"/> (the session's check, as for a new API key).
+    /// <paramref name="credentialReadAt"/> (the session's check, as for a new API key). The code carries only the vaults
+    /// the session lists: none of <paramref name="hidden"/>, which stay in the connection's grant for an Allow while
+    /// they are shown. Whether the connection has vaults left is judged on its grant, before that.
     /// </summary>
     /// <exception cref="ConnectionUnavailableException">The connection or the client can't be authorised (any more).</exception>
     /// <exception cref="CredentialsChangedException">The user's credentials changed, or the user was deactivated.</exception>
-    public async Task<string> IssueCodeAsync(User user, byte[] userKey, DateTime credentialReadAt, PendingAuthorisation request, CancellationToken ct)
+    public async Task<string> IssueCodeAsync(User user, byte[] userKey, DateTime credentialReadAt, PendingAuthorisation request, IReadOnlySet<string> hidden, CancellationToken ct)
     {
         if (request.ConnectionId is not { } connectionId || request.Problem is not null) throw new ConnectionUnavailableException("This request names no connection.");
         await EnsureReadyAsync(ct);
@@ -133,8 +135,9 @@ public sealed class OAuthTokens(
         var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw new ConnectionUnavailableException("This app is no longer known; start the connection again in the app.");
         var rights = Rights(doc, meta, request.ReadOnly);
         if (rights.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
-        // Of the vaults granted; none for an app that asked to read only, as its rights are capped to read.
-        IReadOnlySet<string> publish = request.ReadOnly ? new HashSet<string>() : Connections.PublishOf(doc, meta).Where(rights.ContainsKey).ToHashSet(StringComparer.Ordinal);
+        var listed = rights.Where(r => !hidden.Contains(r.Key)).ToDictionary(r => r.Key, r => r.Value, StringComparer.Ordinal);
+        // Of the vaults granted and listed; none for an app that asked to read only, as its rights are capped to read.
+        IReadOnlySet<string> publish = request.ReadOnly ? new HashSet<string>() : Connections.PublishOf(doc, meta).Where(listed.ContainsKey).ToHashSet(StringComparer.Ordinal);
 
         var code = Secrets.New(CodePrefix);
         var tokenId = NewTokenId();
@@ -145,7 +148,7 @@ public sealed class OAuthTokens(
         IReadOnlyDictionary<string, VaultCatalog.VaultKeyGrant> vaultKeys;
         try
         {
-            (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, publish, expiresAt, ct);
+            (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, listed, publish, expiresAt, ct);
         }
         catch (ArgumentException)
         {
@@ -189,10 +192,12 @@ public sealed class OAuthTokens(
                 var keyId = UserCatalog.KeyId(userKey, user.Id);
                 if (!await Users.Find(s, u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId).AnyAsync(token))
                     throw new CredentialsChangedException();
+                // Judged on the grant, before the hidden vaults are left out: an Allow on a connection of hidden vaults
+                // only answers as any other Allow does.
+                if (!rights.Keys.Any(current.Vaults.Contains)) throw new ConnectionUnavailableException("This connection has no vaults left.");
                 // A vault deleted since the slots were wrapped is gone from the connection's vaults: no slot for it. A
                 // deletion under way writes this document too, and conflicts.
                 var kept = Live(slots, current);
-                if (kept.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
                 // A re-keying of a vault that started or finished since its key was opened: the slot would carry the
                 // old key. Its start and finish raise the wraps of every connection that lists the vault, as the
                 // write below does, so one of the two conflicts and the retry reads the other.
@@ -213,7 +218,8 @@ public sealed class OAuthTokens(
                 }
 
                 await Docs.InsertOneAsync(s, record, cancellationToken: token);
-                await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
+                // None for a connection whose vaults the session all hides: the code is issued as any other.
+                if (kept.Count > 0) await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
                 await connections.SetClientAsync(s, user, userKey, connectionId, connected, token);
                 await ConnectionDocs.UpdateOneAsync(s, c => c.Id == connectionId, Wrapped, cancellationToken: token);
                 return true;
