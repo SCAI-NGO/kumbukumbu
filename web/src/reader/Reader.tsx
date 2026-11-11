@@ -110,61 +110,33 @@ function useSaid() {
     const timer = setTimeout(() => setSaid(null), 3000);
     return () => clearTimeout(timer);
   }, [said]);
+  const say = (text: string) => setSaid((s) => ({ text, n: (s?.n ?? 0) + 1 }));
   const copyText = (text: string) =>
     navigator.clipboard.writeText(text).then(
-      () => setSaid((s) => ({ text: "Copied", n: (s?.n ?? 0) + 1 })),
-      () => setSaid((s) => ({ text: "Couldn't copy. Select the text and copy it by hand.", n: (s?.n ?? 0) + 1 })),
+      () => say("Copied"),
+      () => say("Couldn't copy. Select the text and copy it by hand."),
     );
   const saying = <div aria-live="polite">{said && <span key={said.n} className="text-[14px] text-muted">{said.text}</span>}</div>;
-  return { copyText, saying };
+  return { copyText, saying, clear: () => setSaid(null) };
 }
 
-/** Copies the copy's Markdown and says how that went. */
-function CopyMarkdown({ copy }: { copy: ReaderCopy }) {
-  const { copyText, saying } = useSaid();
-  return (
-    <>
-      <button type="button" onClick={() => void copyText(copyMarkdown(copy))} className={buttonClass}>
-        Copy as Markdown
-      </button>
-      {saying}
-    </>
-  );
-}
+type Made = AiLinkResult | { kind: "failed" };
 
-/** Makes a new link for an AI's fetch tool with each press; the latest replaces whatever the one before showed. */
-function AiLink({ copy }: { copy: string }) {
-  const [made, setMade] = useState<AiLinkResult | { kind: "failed" } | null>(null);
-  const [pending, setPending] = useState(false);
-  const { copyText, saying } = useSaid();
-  const make = () => {
-    setPending(true);
-    makeAiLink(copy).then(
-      (result) => {
-        setPending(false);
-        setMade(result);
-      },
-      () => {
-        setPending(false);
-        setMade({ kind: "failed" });
-      },
-    );
-  };
-  const refusal =
-    made?.kind === "none"
-      ? "The link couldn't be made: open the note's link again."
-      : made?.kind === "off"
-        ? offSentence
-        : made?.kind === "busy"
-          ? busySentence
-          : made?.kind === "failed"
-            ? "The link couldn't be made; try again later."
-            : undefined;
+const refusals: Record<Exclude<Made["kind"], "link">, string> = {
+  none: "The link couldn't be made: open the note's link again.",
+  off: offSentence,
+  busy: busySentence,
+  failed: "The link couldn't be made; try again later.",
+};
+
+/** The link for an AI's fetch tool, a new one with each press, the latest replacing whatever the one before showed. */
+function AiLinkMade({ made }: { made: Made | null }) {
+  const { copyText, saying, clear } = useSaid();
+  const link = made?.kind === "link" ? made.link : undefined;
+  // A "Copied" was said of the link before.
+  useEffect(() => clear(), [link]);
   return (
     <>
-      <button type="button" onClick={make} disabled={pending} aria-busy={pending} className={buttonClass}>
-        Link for your AI
-      </button>
       {made?.kind === "link" && (
         <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
           <input
@@ -180,10 +152,13 @@ function AiLink({ copy }: { copy: string }) {
           {saying}
         </div>
       )}
-      <p aria-live="polite" className="w-full text-[14px] text-muted empty:hidden">
-        {made?.kind === "link"
-          ? `Valid until ${untilText(made.expiresAt)}. Anyone with this link can read this note until then: it is for an AI to fetch, not to post in a chat.`
-          : refusal}
+      {/* Always laid out: a live region that appears with its text is often not read out. */}
+      <p aria-live="polite" className="text-[14px] text-muted">
+        {made === null
+          ? null
+          : made.kind === "link"
+            ? `Valid until ${untilText(made.expiresAt)}. Anyone with this link can read this note until then: it is for an AI to fetch, not to post in a chat.`
+            : refusals[made.kind]}
       </p>
     </>
   );
@@ -191,13 +166,36 @@ function AiLink({ copy }: { copy: string }) {
 
 function Copy({ copy }: { copy: ReaderCopy }) {
   const files = useMemo(() => ({ copy: copy.copy, indices: new Set(copy.files.map((f) => f.index)) }), [copy.copy, copy.files]);
+  const markdown = useSaid();
+  const [made, setMade] = useState<Made | null>(null);
+  const pending = useRef(false);
+  const latest = useRef(0);
+  // Not disabled while it waits, so the focus stays on it; a press meanwhile does nothing.
+  const make = () => {
+    if (pending.current) return;
+    pending.current = true;
+    const id = ++latest.current;
+    const settle = (next: Made) => {
+      pending.current = false;
+      if (id === latest.current) setMade(next);
+    };
+    makeAiLink(copy.copy).then(settle, () => settle({ kind: "failed" }));
+  };
   return (
     <article>
       <h1 className="text-[28px] leading-tight font-bold text-text">{copy.title}</h1>
       <p className="mt-1 mb-4 font-mono text-[12px] text-muted">{snapshotText(copy.snapshotAt)}</p>
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <CopyMarkdown copy={copy} />
-        <AiLink copy={copy.copy} />
+      <div className="mb-6 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => void markdown.copyText(copyMarkdown(copy))} className={buttonClass}>
+            Copy as Markdown
+          </button>
+          <button type="button" onClick={make} className={buttonClass}>
+            Link for your AI
+          </button>
+          {markdown.saying}
+        </div>
+        <AiLinkMade made={made} />
       </div>
       <div className="text-[16px] leading-[1.6] break-words text-text-body">
         <Files.Provider value={files}>
@@ -289,7 +287,7 @@ export default function Reader() {
   return (
     <main className="mx-auto max-w-[720px] px-5 py-10">
       {state.kind === "loading" && <p className="text-muted">Loading …</p>}
-      {state.kind === "copy" && <Copy copy={state.copy} />}
+      {state.kind === "copy" && <Copy key={state.copy.copy} copy={state.copy} />}
       {state.kind === "none" && <CodeForm wrong={wrong} pending={pending} onRead={(code) => read(readWithCode(code), true)} />}
       {state.kind === "off" && <p className="text-text-body">{offSentence}</p>}
       {state.kind === "busy" && <p className="text-text-body">{busySentence}</p>}
