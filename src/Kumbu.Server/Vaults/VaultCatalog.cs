@@ -107,6 +107,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>The copies' files, sealed under their publication's key; no vault blobs, so <see cref="BlobSweep"/> never sees them.</summary>
     internal IMongoCollection<PublicationFileDocument> PublicationFiles { get; } = db.GetCollection<PublicationFileDocument>("publication_files");
 
+    /// <summary>
+    /// The AI links of the copies (<see cref="AiLinkToken"/>), found by their lookup id alone. Left out of
+    /// <see cref="ContentCollections"/> on purpose: anonymous readers make them, so they never count towards the owner's
+    /// storage; <see cref="DeleteVaultsAsync"/> deletes them by vault beside it.
+    /// </summary>
+    internal IMongoCollection<AiLinkDocument> AiLinks { get; } = db.GetCollection<AiLinkDocument>("ai_links");
+
     /// <summary><see cref="Publications"/> and <see cref="PublicationFiles"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
     private IMongoCollection<SealedDocument> PublicationsByVault { get; } = db.GetCollection<SealedDocument>("publications");
 
@@ -753,7 +760,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', WebDAV shares',
     /// the dev token's, recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
-    /// the published copies with their files), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// the published copies with their files and AI links), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -839,6 +846,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
                         }
 
+                        // Not counted: a deletion's figure would otherwise tell how many AI links readers made.
+                        await AiLinks.DeleteManyAsync(s, Builders<AiLinkDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token);
+
                         await Sharing.VaultEvents.DeleteAsync(db, s, ids, null, token);
                         // Their memberships, tombstones included (collab design §2.1): nothing is left to reach or name.
                         await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
@@ -864,6 +874,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 deleted += (await collection.DeleteManyAsync(Builders<SealedDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None)).DeletedCount;
             }
+
+            await AiLinks.DeleteManyAsync(Builders<AiLinkDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None);
 
             return deleted;
         }
@@ -1763,6 +1775,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<PublicationFileDocument>(
                     Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Publication).Ascending(d => d.Index), new CreateIndexOptions { Unique = true }),
                 new CreateIndexModel<PublicationFileDocument>(Builders<PublicationFileDocument>.IndexKeys.Ascending(d => d.Vault)),
+            ],
+            ct);
+        await AiLinks.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<AiLinkDocument>(Builders<AiLinkDocument>.IndexKeys.Ascending(d => d.Lookup), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<AiLinkDocument>(Builders<AiLinkDocument>.IndexKeys.Ascending(d => d.Vault)),
+                new CreateIndexModel<AiLinkDocument>(Builders<AiLinkDocument>.IndexKeys.Ascending(d => d.Publication)),
+                // Only tidies up: every request checks expiresAt itself (PublicationStore.OpenAiLinkAsync, CountAiLinkAsync).
+                new CreateIndexModel<AiLinkDocument>(Builders<AiLinkDocument>.IndexKeys.Ascending(d => d.ExpiresAt), new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
             ],
             ct);
         await Slots.Indexes.CreateManyAsync(
