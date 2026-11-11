@@ -225,4 +225,32 @@ describe("Skills", () => {
     expect(within(await card("tweaked")).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
     expect(within(await card("plain")).queryByText(/update|gone/i)).not.toBeInTheDocument();
   });
+
+  it("says publishing is switched off for a link copy, and offers no review", async () => {
+    api([], {
+      "GET /api/skills": () =>
+        json(200, {
+          skills: [
+            // The stored state is kept while publishing is off, so the list may still say "available".
+            skill({ name: "linked", location: "Skills", path: "/Skills/linked", source: "a skill link", update: "available", canWrite: true }),
+            skill({ name: "fresh", location: "Skills", path: "/Skills/fresh", update: "available", canWrite: true }),
+          ],
+          withoutSkills: [],
+        }),
+      "POST /api/skills/updates/check": () =>
+        json(200, [
+          { path: "/Skills/linked", state: "publishing-off", source: "a skill link", commit: null },
+          { path: "/Skills/fresh", state: "available" },
+        ]),
+    });
+    renderApp("/skills/installed");
+    const card = async (n: string) => (await screen.findByText(n)).closest("li")!;
+    const sentence = "Publishing is switched off on this server, so updates from links can't be checked right now.";
+    expect(await within(await card("linked")).findByText(sentence)).toBeInTheDocument();
+    expect(within(await card("linked")).queryByText("Update available")).not.toBeInTheDocument();
+    expect(within(await card("linked")).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(within(await card("fresh")).getByText("Update available")).toBeInTheDocument();
+    expect(within(await card("fresh")).getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(within(await card("fresh")).queryByText(sentence)).not.toBeInTheDocument();
+  });
 });

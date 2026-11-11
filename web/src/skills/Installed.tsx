@@ -52,13 +52,16 @@ export default function Installed() {
     onSettled: () => setAsking(null),
   });
 
-  // What the last check found for each copy; the list itself tells of an update or an edited origin, only "gone" is the check's alone.
+  // What the last check found for each copy; the list itself tells of an update or an edited origin, only "gone" and
+  // "publishing-off" are the check's alone (while publishing is off the list keeps a link copy's stored "available").
   const [gone, setGone] = useState<Set<string>>(new Set());
+  const [paused, setPaused] = useState<Set<string>>(new Set());
   const [reviewing, setReviewing] = useState<SkillView | null>(null);
   const check = useMutation({
     mutationFn: checkSkillUpdates,
     onSuccess: (states) => {
       setGone(new Set(states.filter((u) => u.state === "gone").map((u) => u.path)));
+      setPaused(new Set(states.filter((u) => u.state === "publishing-off").map((u) => u.path)));
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
     },
   });
@@ -81,6 +84,7 @@ export default function Installed() {
   // Asked every time, with what goes out; a link of it withdrawn since it was last shared also costs the copies made from
   // that link their updates.
   const onShare = (s: SkillView) => setAsking(s);
+  const isPaused = (s: SkillView) => s.path != null && paused.has(s.path);
 
   return (
     <>
@@ -114,6 +118,8 @@ export default function Installed() {
                 <p className="font-mono text-xs break-words text-muted">{origin(s).join(" · ")}</p>
                 {s.originEdited ? (
                   <p className="text-sm text-text">Origin edited: no updates</p>
+                ) : isPaused(s) ? (
+                  <p className="text-sm text-text">Publishing is switched off on this server, so updates from links can't be checked right now.</p>
                 ) : s.update === "available" ? (
                   <p className="text-sm font-medium text-text">Update available</p>
                 ) : (
@@ -138,7 +144,7 @@ export default function Installed() {
                     </button>
                   )}
                   <ZipButton skill={s} />
-                  {!s.originEdited && s.update === "available" && s.path != null && s.canWrite && (
+                  {!s.originEdited && !isPaused(s) && s.update === "available" && s.path != null && s.canWrite && (
                     <button type="button" onClick={() => setReviewing(s)} className={secondaryButtonClass}>
                       Review
                     </button>
