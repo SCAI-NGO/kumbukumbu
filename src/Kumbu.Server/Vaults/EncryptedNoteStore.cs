@@ -476,32 +476,40 @@ public sealed class EncryptedNoteStore(
         var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
 
         catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
-        // Counted as new bytes whether or not the vault holds them already: the check can't know before the gate.
-        var owner = RequireSpace(v, bytes.Length);
-        await v.Gate.WaitAsync(ct);
+        // Counted as new bytes whether or not the vault holds them already: the check can't know before the gate. Bytes
+        // found there give their space back.
+        var reservation = RequireSpace(v, bytes.Length);
         try
         {
-            catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
-            var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
-            if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount == 0)
+            await v.Gate.WaitAsync(ct);
+            try
             {
-                try
+                catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+                var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
+                if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount == 0)
                 {
-                    await catalog.Blobs.InsertOneAsync(
-                        new BlobDocument { Id = ObjectId.GenerateNewId(), Vault = v.Id, BlobId = id, Blob = v.SealBlob(id, bytes.Span), At = catalog.Now },
-                        cancellationToken: ct);
-                    if (owner is not null) _quota!.Adjust(owner, bytes.Length);
+                    try
+                    {
+                        await catalog.Blobs.InsertOneAsync(
+                            new BlobDocument { Id = ObjectId.GenerateNewId(), Vault = v.Id, BlobId = id, Blob = v.SealBlob(id, bytes.Span), At = catalog.Now },
+                            cancellationToken: ct);
+                        if (reservation is not null) _quota!.Commit(reservation);
+                    }
+                    catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+                    {
+                        // Another process put the same bytes meanwhile.
+                        await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct);
+                    }
                 }
-                catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
-                {
-                    // Another process put the same bytes meanwhile.
-                    await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct);
-                }
+            }
+            finally
+            {
+                v.Gate.Release();
             }
         }
         finally
         {
-            v.Gate.Release();
+            _quota?.Release(reservation);
         }
 
         return Convert.ToBase64String(id);
@@ -965,6 +973,9 @@ public sealed class EncryptedNoteStore(
         return written;
     }
 
+    /// <summary><see cref="WriteAsync"/> without the key's record: checks that the vault takes writes, takes the quota's
+    /// reservation, and runs the write under the gate (<see cref="UnderGateAsync"/>), giving the reservation back on every
+    /// way out but the commit.</summary>
     private async Task<bool> WriteUnderGateAsync(
         UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, long? adding, CancellationToken ct)
     {
@@ -972,7 +983,24 @@ public sealed class EncryptedNoteStore(
         // read-only for her refuses here, whichever route came (collab design §7.4).
         var access = _byId.GetValueOrDefault(vault.Id);
         catalog.CheckWritable(vault, access);
-        var owner = adding is { } bytes ? RequireSpace(vault, bytes) : null;
+        // What it holds of the quota is given back on every way out but the commit, which counts it.
+        var reservation = adding is { } bytes ? RequireSpace(vault, bytes) : null;
+        try
+        {
+            return await UnderGateAsync(vault, paths, work, access, reservation, ct);
+        }
+        finally
+        {
+            _quota?.Release(reservation);
+        }
+    }
+
+    /// <summary>The write under the vault's gate: the transaction, the working set after the commit, and the quota's
+    /// figure (<see cref="Accounts.StorageQuota.Commit"/>).</summary>
+    private async Task<bool> UnderGateAsync(
+        UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, VaultAccess? access,
+        Accounts.QuotaReservation? reservation, CancellationToken ct)
+    {
         await vault.Gate.WaitAsync(ct);
         try
         {
@@ -1005,7 +1033,7 @@ public sealed class EncryptedNoteStore(
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
-            if (owner is not null) _quota!.Adjust(owner, adding!.Value);
+            if (reservation is not null) _quota!.Commit(reservation);
             index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
             return true;
@@ -1062,12 +1090,13 @@ public sealed class EncryptedNoteStore(
     /// <summary>
     /// The storage quota's check of a write that adds about <paramref name="incoming"/> bytes to <paramref name="vault"/>
     /// (WebDAV design §3.10): against its owner's account, never the caller's, from the cache alone, so it never waits for
-    /// MongoDB. <see cref="QuotaExceededException"/> if it doesn't fit; else the owner whose figure the write adjusts after
-    /// its commit, or null (no quota, the seeder's store; a vault without an owner). A vault the store has no access record
-    /// for passes: every path that writes found the vault through <see cref="VaultAsync"/>, which records it, so none
-    /// arises but from a misuse inside the store, and refusing there would hide that bug behind "out of space".
+    /// MongoDB. <see cref="QuotaExceededException"/> if it doesn't fit; else the space it holds in its owner's figure until
+    /// the write commits or gives up, or null (no quota, the seeder's store; a vault without an owner). A vault the store
+    /// has no access record for passes: every path that writes found the vault through <see cref="VaultAsync"/>, which
+    /// records it, so none arises but from a misuse inside the store, and refusing there would hide that bug behind "out
+    /// of space".
     /// </summary>
-    private string? RequireSpace(UnlockedVault vault, long incoming) =>
+    private Accounts.QuotaReservation? RequireSpace(UnlockedVault vault, long incoming) =>
         _quota is not null && _byId.GetValueOrDefault(vault.Id) is { } access ? _quota.Require(access, incoming) : null;
 
     /// <summary>What a batch that adds data adds, roughly: the new notes' text (a replace keeps the old one in the

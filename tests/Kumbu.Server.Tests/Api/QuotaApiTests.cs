@@ -780,4 +780,116 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.True(await UsedAsync() < OneMb);
     }
+
+    /// <summary>A store with the quota, as a request's is (the seeder's has none).</summary>
+    private static EncryptedNoteStore QuotaStore(RestClient user) =>
+        new(user.Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey), null, null, null, null, Quota(user.Api));
+
+    private static StoredNote Note(RestClient user, string path, long bytes, WriterRef? by = null) =>
+        new(VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path), new string('x', (int)bytes), 1, user.Username, DateTime.UtcNow, [], Ref: by ?? WriterRef.Server);
+
+    /// <summary>A user on a server with a 1 MB default, a second vault "Other" beside "Work", her figure counted;
+    /// returns the room she has left.</summary>
+    private async Task<(RestClient User, long Room)> RoomAsync()
+    {
+        var api = Own(quotaDefault: "1MB");
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        using (var other = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Other" })) Assert.True(other.IsSuccessStatusCode);
+        var used = (await Quota(api).FigureAsync(user.User.Id, Ct)).Used;
+        return (user, OneMb - used);
+    }
+
+    /// <summary>Many writes at once, each fitting alone, store no more than the limit allows: each holds its space from its
+    /// check until it commits.</summary>
+    [Fact]
+    public async Task Concurrent_writes_store_no_more_than_the_limit()
+    {
+        const long limit = 4 * OneMb;
+        const int noteBytes = 900 * 1024;
+        var user = await RestClient.NewAsync(Api, vault: "Work");
+        var quota = Quota(Api);
+        await OverrideAsync(user, limit);
+        quota.OverrideSeen();
+        // Counted first: before the first count, writes go through unchecked.
+        var before = (await quota.FigureAsync(user.User.Id, Ct)).Used;
+
+        var statuses = await Task.WhenAll(Enumerable.Range(0, 40).Select(async i =>
+        {
+            var content = string.Concat(Enumerable.Repeat($"word{i} ", noteBytes / 5))[..noteBytes];
+            using var put = await user.SendAsync(HttpMethod.Put, user.Url($"n{i}.md"), new { content });
+            return put.StatusCode;
+        }));
+
+        // The check counts a note by its text; what the database stores beside it (sealing, its sections) the recount
+        // adds later, so the bound is on the writes the limit lets through, not on the bytes counted after them.
+        var created = statuses.Count(s => s == HttpStatusCode.Created);
+        Assert.All(statuses, s => Assert.Contains(s, new[] { HttpStatusCode.Created, HttpStatusCode.InsufficientStorage }));
+        Assert.InRange(created, 1, (limit - before) / noteBytes);
+    }
+
+    /// <summary>A write that doesn't commit (its path taken, its work throwing) gives back the space it held.</summary>
+    [Fact]
+    public async Task A_failed_write_frees_the_space_it_reserved()
+    {
+        var (user, room) = await RoomAsync();
+        var store = QuotaStore(user);
+        Assert.True(await store.TryCreateAsync(Note(user, "/Work/a.md", 10), Ct));
+        var big = (room - 10) * 3 / 4;
+
+        Assert.False(await store.TryCreateAsync(Note(user, "/Work/a.md", big), Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.TryCreateAsync(Note(user, "/Work/b.md", big, WriterRef.Unknown), Ct));
+
+        Assert.True(await QuotaStore(user).TryCreateAsync(Note(user, "/Work/c.md", big), Ct));
+        await Assert.ThrowsAsync<QuotaExceededException>(() => QuotaStore(user).TryCreateAsync(Note(user, "/Work/d.md", big), Ct));
+    }
+
+    /// <summary>A write given up while it waits for the vault's gate gives back the space it held; while it waits, the
+    /// space is held, in the owner's other vaults too.</summary>
+    [Fact]
+    public async Task A_cancelled_write_frees_the_space_it_reserved()
+    {
+        var (user, room) = await RoomAsync();
+        var quota = Quota(user.Api);
+        var big = room * 3 / 4;
+        var work = (await user.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == "Work");
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        await work.Vault.Gate.WaitAsync(Ct);
+        try
+        {
+            var waiting = QuotaStore(user).TryCreateAsync(Note(user, "/Work/a.md", big), cancel.Token);
+            await Task.Run(async () =>
+            {
+                while (quota.ReservedBy(user.User.Id) == 0) await Task.Delay(10, Ct);
+            }, Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await Assert.ThrowsAsync<QuotaExceededException>(() => QuotaStore(user).TryCreateAsync(Note(user, "/Other/b.md", big), Ct));
+
+            await cancel.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        }
+        finally
+        {
+            work.Vault.Gate.Release();
+        }
+
+        Assert.True(await QuotaStore(user).TryCreateAsync(Note(user, "/Other/b.md", big), Ct));
+    }
+
+    /// <summary>Bytes the vault holds already are counted as new at the check, but a put that only finds them gives the
+    /// space back.</summary>
+    [Fact]
+    public async Task A_deduplicated_blob_frees_the_space_it_reserved()
+    {
+        var (user, room) = await RoomAsync();
+        var store = QuotaStore(user);
+        var part = (int)(room * 2 / 5);
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(part);
+        var id = await store.PutBlobAsync("Work", bytes, Ct);
+
+        Assert.Equal(id, await store.PutBlobAsync("Work", bytes, Ct));
+
+        // Fits only if the second put gave its reservation back: 2/5 stored, 2/5 more asked for.
+        var other = await store.PutBlobAsync("Work", System.Security.Cryptography.RandomNumberGenerator.GetBytes(part), Ct);
+        Assert.NotEqual(id, other);
+    }
 }
