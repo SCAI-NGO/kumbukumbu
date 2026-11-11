@@ -153,81 +153,106 @@ public static class FileApi
         var declared = request.ContentLength;
         if (declared > AttachmentFormat.MaxBytes) throw new ApiException(StatusCodes.Status413PayloadTooLarge, TooLarge);
 
-        // One more byte than may come, to tell "exactly the limit" from "more".
-        var capacity = (int)Math.Min(declared ?? AttachmentFormat.MaxBytes, AttachmentFormat.MaxBytes) + 1;
-        var buffer = ArrayPool<byte>.Shared.Rent(capacity);
-        try
+        using var body = new ReceivedBody();
+        await body.ReadAsync(request, declared, ct);
+        var bytes = body.Bytes;
+        if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
+
+        // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's.
+        (int, int)? dimensions = null;
+        if (AttachmentFormat.ForPath(filePath)!.Kind == AttachmentKind.Image)
         {
-            var length = await ReadBodyAsync(request, buffer, capacity, declared, ct);
-            var bytes = buffer.AsMemory(0, length);
-            if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
-
-            // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's.
-            (int, int)? dimensions = null;
-            if (AttachmentFormat.ForPath(filePath)!.Kind == AttachmentKind.Image)
-            {
-                dimensions = ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
-            }
-
-            // Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.
-            var existing = await files.GetAttachmentAsync(filePath, ct);
-            if (existing is not null && existing.Version != version) return await ConflictAsync(existing, version, labels, ct);
-            if (existing is null && version is not null) throw await NoteApi.MissingAsync(store, filePath, ct);
-
-            var (result, written) = await writer.WriteAsync(filePath.Value, bytes, dimensions, version, ct);
-            if (result.IsError)
-            {
-                return result.Kind switch
-                {
-                    Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => await ConflictAsync(written, version, labels, ct),
-                    Kumbu.Core.Sh.ShellErrorKind.NotFound => throw await NoteApi.MissingAsync(store, filePath, ct),
-                    Kumbu.Core.Sh.ShellErrorKind.Refused => throw NoteApi.Refused(result),
-                    Kumbu.Core.Sh.ShellErrorKind.Conflict => throw ConflictWithoutState(result.Output),
-                    _ => throw ApiErrors.BadRequest(result.Output),
-                };
-            }
-
-            var view = await FileStateView.OfAsync(written!, labels, ct);
-            return existing is null ? TypedResults.Created(ApiPaths.Url("files", filePath), view) : TypedResults.Ok(view);
+            dimensions = ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
         }
-        finally
+
+        // Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.
+        var existing = await files.GetAttachmentAsync(filePath, ct);
+        if (existing is not null && existing.Version != version) return await ConflictAsync(existing, version, labels, ct);
+        if (existing is null && version is not null) throw await NoteApi.MissingAsync(store, filePath, ct);
+
+        var (result, written) = await writer.WriteAsync(filePath.Value, bytes, dimensions, version, ct);
+        if (result.IsError)
         {
-            // The pool hands the array to the next renter: the file's bytes don't go with it, also when reading
-            // stopped part-way (too large, cut off), so all that may have been written is cleared.
-            buffer.AsSpan(0, capacity).Clear();
-            ArrayPool<byte>.Shared.Return(buffer);
+            return result.Kind switch
+            {
+                Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => await ConflictAsync(written, version, labels, ct),
+                Kumbu.Core.Sh.ShellErrorKind.NotFound => throw await NoteApi.MissingAsync(store, filePath, ct),
+                Kumbu.Core.Sh.ShellErrorKind.Refused => throw NoteApi.Refused(result),
+                Kumbu.Core.Sh.ShellErrorKind.Conflict => throw ConflictWithoutState(result.Output),
+                _ => throw ApiErrors.BadRequest(result.Output),
+            };
         }
+
+        var view = await FileStateView.OfAsync(written!, labels, ct);
+        return existing is null ? TypedResults.Created(ApiPaths.Url("files", filePath), view) : TypedResults.Ok(view);
     }
 
-    /// <summary>The whole body into <paramref name="buffer"/>; 413 past the limit, 400 for a body that ends before
-    /// its <c>Content-Length</c> or is cut off.</summary>
-    private static async Task<int> ReadBodyAsync(HttpRequest request, byte[] buffer, int capacity, long? declared, CancellationToken ct)
+    /// <summary>
+    /// A request's body in arrays from the pool that grow with the bytes received, never with the length declared, so
+    /// a body that arrives slowly holds what it has sent. The pool hands an array to the next renter: the file's bytes
+    /// don't go with it, also when reading stopped part-way (too large, cut off), so each array goes back cleared.
+    /// </summary>
+    private sealed class ReceivedBody : IDisposable
     {
-        var length = 0;
-        try
+        private const int InitialSize = 128 * 1024;
+
+        private byte[] _buffer = [];
+        private int _length;
+
+        public ReadOnlyMemory<byte> Bytes => _buffer.AsMemory(0, _length);
+
+        /// <summary>The whole body; 413 past the limit, 400 for a body that ends before its <c>Content-Length</c> or
+        /// is cut off.</summary>
+        public async Task ReadAsync(HttpRequest request, long? declared, CancellationToken ct)
         {
-            while (length < capacity)
+            // One more byte than may come, to tell "exactly the limit" from "more".
+            var capacity = (int)Math.Min(declared ?? AttachmentFormat.MaxBytes, AttachmentFormat.MaxBytes) + 1;
+            _buffer = ArrayPool<byte>.Shared.Rent(Math.Min(capacity, InitialSize));
+            try
             {
-                var read = await request.Body.ReadAsync(buffer.AsMemory(length, capacity - length), ct);
-                if (read == 0) break;
-                length += read;
+                while (_length < capacity)
+                {
+                    if (_length == _buffer.Length) Grow(Math.Min(capacity, _buffer.Length * 2));
+                    var read = await request.Body.ReadAsync(_buffer.AsMemory(_length, Math.Min(_buffer.Length, capacity) - _length), ct);
+                    if (read == 0) break;
+                    _length += read;
+                }
             }
-        }
-        catch (IOException)
-        {
-            // The client went away mid-body (Kestrel's own "unexpected end" is a BadHttpRequestException, answered alike).
-            throw ApiErrors.BadRequest(CutOff);
+            catch (IOException)
+            {
+                // The client went away mid-body (Kestrel's own "unexpected end" is a BadHttpRequestException, answered alike).
+                throw ApiErrors.BadRequest(CutOff);
+            }
+
+            if (_length == capacity)
+            {
+                throw declared is null || declared > AttachmentFormat.MaxBytes - 1
+                    ? new ApiException(StatusCodes.Status413PayloadTooLarge, TooLarge)
+                    : ApiErrors.BadRequest("The body is longer than its Content-Length.");
+            }
+
+            if (declared is { } expected && _length != expected) throw ApiErrors.BadRequest(CutOff);
         }
 
-        if (length == capacity)
+        private void Grow(int size)
         {
-            throw declared is null || declared > AttachmentFormat.MaxBytes - 1
-                ? new ApiException(StatusCodes.Status413PayloadTooLarge, TooLarge)
-                : ApiErrors.BadRequest("The body is longer than its Content-Length.");
+            var next = ArrayPool<byte>.Shared.Rent(size);
+            _buffer.AsSpan(0, _length).CopyTo(next);
+            Release();
+            _buffer = next;
         }
 
-        if (declared is { } expected && length != expected) throw ApiErrors.BadRequest(CutOff);
-        return length;
+        private void Release()
+        {
+            _buffer.AsSpan().Clear();
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = [];
+        }
+
+        public void Dispose()
+        {
+            if (_buffer.Length > 0) Release();
+        }
     }
 
     /// <summary><c>version</c>: trash the file only if it is still at that version, else 409 with the file as it is now.

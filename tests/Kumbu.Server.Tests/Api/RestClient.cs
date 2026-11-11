@@ -153,9 +153,11 @@ public sealed class RestClient
 
     public Task<HttpResponseMessage> GetAsync(string path, string? bearer = null) => SendAsync(HttpMethod.Get, path, bearer: bearer);
 
-    /// <summary>A request with <paramref name="content"/> as its body as it is (an attachment's bytes), as the session or <paramref name="bearer"/>.</summary>
-    public Task<HttpResponseMessage> SendContentAsync(HttpMethod method, string path, HttpContent content, string? bearer = null) =>
-        SendAsync(_api, method, path, null, bearer is null ? Session : null, bearer, content: content);
+    /// <summary>A request with <paramref name="content"/> as its body as it is (an attachment's bytes), as the session or <paramref name="bearer"/>.
+    /// Without <paramref name="followRedirects"/> the body goes out as it arrives: the redirect handler would buffer the body,
+    /// to the length it declares, and send it with a Content-Length.</summary>
+    public Task<HttpResponseMessage> SendContentAsync(HttpMethod method, string path, HttpContent content, string? bearer = null, bool followRedirects = true) =>
+        SendAsync(_api, method, path, null, bearer is null ? Session : null, bearer, content: content, followRedirects: followRedirects);
 
     /// <summary>Uploads an attachment's bytes through <c>PUT /api/files</c>; <paramref name="version"/> to overwrite.</summary>
     public Task<HttpResponseMessage> PutFileAsync(string filePath, byte[] bytes, string? version = null, string? bearer = null) =>
@@ -200,7 +202,7 @@ public sealed class RestClient
 
     internal static async Task<HttpResponseMessage> SendAsync(
         WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer,
-        IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null, CancellationToken? cancel = null)
+        IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null, CancellationToken? cancel = null, bool followRedirects = true)
     {
         using var request = new HttpRequestMessage(method, path);
         foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.TryAddWithoutValidation(name, value);
@@ -211,7 +213,7 @@ public sealed class RestClient
         else request.Headers.Add("Origin", Origin);
         // An address of its own per request, so the sign-in limits of other tests don't reach it.
         request.Headers.Add("X-Forwarded-For", $"198.20.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}");
-        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = followRedirects, BaseAddress = new Uri("https://localhost") });
         return await client.SendAsync(request, cancel ?? Ct);
     }
 }
