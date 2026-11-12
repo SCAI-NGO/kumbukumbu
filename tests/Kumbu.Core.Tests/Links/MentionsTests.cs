@@ -83,4 +83,15 @@ public class MentionsTests
         Assert.InRange(watch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         Assert.Equal([(0, 4)], mention.Marks);
     }
+
+    [Theory]
+    [InlineData("Plan`a`")]
+    [InlineData("Plan[a](b)")]
+    public void Many_masked_spans_take_linear_time(string unit)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var mention = Assert.Single(Of(string.Concat(Enumerable.Repeat(unit, 80_000)), "Plan"));
+        Assert.InRange(watch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        Assert.Equal([.. Enumerable.Range(0, 80_000).Select(k => (k * unit.Length, 4))], mention.Marks);
+    }
 }

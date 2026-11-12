@@ -37,6 +37,10 @@ public static partial class Mentions
             if (!forms.Any(f => line.Contains(f, StringComparison.OrdinalIgnoreCase))) continue;
 
             var masked = Masked(line);
+            masked.Sort();
+            var starts = masked.ConvertAll(m => m.Start).ToArray();
+            var reach = new int[masked.Count];
+            for (var k = 0; k < reach.Length; k++) reach[k] = k == 0 ? masked[0].End : Math.Max(reach[k - 1], masked[k].End);
             var marks = new SortedSet<(int Start, int Length)>();
             foreach (var form in forms)
             {
@@ -46,7 +50,7 @@ public static partial class Mentions
                     var end = at + form.Length;
                     if (at > 0 && char.IsLetterOrDigit(line[at - 1])) continue;
                     if (end < line.Length && char.IsLetterOrDigit(line[end])) continue;
-                    if (masked.Any(m => at < m.End && m.Start < end)) continue;
+                    if (Overlaps(starts, reach, at, end)) continue;
                     marks.Add((at, form.Length));
                 }
             }
@@ -55,6 +59,20 @@ public static partial class Mentions
         }
 
         return result;
+    }
+
+    // Whether [at, end) overlaps a span, the spans sorted by start and reach[k] the furthest end of the first k + 1.
+    private static bool Overlaps(int[] starts, int[] reach, int at, int end)
+    {
+        int low = 0, high = starts.Length;
+        while (low < high)
+        {
+            var middle = (low + high) / 2;
+            if (starts[middle] < end) low = middle + 1;
+            else high = middle;
+        }
+
+        return low > 0 && reach[low - 1] > at;
     }
 
     /// <summary>What a mention can't stand in on one line, as (start, end): inline code, wikilinks, Markdown links and

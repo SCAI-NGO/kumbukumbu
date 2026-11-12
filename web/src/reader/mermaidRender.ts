@@ -86,21 +86,48 @@ function shapeData(source: string) {
   return blocks;
 }
 
+const codePoint = (code: number) => (code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd");
+
 /** The source with CSS escapes undone: `\` and 1–6 hex digits (and one whitespace after them), or `\` and a character. */
 const cssUnescaped = (source: string) =>
-  source.replace(/\\(?:([0-9a-fA-F]{1,6})\s?|([\s\S]))/g, (_, hex: string | undefined, char: string | undefined) => {
-    if (hex === undefined) return char!;
-    const code = parseInt(hex, 16);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
-  });
+  source.replace(/\\(?:([0-9a-fA-F]{1,6})\s?|([\s\S]))/g, (_, hex: string | undefined, char: string | undefined) =>
+    hex === undefined ? char! : codePoint(parseInt(hex, 16)),
+  );
+
+const named: Record<string, string> = { lpar: "(", rpar: ")", lt: "<", gt: ">", amp: "&", quot: '"', apos: "'", colon: ":", bsol: "\\", sol: "/", semi: ";", num: "#" };
+
+/**
+ * The source with character references undone: HTML's (`&#40;`, `&#x28;`, `&lpar;`, the numeric ones and `&lt;`,
+ * `&gt;`, `&amp;`, `&quot;` also without their semicolon) and Mermaid's entity codes (`#40;`, `#lt;`).
+ */
+const htmlUnescaped = (source: string) =>
+  source.replace(
+    /&#[xX]([0-9a-fA-F]+);?|&#(\d+);?|#[xX]([0-9a-fA-F]+);|#(\d+);|[&#]([A-Za-z]+);|&(lt|gt|amp|quot)(?![A-Za-z;])/gi,
+    (whole, hex, dec, mhex, mdec, name: string | undefined, legacy: string | undefined) => {
+      if (hex ?? mhex) return codePoint(parseInt(hex ?? mhex, 16));
+      if (dec ?? mdec) return codePoint(parseInt(dec ?? mdec, 10));
+      const key = (name ?? legacy)!;
+      return named[key] ?? named[key.toLowerCase()] ?? whole;
+    },
+  );
+
+/** The source as the HTML and CSS it may end up in read it: references and escapes undone, a few rounds deep. */
+function unescaped(source: string) {
+  for (let round = 0; round < 4; round++) {
+    const next = cssUnescaped(htmlUnescaped(source));
+    if (next === source) break;
+    source = next;
+  }
+  return source;
+}
 
 /**
  * Whether drawing would load an image into the live page, a request with the viewer's cookies that the note names:
  * a CSS function such as `url()` in any style, a shape's `img` (its YAML key spelt plainly, quoted or escaped), a
  * sequence actor's `properties` with an `icon`, or its `details`, which reads properties from an element of the page.
  */
-function loadsImage(source: string) {
-  if (/(?:url|image-set|image|cross-fade|element|src)\(/i.test(cssUnescaped(source))) return true;
+function loadsImage(source: string, decoded: string) {
+  if (/(?:url|image-set|image|cross-fade|element|src)\(/i.test(decoded)) return true;
   if (shapeData(source).some((block) => /\bimg\b|\\[xuU]/.test(block))) return true;
   const rows = lines(source);
   if (keyword(rows) !== "sequenceDiagram") return false;
@@ -108,6 +135,13 @@ function loadsImage(source: string) {
     row.split(";").some((statement) => /^\s*details\b/i.test(statement) || (/^\s*properties\b/i.test(statement) && /icon|\\u/i.test(statement))),
   );
 }
+
+/**
+ * Whether the decoded source has something an HTML parser takes for a tag, a comment or a declaration, other than a
+ * line break. Mermaid puts some text into the live page as HTML (KaTeX in sequence messages, architecture services),
+ * and DOMPurify keeps an `<img src>`. Class and state annotations (`<<interface>>`) are no HTML.
+ */
+const hasHtml = (decoded: string) => /<(?!\/?br\s*\/?>)[A-Za-z!/?]/i.test(decoded.replace(/<<[A-Za-z][\w-]*>>/g, ""));
 
 /**
  * The SVG as XML, its root at the size of its `viewBox` (Mermaid gives it `width="100%"` and a `max-width`). Mermaid's
@@ -140,7 +174,9 @@ async function draw(source: string, dark: boolean) {
   const id = `kumbu-mermaid-${++drawn}`;
   try {
     if (source.length > maxTextSize) throw new Error("Maximum text size in diagram exceeded");
-    if (loadsImage(source)) throw new Error("images in diagrams aren't loaded.");
+    const decoded = unescaped(source);
+    if (loadsImage(source, decoded)) throw new Error("images in diagrams aren't loaded.");
+    if (hasHtml(decoded)) throw new Error("HTML in diagrams isn't drawn.");
     mermaid.initialize(config(dark));
     await mermaid.parse(source);
     const { svg } = await mermaid.render(id, source);

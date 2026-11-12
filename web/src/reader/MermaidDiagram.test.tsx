@@ -246,6 +246,8 @@ describe("MermaidDiagram", () => {
     ["a C4 element style", 'C4Context\n Person(a, "A")\n UpdateElementStyle(a, $bgColor="url(/probe-c4)")'],
     ["an escaped url()", "stateDiagram-v2\n [*] --> S\n style S fill:u\\72l(/x)"],
     ["an image-set()", 'stateDiagram-v2\n [*] --> S\n style S background-image:image-set("x.png")'],
+    ["a url() behind a character reference", "stateDiagram-v2\n [*] --> S\n style S fill:url&#40;/x)"],
+    ["a url() in HTML behind a reference without its semicolon", 'sequenceDiagram\n  A->>B: <span style="background:url&#40/api/x)">x</span>'],
   ])("a diagram that would load an image isn't drawn: %s", async (_, source) => {
     render(<MermaidDiagram source={source} dark={false} />);
     expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: images in diagrams aren't loaded\.$/);
@@ -256,11 +258,28 @@ describe("MermaidDiagram", () => {
   });
 
   it.each([
+    ["HTML after KaTeX in a message", 'sequenceDiagram\n  A->>B: $$x$$ <img src="/api/x">'],
+    ["HTML in an architecture service", "architecture-beta\n  service s \"<img src='/api/x'>\" [S]"],
+    ["HTML behind numeric references", 'sequenceDiagram\n  A->>B: &#60;img src="/api/x"&#62;'],
+    ["HTML behind named references", 'sequenceDiagram\n  A->>B: &lt;img src="/api/x"&gt;'],
+    ["HTML behind Mermaid's entity codes", 'sequenceDiagram\n  A->>B: #60;img src="/api/x"#62;'],
+    ["a comment", "flowchart LR\n  A[<!-- x -->] --> B"],
+  ])("a diagram with HTML isn't drawn: %s", async (_, source) => {
+    render(<MermaidDiagram source={source} dark={false} />);
+    expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: HTML in diagrams isn't drawn\.$/);
+    expect(m.parse).not.toHaveBeenCalled();
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["names a url", "stateDiagram-v2\n [*] --> S\n S: the url is in the note"],
     ["has a function name before a space", "stateDiagram-v2\n [*] --> S\n S: image (1) and element (x)"],
+    ["has line breaks", "flowchart LR\n  A[a<br>b] --> B[a<br/>b] --> C[a <br /> b]"],
+    ["compares", "flowchart LR\n  A[a < b] --> B[b > a]"],
+    ["has class annotations", "classDiagram\n  class Pump {\n    <<interface>>\n  }\n  Pump <|-- Motor"],
   ])("draws a diagram that %s", async (_, source) => {
     render(<MermaidDiagram source={source} dark={false} />);
-    expect(await screen.findByRole("img", { name: "Diagram (state)" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: /^Diagram \(/ })).toBeInTheDocument();
     expect(m.render).toHaveBeenCalledTimes(1);
   });
 
