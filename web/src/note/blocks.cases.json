@@ -27,5 +27,7 @@
   {"name": "the first of two wins", "note": "One. ^twice\n\nTwo. ^twice\n", "id": "twice", "lines": [1, 1]},
   {"name": "ignoring case", "note": "The pump needs a new controller. ^Controller\n", "id": "controller", "lines": [1, 1]},
   {"name": "an unknown id", "note": "The pump. ^pump\n", "id": "valve", "lines": null},
-  {"name": "indented code", "note": "text\n\n    code ^ind\n", "id": "ind", "lines": null}
+  {"name": "indented code", "note": "text\n\n    code ^ind\n", "id": "ind", "lines": null},
+  {"name": "a backtick in the info string opens no fence", "note": "``` a`b\nThe pump. ^tick\n", "id": "tick", "lines": [1, 2]},
+  {"name": "a tilde fence closes only with tildes", "note": "~~~\n```\nThe pump. ^tilde\n~~~\nAfter. ^after\n", "id": "tilde", "lines": null}
 ]

@@ -6,6 +6,7 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { useErrorTextFor } from "../discreet/errorText";
+import { remarkHideBlockIds } from "../reader/blockIds";
 import MermaidDiagram from "../reader/MermaidDiagram";
 import { useDarkScheme } from "../theme/dark";
 import { useLinks, useNote } from "../api/notes";
@@ -14,6 +15,7 @@ import { fileKindIcon } from "../components/fileKindIcon";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
+import { blockSource, findBlock } from "./blocks";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
 import { maskComments, remarkMaskedComments } from "./comments";
@@ -21,7 +23,7 @@ import { remarkHighlights } from "./highlights";
 import { section } from "./outline";
 import { prepareMath, remarkRestoreDollars } from "./prepareMath";
 import { splitFrontmatter } from "./properties";
-import { embedHeading, isExternalUrl, remarkWikiLinks, type LinkView } from "./wikiLinks";
+import { embedHeading, isExternalUrl, remarkWikiLinks, subpathBlock, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -140,10 +142,11 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
 }
 
 /**
- * An embedded note (`![[plan]]`, `![[plan#Goals]]`): its text (or the heading's section) in a frame, with the way
- * to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks don't tick from here.
+ * An embedded note (`![[plan]]`, `![[plan#Goals]]`, `![[plan#^id]]`): its text (or the heading's section, or the
+ * block) in a frame, with the way to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks
+ * don't tick from here.
  */
-function EmbeddedNote({ path, heading }: { path: string; heading: string | null }) {
+function EmbeddedNote({ path, heading, block }: { path: string; heading: string | null; block: string | null }) {
   const note = useNote(path);
   const errorFor = useErrorTextFor(path);
   const links = useLinks(path, note.data?.version);
@@ -152,10 +155,13 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
     if (!note.data) return null;
     const masked = maskComments(note.data.content);
     const { body } = splitFrontmatter(masked.source);
-    const shown = heading === null ? body : section(body, heading);
+    // The block is found in the note as stored, whose lines the body keeps.
+    const found = block === null ? null : findBlock(note.data.content, block);
+    const shown = block !== null ? found && blockSource(body, found) : heading === null ? body : section(body, heading);
     return shown === null ? null : { source: shown, mask: masked.mask };
-  }, [note.data, heading]);
-  const title = heading ? `${titleOf(path)} › ${heading}` : titleOf(path);
+  }, [note.data, heading, block]);
+  const subpath = block !== null ? `^${block}` : heading;
+  const title = subpath ? `${titleOf(path)} › ${subpath}` : titleOf(path);
 
   return (
     <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
@@ -169,7 +175,9 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
       </Link>
       {note.isPending && <p className="text-sm text-muted">Loading …</p>}
       {note.isError && <p className="text-sm text-muted">{errorFor(note.error)}</p>}
-      {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
+      {note.data && body === null && (
+        <p className="text-sm text-muted">{block !== null ? `This note has no block ^${block}.` : `This note has no heading “${heading}”.`}</p>
+      )}
       {body !== null && (
         <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
       )}
@@ -214,7 +222,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   const [choosing, setChoosing] = useState(false);
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
   if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
-    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
+    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} block={subpathBlock(link.raw)} />;
   }
   switch (link?.kind) {
     case "attachment":
@@ -550,6 +558,7 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
         remarkCallouts,
         remarkTags,
         [remarkWikiLinks, { links: links ?? [] }],
+        remarkHideBlockIds,
         remarkHighlights,
         [remarkFind, { query, current }],
         // Before the agent's highlights, which land on the `div` a display gets.

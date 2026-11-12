@@ -423,6 +423,29 @@ describe("Mermaid on the reader page", () => {
   });
 });
 
+describe("Block ids on the reader page", () => {
+  const plan = "The pump needs a new controller. ^controller\n";
+
+  it("hides block ids", async () => {
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    const { container } = render(<Reader />);
+
+    expect(await screen.findByText("The pump needs a new controller.")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("^controller");
+  });
+
+  it("Copy as Markdown keeps them", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy as Markdown" }));
+    expect(writeText).toHaveBeenCalledWith(`# Questions on routing\n\n${plan}`);
+    expect(writeText.mock.calls[0]).toEqual([expect.stringContaining("controller. ^controller")]);
+  });
+});
+
 describe("snapshotText", () => {
   it("names the snapshot's time", () => {
     expect(snapshotText("2026-11-05T14:32:00Z", "UTC")).toBe("Snapshot of 5 Nov 2026, 14:32");

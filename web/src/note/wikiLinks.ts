@@ -160,3 +160,27 @@ export function embedHeading(raw: string): string | null {
   const heading = target.slice(hash + 1).trim();
   return heading && !heading.startsWith("^") ? heading : null;
 }
+
+/**
+ * The block id of a link's subpath (`[[Plan#^controller|x]]`, `[c](Plan.md#%5Econtroller)` → `controller`); null
+ * without one, or for a heading.
+ */
+export function subpathBlock(raw: string): string | null {
+  let target: string;
+  if (/^!?\[\[/.test(raw)) {
+    const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
+    const bar = inner.search(/\\?\|/);
+    target = bar >= 0 ? inner.slice(0, bar) : inner;
+  } else {
+    target = /\]\(\s*<?([^)>\s]*)/.exec(raw)?.[1] ?? "";
+  }
+  const hash = target.indexOf("#");
+  if (hash < 0) return null;
+  let fragment = target.slice(hash + 1).trim();
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    // A stray `%` is no escape: the fragment is read as it stands.
+  }
+  return /^\^([A-Za-z0-9-]+)$/.exec(fragment)?.[1] ?? null;
+}

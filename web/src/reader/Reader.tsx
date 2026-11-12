@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkHideBlockIds } from "./blockIds";
 import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReadResult } from "./readerApi";
 import { snapshotText, untilText } from "./snapshot";
 
@@ -55,7 +56,7 @@ function CopyImage({ src, alt }: { src?: string; alt?: string }) {
   return index !== undefined && files.indices.has(Number(index)) ? <CopiedImage copy={files.copy} index={Number(index)} alt={alt ?? ""} /> : null;
 }
 
-const remarkPlugins = [remarkGfm];
+const remarkPlugins = [remarkGfm, remarkHideBlockIds];
 
 // At module level, so a render keeps each component, and its images, as they are. The title is the page's h1: the
 // note's headings go one level down.
