@@ -6,6 +6,8 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { useErrorTextFor } from "../discreet/errorText";
+import MermaidDiagram from "../reader/MermaidDiagram";
+import { useDarkScheme } from "../theme/dark";
 import { useLinks, useNote } from "../api/notes";
 import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
@@ -373,6 +375,18 @@ function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldabl
 }
 
 
+/** A fenced `mermaid` block's `code`; `remarkChanged`'s marks sit on it, as `pre` is a bare wrapper. */
+function mermaidCode(pre: HastNode | undefined) {
+  const elements = pre?.children.filter((c) => c.type === "element") ?? [];
+  const [code] = elements;
+  if (elements.length !== 1 || code.type !== "element" || code.tagName !== "code") return null;
+  return [code.properties.className].flat().includes("language-mermaid") ? code : null;
+}
+
+function Mermaid({ source }: { source: string }) {
+  return <MermaidDiagram source={source} dark={useDarkScheme()} />;
+}
+
 const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
   aside: ({ node, children, ...props }) =>
@@ -446,9 +460,16 @@ const components: Components = {
   // The task's checkbox is the button of its item, above.
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
   blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
-  pre: ({ node: _, ...props }) => (
-    <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
-  ),
+  pre: ({ node, ...props }) => {
+    const code = mermaidCode(node);
+    return code ? (
+      <div data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
+        <Mermaid source={textOf(code).replace(/\n$/, "")} />
+      </div>
+    ) : (
+      <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
+    );
+  },
   code: ({ node: _, ...props }) => <code className="rounded-[4px] bg-surface-2 px-[5px] py-px font-mono text-[0.85em]" {...props} />,
   strong: ({ node: _, ...props }) => <strong className="font-bold text-text" {...props} />,
   hr: () => <hr className="my-6 border-line" />,
