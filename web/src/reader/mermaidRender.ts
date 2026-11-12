@@ -38,19 +38,23 @@ export function diagramAlt(source: string): string {
   return `Diagram (${type.toLowerCase()})`;
 }
 
-/** The root `<svg>` at the size of its `viewBox`: Mermaid gives it `width="100%"` and a `max-width`. */
-function naturalSize(svg: string) {
-  return svg.replace(/<svg\b(?:[^>"']|"[^"]*"|'[^']*')*>/, (tag) => {
-    const box = /\sviewBox\s*=\s*["']\s*[-\d.eE]+[\s,]+[-\d.eE]+[\s,]+([\d.eE]+)[\s,]+([\d.eE]+)\s*["']/.exec(tag);
-    if (!box) return tag;
-    const rest = tag
-      .replace(/\s(?:width|height)\s*=\s*(?:"[^"]*"|'[^']*')/g, "")
-      .replace(/(\sstyle\s*=\s*)(["'])(.*?)\2/, (_, name: string, quote: string, style: string) => {
-        const kept = style.replace(/max-width\s*:[^;]*;?/g, "").trim();
-        return kept ? `${name}${quote}${kept}${quote}` : "";
-      });
-    return rest.replace(/^<svg\b/, `<svg width="${box[1]}" height="${box[2]}"`);
-  });
+/**
+ * The SVG as XML, its root at the size of its `viewBox` (Mermaid gives it `width="100%"` and a `max-width`). Mermaid's
+ * strict output is DOMPurify's HTML serialisation (`&nbsp;`, unclosed `<br>`), which an image, read as XML, refuses.
+ * The parsed document is inert: nothing of it reaches the page.
+ */
+function asImage(svg: string) {
+  const root = new DOMParser().parseFromString(svg, "text/html").querySelector("svg");
+  if (!root) throw new Error("Mermaid's drawing is no SVG.");
+  const box = root.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
+  if (box?.length === 4 && box.every(Number.isFinite)) {
+    root.setAttribute("width", String(box[2]));
+    root.setAttribute("height", String(box[3]));
+    const style = root.getAttribute("style")?.replace(/max-width\s*:[^;]*;?/g, "").trim();
+    if (style) root.setAttribute("style", style);
+    else root.removeAttribute("style");
+  }
+  return new XMLSerializer().serializeToString(root);
 }
 
 const firstLine = (e: unknown) => {
@@ -68,7 +72,7 @@ async function draw(source: string, dark: boolean) {
     mermaid.initialize(config(dark));
     await mermaid.parse(source);
     const { svg } = await mermaid.render(id, source);
-    return { svg: naturalSize(svg), alt: diagramAlt(source) };
+    return { svg: asImage(svg), alt: diagramAlt(source) };
   } catch (e) {
     // Mermaid measures in hidden elements of the live document and doesn't always take them out after a failure.
     for (const left of [id, `d${id}`, `i${id}`]) document.getElementById(left)?.remove();

@@ -62,6 +62,38 @@ describe("MermaidDiagram", () => {
     expect(img.closest("a")).toBeNull();
   });
 
+  it("gives the image well-formed XML from Mermaid's HTML serialisation", async () => {
+    m.render.mockResolvedValue(
+      drawn(
+        '<svg viewBox="0 0 640 120" width="100%" style="max-width: 640px;"><g><text>Pump&nbsp;A</text>' +
+          "<foreignObject><div>Sensor<br>Pump</div></foreignObject></g></svg>",
+      ),
+    );
+    render(<MermaidDiagram source={flowchart} dark={false} />);
+    await screen.findByRole("img");
+    const text = await (urls.create.mock.calls[0][0] as Blob).text();
+    const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
+    expect(parsed.getElementsByTagName("parsererror")).toHaveLength(0);
+    expect(parsed.documentElement.getAttribute("width")).toBe("640");
+    expect(parsed.documentElement.getAttribute("height")).toBe("120");
+    expect(parsed.documentElement.hasAttribute("style")).toBe(false);
+    expect(parsed.documentElement.textContent).toContain("Pump A");
+    expect(text).not.toContain("&nbsp;");
+  });
+
+  it("an image that can't be shown shows the source and says so", async () => {
+    render(<MermaidDiagram source={flowchart} dark={false} />);
+    const img = await screen.findByRole("img");
+    const url = img.getAttribute("src");
+    fireEvent.error(img);
+    expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: the image could not be shown\.$/);
+    const code = document.querySelector("code.language-mermaid")!;
+    expect(code).toBeVisible();
+    expect(code.textContent).toBe(flowchart);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(urls.revoke).toHaveBeenCalledWith(url);
+  });
+
   it("uses accTitle and accDescr as the alt text", async () => {
     render(<MermaidDiagram source={"flowchart LR\n accTitle: Pump chain\n accDescr: Sensor to pump\n A-->B"} dark={false} />);
     expect(await screen.findByRole("img", { name: "Pump chain. Sensor to pump" })).toBeInTheDocument();
@@ -121,6 +153,20 @@ describe("MermaidDiagram", () => {
     fireEvent.click(full);
     expect(screen.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "true");
     expect(img).not.toHaveClass("max-w-full");
+  });
+
+  it("a new image starts fitted", async () => {
+    const { rerender } = render(<MermaidDiagram source={flowchart} dark={false} />);
+    const img = await screen.findByRole("img");
+    Object.defineProperty(img, "naturalWidth", { value: 1200, configurable: true });
+    Object.defineProperty(img.parentElement!, "clientWidth", { value: 600, configurable: true });
+    fireEvent.load(img);
+    fireEvent.click(screen.getByRole("button", { name: "Full size" }));
+    const first = img.getAttribute("src");
+
+    rerender(<MermaidDiagram source={flowchart} dark />);
+    await waitFor(() => expect(screen.getByRole("img").getAttribute("src")).not.toBe(first));
+    expect(screen.getByRole("img")).toHaveClass("max-w-full");
   });
 
   it("a parse error shows the source and the line", async () => {

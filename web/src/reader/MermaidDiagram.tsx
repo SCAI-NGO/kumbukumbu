@@ -36,6 +36,7 @@ export default function MermaidDiagram({ source, dark }: { source: string; dark:
         m.renderDiagram(source, dark).then(
           ({ svg, alt }) => {
             if (cancelled) return;
+            setFull(false);
             setState({ kind: "drawn", url: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })), alt });
           },
           (e: unknown) => !cancelled && setState({ kind: "failed", message: e instanceof Error ? e.message : String(e) }),
@@ -82,7 +83,14 @@ export default function MermaidDiagram({ source, dark }: { source: string; dark:
   return (
     <figure className="my-3">
       <div ref={frame} className="overflow-x-auto">
-        <img ref={image} src={state.url} alt={state.alt} onLoad={measure} className={full ? "h-auto max-w-none" : "h-auto max-w-full"} />
+        <img
+          ref={image}
+          src={state.url}
+          alt={state.alt}
+          onLoad={measure}
+          onError={() => setState({ kind: "failed", message: "the image could not be shown." })}
+          className={full ? "h-auto max-w-none" : "h-auto max-w-full"}
+        />
       </div>
       <div className="flex flex-wrap gap-2">
         <button type="button" aria-expanded={open} aria-controls={codeId} onClick={() => setOpen((o) => !o)} className={buttonClass}>
