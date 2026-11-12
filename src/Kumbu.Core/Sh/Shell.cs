@@ -131,7 +131,12 @@ public sealed class Shell
                 _observer?.Timed(name, System.Diagnostics.Stopwatch.GetElapsedTime(started));
             }
 
-            if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
+            if (stages.Count == 1 && command is Cat cat && args.Count == 1)
+            {
+                var read = result;
+                result = Cat.OutlineIfTooLong(args[0], result);
+                result = await cat.AppendEmbedsAsync(args[0], read, result, ct);
+            }
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
             if (result.IsError) break;
