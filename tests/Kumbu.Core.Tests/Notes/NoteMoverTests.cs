@@ -219,4 +219,18 @@ public class NoteMoverTests
         Assert.Equal("See [[ch2]] and [next](ch2.md).\n", await store.ReadAsync(P("/W/_archive/Inbox/Manual/ch1.md"), Ct));
         Assert.Equal("Back to [[ch1]].\n", await store.ReadAsync(P("/W/_archive/Inbox/Manual/ch2.md"), Ct));
     }
+
+    [Fact]
+    public async Task Moving_a_note_keeps_block_subpaths()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Pump/Plan.md", "# Plan\n\nThe pump needs a new controller. ^controller\n"),
+            ("/Work/Pump/Tasks.md", "[[Pump/Plan#^controller]]\n[c](/Pump/Plan.md#%5Econtroller)\n"));
+        var mover = new NoteMover(store, _time, new FixedCaller(Writers.Dev));
+
+        var result = await mover.MoveAsync(P("/Work/Pump/Plan.md"), P("/Work/Old/Plan.md"), rewriteLinks: true, Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("[[Old/Plan#^controller]]\n[c](/Old/Plan.md#%5Econtroller)\n", await store.ReadAsync(P("/Work/Pump/Tasks.md"), Ct));
+    }
 }

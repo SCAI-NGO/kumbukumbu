@@ -407,4 +407,80 @@ public class LinkCommandsTests
     [Fact]
     public async Task BacklinksOfAnUnlinkedNote() =>
         Assert.Equal("(no notes link here)", (await Run("backlinks /Ideas/x.md")).Output);
+
+    private const string BlockPlan = "# Plan\n\nThe pump needs a new controller. ^controller\n\nSee [[Tasks]] and [[Ruling]] ^refs\n\nOther [[Ruling]]\n";
+
+    private const string BlockTasks =
+        "- see [[Plan#^controller]]\n[[Plan#^contoller]]\n[c](Plan.md#%5Econtroller)\n[[#^here]]\n[[#^gone]]\n[[Plan#Plan]]\n\nAnchor ^here\n";
+
+    // Its own store, so the shared fixtures stay as they are.
+    private static Func<string, Task<ShellResult>> WithBlockNotes()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Pump/Plan.md", BlockPlan),
+            ("/Work/Pump/Tasks.md", BlockTasks),
+            ("/Work/Pump/Ruling.md", "# Ruling\n## Decision\nGo.\n"));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return line => sh.RunAsync(line, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Links_to_a_block_name_it()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("1: [[Plan#^controller]] → /Work/Pump/Plan.md#^controller", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_missing_block_is_not_found()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("2: [[Plan#^contoller]] → not found: no block ^contoller in /Work/Pump/Plan.md", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_percent_encoded_caret_counts()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("3: [c](Plan.md#%5Econtroller) → /Work/Pump/Plan.md#^controller", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_block_of_the_note_itself()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output.Split('\n');
+
+        Assert.Contains("4: [[#^here]] → this note", output);
+        Assert.Contains("5: [[#^gone]] → not found: no block ^gone in this note", output);
+    }
+
+    [Fact]
+    public async Task A_heading_subpath_prints_as_before()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("6: [[Plan#Plan]] → /Work/Pump/Plan.md", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_directory_lists_missing_blocks_among_the_broken()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump")).Output.Split('\n');
+
+        Assert.Contains("/Work/Pump/Tasks.md:2: [[Plan#^contoller]] → not found: no block ^contoller in /Work/Pump/Plan.md", output);
+        Assert.Contains("/Work/Pump/Tasks.md:5: [[#^gone]] → not found: no block ^gone in this note", output);
+        Assert.DoesNotContain(output, l => l.Contains("^controller") || l.Contains("^here"));
+    }
+
+    [Fact]
+    public async Task Links_of_a_block()
+    {
+        var output = (await WithBlockNotes()("links \"/Work/Pump/Plan.md#^refs\"")).Output;
+
+        Assert.Equal("5: [[Tasks]] → /Work/Pump/Tasks.md\n5: [[Ruling]] → /Work/Pump/Ruling.md", output);
+    }
 }
