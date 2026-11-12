@@ -35,7 +35,7 @@ SOFTWARE.
 ## PDF.js
 
 - Used in: the web app's build, from the npm package `pdfjs-dist` 6.4 (`web/package.json`): the chunk `pdfjs-*.js`, its worker `pdf.worker.min-*.mjs` and the image decoders under `assets/pdfjs-<hash>/` (copied by `web/vite.config.ts`), which draw PDFs in the browser (`web/src/attachments/pdf.ts`)
-- Used in: the PDF sidecar's image, from the npm package `pdfjs-dist` 6.4.299, its legacy build (`pdf/package.json`), which analyses PDFs and renders their pages (`pdf/src/pdfjs.ts`)
+- Used in: the PDF sidecar's image, from the npm package `pdfjs-dist` 6.5.438, its legacy build (`pdf/package.json`), which analyses PDFs and renders their pages (`pdf/src/pdfjs.ts`)
 - Source: https://github.com/mozilla/pdf.js
 - Licence: Apache License 2.0
 

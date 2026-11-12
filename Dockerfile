@@ -1,7 +1,7 @@
 # Base images by digest, so a re-tagged image can't change what is built; the tag before the digest says which
 # image it is and is what Dependabot follows (.github/dependabot.yml) when it proposes a new digest.
 # node:26-slim
-FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS web
+FROM node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS web
 WORKDIR /src
 COPY web/package.json web/pnpm-lock.yaml web/
 # Node 25+ ships no corepack, so pnpm comes from npm, at the version web/package.json's packageManager names.
@@ -14,7 +14,7 @@ ARG GIT_SHA=""
 RUN KUMBU_VERSION="$VERSION" KUMBU_GIT_SHA="$GIT_SHA" pnpm -C web build
 
 # mcr.microsoft.com/dotnet/sdk:10.0
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /src
 COPY . .
 # The web app is served from the server's wwwroot.
@@ -28,7 +28,7 @@ RUN dotnet restore src/Kumbu.Server --locked-mode && \
     dotnet publish src/Kumbu.Server -c Release -o /app --no-restore -p:Version="$VERSION" -p:SourceRevisionId="$GIT_SHA"
 
 # mcr.microsoft.com/dotnet/aspnet:10.0
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:de0ee358cdd672f7017a003bed21e9ac9ed48a27c922a59b18175b6e82fa7fee
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c
 ARG VERSION=0.0.0-dev
 ARG GIT_SHA=""
 ARG BUILT_AT=""

@@ -105,7 +105,7 @@ public class PdfCommandTests
     private static PdfPage Scan(int n) => new(n, 595, 842, 0, PageType.Image, 0, 0, 0.98, 0, 1, [new PdfRegion("image", 0, 0, 595, 842)]);
 
     /// <summary>12 pages: 1-3 text (page 2 with a small image), 4 mixed, 5-12 text.</summary>
-    private static PdfAnalysis Twelve() => new("pdfjs-dist@6.4.299+rules.1", 12, 12, "Attention to detail", "A. Smith", [
+    private static PdfAnalysis Twelve() => new("pdfjs-dist@6.5.438+rules.1", 12, 12, "Attention to detail", "A. Smith", [
         Text(1), Text(2, images: 1, imageCoverage: 0.03), Text(3),
         Mixed(4, regions: [new PdfRegion("drawing", 72, 300, 451, 260), new PdfRegion("image", 80, 90, 200, 120)]),
         .. Enumerable.Range(5, 8).Select(n => Text(n)),
