@@ -5,6 +5,7 @@ using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
+using Blocks = Kumbu.Core.Search.Blocks;
 
 namespace Kumbu.Core.Tests.Search;
 

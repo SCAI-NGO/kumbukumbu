@@ -54,6 +54,24 @@ public static class SectionLookup
         }
     }
 
+    /// <summary>Finds the block "^id" names, its marker included; the error has no command prefix.</summary>
+    public static bool TryFindBlock(
+        VaultPath path, string content, string id,
+        [NotNullWhen(true)] out string? text, [NotNullWhen(false)] out string? error)
+    {
+        var lines = Lines.Split(content);
+        if (Blocks.Find(lines, id) is { } block)
+        {
+            text = Lines.Join(lines.Skip(block.Start).Take(block.End - block.Start));
+            error = null;
+            return true;
+        }
+
+        text = null;
+        error = $"{path.Value}#^{id}: no such block (a block id is written as ^{id} at the end of a paragraph, item or heading)";
+        return false;
+    }
+
     /// <summary>A path as it would be typed in sh: quoted if it contains a space.</summary>
     public static string Quote(VaultPath path) => path.Value.Contains(' ') ? $"\"{path.Value}\"" : path.Value;
 }
