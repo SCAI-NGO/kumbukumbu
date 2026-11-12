@@ -27,13 +27,21 @@ public static class Frontmatter
             return root switch
             {
                 null => new FrontmatterValues(NoValues, null),
-                IDictionary<object, object?> map => new FrontmatterValues(ToMap(map), null),
+                IDictionary<object, object?> map => new FrontmatterValues(new Budget().ToMap(map, 0), null),
                 _ => new FrontmatterValues(NoValues, "The frontmatter is not a map of keys and values."),
             };
         }
         catch (YamlException e)
         {
             return new FrontmatterValues(NoValues, e.Message);
+        }
+        catch (TooLarge)
+        {
+            return new FrontmatterValues(NoValues, "The frontmatter is too large or nested too deeply.");
+        }
+        catch (KeyTwice e)
+        {
+            return new FrontmatterValues(NoValues, $"The frontmatter has the key '{e.Key}' twice.");
         }
     }
 
@@ -91,14 +99,46 @@ public static class Frontmatter
         line.Trim().Length > 0
         && (line.StartsWith(' ') || line.StartsWith('\t') || line.StartsWith("- ", StringComparison.Ordinal) || line.TrimEnd() == "-");
 
-    private static Dictionary<string, object?> ToMap(IDictionary<object, object?> map) =>
-        map.ToDictionary(p => p.Key.ToString() ?? "", p => Convert(p.Value));
+    private const int MaxValues = 10_000;
+    private const int MaxDepth = 64;
 
-    private static object? Convert(object? value) => value switch
+    private sealed class TooLarge : Exception;
+
+    private sealed class KeyTwice(string key) : Exception
     {
-        IDictionary<object, object?> map => ToMap(map),
-        IList<object?> list => list.Select(Convert).ToList(),
-        null => null,
-        _ => value.ToString(),
-    };
+        public string Key { get; } = key;
+    }
+
+    /// <summary>Converts the parsed YAML into plain values under a budget: anchors turn a few lines into a cycle
+    /// (<c>a: &amp;a [*a]</c>) or a tenfold expansion per level, and link resolution reads front matter that anyone
+    /// with write access can plant. A cycle runs into <see cref="MaxDepth"/>, an expansion into <see cref="MaxValues"/>.</summary>
+    private sealed class Budget
+    {
+        private int values;
+
+        public Dictionary<string, object?> ToMap(IDictionary<object, object?> map, int depth)
+        {
+            var result = new Dictionary<string, object?>();
+            foreach (var (key, value) in map)
+            {
+                // A key that is a list or a map reads as its type's name, so two of them read alike.
+                var name = key.ToString() ?? "";
+                if (!result.TryAdd(name, Convert(value, depth + 1))) throw new KeyTwice(name);
+            }
+
+            return result;
+        }
+
+        private object? Convert(object? value, int depth)
+        {
+            if (++values > MaxValues || depth > MaxDepth) throw new TooLarge();
+            return value switch
+            {
+                IDictionary<object, object?> map => ToMap(map, depth),
+                IList<object?> list => list.Select(item => Convert(item, depth + 1)).ToList(),
+                null => null,
+                _ => value.ToString(),
+            };
+        }
+    }
 }

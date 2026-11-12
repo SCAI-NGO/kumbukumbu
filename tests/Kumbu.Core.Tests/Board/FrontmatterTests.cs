@@ -133,4 +133,58 @@ public class FrontmatterTests
         Assert.Equal("---\na: 1\nm:\n  k: \"v\"\n---\n", Frontmatter.Set("---\na: 1\n---\n", Changes(("m", "\n  k: \"v\""))));
         Assert.Equal("---\nm:\n  k: \"v\"\n---\nbody", Frontmatter.Set("body", Changes(("m", "\n  k: \"v\""))));
     }
+
+    [Fact]
+    public void A_self_referencing_anchor_is_a_problem_not_a_crash()
+    {
+        var read = Frontmatter.Read("---\na: &a [*a]\naliases: [x]\n---\nText\n");
+        Assert.Empty(read.Values);
+        Assert.NotNull(read.Problem);
+    }
+
+    [Fact]
+    public void Anchor_expansion_is_a_problem_and_fast()
+    {
+        var yaml = "a: &a [x,x,x,x,x,x,x,x,x,x]\n";
+        var previous = "a";
+        for (var i = 0; i < 8; i++)
+        {
+            yaml += $"b{i}: &b{i} [{string.Join(",", Enumerable.Repeat("*" + previous, 10))}]\n";
+            previous = $"b{i}";
+        }
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var read = Frontmatter.Read($"---\n{yaml}aliases: [x]\n---\nText\n");
+        Assert.Empty(read.Values);
+        Assert.NotNull(read.Problem);
+        Assert.True(watch.ElapsedMilliseconds < 1000, $"{watch.ElapsedMilliseconds} ms");
+    }
+
+    [Fact]
+    public void A_chain_of_anchors_deeper_than_the_limit_is_a_problem()
+    {
+        // 100 levels, about 5,000 values: under the value budget, over the depth limit.
+        var yaml = "a0: &a0 [x]\n" + string.Concat(Enumerable.Range(1, 99).Select(i => $"a{i}: &a{i} [*a{i - 1}]\n"));
+        var read = Frontmatter.Read($"---\n{yaml}---\nText\n");
+        Assert.Empty(read.Values);
+        Assert.NotNull(read.Problem);
+    }
+
+    [Theory]
+    [InlineData("[a]: 1\n[b]: 2")]
+    [InlineData("{a: 1}: x\n{b: 2}: y")]
+    public void Keys_that_read_alike_are_a_problem_not_an_exception(string yaml)
+    {
+        var read = Frontmatter.Read($"---\n{yaml}\n---\nText\n");
+        Assert.Empty(read.Values);
+        Assert.NotNull(read.Problem);
+    }
+
+    [Fact]
+    public void A_shared_anchor_used_a_few_times_still_reads()
+    {
+        var read = Frontmatter.Read("---\nbase: &b [x, y]\ncopy: *b\n---\n");
+        Assert.Null(read.Problem);
+        Assert.Equal(new List<object?> { "x", "y" }, read.Values["copy"]);
+    }
 }
