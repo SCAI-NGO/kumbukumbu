@@ -66,8 +66,9 @@ public sealed class LinkResolver
             {
                 // An alias that is the note's own name already finds it by its name.
                 if (alias.Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                // NoteAliases lists each alias of a note once; a check of the list here would be quadratic in the notes.
                 if (!_byAlias.TryGetValue(alias, out var list)) _byAlias[alias] = list = [];
-                if (!list.Contains(note)) list.Add(note);
+                list.Add(note);
             }
         }
 
@@ -123,8 +124,10 @@ public sealed class LinkResolver
         var name = path[(path.LastIndexOf('/') + 1)..];
         if (Find(_byName, LinkKind.Note, source, path, name, "/" + path + ".md", exact) is { } note) return note;
 
-        // A bare name that no note or attachment carries may be a note's alias; "Kumbu.md" names a file, never an alias.
+        // A bare name that no note or attachment carries may be a note's alias; "Kumbu.md" names a file, never an alias,
+        // and so does "shot.png": without the vault's attachments it may name one that exists.
         if (!exact && !full.Contains('/') && !full.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            && AttachmentFormat.ForName(fileName) is null
             && _byAlias.TryGetValue(name, out var aliased)
             && Choose(LinkKind.Note, source, [.. aliased], exact) is { } byAlias)
         {

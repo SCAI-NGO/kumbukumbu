@@ -160,4 +160,24 @@ public class AliasResolutionTests
         Assert.Equal((without.Kind, without.Target, without.ViaAlias), (with.Kind, with.Target, with.ViaAlias));
         Assert.Equal(without.Candidates, with.Candidates);
     }
+
+    [Fact]
+    public void An_alias_never_takes_a_name_of_a_kind_the_vault_keeps_as_attachments()
+    {
+        // Without the attachment list (rm, replace, write) [[shot.png]] may name a real file: it stays an attachment.
+        var resolver = Resolver([("/W/Shots.md", ["shot.png"])]);
+        Assert.Equal("attachment", Resolve(resolver, "/W/Diary/day.md", "shot.png"));
+    }
+
+    [Fact]
+    public void Many_notes_sharing_many_aliases_index_in_linear_time()
+    {
+        string[] shared = [.. Enumerable.Range(0, 100).Select(i => $"a{i}")];
+        var notes = Enumerable.Range(0, 5000).Select(i => P($"/W/n{i}.md")).ToList();
+        var aliases = notes.ToDictionary(n => n, _ => (IReadOnlyList<string>)shared);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var resolver = new LinkResolver("W", notes, null, aliases);
+        Assert.True(watch.ElapsedMilliseconds < 3000, $"{watch.ElapsedMilliseconds} ms");
+        Assert.Equal(LinkKind.Ambiguous, resolver.Resolve(P("/W/x/y.md"), "a1").Kind);
+    }
 }

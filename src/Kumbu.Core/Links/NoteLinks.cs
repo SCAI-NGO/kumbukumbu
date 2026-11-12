@@ -25,7 +25,7 @@ public static class NoteLinks
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
-            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
         return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
     }
 
@@ -36,7 +36,7 @@ public static class NoteLinks
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
-            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
         var exact = new List<Backlink>();
         var maybe = new List<Backlink>();
         foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))

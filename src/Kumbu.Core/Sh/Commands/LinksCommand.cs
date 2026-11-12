@@ -104,7 +104,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     {
         var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
-            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
         var prefix = dir.Value + "/";
         var output = new List<string>();
         var targets = all.ToDictionary(n => n.Path, n => (IReadOnlyList<string>?)Lines.Split(n.Content));

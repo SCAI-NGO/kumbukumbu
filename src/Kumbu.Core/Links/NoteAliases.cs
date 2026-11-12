@@ -15,12 +15,21 @@ public static class NoteAliases
 {
     private static readonly char[] Forbidden = ['/', '#', '|', '[', ']', '^', '\n', '\r'];
 
+    /// <summary>Aliases a note can have; the rest are ignored. Every link view builds an index of the vault's aliases
+    /// and every unlinked-mentions search looks for each, so a note listing thousands could stall them.</summary>
+    internal const int MaxPerNote = 100;
+
+    /// <summary>Front matter longer than this (in characters) is not parsed for aliases: names don't need it, and the
+    /// YAML reader builds the whole document before its budget can stop it.</summary>
+    internal const int MaxFrontmatterLength = 64 * 1024;
+
     public static IReadOnlyList<string> Of(string content)
     {
         var lines = Lines.Split(content);
         var end = Outline.FrontmatterEnd(lines);
         // Most notes have no aliases; skip parsing their front matter.
         if (end == 0 || !lines.Take(end).Any(l => l.Contains("aliases", StringComparison.Ordinal))) return [];
+        if (lines.Take(end).Sum(l => l.Length + 1) > MaxFrontmatterLength) return [];
 
         object? value;
         try
@@ -47,17 +56,19 @@ public static class NoteAliases
             var alias = text.Trim().Normalize(NormalizationForm.FormC);
             if (alias.Length == 0 || alias.IndexOfAny(Forbidden) >= 0) continue;
             if (seen.Add(alias)) aliases.Add(alias);
+            if (aliases.Count == MaxPerNote) break;
         }
 
         return aliases;
     }
 
     /// <summary>The aliases of each of <paramref name="notes"/> that has any.</summary>
-    public static IReadOnlyDictionary<VaultPath, IReadOnlyList<string>> Of(IEnumerable<Note> notes)
+    public static IReadOnlyDictionary<VaultPath, IReadOnlyList<string>> Of(IEnumerable<Note> notes, CancellationToken ct = default)
     {
         var result = new Dictionary<VaultPath, IReadOnlyList<string>>();
         foreach (var note in notes)
         {
+            ct.ThrowIfCancellationRequested();
             if (Of(note.Content) is { Count: > 0 } aliases) result[note.Path] = aliases;
         }
 

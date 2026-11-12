@@ -301,7 +301,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         // Asked before removing: once the note is gone, its backlinks can't be asked for any more.
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path), noteAliases: NoteAliases.Of(notes));
+        var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path), noteAliases: NoteAliases.Of(notes, ct));
         var linking = notes
             .Where(n => n.Path != path)
             .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
@@ -383,7 +383,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     {
         var vault = created.Segments[0];
         var notes = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
-        var aliases = NoteAliases.Of(notes);
+        var aliases = NoteAliases.Of(notes, ct);
         var after = new LinkResolver(vault, notes.Select(n => n.Path), noteAliases: aliases);
         var before = new LinkResolver(
             vault, notes.Select(n => n.Path).Where(p => p != created),

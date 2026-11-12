@@ -37,8 +37,31 @@ public class NoteAliasesTests
     [Fact]
     public void Of_notes_keeps_only_notes_with_aliases()
     {
-        var map = NoteAliases.Of([new Note(P("/W/a.md"), "---\naliases: [x]\n---\n"), new Note(P("/W/b.md"), "# b\n")]);
+        var map = NoteAliases.Of([new Note(P("/W/a.md"), "---\naliases: [x]\n---\n"), new Note(P("/W/b.md"), "# b\n")], TestContext.Current.CancellationToken);
         Assert.Equal(["x"], map[P("/W/a.md")]);
         Assert.False(map.ContainsKey(P("/W/b.md")));
+    }
+
+    [Fact]
+    public void Only_the_first_hundred_aliases_count()
+    {
+        var aliases = NoteAliases.Of($"---\naliases: [{string.Join(", ", Enumerable.Range(0, 150).Select(i => $"a{i}"))}]\n---\n");
+        Assert.Equal(NoteAliases.MaxPerNote, aliases.Count);
+        Assert.Equal("a99", aliases[^1]);
+    }
+
+    [Fact]
+    public void Front_matter_too_long_to_be_names_has_no_aliases()
+    {
+        var filler = new string('x', NoteAliases.MaxFrontmatterLength);
+        Assert.Empty(NoteAliases.Of($"---\naliases: [Kumbu]\nnotes: {filler}\n---\n"));
+    }
+
+    [Fact]
+    public void Of_notes_stops_when_cancelled()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => NoteAliases.Of([new Note(P("/W/a.md"), "---\naliases: [x]\n---\n")], cancelled.Token));
     }
 }

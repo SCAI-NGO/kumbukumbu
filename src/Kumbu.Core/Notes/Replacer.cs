@@ -117,7 +117,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         var vault = path.Segments[0];
         var all = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
         var paths = all.Select(n => n.Path).ToList();
-        var resolver = new LinkResolver(vault, paths, noteAliases: NoteAliases.Of(all));
+        var resolver = new LinkResolver(vault, paths, noteAliases: NoteAliases.Of(all, ct));
         var output = new List<string>();
 
         var named = paths

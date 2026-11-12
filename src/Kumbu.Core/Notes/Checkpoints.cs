@@ -467,9 +467,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         foreach (var (path, (_, content)) in changed) afterContent[path] = content;
         foreach (var (path, content) in back) afterContent[path] = content;
         foreach (var (path, (_, content)) in moved) afterContent[path] = content;
-        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path), attachments, Links.NoteAliases.Of(notes));
+        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path), attachments, Links.NoteAliases.Of(notes, ct));
         var after = new Links.LinkResolver(
-            vault.Segments[0], afterPaths, afterAttachments, Links.NoteAliases.Of(afterContent.Select(c => new Note(c.Key, c.Value))));
+            vault.Segments[0], afterPaths, afterAttachments, Links.NoteAliases.Of(afterContent.Select(c => new Note(c.Key, c.Value)), ct));
         foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
