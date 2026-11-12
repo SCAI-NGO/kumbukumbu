@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { expect, it } from "vitest";
 
 // The reader page runs on the app's origin, beside the owner's session cookie: none of the app's code may come with it.
-const packages = new Set(["react", "react-dom/client", "react-markdown", "remark-gfm"]);
+const packages = new Set(["react", "react-dom/client", "react-markdown", "remark-gfm", "mermaid"]);
 
 it("imports nothing of the app", () => {
   const folder = import.meta.dirname;

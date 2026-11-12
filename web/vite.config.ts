@@ -69,6 +69,9 @@ export default defineConfig({
           if (/\/node_modules\/\.pnpm\/(remark-math|micromark-extension-math|mdast-util-math|rehype-katex|katex|hast-util-from-html-isomorphic|hast-util-from-dom|hast-util-to-text|hastscript|hast-util-parse-selector|web-namespaces)@/.test(id)) {
             return undefined;
           }
+          // Loaded only for a note with a diagram (reader/mermaidRender.ts), in the app and on the reader page: not in
+          // the markdown chunk, which loads with both.
+          if (/\/node_modules\/\.pnpm\/(mermaid|@mermaid-js\+[a-z-]+)@/.test(id)) return undefined;
           if (/\/node_modules\/\.pnpm\/(react-markdown|remark-|micromark|mdast-|hast-|unist-|unified|vfile|property-information|space-separated-tokens|comma-separated-tokens|html-url-attributes|decode-named-character-reference|character-entities|ccount|markdown-table|longest-streak|zwitch|trim-lines|devlop|bail|trough|is-plain-obj|estree-util|style-to-|inline-style-parser|escape-string-regexp|@ungap)/.test(id)) {
             return "markdown";
           }
