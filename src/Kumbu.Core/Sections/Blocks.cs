@@ -154,21 +154,22 @@ public static partial class Blocks
         return column;
     }
 
-    [GeneratedRegex(@"[ \t]\^([A-Za-z0-9-]+)\s*$")]
+    // ASCII digits and white space only, as the web's finder reads them: .NET's `\d` and `\s` take Unicode's.
+    [GeneratedRegex(@"[ \t]\^([A-Za-z0-9-]+)[ \t\v\f\r]*$")]
     private static partial Regex InlineRegex();
 
-    [GeneratedRegex(@"^\^([A-Za-z0-9-]+)\s*$")]
+    [GeneratedRegex(@"^\^([A-Za-z0-9-]+)[ \t\v\f\r]*$")]
     private static partial Regex OwnLineRegex();
 
     [GeneratedRegex(@"^\^([A-Za-z0-9-]+)$")]
     private static partial Regex FragmentRegex();
 
-    [GeneratedRegex(@"^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)")]
+    [GeneratedRegex(@"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)")]
     private static partial Regex ItemRegex();
 
     [GeneratedRegex(@"^ {0,3}>")]
     private static partial Regex QuoteRegex();
 
-    [GeneratedRegex(@"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")]
+    [GeneratedRegex(@"^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$")]
     private static partial Regex DelimiterRowRegex();
 }

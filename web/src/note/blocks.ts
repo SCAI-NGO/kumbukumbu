@@ -12,11 +12,12 @@ type Kind = "heading" | "paragraph" | "list" | "table" | "quote";
 // 0-based lines, `end` excluded.
 type Chunk = { kind: Kind; start: number; end: number };
 
-const inline = /[ \t]\^([A-Za-z0-9-]+)\s*$/;
-const ownLine = /^\^([A-Za-z0-9-]+)\s*$/;
-const item = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+// ASCII digits and white space only, as the Core reads them (its `\d` and `\s` would take Unicode's).
+const inline = /[ \t]\^([A-Za-z0-9-]+)[ \t\v\f\r]*$/;
+const ownLine = /^\^([A-Za-z0-9-]+)[ \t\v\f\r]*$/;
+const item = /^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)/;
 const quote = /^ {0,3}>/;
-const delimiterRow = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+const delimiterRow = /^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$/;
 // `[^\n]` where .NET's `.` stands: it matches a "\r", which JS's doesn't.
 const heading = /^ {0,3}(#{1,6})(?:[ \t]+([^\n]*?))?(?:[ \t]+#+)?[ \t]*$/;
 const fenceLine = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;

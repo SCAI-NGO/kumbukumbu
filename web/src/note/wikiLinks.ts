@@ -171,7 +171,9 @@ export function embedHeading(raw: string): string | null {
  * without one, or for a heading.
  */
 export function subpathBlock(raw: string): string | null {
-  const target = /^!?\[\[/.test(raw) ? wikiTarget(raw) : (/\]\(\s*<?([^)>\s]*)/.exec(raw)?.[1] ?? "");
+  // A Markdown destination in angle brackets may hold spaces: `[x](<My Plan.md#^id>)`.
+  const destination = /\]\(\s*(?:<([^>]*)>|([^)\s]*))/.exec(raw);
+  const target = /^!?\[\[/.test(raw) ? wikiTarget(raw) : (destination?.[1] ?? destination?.[2] ?? "");
   const hash = target.indexOf("#");
   if (hash < 0) return null;
   let fragment = target.slice(hash + 1).trim();

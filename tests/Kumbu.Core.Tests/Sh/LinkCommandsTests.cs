@@ -483,6 +483,35 @@ public class LinkCommandsTests
 
         Assert.Equal("5: [[Tasks]] → /Work/Pump/Tasks.md\n5: [[Ruling]] → /Work/Pump/Ruling.md", output);
     }
+
+    [Fact]
+    public async Task A_block_link_to_an_ambiguous_or_missing_note_prints_as_before()
+    {
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/b.md", out var p) ? p : null!,
+            "[[plan#^x]]\n[[nope#^x]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
+
+        Assert.Equal(
+            "1: [[plan#^x]] → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md\n2: [[nope#^x]] → not found",
+            (await Run("links /Demo/b.md")).Output);
+    }
+
+    [Fact]
+    public async Task Links_of_a_version_find_blocks_in_the_notes_as_they_are_now()
+    {
+        var store = new InMemoryNoteStore(("/Work/Pump/Plan.md", BlockPlan), ("/Work/Pump/Tasks.md", BlockTasks));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var writer = new NoteWriter(store, time, new FixedCaller(Writers.Dev));
+        var sh = new Shell(store, writer, new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        Assert.False((await writer.WriteAsync("/Work/Pump/Tasks.md", "Done.\n", VersionToken.Of(BlockTasks), CancellationToken.None)).IsError);
+        var plan = BlockPlan.Replace("^controller", "^contoller");
+        Assert.False((await writer.WriteAsync("/Work/Pump/Plan.md", plan, VersionToken.Of(BlockPlan), CancellationToken.None)).IsError);
+
+        var output = (await sh.RunAsync($"links --version {VersionToken.Of(BlockTasks)} /Work/Pump/Tasks.md", CancellationToken.None)).Output.Split('\n');
+
+        Assert.Contains("1: [[Plan#^controller]] → not found: no block ^controller in /Work/Pump/Plan.md", output);
+        Assert.Contains("2: [[Plan#^contoller]] → /Work/Pump/Plan.md#^contoller", output);
+    }
+
     // The spec's vault, with a vault beside it and the given notes: the shell.
     private static Func<string, Task<ShellResult>> WithSpecVault(params (string Path, string Content)[] notes)
     {

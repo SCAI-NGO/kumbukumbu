@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { routerFuture } from "../router";
 import { fakeApi, json } from "../test/app";
@@ -84,6 +84,38 @@ describe("unlinked mentions", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("says it is looking while a retry is under way", async () => {
+    let calls = 0;
+    let answer: (r: Response) => void = () => {};
+    fakeApi({ [mentionsUrl]: () => (++calls === 1 ? json(500, { error: "boom" }) : new Promise<Response>((r) => (answer = r))) });
+    show(<UnlinkedMentions path={PLAN} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Unlinked mentions" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Looking for mentions …")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't look for mentions\./)).not.toBeInTheDocument();
+    answer(json(200, [dated]));
+    expect(await screen.findByText("2026-11-12")).toBeInTheDocument();
+  });
+
+  it("closes again when the note changes", async () => {
+    fakeApi({ [mentionsUrl]: () => json(200, [dated]), [`GET /api/mentions/Work/inbox.md`]: () => json(200, []) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const at = (path: string) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter future={routerFuture}>
+          <UnlinkedMentions path={path} />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(at(PLAN));
+    const button = screen.getByRole("button", { name: "Unlinked mentions" });
+    await userEvent.click(button);
+    expect(await screen.findByText("2026-11-12")).toBeInTheDocument();
+    rerender(at("/Work/inbox.md"));
+    expect(screen.getByRole("button", { name: "Unlinked mentions" })).toBe(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("shows even when nothing links here", async () => {
     fakeApi({ [`GET /api/backlinks${PLAN}`]: () => json(200, []) });
     show(<BacklinksList path={PLAN} />);
@@ -94,17 +126,17 @@ describe("unlinked mentions", () => {
   it("follows Linked from when something links here", async () => {
     fakeApi({ [`GET /api/backlinks${PLAN}`]: () => json(200, [{ path: "/Work/inbox.md", line: 3, text: "see [[plan]]", ambiguous: false }]) });
     show(<BacklinksList path={PLAN} />);
-    expect(await screen.findByRole("region", { name: "Linked from" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Unlinked mentions" })).toBeInTheDocument();
+    const linked = await screen.findByRole("region", { name: "Linked from" });
+    const unlinked = screen.getByRole("button", { name: "Unlinked mentions" });
+    expect(linked.compareDocumentPosition(unlinked) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("a mention's text is never markup", async () => {
     fakeApi({ [mentionsUrl]: () => json(200, [{ ...dated, text: "<b>plan</b> here", marks: [{ start: 3, length: 4 }] }]) });
-    const { container } = { container: document.body };
     show(<UnlinkedMentions path={PLAN} />);
     await userEvent.click(await screen.findByRole("button", { name: "Unlinked mentions" }));
     await screen.findByText("2026-11-12");
     expect(screen.getByRole("button", { name: /2026-11-12/ })).toHaveTextContent("<b>plan</b> here");
-    expect(container.querySelector("b")).toBeNull();
+    expect(screen.getByRole("region", { name: "Unlinked mentions" }).querySelector("b")).toBeNull();
   });
 });

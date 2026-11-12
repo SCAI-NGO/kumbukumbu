@@ -20,6 +20,8 @@ describe("subpathBlock", () => {
     ["![[Plan#^controller]]", "controller"],
     ["[c](Plan.md#%5Econtroller)", "controller"],
     ["[c](Plan.md#^controller)", "controller"],
+    ["[x](<My Plan.md#^controller>)", "controller"],
+    ["[x](<My Plan.md#^controller> \"title\")", "controller"],
     ["[[Plan#Goals]]", null],
     ["[[Plan]]", null],
     ["[c](Plan.md#Goals)", null],

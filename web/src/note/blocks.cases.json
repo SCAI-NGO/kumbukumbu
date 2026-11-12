@@ -32,5 +32,7 @@
   {"name": "a tilde fence closes only with tildes", "note": "~~~\n```\nThe pump. ^tilde\n~~~\nAfter. ^after\n", "id": "tilde", "lines": null},
   {"name": "Windows line ends after code", "note": "```\r\nx\r\n```\r\nThe pump. ^after\r\n", "id": "after", "lines": [4, 4]},
   {"name": "Windows line ends, a heading below a paragraph", "note": "Para\r\n## H ^h\r\n", "id": "h", "lines": [2, 2]},
-  {"name": "Windows line ends, an own-line id below a heading", "note": "## H\r\n\r\n^x\r\n", "id": "x", "lines": null}
+  {"name": "Windows line ends, an own-line id below a heading", "note": "## H\r\n\r\n^x\r\n", "id": "x", "lines": null},
+  {"name": "a list marker with Arabic-Indic digits is no item", "note": "The pump.\n\u0661. order it ^u\n", "id": "u", "lines": [1, 2]},
+  {"name": "a next-line character after an id is no space", "note": "The pump. ^u\u0085\n", "id": "u", "lines": null}
 ]

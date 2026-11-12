@@ -5,15 +5,15 @@ import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, use
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { useErrorTextFor } from "../discreet/errorText";
-import { remarkHideBlockIds } from "../reader/blockIds";
-import MermaidDiagram from "../reader/MermaidDiagram";
-import { useDarkScheme } from "../theme/dark";
 import { useLinks, useNote } from "../api/notes";
 import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import { useErrorTextFor } from "../discreet/errorText";
+import { remarkHideBlockIds } from "../reader/blockIds";
+import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
+import { useDarkScheme } from "../theme/dark";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { blockSource, findBlock } from "./blocks";
 import { remarkCallouts, type CalloutKind } from "./callouts";
@@ -59,7 +59,7 @@ function remarkChanged({ highlight }: { highlight: Highlight | null }) {
 type HastNode = NonNullable<ExtraProps["node"]>;
 type HastChild = HastNode["children"][number];
 
-/** The text of a list item without its nested lists: a task's accessible name. */
+/** The text of a node without its nested lists: a task's accessible name, a code block's source. */
 function textOf(node: HastChild): string {
   if (node.type === "text") return node.value;
   if (node.type !== "element" || node.tagName === "ul" || node.tagName === "ol") return "";

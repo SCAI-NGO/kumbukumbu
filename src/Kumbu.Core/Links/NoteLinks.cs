@@ -54,6 +54,7 @@ public static class NoteLinks
 
         return [.. exact, .. maybe];
     }
+
     /// <summary>The lines of the other notes in the vault that name <paramref name="path"/> without linking to it (see
     /// <see cref="Mentions"/>), by source path and line; archived notes only when <see cref="ArchiveFolder.Shown"/>.
     /// An attachment has none.</summary>

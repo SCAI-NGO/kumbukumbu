@@ -79,6 +79,23 @@ const headingLines = "h1[data-line], h2[data-line], h3[data-line], h4[data-line]
 const FLASH_MS = 1_600;
 
 /**
+ * What draws late above `target` (a diagram, an embed) moves it after the jump: while it is lit, it is centred again
+ * whenever the article changes size, until the user scrolls themself. Gives what stops it.
+ */
+function keepCentred(article: HTMLElement, target: HTMLElement): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+  const observer = new ResizeObserver(() => target.scrollIntoView({ block: "center" }));
+  const byUser = ["wheel", "touchstart", "keydown", "mousedown"] as const;
+  const stop = () => {
+    observer.disconnect();
+    for (const type of byUser) window.removeEventListener(type, stop, true);
+  };
+  observer.observe(article);
+  for (const type of byUser) window.addEventListener(type, stop, { capture: true, passive: true });
+  return stop;
+}
+
+/**
  * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. Write mode: the
  * editor with its toolbar, in place of the dock.
  */
@@ -231,10 +248,11 @@ export default function NoteView({ path }: { path: string }) {
 
   // Opened at a block (a `[[Plan#^id]]` link) or a line (an unlinked mention): the block holding it comes into view
   // and lights up briefly. Once per navigation, when the note is shown.
-  const flash = useRef<{ target: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const flash = useRef<{ target: HTMLElement; timer: ReturnType<typeof setTimeout>; stop: () => void } | null>(null);
   const unflash = useCallback(() => {
     if (!flash.current) return;
     clearTimeout(flash.current.timer);
+    flash.current.stop();
     flash.current.target.classList.remove("k-flash");
     flash.current = null;
   }, []);
@@ -247,7 +265,8 @@ export default function NoteView({ path }: { path: string }) {
     const at = location.state as { block?: unknown; line?: unknown } | null;
     let line = typeof at?.line === "number" ? at.line : undefined;
     if (typeof at?.block === "string") {
-      const found = findBlock(shown.body, at.block);
+      // On the stored text, as the Core finds it: a block a comment hides leads to the one shown above it.
+      const found = findBlock(note.data.content, at.block);
       if (!found) {
         setNotice({ kind: "block", id: at.block });
         return;
@@ -263,11 +282,12 @@ export default function NoteView({ path }: { path: string }) {
       if (n <= line && (!target || n > Number(target.dataset.line)) && !e.closest(".k-embed")) target = e;
     }
     if (!target) return;
+    target.closest("details")?.setAttribute("open", "");
     target.scrollIntoView({ block: "center" });
     unflash();
     target.classList.add("k-flash");
-    flash.current = { target, timer: setTimeout(unflash, FLASH_MS) };
-  }, [mode, note.data, location.key, location.state, shown.body, unflash]);
+    flash.current = { target, timer: setTimeout(unflash, FLASH_MS), stop: keepCentred(article.current, target) };
+  }, [mode, note.data, location.key, location.state, unflash]);
 
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {

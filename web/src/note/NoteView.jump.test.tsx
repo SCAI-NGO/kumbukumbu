@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +99,61 @@ describe("opening a note at a block or a line", () => {
     const quote = (await screen.findByText(/^The pump is loud\./, { selector: "p" })).closest("blockquote")!;
     await vi.waitFor(() => expect(scrolled()).toEqual([quote]));
     expect(quote).toHaveClass("k-flash");
+  });
+
+  it("a block a comment hides opens at the block above it, without a notice", async () => {
+    planApi(["# Plan", "", "Intro.", "", "%%Secret plan. ^hidden", "", "%%", "", "Done."].join("\n"));
+    renderApp({ pathname: planUrl, state: { block: "hidden" } satisfies NoteAt });
+    const intro = await screen.findByText("Intro.", { selector: "p" });
+    await vi.waitFor(() => expect(scrolled()).toEqual([intro]));
+    expect(screen.queryByText(/Secret plan/)).toBeNull();
+    expect(screen.queryByText(/There is no block/)).toBeNull();
+  });
+
+  it("a jump into a folded callout unfolds it", async () => {
+    planApi(["# Plan", "", "> [!note]- Folded", "> The pump is loud.", ">", "> Bob heard it.", "", "Done."].join("\n"));
+    renderApp({ pathname: planUrl, state: { line: 6 } satisfies NoteAt });
+    const paragraph = await screen.findByText("Bob heard it.", { selector: "p" });
+    await vi.waitFor(() => expect(scrolled()).toEqual([paragraph]));
+    expect(paragraph.closest("details")).toHaveAttribute("open");
+  });
+
+  describe("while the block lights up", () => {
+    // jsdom has no ResizeObserver: this one reports a change in size when asked.
+    let resized: () => void;
+    beforeEach(() => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: () => void) {
+            resized = callback;
+          }
+          observe() {}
+          disconnect() {
+            resized = () => {};
+          }
+        },
+      );
+    });
+
+    it("the block is centred again when the note above it grows", async () => {
+      planApi();
+      renderApp({ pathname: planUrl, state: { block: "controller" } satisfies NoteAt });
+      const block = await screen.findByText("The pump needs a new controller.", { selector: "p" });
+      await vi.waitFor(() => expect(scrolled()).toEqual([block]));
+      act(() => resized());
+      expect(scrolled()).toEqual([block, block]);
+    });
+
+    it("but not once the user scrolls", async () => {
+      planApi();
+      renderApp({ pathname: planUrl, state: { block: "controller" } satisfies NoteAt });
+      const block = await screen.findByText("The pump needs a new controller.", { selector: "p" });
+      await vi.waitFor(() => expect(scrolled()).toEqual([block]));
+      fireEvent.wheel(block);
+      act(() => resized());
+      expect(scrolled()).toEqual([block]);
+    });
   });
 
   it("nothing inside an embed carries data-line", () => {

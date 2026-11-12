@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Reader from "./Reader";
 import { snapshotText } from "./snapshot";
 
-// Counts the loads of the Mermaid module: the reader page never loads it.
-const { mermaidLoaded } = vi.hoisted(() => ({ mermaidLoaded: vi.fn() }));
+// Counts the loads of the Mermaid module: the reader page never loads it. The factory runs only on the first import in
+// this file, so the count is no mock that restoreAllMocks would clear: a load in any earlier test still shows.
+const mermaid = vi.hoisted(() => ({ loads: 0 }));
 vi.mock("./mermaidRender", () => {
-  mermaidLoaded();
+  mermaid.loads++;
   return { renderDiagram: vi.fn() };
 });
 
@@ -407,8 +408,8 @@ describe("Mermaid on the reader page", () => {
     expect(code).toHaveTextContent("flowchart LR Sensor --> Controller --> Pump");
     expect(code?.closest("pre")).toBeVisible();
     expect(screen.queryByRole("img")).toBeNull();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mermaidLoaded).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
+    expect(mermaid.loads).toBe(0);
   });
 
   it("Copy as Markdown keeps the mermaid source", async () => {
