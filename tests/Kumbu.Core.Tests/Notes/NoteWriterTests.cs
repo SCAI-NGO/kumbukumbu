@@ -44,6 +44,65 @@ public class NoteWriterTests
             result.Output);
     }
 
+    private const string Moved = "now leads to /Work/Ideas/Kumbu.md (before: /Work/Projects/Kumbukumbu.md by its alias)";
+
+    private async Task Seed(string path, string content) =>
+        await _store.TryCreateAsync(new StoredNote(P(path), content, 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), Ct);
+
+    /// <summary>The spec's example (§1): Kumbukumbu goes by Kumbu and K², and the diary links to both.</summary>
+    private async Task SeedAliasExample()
+    {
+        await Seed("/Work/Projects/Kumbukumbu.md", "---\naliases: [Kumbu, K²]\n---\n# Kumbukumbu\n");
+        await Seed("/Work/Diary/2026-11-12.md", "Talked with Bob about [[Kumbu]] and the [[K²#Roadmap|roadmap]].\nKumbu needs a calendar.\n");
+    }
+
+    [Fact]
+    public async Task CreatingANoteNamedLikeAnAliasSaysWhereTheLinksLeadNow()
+    {
+        await SeedAliasExample();
+
+        var result = await Write("/Work/Ideas/Kumbu.md", "x\n", null);
+
+        Assert.Equal($"created /Work/Ideas/Kumbu.md (1 line); note: [[Kumbu]] in /Work/Diary/2026-11-12.md {Moved}", result.Output);
+    }
+
+    [Fact]
+    public async Task CreatingANoteWithASharedAliasSaysNowAmbiguous()
+    {
+        await SeedAliasExample();
+
+        var result = await Write("/Work/People/Kumbu Team.md", "---\naliases: [K²]\n---\n", null);
+
+        Assert.StartsWith(
+            "created /Work/People/Kumbu Team.md (3 lines); note: now ambiguous: [[K²#Roadmap|roadmap]] in /Work/Diary/2026-11-12.md (2 notes)",
+            result.Output);
+    }
+
+    [Fact]
+    public async Task TheAliasHintListsFiveAndCountsTheRest()
+    {
+        await Seed("/Work/Projects/Kumbukumbu.md", "---\naliases: [Kumbu]\n---\n");
+        for (var i = 1; i <= 7; i++) await Seed($"/Work/Diary/d{i}.md", "[[Kumbu]]\n");
+
+        var result = await Write("/Work/Ideas/Kumbu.md", "x\n", null);
+
+        var shown = string.Join(", ", Enumerable.Range(1, 5).Select(i => $"[[Kumbu]] in /Work/Diary/d{i}.md {Moved}"));
+        Assert.Equal($"created /Work/Ideas/Kumbu.md (1 line); note: {shown} and 2 more", result.Output);
+    }
+
+    [Fact]
+    public async Task BothClausesStandSideBySide()
+    {
+        await SeedAliasExample();
+
+        var result = await Write("/Work/Ideas/Kumbu.md", "---\naliases: [K²]\n---\n", null);
+
+        Assert.Equal(
+            "created /Work/Ideas/Kumbu.md (3 lines); note: now ambiguous: [[K²#Roadmap|roadmap]] in /Work/Diary/2026-11-12.md (2 notes) ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)"
+            + $"; note: [[Kumbu]] in /Work/Diary/2026-11-12.md {Moved}",
+            result.Output);
+    }
+
     [Fact]
     public void TokenIsTwelveHexCharactersOfTheSha256() => Assert.Equal("2cf24dba5fb0", VersionToken.Of("hello"));
 

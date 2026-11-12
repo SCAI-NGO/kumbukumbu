@@ -123,7 +123,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             }
 
             var shared = (await store.VaultInfoAsync(path.Segments[0], ct))?.Shared == true ? $". {path.Segments[0]} is shared: others can read this note" : "";
-            return Written($"created {path.Value} ({Lines.Count(content)}){await NewlyAmbiguousAsync(path, ct)}{shared}", note);
+            return Written($"created {path.Value} ({Lines.Count(content)}){await LinkHintsAsync(path, ct)}{shared}", note);
         }
 
         if (existing is null) return await MissingAsync(tool, path, ct);
@@ -375,32 +375,51 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     private const int AmbiguousShown = 5;
 
     /// <summary>
-    /// Links that led to one note and, with <paramref name="created"/> there too, now match two. Nothing is
-    /// rewritten (links resolve at read time, as in Obsidian); the hint says where to look.
+    /// Links that led to one note and, with <paramref name="created"/> there too, now match two; and links that led to
+    /// another note by its alias and now lead to <paramref name="created"/> by its name. Nothing is rewritten (links
+    /// resolve at read time, as in Obsidian); the hint says where to look.
     /// </summary>
-    private async Task<string> NewlyAmbiguousAsync(VaultPath created, CancellationToken ct)
+    private async Task<string> LinkHintsAsync(VaultPath created, CancellationToken ct)
     {
         var vault = created.Segments[0];
         var notes = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
-        var after = new LinkResolver(vault, notes.Select(n => n.Path));
-        var before = new LinkResolver(vault, notes.Select(n => n.Path).Where(p => p != created));
+        var aliases = NoteAliases.Of(notes);
+        var after = new LinkResolver(vault, notes.Select(n => n.Path), noteAliases: aliases);
+        var before = new LinkResolver(
+            vault, notes.Select(n => n.Path).Where(p => p != created),
+            noteAliases: aliases.Where(a => a.Key != created).ToDictionary());
         var found = new List<string>();
+        var moved = new List<string>();
         foreach (var note in notes.Where(n => n.Path != created).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var now = after.Resolve(note.Path, link.Target);
-                if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && before.Resolve(note.Path, link.Target).Kind == LinkKind.Note)
+                var was = before.Resolve(note.Path, link.Target);
+                if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && was.Kind == LinkKind.Note)
                 {
                     found.Add($"{link.Raw} in {note.Path.Value} ({now.Candidates.Count} notes)");
+                }
+                else if (was is { Kind: LinkKind.Note, ViaAlias: true } && was.Target != created
+                    && now is { Kind: LinkKind.Note, ViaAlias: false } && now.Target == created)
+                {
+                    moved.Add($"{link.Raw} in {note.Path.Value} now leads to {created.Value} (before: {was.Target!.Value} by its alias)");
                 }
             }
         }
 
-        if (found.Count == 0) return "";
-        var more = found.Count > AmbiguousShown ? $" and {found.Count - AmbiguousShown} more" : "";
-        return $"; note: now ambiguous: {string.Join(", ", found.Take(AmbiguousShown))}{more} ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)";
+        var hints = "";
+        if (found.Count > 0)
+        {
+            hints += $"; note: now ambiguous: {Shown(found)} ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)";
+        }
+
+        if (moved.Count > 0) hints += $"; note: {Shown(moved)}";
+        return hints;
+
+        static string Shown(List<string> items) =>
+            string.Join(", ", items.Take(AmbiguousShown)) + (items.Count > AmbiguousShown ? $" and {items.Count - AmbiguousShown} more" : "");
     }
 
     private async Task<ShellResult> ReplaceAsync(
