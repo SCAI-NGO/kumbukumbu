@@ -51,7 +51,7 @@ public class HelpTests
     [Theory]
     [InlineData("ls", "ls [--archive] [path]", "ls [--archive] [path]")]
     [InlineData("tags", "tags [--archive] [path]", "tags [--archive] [tag] [path]")]
-    [InlineData("backlinks", "backlinks [--archive] <path>", "backlinks [--archive] <path>")]
+    [InlineData("backlinks", "backlinks [--archive] [--unlinked] <path>", "backlinks [--archive] <path>")]
     public async Task The_readers_that_hide_the_archive_take_archive(string command, string help, string usage)
     {
         var details = (await Run($"help {command}")).Output;

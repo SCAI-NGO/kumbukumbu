@@ -17,7 +17,7 @@ public static class Manual
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
-          backlinks [--archive] <path>    the notes that link to a note, as path:line:text
+          backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
           head [-n N] [path]              first lines (default 10)
