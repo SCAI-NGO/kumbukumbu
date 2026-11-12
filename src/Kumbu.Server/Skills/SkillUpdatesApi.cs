@@ -43,7 +43,7 @@ public static class SkillUpdatesApi
         [FromQuery] string? path, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing,
         UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var (upstream, files) = await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled).ReviewAsync(path, ct);
+        var (upstream, files) = await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled, options.Value.Publish.Enabled).ReviewAsync(path, ct);
         return TypedResults.Ok(new SkillReviewView(
             upstream.Source, upstream.Repo?.ToString(), upstream.RepoPath, upstream.Commit, upstream.Hash,
             [.. files.Select(f => new SkillReviewFileView(f.Path, f.Change, [.. f.Hunks]))]));
@@ -53,7 +53,7 @@ public static class SkillUpdatesApi
         SkillUpdateRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing,
         UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var taken = await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled).TakeAsync(body.Path, body.Hash, ct);
+        var taken = await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled, options.Value.Publish.Enabled).TakeAsync(body.Path, body.Hash, ct);
         return TypedResults.Ok(new SkillTakenView(body.Path.TrimEnd('/'), taken.Source, taken.Hash));
     }
 
@@ -61,7 +61,7 @@ public static class SkillUpdatesApi
         SkillUpdateRequest body, RequestCaller caller, EncryptedNoteStore store, NoteWriter writer, MarketplaceFetcher github, PublicationStore publishing,
         UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled).SkipAsync(body.Path, body.Hash, ct);
+        await new SkillUpdateTaker(store, writer, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled, options.Value.Publish.Enabled).SkipAsync(body.Path, body.Hash, ct);
         return TypedResults.NoContent();
     }
 }

@@ -21,13 +21,17 @@ public sealed record ReaderView(string Title, string Markdown, DateTime Snapshot
 /// <summary>A file of the copy: its index and media type, never its name in the vault.</summary>
 public sealed record ReaderFileView(int Index, string MediaType);
 
-/// <summary>The paths strangers open (publish spec §3.12, skills design §3.12): the reader page, the skill page and their
-/// endpoints. They get the reader's headers and are left out of the HTTP metrics.</summary>
+/// <summary>An AI link (<see cref="AiLinkApi"/>) and when it expires.</summary>
+public sealed record AiLinkView(string Link, DateTime ExpiresAt);
+
+/// <summary>The paths strangers open (publish spec §3.12, skills design §3.12, AI link spec §3.4): the reader page, the
+/// skill page, their endpoints and the AI links. They get the reader's headers and are left out of the HTTP metrics.</summary>
 public static class ReaderPaths
 {
     public static bool Is(PathString path) => IsPage(path, "/s") || IsPage(path, "/k")
         || path.StartsWithSegments(ReaderApi.CookiePath, StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments(SkillPageApi.CookiePath, StringComparison.OrdinalIgnoreCase);
+        || path.StartsWithSegments(SkillPageApi.CookiePath, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments(AiLinkApi.Path, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPage(PathString path, string page) =>
         (path.StartsWithSegments(page, StringComparison.OrdinalIgnoreCase, out var rest) && rest.Value is null or "" or "/")
@@ -66,6 +70,7 @@ public static class ReaderApi
             .Produces(StatusCodes.Status200OK, typeof(byte[]), ImageTypes[0], ImageTypes[1..])
             .WithMetadata(FileContentMetadata.Instance)
             .Errors(404, 429);
+        api.MapPost("/ai-links", MakeAiLinkAsync).WithMetadata(new RequestSizeLimitAttribute(1024)).Errors(403, 404, 413, 429);
     }
 
     private static readonly string[] ImageTypes = [.. AttachmentFormat.All.Where(f => f.Kind == AttachmentKind.Image).Select(f => f.MediaType).Distinct()];
@@ -102,6 +107,22 @@ public static class ReaderApi
         }
 
         return TypedResults.File(file.Bytes, file.MediaType);
+    }
+
+    /// <summary>An AI link to the reader cookie's copy (AI link spec §3.2), if <see cref="CopyHeader"/> names that copy,
+    /// as for a file; a read of the copy towards the limits. Each request makes a new one.</summary>
+    private static async Task<Ok<AiLinkView>> MakeAiLinkAsync(
+        [FromHeader(Name = CopyHeader)] string? copy, HttpContext http, PublicationStore store, UserCatalog users, AccountLimits limits,
+        IOptions<KumbuOptions> options, ILoggerFactory logs, CancellationToken ct)
+    {
+        var (code, opened) = await OpenAsync(http.Request.Cookies[Cookie], limits.ReaderRead, http, store, users, limits, options, logs, ct);
+        // As for a file: another copy's id is no guess, the cookie stays. A copy withdrawn since it opened makes none.
+        if (!string.Equals(copy, ShareCode.CopyId(code), StringComparison.Ordinal) || await store.CreateAiLinkAsync(opened, ct) is not { } made)
+        {
+            throw ApiErrors.NotFound(NotFoundSentence);
+        }
+
+        return TypedResults.Ok(new AiLinkView($"{Publications.BaseUrl(http, options.Value)}{AiLinkApi.Path}/{made.Token}", made.ExpiresAt));
     }
 
     /// <summary>

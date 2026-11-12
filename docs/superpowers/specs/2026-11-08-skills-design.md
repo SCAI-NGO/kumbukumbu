@@ -134,6 +134,7 @@ A new `ICommand` in `Shell` (`src/Kumbu.Core/Sh/Shell.cs:35-59`), with a page in
 
 - Checked only when the user opens the Skills screen or presses **Check for updates**; never in the background.
 - A copy has an update when its source has a different state than `kumbu-hash` records: a newer commit whose skill folder hashes differently, or a link whose publication now hashes differently (opened with the code kept per §3.8). A withdrawn link or a vanished repository is shown as "source gone".
+- **Publishing switched off** (`KUMBU_PUBLISH_ENABLED=false`; amended 2026-11-11 by the AI link design §5): a link's copy is not checked. The check answers `publishing-off` and keeps the copy's stored update state; **Review** and **Take update** refuse with "Publishing is switched off on this server, so updates from links can't be checked right now.", and the Skills screen shows that sentence in place of the update state. Switched on again, everything continues as before. A fact about the server is said as one, never as "source gone".
 - **Review** shows a diff of every file between the user's current copy, including their own edits, and the new version (`src/Kumbu.Core/Diffs`). **Take update** replaces the folder and rewrites the origin fields; the previous state stays in the history. **Skip** hides the notice until the source changes again.
 - Agents never take updates. `skills ls` may say "update available"; the hint tells the AI to point the user to the Skills screen.
 

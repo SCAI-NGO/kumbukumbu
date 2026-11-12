@@ -25,6 +25,8 @@ internal sealed class PublicationStore(VaultCatalog catalog)
 
     private static FilterDefinitionBuilder<PublicationFileDocument> Files => Builders<PublicationFileDocument>.Filter;
 
+    private static FilterDefinitionBuilder<AiLinkDocument> A => Builders<AiLinkDocument>.Filter;
+
     /// <summary>The collection of the vaults' records (<see cref="VaultCatalog.Publishing"/>).</summary>
     internal const string RecordCollection = "publishing";
 
@@ -222,13 +224,15 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         var lookup = ShareCode.Lookup(code);
         if (await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { } doc) return;
         await catalog.PublicationFiles.DeleteManyAsync(session, Files.Eq(d => d.Publication, doc.Id), cancellationToken: ct);
+        await catalog.AiLinks.DeleteManyAsync(session, A.Eq(d => d.Publication, doc.Id), cancellationToken: ct);
         await catalog.Publications.DeleteOneAsync(session, P.Eq(d => d.Id, doc.Id), cancellationToken: ct);
     }
 
-    /// <summary>Every copy of the vaults with its files, without opening anything; returns how many documents went, as
-    /// <see cref="VaultCatalog.DeleteVaultsAsync"/> counts them.</summary>
+    /// <summary>Every copy of the vaults with its files and AI links, without opening anything; returns how many documents
+    /// went, as <see cref="VaultCatalog.DeleteVaultsAsync"/> counts them: the AI links left out, as there.</summary>
     public async Task<long> DeleteCopiesOfVaultsAsync(IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, CancellationToken ct)
     {
+        await catalog.AiLinks.DeleteManyAsync(session, A.In(d => d.Vault, vaultIds), cancellationToken: ct);
         var files = (await catalog.PublicationFiles.DeleteManyAsync(session, Files.In(d => d.Vault, vaultIds), cancellationToken: ct)).DeletedCount;
         return files + (await catalog.Publications.DeleteManyAsync(session, P.In(d => d.Vault, vaultIds), cancellationToken: ct)).DeletedCount;
     }
@@ -318,6 +322,98 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         }
     }
 
+    /// <summary>A new AI link to the copy opened (AI link spec §3.4): its token and when it expires; null if the
+    /// publication's document is gone. Its slot holds the publication key and the owner's id under the token's key,
+    /// bound to <c>ai-link:{L}:{publication id}</c>, L the token's lookup id.</summary>
+    public async Task<(string Token, DateTime ExpiresAt)?> CreateAiLinkAsync(OpenedPublication opened, CancellationToken ct)
+    {
+        var vault = await catalog.Publications.Find(P.Eq(d => d.Id, opened.Id)).Project(d => d.Vault).FirstOrDefaultAsync(ct);
+        if (vault is null) return null;
+        var token = AiLinkToken.New();
+        var lookup = AiLinkToken.Lookup(token);
+        var key = AiLinkToken.Key(token);
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new AiLinkSlot(opened.Key, opened.Owner));
+        byte[] slot;
+        try
+        {
+            slot = VaultCrypto.Seal(key, plain, AiLinkContext(Convert.ToHexStringLower(lookup), opened.Id));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(plain);
+        }
+
+        // In whole milliseconds, as MongoDB keeps it: the answer names the expiry the document has.
+        var now = catalog.Now + AiLinkToken.Lifetime;
+        var expiresAt = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+        try
+        {
+            await catalog.AiLinks.InsertOneAsync(
+                new AiLinkDocument { Id = ObjectId.GenerateNewId(), Vault = vault, Publication = opened.Id, Lookup = lookup, Slot = slot, ExpiresAt = expiresAt },
+                cancellationToken: ct);
+        }
+        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // Without the driver's exception: its message names the lookup id.
+            throw new InvalidOperationException("An AI link's lookup id is taken.");
+        }
+
+        return (token, expiresAt);
+    }
+
+    /// <summary>The copy the AI link <paramref name="token"/> (normalised, <see cref="AiLinkToken.Parse"/>) opens, with the link's document id; null if no unexpired document has the token's
+    /// lookup, its slot doesn't open, or the publication is gone, a skill's, or its copy doesn't open. The request count
+    /// is <see cref="CountAiLinkAsync"/>'s.</summary>
+    public async Task<(OpenedPublication Opened, ObjectId Id)?> OpenAiLinkAsync(string token, CancellationToken ct)
+    {
+        var link = await catalog.AiLinks.Find(A.Eq(d => d.Lookup, AiLinkToken.Lookup(token)) & A.Gt(d => d.ExpiresAt, catalog.Now)).FirstOrDefaultAsync(ct);
+        if (link is null) return null;
+        AiLinkSlot? slot;
+        var key = AiLinkToken.Key(token);
+        try
+        {
+            slot = JsonSerializer.Deserialize<AiLinkSlot>(VaultCrypto.Open(key, link.Slot, AiLinkContext(Convert.ToHexStringLower(link.Lookup), link.Publication)));
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+
+        if (slot?.Key is not { } publicationKey || slot.Owner is not { } owner) return null;
+        // A note's copy has no kind.
+        var doc = await catalog.Publications.Find(P.Eq(d => d.Id, link.Publication)).FirstOrDefaultAsync(ct);
+        if (doc is null || doc.Kind is not null)
+        {
+            CryptographicOperations.ZeroMemory(publicationKey);
+            return null;
+        }
+
+        try
+        {
+            if (JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(publicationKey, doc.Blob, CopyContext(Convert.ToHexStringLower(doc.Lookup)))) is { } copy)
+                return (new OpenedPublication(doc.Id, owner, copy, publicationKey, doc.Lookup), link.Id);
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+        }
+
+        CryptographicOperations.ZeroMemory(publicationKey);
+        return null;
+    }
+
+    /// <summary>Counts a request of the AI link <paramref name="id"/>, in one update, only while it is unexpired and under
+    /// <paramref name="ceiling"/>; returns whether it was.</summary>
+    public async Task<bool> CountAiLinkAsync(ObjectId id, int ceiling, CancellationToken ct) =>
+        (await catalog.AiLinks.UpdateOneAsync(
+            A.Eq(d => d.Id, id) & A.Gt(d => d.ExpiresAt, catalog.Now) & A.Lt(d => d.Count, ceiling),
+            Builders<AiLinkDocument>.Update.Inc(d => d.Count, 1),
+            cancellationToken: ct)).ModifiedCount == 1;
+
     private async Task InsertFilesAsync(IClientSessionHandle session, string vaultId, ObjectId publication, string l, byte[] key, IReadOnlyList<byte[]> files, CancellationToken ct)
     {
         if (files.Count == 0) return;
@@ -338,6 +434,8 @@ internal sealed class PublicationStore(VaultCatalog catalog)
     private static string SkillContext(string l) => $"publication:{l}:skill";
 
     private static string FileContext(string l, int n) => $"publication:{l}:file:{n}";
+
+    private static string AiLinkContext(string l, ObjectId publication) => $"ai-link:{l}:{publication}";
 }
 
 /// <summary>A copy opened with its code (<see cref="PublicationStore.OpenPublicationAsync"/>): its document's id, its

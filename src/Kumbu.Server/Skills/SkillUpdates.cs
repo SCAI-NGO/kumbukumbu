@@ -25,9 +25,16 @@ public sealed record SkillUpdateState(VaultPath Folder, string State, string? So
 /// </summary>
 internal sealed class SkillUpdates(
     EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
-    RequestCaller caller, bool marketplaces)
+    RequestCaller caller, bool marketplaces, bool publishingEnabled)
 {
     public const string Current = "current", Available = "available", Gone = "gone", Skipped = "skipped", OriginEdited = "origin-edited";
+
+    /// <summary>A link copy's state while publishing is switched off: its link isn't read, and what the last check found
+    /// stays (the same fact about the server as the reader's <see cref="ReaderApi.OffType"/>).</summary>
+    public const string PublishingOff = ReaderApi.OffType;
+
+    /// <summary>The answer of Review and Take for a link copy while publishing is switched off.</summary>
+    public const string PublishingOffSentence = "Publishing is switched off on this server, so updates from links can't be checked right now.";
 
     private const string GitHubPrefix = "github:", LinkPrefix = "link:";
 
@@ -72,7 +79,7 @@ internal sealed class SkillUpdates(
     }
 
     /// <summary>The copy's state; null when its source couldn't be asked for now (GitHub unavailable, marketplaces switched
-    /// off), which leaves what the last check found.</summary>
+    /// off), which leaves what the last check found, as <see cref="PublishingOff"/> does for a link copy.</summary>
     private async Task<SkillUpdateState?> StateAsync(PublishingRecord record, SkillOrigin origin, VaultPath folder, CancellationToken ct)
     {
         if (IsOriginEdited(folder, await store.ReadAsync(folder.Child(SkillPaths.Manifest), ct), origin))
@@ -88,6 +95,7 @@ internal sealed class SkillUpdates(
 
         if (origin.Source.StartsWith(LinkPrefix, StringComparison.Ordinal))
         {
+            if (!publishingEnabled) return new SkillUpdateState(folder, PublishingOff, origin.Source, null);
             var hash = await LinkHashAsync(record.SkillCodes.FirstOrDefault(c => string.Equals(c.Path, stored, StringComparison.Ordinal))?.Code, ct);
             return new SkillUpdateState(folder, hash is null ? Gone : StateOf(hash), origin.Source, null);
         }
@@ -155,10 +163,11 @@ internal sealed class SkillUpdates(
     }
 
     /// <summary>The folders found <see cref="Available"/> into the vault's record in place of those the last check found;
-    /// a copy whose source couldn't be asked keeps its entry, a folder without a sealed origin any more loses it.</summary>
+    /// a copy whose source couldn't be asked (null, <see cref="PublishingOff"/>) keeps its entry, a folder without a sealed
+    /// origin any more loses it.</summary>
     private Task RecordAsync(VaultAccess access, IReadOnlyList<(SkillOrigin Origin, SkillUpdateState? State)> found, CancellationToken ct)
     {
-        var checkedPaths = found.Where(f => f.State is not null).Select(f => f.Origin.Path).ToHashSet(StringComparer.Ordinal);
+        var checkedPaths = found.Where(f => f.State is not null && f.State.State != PublishingOff).Select(f => f.Origin.Path).ToHashSet(StringComparer.Ordinal);
         var available = found.Where(f => f.State?.State == Available).Select(f => f.Origin.Path).ToList();
         return publishing.ChangeAsync(access, r =>
         {

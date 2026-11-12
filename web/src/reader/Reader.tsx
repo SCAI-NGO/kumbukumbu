@@ -2,10 +2,16 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { readAgain, readFile, readWithCode, type ReaderCopy, type ReadResult } from "./readerApi";
-import { snapshotText } from "./snapshot";
+import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReadResult } from "./readerApi";
+import { snapshotText, untilText } from "./snapshot";
 
 type State = { kind: "loading" } | { kind: "failed" } | ReadResult;
+
+const offSentence = "Published notes can't be read on this server.";
+const busySentence = "Too many tries; wait a minute and try again.";
+
+const buttonClass =
+  "min-h-11 rounded-[8px] border border-line bg-surface px-4 text-[14px] text-text focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60";
 
 const webLink = (href: string | undefined) => {
   try {
@@ -96,8 +102,8 @@ const components: Components = {
 /** The copy as one Markdown text, title first, for pasting into an AI's chat: its fetch tools can't read this page. */
 export const copyMarkdown = (copy: ReaderCopy) => `# ${copy.title}\n\n${copy.markdown}`;
 
-/** Copies the copy's Markdown and says how that went for a few seconds (the app's `useCopied`, which this page can't import). */
-function CopyMarkdown({ copy }: { copy: ReaderCopy }) {
+/** What a copy did, said for a few seconds (the app's `useCopied`, which this page can't import). */
+function useSaid() {
   const [said, setSaid] = useState<{ text: string; n: number } | null>(null);
   useEffect(() => {
     if (!said) return;
@@ -105,32 +111,92 @@ function CopyMarkdown({ copy }: { copy: ReaderCopy }) {
     return () => clearTimeout(timer);
   }, [said]);
   const say = (text: string) => setSaid((s) => ({ text, n: (s?.n ?? 0) + 1 }));
-  const copyText = () =>
-    navigator.clipboard.writeText(copyMarkdown(copy)).then(
+  const copyText = (text: string) =>
+    navigator.clipboard.writeText(text).then(
       () => say("Copied"),
       () => say("Couldn't copy. Select the text and copy it by hand."),
     );
+  const saying = <div aria-live="polite">{said && <span key={said.n} className="text-[14px] text-muted">{said.text}</span>}</div>;
+  return { copyText, saying, clear: () => setSaid(null) };
+}
+
+type Made = AiLinkResult | { kind: "failed" };
+
+const refusals: Record<Exclude<Made["kind"], "link">, string> = {
+  none: "The link couldn't be made: open the note's link again.",
+  off: offSentence,
+  busy: busySentence,
+  failed: "The link couldn't be made; try again later.",
+};
+
+/** The link for an AI's fetch tool, a new one with each press, the latest replacing whatever the one before showed. */
+function AiLinkMade({ made }: { made: Made | null }) {
+  const { copyText, saying, clear } = useSaid();
+  const link = made?.kind === "link" ? made.link : undefined;
+  // A "Copied" was said of the link before.
+  useEffect(() => clear(), [link]);
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-3">
-      <button
-        type="button"
-        onClick={() => void copyText()}
-        className="min-h-11 rounded-[8px] border border-line bg-surface px-4 text-[14px] text-text focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        Copy as Markdown
-      </button>
-      <div aria-live="polite">{said && <span key={said.n} className="text-[14px] text-muted">{said.text}</span>}</div>
-    </div>
+    <>
+      {made?.kind === "link" && (
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
+          <input
+            readOnly
+            value={made.link}
+            aria-label="Link for your AI"
+            onFocus={(e) => e.currentTarget.select()}
+            className="min-h-11 w-full min-w-0 rounded-[8px] border border-line bg-surface px-3 font-mono text-[13px] text-text focus-visible:outline-2 focus-visible:outline-accent sm:w-auto sm:flex-1"
+          />
+          <button type="button" onClick={() => void copyText(made.link)} className={buttonClass}>
+            Copy
+          </button>
+          {saying}
+        </div>
+      )}
+      {/* Always laid out: a live region that appears with its text is often not read out. */}
+      <p aria-live="polite" className="text-[14px] text-muted">
+        {made === null
+          ? null
+          : made.kind === "link"
+            ? `Valid until ${untilText(made.expiresAt)}. Anyone with this link can read this note until then: it is for an AI to fetch, not to post in a chat.`
+            : refusals[made.kind]}
+      </p>
+    </>
   );
 }
 
 function Copy({ copy }: { copy: ReaderCopy }) {
   const files = useMemo(() => ({ copy: copy.copy, indices: new Set(copy.files.map((f) => f.index)) }), [copy.copy, copy.files]);
+  const markdown = useSaid();
+  const [made, setMade] = useState<Made | null>(null);
+  const pending = useRef(false);
+  const latest = useRef(0);
+  // Not disabled while it waits, so the focus stays on it; a press meanwhile does nothing.
+  const make = () => {
+    if (pending.current) return;
+    pending.current = true;
+    const id = ++latest.current;
+    const settle = (next: Made) => {
+      pending.current = false;
+      if (id === latest.current) setMade(next);
+    };
+    makeAiLink(copy.copy).then(settle, () => settle({ kind: "failed" }));
+  };
   return (
     <article>
       <h1 className="text-[28px] leading-tight font-bold text-text">{copy.title}</h1>
       <p className="mt-1 mb-4 font-mono text-[12px] text-muted">{snapshotText(copy.snapshotAt)}</p>
-      <CopyMarkdown copy={copy} />
+      <div className="mb-6 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => void markdown.copyText(copyMarkdown(copy))} className={buttonClass}>
+            Copy as Markdown
+          </button>
+          <button type="button" onClick={make} className={buttonClass}>
+            Link for your AI
+          </button>
+          {markdown.saying}
+        </div>
+        <AiLinkMade made={made} />
+      </div>
       <div className="text-[16px] leading-[1.6] break-words text-text-body">
         <Files.Provider value={files}>
           <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
@@ -221,10 +287,10 @@ export default function Reader() {
   return (
     <main className="mx-auto max-w-[720px] px-5 py-10">
       {state.kind === "loading" && <p className="text-muted">Loading …</p>}
-      {state.kind === "copy" && <Copy copy={state.copy} />}
+      {state.kind === "copy" && <Copy key={state.copy.copy} copy={state.copy} />}
       {state.kind === "none" && <CodeForm wrong={wrong} pending={pending} onRead={(code) => read(readWithCode(code), true)} />}
-      {state.kind === "off" && <p className="text-text-body">Published notes can't be read on this server.</p>}
-      {state.kind === "busy" && <p className="text-text-body">Too many tries; wait a minute and try again.</p>}
+      {state.kind === "off" && <p className="text-text-body">{offSentence}</p>}
+      {state.kind === "busy" && <p className="text-text-body">{busySentence}</p>}
       {state.kind === "failed" && <p className="text-text-body">The note couldn't be loaded; try again later.</p>}
     </main>
   );

@@ -2,6 +2,8 @@
 
 Date: 2026-11-05. Status: approved by the maintainer on 2026-11-05. Target: 0.3.2.
 
+Amended 2026-11-11 by the AI link design (`2026-11-11-ai-link-design.md`): the anti-goal on link previews (§2) holds for the ordinary link, and the reader page can make a short-lived link for an AI (§3.12).
+
 ## 1. Why
 
 Kumbu² is now in daily use at work. Twice on the first day its owner wanted to send a colleague a note, a list of questions and a list of example prompts, and had to copy and paste the text into a chat service instead. The colleague reads the list and answers in the chat; nothing more is needed.
@@ -33,7 +35,7 @@ The notes linked to other notes, among them a master note for the sub-project wi
 - anything the owner didn't choose leaves the vault: another note, its title through a path, a tag, a comment, an attachment's metadata, the vault's name, the owner's name;
 - a half-finished edit reaches the reader without the owner saying so;
 - an agent can publish because of a right the owner gave it for something else;
-- a chat service's link preview shows any of the content;
+- a chat service's link preview shows any of the content (of the ordinary link; an AI link, made by a reader on purpose, shows its content to whatever fetches it within its hour: §3.6 of the AI link design);
 - the reader page is a way into the web app (XSS on the same origin).
 
 ## 3. Decisions taken
@@ -164,6 +166,7 @@ As in the mockups of 2026-11-05 (`.superpowers/brainstorm/`, not committed):
 - `X-Robots-Tag: noindex, nofollow` and a `noindex` meta tag; `Referrer-Policy: no-referrer`; `Cache-Control: no-store`.
 - The reader endpoint is rate-limited per network and server-wide, as `/api/pairing/redeem` is (`Security.cs:360-374`), against load; 160-bit codes make guessing hopeless anyway.
 - **No reading statistics**: no count, no last-read time, no log of who read. Nothing about readers is stored.
+- **A link for an AI** (amended 2026-11-11): the page can make a link under `<base>/s/t/` that an AI's fetch tool reads with a plain `GET`, the copy as Markdown, for one hour. Its token is in the path by design; its request count serves only its ceiling and goes with it. See the AI link design (`2026-11-11-ai-link-design.md`).
 
 ### 3.13 Switching it off
 

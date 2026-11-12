@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using Kumbu.Server.Api;
 using Kumbu.Server.Tests.Publishing;
+using Kumbu.Server.Publishing;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Mvc.Testing.Handlers;
 
 namespace Kumbu.Server.Tests.Metrics;
 
@@ -112,5 +114,44 @@ public sealed class HttpMetricsTests(KumbuAppFactory app)
         var readerRoutes = new[] { "endpoint=\"/s\"", "endpoint=\"/s.html\"", "endpoint=\"/api/s\"", "endpoint=\"/api/s/\"", "endpoint=\"/api/s/files/{index}\"" };
         Assert.DoesNotContain(text.Split('\n'), l => readerRoutes.Any(r => l.Contains(r, StringComparison.Ordinal)));
         Assert.Equal(before, Scrape.Value(text, none));
+    }
+
+    [Fact]
+    public async Task AI_links_are_not_counted()
+    {
+        var published = await ReaderApiTests.PublishedAsync(app.PublicApi);
+        await using var api = ReaderApiTests.Limited(app.PublicApi);
+        using var reader = new ReaderApiTests.Reader(api, "203.0.113.121");
+        (await reader.PostAsync(published.Formatted)).Dispose();
+        string link;
+        using (var cookies = api.CreateDefaultClient(new Uri(KumbuAppFactory.PublicUrl), new CookieContainerHandler(reader.Jar)))
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/s/ai-links");
+            request.Headers.Add("Origin", KumbuAppFactory.PublicUrl);
+            request.Headers.Add(ReaderApi.CopyHeader, reader.Copy);
+            request.Headers.Add("X-Forwarded-For", reader.Address);
+            using var made = await cookies.SendAsync(request, Ct);
+            Assert.Equal(System.Net.HttpStatusCode.OK, made.StatusCode);
+            link = System.Text.Json.Nodes.JsonNode.Parse(await made.Content.ReadAsStringAsync(Ct))!["link"]!.GetValue<string>();
+        }
+
+        var token = link[(link.LastIndexOf('/') + 1)..];
+        using var ai = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(KumbuAppFactory.PublicUrl) });
+        var statuses = new List<int>();
+        foreach (var (method, url) in new[]
+        {
+            (HttpMethod.Get, link), (HttpMethod.Head, link), (HttpMethod.Get, $"{link}/files/0"), (HttpMethod.Get, $"/s/t/{AiLinkToken.New()}"),
+            (HttpMethod.Post, link), (HttpMethod.Get, link), (HttpMethod.Get, link),
+        })
+        {
+            using var request = new HttpRequestMessage(method, url);
+            request.Headers.Add("X-Forwarded-For", "203.0.113.122");
+            using var response = await ai.SendAsync(request, Ct);
+            statuses.Add((int)response.StatusCode);
+        }
+
+        Assert.Equal([200, 200, 200, 404, 404, 200, 429], statuses);
+        var text = await Scrape.TextAsync(api);
+        Assert.DoesNotContain(text.Split('\n'), l => l.Contains("/s/t", StringComparison.Ordinal) || l.Contains(token, StringComparison.OrdinalIgnoreCase));
     }
 }

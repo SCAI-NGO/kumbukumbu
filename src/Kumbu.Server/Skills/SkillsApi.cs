@@ -145,7 +145,7 @@ public static class SkillsApi
     private static async Task<Ok<SkillUpdateView[]>> CheckUpdatesAsync(
         RequestCaller caller, EncryptedNoteStore store, MarketplaceFetcher github, PublicationStore publishing, UserCatalog users, AccountLimits limits,
         IOptions<KumbuOptions> options, CancellationToken ct) =>
-        TypedResults.Ok((await new SkillUpdates(store, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled).CheckAsync(ct))
+        TypedResults.Ok((await new SkillUpdates(store, github, publishing, users, limits, caller, options.Value.Skills.Marketplaces.Enabled, options.Value.Publish.Enabled).CheckAsync(ct))
             .Select(s => new SkillUpdateView(s.Folder.Value, s.State, s.Source, s.Commit)).ToArray());
 
     /// <summary>

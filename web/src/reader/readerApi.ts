@@ -47,3 +47,17 @@ export async function readFile(copy: string, index: number): Promise<Blob> {
   if (!response.ok) throw new Error(`The file answered ${response.status}.`);
   return response.blob();
 }
+
+export type AiLinkResult = { kind: "link"; link: string; expiresAt: string } | { kind: "none" } | { kind: "off" } | { kind: "busy" };
+
+/** A new link for an AI's fetch tool to read the copy `copy` with, for an hour; made with the reader cookie, as a file is. */
+export async function makeAiLink(copy: string): Promise<AiLinkResult> {
+  const response = await fetch("/api/s/ai-links", { method: "POST", credentials: "same-origin", headers: { "X-Kumbu-Copy": copy } });
+  if (response.ok) {
+    const { link, expiresAt } = (await response.json()) as { link: string; expiresAt: string };
+    return { kind: "link", link, expiresAt };
+  }
+  const result = await answer(response);
+  if (result.kind === "copy") throw new Error(`The AI link answered ${response.status}.`);
+  return result;
+}

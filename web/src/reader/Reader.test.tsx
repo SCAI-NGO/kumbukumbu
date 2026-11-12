@@ -286,6 +286,93 @@ describe("Reader", () => {
     expect(await screen.findByText("Couldn't copy. Select the text and copy it by hand.")).toBeInTheDocument();
   });
 
+  it("makes a link for an AI and shows it with its expiry", async () => {
+    const link = "https://kumbu.example.org/s/t/abcdefghijklmnopqrstuvwxyz012345";
+    const fetch = stubFetch({
+      "GET /api/s": () => json(200, copy("Which way is shorter?")),
+      "POST /api/s/ai-links": () => json(200, { link, expiresAt: "2026-11-11T21:40:00Z" }),
+    });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Link for your AI" }));
+    expect(await screen.findByRole("textbox", { name: "Link for your AI" })).toHaveValue(link);
+    expect(screen.getByRole("textbox", { name: "Link for your AI" })).toHaveAttribute("readonly");
+    expect(
+      screen.getByText("Valid until 21:40. Anyone with this link can read this note until then: it is for an AI to fetch, not to post in a chat."),
+    ).toBeInTheDocument();
+    const init = fetch.mock.calls.find(([url]) => String(url).endsWith("/api/s/ai-links"))![1]!;
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("X-Kumbu-Copy")).toBe(copyId);
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("copies the AI link", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const link = "https://kumbu.example.org/s/t/abcdefghijklmnopqrstuvwxyz012345";
+    stubFetch({
+      "GET /api/s": () => json(200, copy("Which way is shorter?")),
+      "POST /api/s/ai-links": () => json(200, { link, expiresAt: "2026-11-11T21:40:00Z" }),
+    });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Link for your AI" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith(link);
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+  });
+
+  it("a second press replaces the link", async () => {
+    const links = ["https://kumbu.example.org/s/t/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://kumbu.example.org/s/t/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+    let made = 0;
+    stubFetch({
+      "GET /api/s": () => json(200, copy("Which way is shorter?")),
+      "POST /api/s/ai-links": () => json(200, { link: links[made], expiresAt: made++ === 0 ? "2026-11-11T21:40:00Z" : "2026-11-11T21:45:00Z" }),
+    });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Link for your AI" }));
+    expect(await screen.findByRole("textbox", { name: "Link for your AI" })).toHaveValue(links[0]);
+    await userEvent.click(screen.getByRole("button", { name: "Link for your AI" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Link for your AI" })).toHaveValue(links[1]));
+    expect(screen.getAllByRole("textbox", { name: "Link for your AI" })).toHaveLength(1);
+    expect(screen.getByText(/^Valid until 21:45\./)).toBeInTheDocument();
+    expect(screen.queryByText(/^Valid until 21:40\./)).not.toBeInTheDocument();
+  });
+
+  it("says so when publishing is off or the link can't be made", async () => {
+    const answers: (() => Response)[] = [
+      () => json(404, { error: "Published notes can't be read on this server.", type: "publishing-off" }),
+      none,
+      () => json(429, { error: "Too many attempts; try again in a minute." }),
+      () => new Response("", { status: 500 }),
+      () => json(200, { link: "https://kumbu.example.org/s/t/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expiresAt: "2026-11-11T21:40:00Z" }),
+      none,
+    ];
+    let n = 0;
+    stubFetch({ "GET /api/s": () => json(200, copy("Which way is shorter?")), "POST /api/s/ai-links": () => answers[n++]() });
+    render(<Reader />);
+    const press = async () => userEvent.click(await screen.findByRole("button", { name: "Link for your AI" }));
+
+    await press();
+    expect(await screen.findByText("Published notes can't be read on this server.")).toBeInTheDocument();
+    // Still the note: only the link wasn't made.
+    expect(screen.getByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    await press();
+    expect(await screen.findByText("The link couldn't be made: open the note's link again.")).toBeInTheDocument();
+    expect(screen.queryByText("Published notes can't be read on this server.")).not.toBeInTheDocument();
+    await press();
+    expect(await screen.findByText("Too many tries; wait a minute and try again.")).toBeInTheDocument();
+    await press();
+    expect(await screen.findByText("The link couldn't be made; try again later.")).toBeInTheDocument();
+    // A refusal after a link takes the old link away.
+    await press();
+    expect(await screen.findByRole("textbox", { name: "Link for your AI" })).toBeInTheDocument();
+    await press();
+    expect(await screen.findByText("The link couldn't be made: open the note's link again.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Link for your AI" })).not.toBeInTheDocument();
+  });
+
   it("opens web links without a referrer", async () => {
     stubFetch({ "GET /api/s": () => json(200, copy("[the map](https://example.org/map) and [Bob](mailto:bob@example.org)")) });
     render(<Reader />);
