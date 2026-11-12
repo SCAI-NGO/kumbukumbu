@@ -476,8 +476,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             foreach (var link in Links.NoteLink.Parse(content))
             {
                 if (link.Target.Trim().Length == 0) continue;
-                var was = before.Resolve(note.Path, link.Target);
-                if (!Leads(was) || Leads(after.Resolve(note.Path, link.Target))) continue;
+                var was = before.Resolve(note.Path, link);
+                if (!Leads(was) || Leads(after.Resolve(note.Path, link))) continue;
                 var why = trashed.Contains(was.Target!) ? "going to the trash" : "gone after the restore";
                 broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} (now {was.Target!.Value}, {why})");
             }

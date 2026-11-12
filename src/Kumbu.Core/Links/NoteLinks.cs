@@ -26,7 +26,7 @@ public static class NoteLinks
         var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
             vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
-        return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
+        return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link)))];
     }
 
     /// <summary>The lines in the vault that link to <paramref name="path"/>, by source path and line; then the lines
@@ -44,7 +44,7 @@ public static class NoteLinks
             var lines = Lines.Split(source.Content);
             var resolved = NoteLink.Parse(source.Content)
                 .Where(l => l.Target.Trim().Length > 0)
-                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l.Target)))
+                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l)))
                 .ToList();
             exact.AddRange(resolved.Where(r => r.Resolution.Target == path).Select(r => r.Line).Distinct()
                 .Select(line => new Backlink(source.Path, line, lines[line], Ambiguous: false)));

@@ -113,7 +113,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             var sourceLines = targets[source.Path]!;
             foreach (var link in NoteLink.Parse(source.Content))
             {
-                var r = resolver.Resolve(source.Path, link.Target);
+                var r = resolver.Resolve(source.Path, link);
                 var (text, broken) = await DescribeAsync(link, r, sourceLines, targets, ct);
                 if (broken || r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)
                 {

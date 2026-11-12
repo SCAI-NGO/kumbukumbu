@@ -25,6 +25,7 @@ public static class NoteAliases
 
     public static IReadOnlyList<string> Of(string content)
     {
+        if (!content.StartsWith("---", StringComparison.Ordinal)) return [];
         var lines = Lines.Split(content);
         var end = Outline.FrontmatterEnd(lines);
         // Most notes have no aliases; skip parsing their front matter.
@@ -36,9 +37,10 @@ public static class NoteAliases
         {
             value = Frontmatter.Read(content).Values.GetValueOrDefault("aliases");
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException or OperationCanceledException))
+        catch (Exception e) when (e is not (OutOfMemoryException or OperationCanceledException))
         {
-            // Spec §1: malformed front matter never reaches a request as an exception.
+            // Frontmatter.Read turns the failures it knows into a Problem; any other one still means no aliases, never an
+            // exception reaching a request (spec §1).
             return [];
         }
 

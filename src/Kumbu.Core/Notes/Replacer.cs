@@ -145,8 +145,8 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
                 var raw = Replace(link.Raw, inside, oldText.Length, newText);
                 if (NoteLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
-                var after = resolver.Resolve(note.Path, changed.Target);
-                var now = resolver.Resolve(note.Path, link.Target);
+                var after = resolver.Resolve(note.Path, changed);
+                var now = resolver.Resolve(note.Path, link);
                 var was = now.Kind == LinkKind.Note ? $"now {now.Target!.Value}" : "now it leads nowhere";
                 var where = $"  {note.Path.Value}:{link.Line + 1}: {link.Raw} → {raw}";
                 if (after.Kind == LinkKind.NotFound) broken.Add($"{where}: no such note ({was})");

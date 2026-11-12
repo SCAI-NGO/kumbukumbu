@@ -133,4 +133,15 @@ public class AliasLinkCommandsTests
         await Add("/Work/K².md", "---\naliases: [Kumbu]\n---\n");
         Assert.Equal("/Work/Diary/2026-11-12.md:2:Kumbu needs a calendar.", (await Run("backlinks --unlinked /Work/K².md")).Output);
     }
+
+    [Fact]
+    public async Task A_markdown_link_never_resolves_by_alias()
+    {
+        await Add("/Work/Diary/md.md", "[talk](Kumbu) and [k](K%C2%B2)\n");
+        Assert.Equal("1: [talk](Kumbu) → not found\n1: [k](K%C2%B2) → not found", (await Run("links /Work/Diary/md.md")).Output);
+        Assert.Equal(
+            "/Work/Diary/2026-11-12.md:1:Talked with Bob about [[Kumbu]] and the [[K²#Roadmap|roadmap]].",
+            (await Run("backlinks /Work/Projects/Kumbukumbu.md")).Output);
+        Assert.Contains("/Work/Diary/md.md:1: [talk](Kumbu) → not found", (await Run("links /Work")).Output);
+    }
 }

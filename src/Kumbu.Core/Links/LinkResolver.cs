@@ -91,7 +91,14 @@ public sealed class LinkResolver
     /// link form.</summary>
     public static string LinkText(VaultPath note) => StripMd(string.Join('/', note.Segments.Skip(1)));
 
-    public LinkResolution Resolve(VaultPath source, string target)
+    /// <summary>Where <paramref name="link"/> in <paramref name="source"/> leads; a Markdown link names a path, so
+    /// never an alias (spec §3.1).</summary>
+    public LinkResolution Resolve(VaultPath source, NoteLink link) => Resolve(source, link.Target, wikilink: link is WikiLink);
+
+    /// <summary>Where a wikilink to <paramref name="target"/> in <paramref name="source"/> leads.</summary>
+    public LinkResolution Resolve(VaultPath source, string target) => Resolve(source, target, wikilink: true);
+
+    private LinkResolution Resolve(VaultPath source, string target, bool wikilink)
     {
         var text = target.Trim().Normalize(NormalizationForm.FormC);
         if (text.Length == 0) return new LinkResolution(LinkKind.Self, source, []);
@@ -126,7 +133,7 @@ public sealed class LinkResolver
 
         // A bare name that no note or attachment carries may be a note's alias; "Kumbu.md" names a file, never an alias,
         // and so does "shot.png": without the vault's attachments it may name one that exists.
-        if (!exact && !full.Contains('/') && !full.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        if (wikilink && !exact && !full.Contains('/') && !full.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
             && AttachmentFormat.ForName(fileName) is null
             && _byAlias.TryGetValue(name, out var aliased)
             && Choose(LinkKind.Note, source, [.. aliased], exact) is { } byAlias)

@@ -304,7 +304,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path), noteAliases: NoteAliases.Of(notes, ct));
         var linking = notes
             .Where(n => n.Path != path)
-            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
+            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l).Target == path)))
             .Where(x => x.Count > 0)
             .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
@@ -395,8 +395,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
-                var now = after.Resolve(note.Path, link.Target);
-                var was = before.Resolve(note.Path, link.Target);
+                var now = after.Resolve(note.Path, link);
+                var was = before.Resolve(note.Path, link);
                 if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && was.Kind == LinkKind.Note)
                 {
                     found.Add($"{link.Raw} in {note.Path.Value} ({now.Candidates.Count} notes)");

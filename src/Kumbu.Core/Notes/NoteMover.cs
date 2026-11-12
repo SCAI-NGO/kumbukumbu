@@ -328,11 +328,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
-                var was = before.Resolve(oldPath, link.Target);
+                var was = before.Resolve(oldPath, link);
                 if (!Found(was)) continue;
 
                 var meant = map.GetValueOrDefault(was.Target!, was.Target!);
-                var now = after.Resolve(newPath, link.Target);
+                var now = after.Resolve(newPath, link);
                 if (Found(now) && now.Target == meant) continue;
 
                 if (!result.TryGetValue(newPath, out var list)) result[newPath] = list = [];
