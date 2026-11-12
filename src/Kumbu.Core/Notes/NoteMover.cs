@@ -314,9 +314,12 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         IReadOnlyList<Note> notes, IReadOnlyDictionary<VaultPath, VaultPath> map, IReadOnlyList<VaultPath>? attachments = null)
     {
         var vault = map.Keys.First().Vault!;
-        var before = new LinkResolver(vault, notes.Select(n => n.Path), attachments);
+        // A note's aliases move with it, so a link by alias keeps leading to it and isn't rewritten.
+        var aliases = NoteAliases.Of(notes);
+        var before = new LinkResolver(vault, notes.Select(n => n.Path), attachments, aliases);
         var after = new LinkResolver(
-            vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)), attachments?.Select(a => map.GetValueOrDefault(a, a)));
+            vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)), attachments?.Select(a => map.GetValueOrDefault(a, a)),
+            aliases.ToDictionary(a => map.GetValueOrDefault(a.Key, a.Key), a => a.Value));
         var result = new Dictionary<VaultPath, List<(NoteLink, string)>>();
         foreach (var note in notes)
         {
