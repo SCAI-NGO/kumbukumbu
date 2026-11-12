@@ -128,7 +128,7 @@ public sealed class MarkerTests(KumbuAppFactory app)
             $"/api/changes?since={since}", "/api/vaults/garten/activity", "/api/vaults/garten/trash", "/api/vaults/garten/checkpoints",
             "/api/vaults/garten/checkpoints/vorher/tree", "/api/vaults/garten/checkpoints/vorher/notes/kohl2.md", "/api/vaults/garten/board",
             "/api/vaults/garten/versions", "/api/links/garten/kohl2.md", "/api/backlinks/garten/kohl2.md", "/api/keys", "/api/session",
-            "/api/notes/garten/ord/hoch.md", "/api/history/garten/ord/hoch.md",
+            "/api/notes/garten/ord/hoch.md", "/api/history/garten/ord/hoch.md", "/api/mentions/garten/kohl2.md",
         ];
         var answers = new List<(string What, string Text)>();
         foreach (var path in gets)
