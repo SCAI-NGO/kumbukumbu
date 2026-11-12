@@ -2,7 +2,7 @@
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
 import { errorText, isNotFound } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
@@ -24,6 +24,7 @@ import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
+import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
@@ -70,8 +71,12 @@ export const startsWithH1 = (body: string) => {
   return (!!atx?.[1] && !/^#+$/.test(atx[1])) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
 
-/** The notice under the title: a write that lost to a newer version, or one that failed. */
-type Notice = { kind: "conflict" } | { kind: "error"; text: string };
+/** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block the note lacks. */
+type Notice = { kind: "conflict" } | { kind: "error"; text: string } | { kind: "block"; id: string };
+
+// Headings only: the note's other blocks carry `data-line` too.
+const headingLines = "h1[data-line], h2[data-line], h3[data-line], h4[data-line], h5[data-line], h6[data-line]";
+const FLASH_MS = 1_600;
 
 /**
  * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. Write mode: the
@@ -95,6 +100,7 @@ export default function NoteView({ path }: { path: string }) {
   const createNote = useCreateNote();
   const openNote = useEditor((s) => s.openNote);
   const navigate = useNavigate();
+  const location = useLocation();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
@@ -170,11 +176,14 @@ export default function NoteView({ path }: { path: string }) {
     return () => registerScrollTop(null);
   }, []);
   const restored = useRef(false);
+  const opened = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (restored.current || !note.data) return;
     restored.current = true;
     const restore = takeRestore();
     if (!restore) return;
+    // A reload finds the reader where they were, not at the block or line the note was opened at.
+    opened.current = location.key;
     if (restore.mode === "write") {
       editorScroll.current = restore.scrollTop;
       useEditor.getState().setMode("write");
@@ -215,10 +224,43 @@ export default function NoteView({ path }: { path: string }) {
   }, [autoRefresh, newer, refresh]);
   useEffect(() => {
     if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
-    const headings = [...article.current.querySelectorAll<HTMLElement>("[data-line]")].filter((h) => Number(h.dataset.line) <= scrollTarget.line);
+    const headings = [...article.current.querySelectorAll<HTMLElement>(headingLines)].filter((h) => Number(h.dataset.line) <= scrollTarget.line);
     headings.at(-1)?.scrollIntoView({ block: "start" });
     useEditor.getState().setScrollTarget(null);
   }, [scrollTarget, path, mode, note.data]);
+
+  // Opened at a block (a `[[Plan#^id]]` link) or a line (an unlinked mention): the block holding it comes into view
+  // and lights up briefly. Once per navigation, when the note is shown.
+  const flash = useRef<{ target: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const unflash = useCallback(() => {
+    if (!flash.current) return;
+    clearTimeout(flash.current.timer);
+    flash.current.target.classList.remove("k-flash");
+    flash.current = null;
+  }, []);
+  useEffect(() => unflash, [unflash]);
+  useEffect(() => {
+    if (mode !== "read" || !note.data || !article.current || opened.current === location.key) return;
+    opened.current = location.key;
+    setNotice((n) => (n?.kind === "block" ? null : n));
+    // A `NoteAt`; any other state (or none) opens the note as usual.
+    const at = location.state as { block?: unknown; line?: unknown } | null;
+    let line = typeof at?.line === "number" ? at.line : undefined;
+    if (typeof at?.block === "string") {
+      const found = findBlock(shown.body, at.block);
+      if (!found) return setNotice({ kind: "block", id: at.block });
+      line = found.start;
+    }
+    if (line === undefined) return;
+    const target = [...article.current.querySelectorAll<HTMLElement>("[data-line]")]
+      .filter((e) => !e.closest(".k-embed") && Number(e.dataset.line) <= line)
+      .at(-1);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    unflash();
+    target.classList.add("k-flash");
+    flash.current = { target, timer: setTimeout(unflash, FLASH_MS) };
+  }, [mode, note.data, location.key, location.state, shown.body, unflash]);
 
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {
@@ -235,7 +277,7 @@ export default function NoteView({ path }: { path: string }) {
 
   const jump = (line: number) => {
     useEditor.getState().setNoteTool(null);
-    article.current?.querySelector<HTMLElement>(`[data-line="${line}"]`)?.scrollIntoView({ block: "start" });
+    [...(article.current?.querySelectorAll<HTMLElement>(headingLines) ?? [])].find((h) => Number(h.dataset.line) === line)?.scrollIntoView({ block: "start" });
   };
 
   useEffect(() => {
@@ -365,10 +407,10 @@ export default function NoteView({ path }: { path: string }) {
         {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
         {notice && (
           <p
-            role={notice.kind === "conflict" ? "status" : "alert"}
+            role={notice.kind === "error" ? "alert" : "status"}
             className="mt-3 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text"
           >
-            {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.text}
+            {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.kind === "block" ? `There is no block ^${notice.id} in this note.` : notice.text}
           </p>
         )}
         {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}

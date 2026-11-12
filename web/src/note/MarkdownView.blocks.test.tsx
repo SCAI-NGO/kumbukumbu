@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
@@ -66,6 +67,47 @@ describe("Block ids in the note view", () => {
     expect(items.map((li) => li.firstChild?.textContent)).toEqual(["controller", "board"]);
     expect(frame.querySelector("pre")).toBeNull();
     expect(frame).not.toHaveTextContent("pump");
+  });
+
+  it("a link to a block carries the block in its state", async () => {
+    function State() {
+      return <p>state {JSON.stringify(useLocation().state)}</p>;
+    }
+    const link: LinkView = { line: 1, raw: "[[Plan#^controller]]", kind: "note", path: PLAN, target: "Plan", candidates: [] };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/notes/Work/Pump/Tasks.md"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
+            <Route
+              path="*"
+              element={<MarkdownView source="See [[Plan#^controller]]." links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("link", { name: "Plan › ^controller" }));
+    expect(await screen.findByText('state {"block":"controller"}')).toBeInTheDocument();
+  });
+
+  it("a link to a block of the note itself opens it there", async () => {
+    function State() {
+      return <p>state {JSON.stringify(useLocation().state)}</p>;
+    }
+    const link: LinkView = { line: 1, raw: "[[#^controller]]", kind: "self", path: PLAN, target: "", candidates: [] };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
+            <Route path="*" element={<MarkdownView source="See [[#^controller]]." links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path={PLAN} />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("link"));
+    expect(await screen.findByText('state {"block":"controller"}')).toBeInTheDocument();
   });
 
   it("an embed of a missing block says so", async () => {

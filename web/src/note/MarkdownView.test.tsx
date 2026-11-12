@@ -547,7 +547,7 @@ describe("highlights and comments", () => {
     expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
     expect(screen.queryByText(/more/)).not.toBeInTheDocument();
     expect(screen.getByText("Shown")).toBeInTheDocument();
-    expect(document.querySelector("[data-line]")).toBeNull();
+    expect(document.querySelector("h1[data-line], h2[data-line], h3[data-line], h4[data-line], h5[data-line], h6[data-line]")).toBeNull();
     cleanup();
 
     // A `%%` in code ends no comment; the code goes with it.

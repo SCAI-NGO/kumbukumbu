@@ -10,7 +10,7 @@ import { remarkHideBlockIds } from "../reader/blockIds";
 import MermaidDiagram from "../reader/MermaidDiagram";
 import { useDarkScheme } from "../theme/dark";
 import { useLinks, useNote } from "../api/notes";
-import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
@@ -100,7 +100,7 @@ interface Props {
   /** The note shown. With it, notes embedded on a line of their own (`![[plan]]`) show their text; without it
    * (inside an embedded note: one level deep) every embed stays a link. */
   path?: string;
-  /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
+  /** Inside an embedded note: its blocks carry no `data-line`, which names lines of the note shown. */
   nested?: boolean;
   /** Inside a checkpoint: where a note or attachment it holds is opened. Its links stay in it, an embed stays a
    * link, and a note it lacks cannot be created. Without it, the note is today's. */
@@ -122,7 +122,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   const checked = taskChecked(node);
   const line = node.position!.start.line;
   return (
-    <li className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
+    <li data-line={useLine(node)} className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
       <button
         type="button"
         role="checkbox"
@@ -230,12 +230,18 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       return link.path ? <AttachmentChip path={link.path} /> : <span className="text-text-body">{children}</span>;
     case undefined:
       return <span>{children}</span>;
-    case "note":
+    case "note": {
+      const block = subpathBlock(link.raw);
       return (
-        <Link to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+        <Link
+          to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
+          state={block ? ({ block } satisfies NoteAt) : undefined}
+          className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
+        >
           {children}
         </Link>
       );
+    }
     case "not_found":
       // A checkpoint is read-only, and the note may well exist today: only say it isn't in this one.
       if (checkpointLink) {
@@ -287,9 +293,18 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
           )}
         </>
       );
-    default:
-      // A heading of this note (`self`): named, not opened.
+    default: {
+      // A block of the note shown (`[[#^id]]`) is jumped to; a heading of this note (`self`) is named, not opened.
+      const block = link?.kind === "self" ? subpathBlock(link.raw) : null;
+      if (block && path && !checkpointLink) {
+        return (
+          <Link to={noteUrl(path)} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+            {children}
+          </Link>
+        );
+      }
       return <span className="text-text-body">{children}</span>;
+    }
   }
 }
 
@@ -350,7 +365,7 @@ function useHeadingId(id: string | undefined) {
   return id === footnoteLabel ? prefix + footnoteLabel : id;
 }
 
-/** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
+/** A block's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
 function useLine(node: HastNode | undefined) {
   const { nested } = useContext(NoteContext);
   return nested ? undefined : node?.position?.start.line;
@@ -399,14 +414,14 @@ const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
   aside: ({ node, children, ...props }) =>
     node?.properties.dataCallout ? (
-      <aside {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
+      <aside data-line={useLine(node)} {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
         {children}
       </aside>
     ) : (
       <aside {...props}>{children}</aside>
     ),
   details: ({ node, children, ...props }) => (
-    <details {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
+    <details data-line={useLine(node)} {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
       {children}
     </details>
   ),
@@ -441,7 +456,7 @@ const components: Components = {
         </CalloutTitle>
       </p>
     ) : (
-      <p className="my-3" {...props}>
+      <p data-line={useLine(node)} className="my-3" {...props}>
         {children}
       </p>
     ),
@@ -464,25 +479,26 @@ const components: Components = {
       <TaskItem node={node} {...props}>
         {children}
       </TaskItem>
-    ) : <li className="my-1 marker:text-dim" {...props}>{children}</li>,
+    ) : <li data-line={useLine(node)} className="my-1 marker:text-dim" {...props}>{children}</li>,
   // The task's checkbox is the button of its item, above.
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
-  blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote data-line={useLine(node)} className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
   pre: ({ node, ...props }) => {
     const code = mermaidCode(node);
+    const line = useLine(node);
     return code ? (
-      <div data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
+      <div data-line={line} data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
         <Mermaid source={textOf(code).replace(/\n$/, "")} />
       </div>
     ) : (
-      <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
+      <pre data-line={line} className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
     );
   },
   code: ({ node: _, ...props }) => <code className="rounded-[4px] bg-surface-2 px-[5px] py-px font-mono text-[0.85em]" {...props} />,
   strong: ({ node: _, ...props }) => <strong className="font-bold text-text" {...props} />,
   hr: () => <hr className="my-6 border-line" />,
-  table: ({ node: _, ...props }) => (
-    <div className="my-3 overflow-x-auto">
+  table: ({ node, ...props }) => (
+    <div data-line={useLine(node)} className="my-3 overflow-x-auto">
       <table className="border-collapse text-[15px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left" {...props} />
     </div>
   ),
@@ -503,6 +519,8 @@ const components: Components = {
     ),
   // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when. One of the vault's
   // own (`![](/Screenshots/shot.png)`) is an attachment chip instead (`remarkWikiLinks`).
+  // A line of embeds (`remarkWikiLinks`) and a display of maths.
+  div: ({ node, ...props }) => <div data-line={useLine(node)} {...props} />,
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
