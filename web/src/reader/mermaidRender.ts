@@ -86,12 +86,21 @@ function shapeData(source: string) {
   return blocks;
 }
 
+/** The source with CSS escapes undone: `\` and 1–6 hex digits (and one whitespace after them), or `\` and a character. */
+const cssUnescaped = (source: string) =>
+  source.replace(/\\(?:([0-9a-fA-F]{1,6})\s?|([\s\S]))/g, (_, hex: string | undefined, char: string | undefined) => {
+    if (hex === undefined) return char!;
+    const code = parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+  });
+
 /**
  * Whether drawing would load an image into the live page, a request with the viewer's cookies that the note names:
- * a shape's `img` (its YAML key spelt plainly, quoted or escaped), a sequence actor's `properties` with an `icon`, or
- * its `details`, which reads properties from an element of the page.
+ * a CSS function such as `url()` in any style, a shape's `img` (its YAML key spelt plainly, quoted or escaped), a
+ * sequence actor's `properties` with an `icon`, or its `details`, which reads properties from an element of the page.
  */
 function loadsImage(source: string) {
+  if (/(?:url|image-set|image|cross-fade|element|src)\(/i.test(cssUnescaped(source))) return true;
   if (shapeData(source).some((block) => /\bimg\b|\\[xuU]/.test(block))) return true;
   const rows = lines(source);
   if (keyword(rows) !== "sequenceDiagram") return false;

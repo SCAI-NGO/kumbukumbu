@@ -240,6 +240,12 @@ describe("MermaidDiagram", () => {
     ["an escaped key", 'flowchart LR\n  A@{ "\\x69mg": "/api/x" }'],
     ["an actor icon", 'sequenceDiagram\n  participant A\n  properties A: {"icon": "/api/x"}'],
     ["actor details from the page", "sequenceDiagram\n  participant A; details A: some-id\n  A->>A: Hi"],
+    ["a state style", "stateDiagram-v2\n [*] --> S\n style S fill:url(/probe-sdfill)"],
+    ["a class classDef", "classDiagram\n class A:::k\n classDef k fill:url(/probe-cdinl)"],
+    ["a block style", "block-beta\n columns 2\n a b\n style a fill:url(/probe-bl1)"],
+    ["a C4 element style", 'C4Context\n Person(a, "A")\n UpdateElementStyle(a, $bgColor="url(/probe-c4)")'],
+    ["an escaped url()", "stateDiagram-v2\n [*] --> S\n style S fill:u\\72l(/x)"],
+    ["an image-set()", 'stateDiagram-v2\n [*] --> S\n style S background-image:image-set("x.png")'],
   ])("a diagram that would load an image isn't drawn: %s", async (_, source) => {
     render(<MermaidDiagram source={source} dark={false} />);
     expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: images in diagrams aren't loaded\.$/);
@@ -247,6 +253,15 @@ describe("MermaidDiagram", () => {
     expect(m.initialize).not.toHaveBeenCalled();
     expect(m.parse).not.toHaveBeenCalled();
     expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["names a url", "stateDiagram-v2\n [*] --> S\n S: the url is in the note"],
+    ["has a function name before a space", "stateDiagram-v2\n [*] --> S\n S: image (1) and element (x)"],
+  ])("draws a diagram that %s", async (_, source) => {
+    render(<MermaidDiagram source={source} dark={false} />);
+    expect(await screen.findByRole("img", { name: "Diagram (state)" })).toBeInTheDocument();
+    expect(m.render).toHaveBeenCalledTimes(1);
   });
 
   it("draws shape data without an image", async () => {
