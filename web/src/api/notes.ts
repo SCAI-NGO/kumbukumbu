@@ -248,6 +248,10 @@ export const useLinks = (path: string, version: string | undefined) =>
 export const useBacklinks = (path: string) =>
   useQuery({ queryKey: ["backlinks", path], queryFn: () => call(api.GET("/api/backlinks/{vault}/{path}", { params: params(path) })) });
 
+/** Lines elsewhere that name this note without linking it; asked only while `enabled` (the section is open). */
+export const useMentions = (path: string, enabled: boolean) =>
+  useQuery({ queryKey: ["mentions", path], queryFn: () => call(api.GET("/api/mentions/{vault}/{path}", { params: params(path) })), enabled });
+
 /** Notes last written by one of the user's keys since `since` (session only): the agent banner. Not asked without a time. */
 export const useChanges = (since: string | null) =>
   useQuery({
