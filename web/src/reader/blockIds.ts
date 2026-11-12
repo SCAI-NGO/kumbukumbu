@@ -23,6 +23,9 @@ function hide(node: MdNode) {
   node.children = node.children.filter((child) => !onlyId(child));
   for (const child of node.children) hide(child);
   if (node.type !== "paragraph" && node.type !== "heading") return;
+  // After a hard break, the id's line is a text of its own: both go.
+  const [brk, after] = node.children.slice(-2);
+  if (node.type === "paragraph" && brk?.type === "break" && after?.type === "text" && blockIdLine.test(after.value ?? "")) node.children.splice(-2);
   const last = node.children.at(-1);
   if (last?.type !== "text" || last.value === undefined) return;
   last.value = last.value.replace(blockIdAtEnd, "");

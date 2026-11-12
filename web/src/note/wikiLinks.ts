@@ -150,11 +150,16 @@ export function createdPath(notePath: string, target: string): string {
   return path.endsWith(".md") ? path : `${path}.md`;
 }
 
-/** The heading of an embed's subpath (`![[plan#Goals]]` → `Goals`); null without one, or for a block (`#^id`). */
-export function embedHeading(raw: string): string | null {
+/** A wikilink's target with its subpath, without the brackets and the label: `![[plan#Goals|x]]` → `plan#Goals`. */
+function wikiTarget(raw: string) {
   const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
   const bar = inner.search(/\\?\|/);
-  const target = bar >= 0 ? inner.slice(0, bar) : inner;
+  return bar >= 0 ? inner.slice(0, bar) : inner;
+}
+
+/** The heading of an embed's subpath (`![[plan#Goals]]` → `Goals`); null without one, or for a block (`#^id`). */
+export function embedHeading(raw: string): string | null {
+  const target = wikiTarget(raw);
   const hash = target.indexOf("#");
   if (hash < 0) return null;
   const heading = target.slice(hash + 1).trim();
@@ -166,14 +171,7 @@ export function embedHeading(raw: string): string | null {
  * without one, or for a heading.
  */
 export function subpathBlock(raw: string): string | null {
-  let target: string;
-  if (/^!?\[\[/.test(raw)) {
-    const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
-    const bar = inner.search(/\\?\|/);
-    target = bar >= 0 ? inner.slice(0, bar) : inner;
-  } else {
-    target = /\]\(\s*<?([^)>\s]*)/.exec(raw)?.[1] ?? "";
-  }
+  const target = /^!?\[\[/.test(raw) ? wikiTarget(raw) : (/\]\(\s*<?([^)>\s]*)/.exec(raw)?.[1] ?? "");
   const hash = target.indexOf("#");
   if (hash < 0) return null;
   let fragment = target.slice(hash + 1).trim();

@@ -54,6 +54,20 @@ describe("Block ids in the note view", () => {
     expect(frame).not.toHaveTextContent("order it");
   });
 
+  it("an embed of a nested item shows it as a list", async () => {
+    fakeApi({
+      [`GET /api/notes${PLAN}`]: () =>
+        json(200, { path: PLAN, content: "- pump\n    - controller ^controller\n        - board\n- valve\n", version: "r1", lastWriter: "alice", lastWriteAt: "2026-11-12T09:00:00Z" }),
+      [`GET /api/links${PLAN}`]: () => json(200, []),
+    });
+    show("![[Plan#^controller]]", [embed("![[Plan#^controller]]")]);
+    const frame = await screen.findByRole("region", { name: "Embedded: Plan › ^controller" });
+    const items = await within(frame).findAllByRole("listitem");
+    expect(items.map((li) => li.firstChild?.textContent)).toEqual(["controller", "board"]);
+    expect(frame.querySelector("pre")).toBeNull();
+    expect(frame).not.toHaveTextContent("pump");
+  });
+
   it("an embed of a missing block says so", async () => {
     planApi();
     show("![[Plan#^contoller]]", [embed("![[Plan#^contoller]]")]);

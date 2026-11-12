@@ -29,5 +29,8 @@
   {"name": "an unknown id", "note": "The pump. ^pump\n", "id": "valve", "lines": null},
   {"name": "indented code", "note": "text\n\n    code ^ind\n", "id": "ind", "lines": null},
   {"name": "a backtick in the info string opens no fence", "note": "``` a`b\nThe pump. ^tick\n", "id": "tick", "lines": [1, 2]},
-  {"name": "a tilde fence closes only with tildes", "note": "~~~\n```\nThe pump. ^tilde\n~~~\nAfter. ^after\n", "id": "tilde", "lines": null}
+  {"name": "a tilde fence closes only with tildes", "note": "~~~\n```\nThe pump. ^tilde\n~~~\nAfter. ^after\n", "id": "tilde", "lines": null},
+  {"name": "Windows line ends after code", "note": "```\r\nx\r\n```\r\nThe pump. ^after\r\n", "id": "after", "lines": [4, 4]},
+  {"name": "Windows line ends, a heading below a paragraph", "note": "Para\r\n## H ^h\r\n", "id": "h", "lines": [2, 2]},
+  {"name": "Windows line ends, an own-line id below a heading", "note": "## H\r\n\r\n^x\r\n", "id": "x", "lines": null}
 ]

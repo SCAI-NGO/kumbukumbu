@@ -30,6 +30,14 @@ describe("remarkHideBlockIds", () => {
     expect(shown("text\n^p").querySelector("p")?.textContent).toBe("text");
   });
 
+  it("hides an id on the line below a hard break", () => {
+    for (const markdown of ["text\\\n^id", "text  \n^id"]) {
+      const p = shown(markdown).querySelector("p");
+      expect(p?.textContent).toBe("text");
+      expect(p?.querySelector("br")).toBeNull();
+    }
+  });
+
   it("hides a quote's id", () => {
     expect(shown("> The pump\n> needs a controller. ^quote").querySelector("blockquote")?.textContent?.trim()).toBe("The pump\nneeds a controller.");
   });

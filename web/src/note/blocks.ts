@@ -17,8 +17,9 @@ const ownLine = /^\^([A-Za-z0-9-]+)\s*$/;
 const item = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const quote = /^ {0,3}>/;
 const delimiterRow = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
-const heading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
-const fenceLine = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// `[^\n]` where .NET's `.` stands: it matches a "\r", which JS's doesn't.
+const heading = /^ {0,3}(#{1,6})(?:[ \t]+([^\n]*?))?(?:[ \t]+#+)?[ \t]*$/;
+const fenceLine = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;
 
 const blank = (line: string) => line.trim() === "";
 
@@ -147,10 +148,21 @@ export function findBlock(source: string, id: string): { start: number; end: num
   return block ? { start: block.start + 1, end: block.end } : null;
 }
 
-/** `source` with the lines outside `block` left empty, so the block keeps the note's line numbers (as `section`). */
+// The line with up to `columns` columns of indentation taken off (a tab reaching past them leaves spaces).
+function dedent(line: string, columns: number) {
+  let column = 0;
+  let i = 0;
+  while (column < columns && (line[i] === " " || line[i] === "\t")) column += line[i++] === " " ? 1 : 4 - (column % 4);
+  return " ".repeat(Math.max(0, column - columns)) + line.slice(i);
+}
+
+/**
+ * `source` with the lines outside `block` left empty, so the block keeps the note's line numbers (as `section`), and
+ * without the block's common indentation: a nested item, alone, would read as indented code.
+ */
 export function blockSource(source: string, block: { start: number; end: number }): string {
-  return source
-    .split("\n")
-    .map((l, i) => (i + 1 >= block.start && i + 1 <= block.end ? l : ""))
-    .join("\n");
+  const lines = source.split("\n");
+  const inside = (i: number) => i + 1 >= block.start && i + 1 <= block.end;
+  const common = Math.min(...lines.flatMap((l, i) => (inside(i) && !blank(l) ? [indent(l)] : [])));
+  return lines.map((l, i) => (inside(i) ? (Number.isFinite(common) ? dedent(l, common) : l) : "")).join("\n");
 }

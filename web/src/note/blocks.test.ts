@@ -21,4 +21,10 @@ describe("blockSource", () => {
     const note = "# Plan\n\nThe pump needs\na new controller. ^controller\n\nNext.";
     expect(blockSource(note, { start: 3, end: 4 })).toBe("\n\nThe pump needs\na new controller. ^controller\n\n");
   });
+
+  it("takes off the block's common indentation, so a nested item stays a list", () => {
+    const note = "- pump\n    - controller ^controller\n        - board\n\n      more\n- valve";
+    expect(blockSource(note, { start: 2, end: 5 })).toBe("\n- controller ^controller\n    - board\n\n  more\n");
+    expect(blockSource("- a\n\t- b ^b\n\t    - c", { start: 2, end: 3 })).toBe("\n- b ^b\n    - c");
+  });
 });
