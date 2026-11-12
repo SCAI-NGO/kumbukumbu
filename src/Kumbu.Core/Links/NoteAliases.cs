@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
+using Kumbu.Core.Board;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
+using Kumbu.Core.Sh;
+
+namespace Kumbu.Core.Links;
+
+/// <summary>The other names a note goes by: the top-level <c>aliases</c> of its front matter, a list or a single text
+/// (spec §2). Each is trimmed and NFC; empty values and those that can't be a link's name are skipped, duplicates
+/// (ignoring case) count once. Front matter that doesn't parse means no aliases.</summary>
+public static class NoteAliases
+{
+    private static readonly char[] Forbidden = ['/', '#', '|', '[', ']', '^', '\n', '\r'];
+
+    public static IReadOnlyList<string> Of(string content)
+    {
+        var lines = Lines.Split(content);
+        var end = Outline.FrontmatterEnd(lines);
+        // Most notes have no aliases; skip parsing their front matter.
+        if (end == 0 || !lines.Take(end).Any(l => l.Contains("aliases", StringComparison.Ordinal))) return [];
+
+        object? value;
+        try
+        {
+            value = Frontmatter.Read(content).Values.GetValueOrDefault("aliases");
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException or OperationCanceledException))
+        {
+            // Spec §1: malformed front matter never reaches a request as an exception.
+            return [];
+        }
+
+        IEnumerable<string> texts = value switch
+        {
+            string one => [one],
+            List<object?> list => list.OfType<string>(),
+            _ => [],
+        };
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var aliases = new List<string>();
+        foreach (var text in texts)
+        {
+            var alias = text.Trim().Normalize(NormalizationForm.FormC);
+            if (alias.Length == 0 || alias.IndexOfAny(Forbidden) >= 0) continue;
+            if (seen.Add(alias)) aliases.Add(alias);
+        }
+
+        return aliases;
+    }
+
+    /// <summary>The aliases of each of <paramref name="notes"/> that has any.</summary>
+    public static IReadOnlyDictionary<VaultPath, IReadOnlyList<string>> Of(IEnumerable<Note> notes)
+    {
+        var result = new Dictionary<VaultPath, IReadOnlyList<string>>();
+        foreach (var note in notes)
+        {
+            if (Of(note.Content) is { Count: > 0 } aliases) result[note.Path] = aliases;
+        }
+
+        return result;
+    }
+}
