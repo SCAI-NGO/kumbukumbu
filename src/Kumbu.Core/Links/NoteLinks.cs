@@ -23,8 +23,9 @@ public static class NoteLinks
     public static async Task<IReadOnlyList<ResolvedLink>> OfAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
-            vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
         return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
     }
 
@@ -34,7 +35,8 @@ public static class NoteLinks
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
+        var resolver = new LinkResolver(
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
         var exact = new List<Backlink>();
         var maybe = new List<Backlink>();
         foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))

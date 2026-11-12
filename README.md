@@ -42,7 +42,7 @@ The server offers five MCP tools. `sh` is a shell over your notes:
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
-Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. The web app (below) and the REST API under `/api` sit on top of this; accounts and API keys are described further down.
+Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. A note's `aliases` in its front matter work as in Obsidian: `[[Kumbu]]` leads to the note that lists `Kumbu` there, unless a note or attachment has that name. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. The web app (below) and the REST API under `/api` sit on top of this; accounts and API keys are described further down.
 
 ### The web app
 

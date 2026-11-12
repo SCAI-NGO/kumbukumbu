@@ -27,7 +27,9 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
           A link resolves within its vault, ignoring case: the note whose path ends with the link
           ([[kumbu]] or [[projects/kumbu]] → /Demo/projects/kumbu.md); if several match, the one in the
           linking note's folder; './' and '../' are relative to it. An attachment is named with its
-          extension: ![[shot.png]], [[report.pdf]].
+          extension: ![[shot.png]], [[report.pdf]]. If no note or attachment has the name, a note
+          whose front matter lists it under aliases (aliases: [Kumbu, K²]) is the target, marked
+          ' (alias)'; several such notes make the link ambiguous.
           A Markdown link target may be '/Folder/Note.md' (the path inside the vault, without the
           vault's name: /Demo/projects/plan.md is '/projects/plan.md'), './note.md', '../note.md' or
           a bare name; spaces as %20 or the target in <...>. A path without a leading '/' is matched
@@ -101,7 +103,8 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
     {
         var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
+        var resolver = new LinkResolver(
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all));
         var prefix = dir.Value + "/";
         var output = new List<string>();
         var targets = all.ToDictionary(n => n.Path, n => (IReadOnlyList<string>?)Lines.Split(n.Content));
@@ -122,8 +125,8 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         return ShellResult.Ok(output.Count > 0 ? Lines.Join(output) : $"(no broken or ambiguous links below {dir.Value})");
     }
 
-    /// <summary>Where a link leads; <c>Broken</c> when it names a block its note doesn't have. The lines of each
-    /// target note are read once and kept in <paramref name="targets"/>.</summary>
+    /// <summary>Where a link leads, marked ' (alias)' when it found its note by an alias; <c>Broken</c> when it names
+    /// a block its note doesn't have. The lines of each target note are read once and kept in <paramref name="targets"/>.</summary>
     private async Task<(string Text, bool Broken)> DescribeAsync(
         NoteLink link, LinkResolution r, IReadOnlyList<string> sourceLines,
         Dictionary<VaultPath, IReadOnlyList<string>?> targets, CancellationToken ct)
@@ -147,13 +150,15 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
                 {
                     return Blocks.Find(lines, id) is null
                         ? ($"not found: no block ^{id} in {target.Value}", true)
-                        : ($"{target.Value}#^{id}", false);
+                        : ($"{target.Value}#^{id}{AliasMark(r)}", false);
                 }
             }
         }
 
-        return (Describe(r), false);
+        return (Describe(r) + AliasMark(r), false);
     }
+
+    private static string AliasMark(LinkResolution r) => r is { ViaAlias: true, Kind: LinkKind.Note, Target: not null } ? " (alias)" : "";
 
     internal static string Describe(LinkResolution r) => r.Kind switch
     {
