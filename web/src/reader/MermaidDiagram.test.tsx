@@ -233,6 +233,28 @@ describe("MermaidDiagram", () => {
     expect(urls.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an image shape", 'flowchart LR\n  A@{ img: "/api/x", label: "x" }'],
+    ["a quoted key over lines", 'flowchart LR\n  A@{\n    shape: image\n    "img": "/api/x"\n  }'],
+    ["a brace in a string first", 'flowchart LR\n  A@{ label: "}", img: "/api/x" }'],
+    ["an escaped key", 'flowchart LR\n  A@{ "\\x69mg": "/api/x" }'],
+    ["an actor icon", 'sequenceDiagram\n  participant A\n  properties A: {"icon": "/api/x"}'],
+    ["actor details from the page", "sequenceDiagram\n  participant A; details A: some-id\n  A->>A: Hi"],
+  ])("a diagram that would load an image isn't drawn: %s", async (_, source) => {
+    render(<MermaidDiagram source={source} dark={false} />);
+    expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: images in diagrams aren't loaded\.$/);
+    expect(document.querySelector("code.language-mermaid")!.textContent).toBe(source);
+    expect(m.initialize).not.toHaveBeenCalled();
+    expect(m.parse).not.toHaveBeenCalled();
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it("draws shape data without an image", async () => {
+    render(<MermaidDiagram source={'flowchart LR\n  A@{ shape: rect, label: "Image of a pump" }\n  B@{ shape: circle }'} dark={false} />);
+    expect(await screen.findByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
+    expect(m.render).toHaveBeenCalledTimes(1);
+  });
+
   it("the config is secured against init directives", async () => {
     render(<MermaidDiagram source={flowchart} dark={false} />);
     await screen.findByRole("img");
@@ -260,5 +282,13 @@ describe("diagramAlt", () => {
     const { diagramAlt } = await import("./mermaidRender");
     expect(diagramAlt("flowchart LR\n accTitle: Pump chain\n accDescr {\n  Sensor to\n  pump\n }\n A-->B")).toBe("Pump chain. Sensor to pump");
     expect(diagramAlt("flowchart LR\n accDescr: Sensor to pump\n A-->B")).toBe("Sensor to pump");
+  });
+
+  it("takes linear time on long runs of blank lines", async () => {
+    const { diagramAlt } = await import("./mermaidRender");
+    const source = "flowchart LR\n" + " \n  \t\n".repeat(10_000);
+    const started = performance.now();
+    expect(diagramAlt(source)).toBe("Diagram (flowchart)");
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

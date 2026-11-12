@@ -68,6 +68,7 @@ public static class NoteLinks
         var result = new List<Mention>();
         foreach (var source in (await notes.ReadNotesUnderAsync(vault, ct)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
+            ct.ThrowIfCancellationRequested();
             if (source.Path == path || (!shown && ArchiveFolder.Contains(source.Path))) continue;
             var lines = Lines.Split(source.Content);
             result.AddRange(Mentions.In(source.Content, title).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));

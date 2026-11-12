@@ -21,21 +21,83 @@ const config = (dark: boolean): MermaidConfig => ({
 
 const lines = (source: string) => source.split(/\r?\n/);
 
+/** What follows `key` at the start of a line, past blank lines as Mermaid's `\s*` reads them, and the line it is on. */
+function* keyed(rows: string[], key: string) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i].trim();
+    if (!row.startsWith(key)) continue;
+    let [rest, at] = [row.slice(key.length).trimStart(), i];
+    while (!rest && at + 1 < rows.length) rest = rows[++at].trim();
+    yield { rest, at };
+  }
+}
+
+/** The text after `key:`; with nothing after the colon, the next line with text. */
+function accLine(rows: string[], key: string) {
+  for (const { rest, at } of keyed(rows, key)) {
+    if (rest.startsWith(":")) return rest.slice(1).trim() || (rows.slice(at + 1).find((l) => l.trim())?.trim() ?? "");
+  }
+}
+
+/** What stands between `key {` and the next `}`. */
+function accBlock(rows: string[], key: string) {
+  for (const { rest, at } of keyed(rows, key)) {
+    if (!rest.startsWith("{")) continue;
+    const body = [];
+    for (let i = at, text = rest.slice(1); i < rows.length; text = rows[++i]) {
+      const end = text.indexOf("}");
+      if (end >= 0) return [...body, text.slice(0, end)].join("\n");
+      body.push(text);
+    }
+    return undefined;
+  }
+}
+
+/** The diagram's keyword, past a front matter block (`---` … `---`), which Mermaid takes for its title and config. */
+function keyword(rows: string[]) {
+  if (rows[0]?.trim() === "---") rows = rows.slice(rows.findIndex((l, i) => i > 0 && l.trim() === "---") + 1);
+  const first = rows.map((l) => l.trim()).find((l) => l && !l.startsWith("%%"));
+  return first && /^[A-Za-z][\w-]*/.exec(first)?.[0];
+}
+
 /** The diagram's `accTitle` and `accDescr`, else its type: "Diagram (flowchart)". */
 export function diagramAlt(source: string): string {
-  const title = /^\s*accTitle\s*:\s*(.*?)\s*$/m.exec(source)?.[1];
-  const description = (/^\s*accDescr\s*:\s*(.*?)\s*$/m.exec(source)?.[1] ?? /^\s*accDescr\s*\{([^}]*)\}/m.exec(source)?.[1])?.trim().replace(/\s+/g, " ");
+  const rows = lines(source);
+  const title = accLine(rows, "accTitle");
+  const description = (accLine(rows, "accDescr") ?? accBlock(rows, "accDescr"))?.trim().replace(/\s+/g, " ");
   const given = [title, description].filter((s): s is string => !!s);
   if (given.length) return given.join(". ");
 
-  // Past a front matter block (`---` … `---`), which Mermaid takes for the diagram's title and config.
-  let rest = lines(source);
-  if (rest[0]?.trim() === "---") rest = rest.slice(rest.findIndex((l, i) => i > 0 && l.trim() === "---") + 1);
-  const first = rest.map((l) => l.trim()).find((l) => l && !l.startsWith("%%"));
-  const keyword = first && /^[A-Za-z][\w-]*/.exec(first)?.[0];
-  if (!keyword) return "Diagram";
-  const type = keyword === "graph" ? "flowchart" : keyword.replace(/-(v2|beta)$/, "").replace(/Diagram$/, "");
+  const name = keyword(rows);
+  if (!name) return "Diagram";
+  const type = name === "graph" ? "flowchart" : name.replace(/-(v2|beta)$/, "").replace(/Diagram$/, "");
   return `Diagram (${type.toLowerCase()})`;
+}
+
+/** The shape data blocks (`A@{ … }`) as Mermaid's lexer reads them: a `"` runs to the next `"`, a `}` outside one ends the block. */
+function shapeData(source: string) {
+  const blocks = [];
+  for (let at = source.indexOf("@{"); at >= 0; ) {
+    let end = at + 2;
+    for (let quoted = false; end < source.length && (quoted || source[end] !== "}"); end++) if (source[end] === '"') quoted = !quoted;
+    blocks.push(source.slice(at + 2, end));
+    at = source.indexOf("@{", end);
+  }
+  return blocks;
+}
+
+/**
+ * Whether drawing would load an image into the live page, a request with the viewer's cookies that the note names:
+ * a shape's `img` (its YAML key spelt plainly, quoted or escaped), a sequence actor's `properties` with an `icon`, or
+ * its `details`, which reads properties from an element of the page.
+ */
+function loadsImage(source: string) {
+  if (shapeData(source).some((block) => /\bimg\b|\\[xuU]/.test(block))) return true;
+  const rows = lines(source);
+  if (keyword(rows) !== "sequenceDiagram") return false;
+  return rows.some((row) =>
+    row.split(";").some((statement) => /^\s*details\b/i.test(statement) || (/^\s*properties\b/i.test(statement) && /icon|\\u/i.test(statement))),
+  );
 }
 
 /**
@@ -69,6 +131,7 @@ async function draw(source: string, dark: boolean) {
   const id = `kumbu-mermaid-${++drawn}`;
   try {
     if (source.length > maxTextSize) throw new Error("Maximum text size in diagram exceeded");
+    if (loadsImage(source)) throw new Error("images in diagrams aren't loaded.");
     mermaid.initialize(config(dark));
     await mermaid.parse(source);
     const { svg } = await mermaid.render(id, source);

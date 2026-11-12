@@ -63,9 +63,10 @@ public static partial class Mentions
     {
         var spans = NoteLink.CodeSpans(line);
         spans.AddRange(WikiLink.LinkRegex().Matches(line).Select(m => (m.Index, m.Index + m.Length)));
+        var closers = Closers(line);
         for (var i = 0; i < line.Length; i++)
         {
-            if (line[i] == '[' && MarkdownLinkEnd(line, i) is { } end)
+            if (line[i] == '[' && MarkdownLinkEnd(line, closers, i) is { } end)
             {
                 spans.Add((i, end));
                 i = end - 1;
@@ -78,25 +79,54 @@ public static partial class Mentions
     }
 
     // "[text](destination)" with balanced brackets and parentheses; the index after it, or null.
-    private static int? MarkdownLinkEnd(string line, int start)
+    private static int? MarkdownLinkEnd(string line, int[] closers, int start)
     {
-        var i = start + 1;
-        for (var depth = 0; i < line.Length; i++)
+        var i = closers[start];
+        if (i < 0 || i + 1 >= line.Length || line[i + 1] != '(') return null;
+        var j = closers[i + 1];
+        return j < 0 ? null : j + 1;
+    }
+
+    // For each '[' and '(' of the line the ']' or ')' that closes it, else -1, in one pass: the first unescaped closer
+    // that takes the depth below the one just after the opener. An escape read from any opener on is read the same from
+    // the start of the line, so one pass serves them all, escaped openers included.
+    private static int[] Closers(string line)
+    {
+        var closers = new int[line.Length];
+        Array.Fill(closers, -1);
+        Stack<(int At, int Depth)> brackets = new(), parens = new();
+        var (bracketDepth, parenDepth) = (0, 0);
+        for (int i = 0, escaped = -1; i < line.Length; i++)
         {
-            if (line[i] == '\\') i++;
-            else if (line[i] == '[') depth++;
-            else if (line[i] == ']' && depth-- == 0) break;
+            var counts = i != escaped;
+            switch (line[i])
+            {
+                case '\\' when counts:
+                    escaped = i + 1;
+                    break;
+                case '[':
+                    if (counts) bracketDepth++;
+                    brackets.Push((i, bracketDepth));
+                    break;
+                case '(':
+                    if (counts) parenDepth++;
+                    parens.Push((i, parenDepth));
+                    break;
+                case ']' when counts:
+                    Close(brackets, --bracketDepth, i);
+                    break;
+                case ')' when counts:
+                    Close(parens, --parenDepth, i);
+                    break;
+            }
         }
 
-        if (i + 1 >= line.Length || line[i + 1] != '(') return null;
-        for (int j = i + 2, depth = 0; j < line.Length; j++)
-        {
-            if (line[j] == '\\') j++;
-            else if (line[j] == '(') depth++;
-            else if (line[j] == ')' && depth-- == 0) return j + 1;
-        }
+        return closers;
 
-        return null;
+        void Close(Stack<(int At, int Depth)> open, int depth, int at)
+        {
+            while (open.TryPeek(out var o) && o.Depth > depth) closers[open.Pop().At] = at;
+        }
     }
 
     [GeneratedRegex(@"<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s]+)>")]

@@ -74,4 +74,13 @@ public class MentionsTests
         var mention = Assert.Single(Of($"das {decomposed} heute", "Über"));
         Assert.Equal([(4, decomposed.Length)], mention.Marks);
     }
+
+    [Fact]
+    public void Unclosed_brackets_take_linear_time()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var mention = Assert.Single(Of("Plan " + new string('[', 200_000), "Plan"));
+        Assert.InRange(watch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        Assert.Equal([(0, 4)], mention.Marks);
+    }
 }
