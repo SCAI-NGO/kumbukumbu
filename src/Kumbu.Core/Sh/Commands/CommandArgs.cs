@@ -111,7 +111,7 @@ internal static class CommandArgs
             : ShellResult.Error($"{command}: {path.Value} has no version {version} ('history {SectionLookup.Quote(path)}' lists them)");
     }
 
-    /// <summary>Reads a note or, for "note.md#Heading", one section of it. The version token is always
+    /// <summary>Reads a note or, for "note.md#Heading", one section of it ("note.md#^id": one block). The version token is always
     /// the whole note's, since writes go to the whole note. With <paramref name="version"/>, reads that
     /// earlier version instead, without a token: an earlier version can be restored, not edited.</summary>
     public static async Task<ShellResult> ReadAddressAsync(
@@ -122,6 +122,13 @@ internal static class CommandArgs
 
         var note = version is null ? await ReadNoteAsync(command, notes, path, ct) : await ReadVersionAsync(command, notes, path, version, ct);
         if (note.IsError || fragment is null) return note;
+
+        if (Blocks.TryId(fragment, out var id))
+        {
+            return SectionLookup.TryFindBlock(path, note.Output, id, out var block, out var blockError)
+                ? ShellResult.Ok(block) with { Version = note.Version }
+                : ShellResult.Error($"{command}: {blockError}");
+        }
 
         return SectionLookup.TryFind(path, note.Output, fragment, out var match, out var error)
             ? ShellResult.Ok(match.Text) with { Version = note.Version }

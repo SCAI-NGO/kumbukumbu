@@ -4332,6 +4332,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mentions/{vault}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    archive?: boolean;
+                };
+                header?: never;
+                path: {
+                    vault: string;
+                    path: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MentionView"][];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/history/{vault}/{path}": {
         parameters: {
             query?: never;
@@ -12347,6 +12423,19 @@ export interface components {
             /** Format: date-time */
             redeemedAt: null | string;
             redeemer: null | components["schemas"]["RedeemerView"];
+        };
+        MentionMarkView: {
+            /** Format: int32 */
+            start: number | string;
+            /** Format: int32 */
+            length: number | string;
+        };
+        MentionView: {
+            path: string;
+            /** Format: int32 */
+            line: number | string;
+            text: string;
+            marks: components["schemas"]["MentionMarkView"][];
         };
         MoveCardRequest: {
             card: string;

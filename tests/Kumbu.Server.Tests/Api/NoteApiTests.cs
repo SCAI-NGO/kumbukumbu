@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
@@ -362,6 +364,70 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal((await user.ReadAsync("index.md"))["version"]!.GetValue<string>(), history[0]!["version"]!.GetValue<string>());
     }
 
+    /// <summary>The spec's vault: Plan, its ruling, the tasks linking to it and the diary naming it.</summary>
+    private async Task<RestClient> PumpAsync()
+    {
+        var user = await UserAsync("Work");
+        await user.CreateAsync("Pump/Plan.md", "The pump needs a new controller. ^controller\n");
+        await user.CreateAsync("Pump/Ruling.md", "## Decision\n\nA new one.\n");
+        await user.CreateAsync("Pump/Tasks.md", "- see [[Plan#^controller]]\n");
+        await user.CreateAsync("Diary/2026-11-12.md", "Talked about the plan with Bob.\n");
+        await user.CreateAsync("_archive/Old.md", "The old plan.\n");
+        return user;
+    }
+
+    [Fact]
+    public async Task Mentions_lists_plain_mentions_with_their_marks()
+    {
+        var user = await PumpAsync();
+
+        using var response = await user.GetAsync(user.Url("Pump/Plan.md", "mentions"));
+        using var archived = await user.GetAsync(user.Url("Pump/Plan.md", "mentions") + "?archive=true");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var mention = Assert.Single((await JsonAsync(response)).AsArray())!;
+        Assert.Equal("/Work/Diary/2026-11-12.md", mention["path"]!.GetValue<string>());
+        Assert.Equal(1, mention["line"]!.GetValue<int>());
+        Assert.Equal("Talked about the plan with Bob.", mention["text"]!.GetValue<string>());
+        var mark = Assert.Single(mention["marks"]!.AsArray())!;
+        Assert.Equal(17, mark["start"]!.GetValue<int>());
+        Assert.Equal(4, mark["length"]!.GetValue<int>());
+        Assert.Equal(["/Work/_archive/Old.md", "/Work/Diary/2026-11-12.md"], Strings(await JsonAsync(archived), "path"));
+    }
+
+    [Fact]
+    public async Task Mentions_of_a_missing_note_is_404()
+    {
+        var user = await PumpAsync();
+
+        using var missing = await user.GetAsync(user.Url("Pump/Plans.md", "mentions"));
+
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
+    public async Task Mentions_of_another_users_vault_is_404()
+    {
+        var user = await PumpAsync();
+
+        using var otherUsers = await (await UserAsync("Fremd")).GetAsync(user.Url("Pump/Plan.md", "mentions"));
+
+        Assert.Equal(HttpStatusCode.NotFound, otherUsers.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_member_reads_mentions_of_a_shared_vault()
+    {
+        var alice = await PumpAsync();
+        var bob = await UserAsync("Home");
+        await alice.ShareWithAsync(bob, "pumpe", MemberRole.Read);
+
+        using var response = await bob.GetAsync("/api/mentions/pumpe/Pump/Plan.md");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(["/pumpe/Diary/2026-11-12.md"], Strings(await JsonAsync(response), "path"));
+    }
+
     [Fact]
     public async Task Search_ranks_by_meaning_and_words_or_finds_exact_text_per_section()
     {
@@ -575,6 +641,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
                      ("get", "/api/vaults"), ("post", "/api/vaults"), ("get", "/api/vaults/{vault}/tree"),
                      ("get", "/api/notes/{vault}/{path}"), ("put", "/api/notes/{vault}/{path}"), ("delete", "/api/notes/{vault}/{path}"),
                      ("post", "/api/move"), ("get", "/api/links/{vault}/{path}"), ("get", "/api/backlinks/{vault}/{path}"),
+                     ("get", "/api/mentions/{vault}/{path}"),
                      ("get", "/api/history/{vault}/{path}"), ("get", "/api/search"), ("get", "/api/changes"),
                      ("post", "/api/upload/{vault}/{folder}"), ("put", "/api/vaults/{vault}/embeddings"), ("get", "/api/embeddings"),
                      ("get", "/api/files/{vault}/{path}"), ("put", "/api/files/{vault}/{path}"), ("delete", "/api/files/{vault}/{path}"),

@@ -5,13 +5,17 @@ import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, use
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { useErrorTextFor } from "../discreet/errorText";
 import { useLinks, useNote } from "../api/notes";
-import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import { useErrorTextFor } from "../discreet/errorText";
+import { remarkHideBlockIds } from "../reader/blockIds";
+import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
+import { useDarkScheme } from "../theme/dark";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
+import { blockSource, findBlock } from "./blocks";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
 import { maskComments, remarkMaskedComments } from "./comments";
@@ -19,7 +23,7 @@ import { remarkHighlights } from "./highlights";
 import { section } from "./outline";
 import { prepareMath, remarkRestoreDollars } from "./prepareMath";
 import { splitFrontmatter } from "./properties";
-import { embedHeading, isExternalUrl, remarkWikiLinks, type LinkView } from "./wikiLinks";
+import { embedHeading, isExternalUrl, remarkWikiLinks, subpathBlock, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -55,7 +59,7 @@ function remarkChanged({ highlight }: { highlight: Highlight | null }) {
 type HastNode = NonNullable<ExtraProps["node"]>;
 type HastChild = HastNode["children"][number];
 
-/** The text of a list item without its nested lists: a task's accessible name. */
+/** The text of a node without its nested lists: a task's accessible name, a code block's source. */
 function textOf(node: HastChild): string {
   if (node.type === "text") return node.value;
   if (node.type !== "element" || node.tagName === "ul" || node.tagName === "ol") return "";
@@ -96,7 +100,7 @@ interface Props {
   /** The note shown. With it, notes embedded on a line of their own (`![[plan]]`) show their text; without it
    * (inside an embedded note: one level deep) every embed stays a link. */
   path?: string;
-  /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
+  /** Inside an embedded note: its blocks carry no `data-line`, which names lines of the note shown. */
   nested?: boolean;
   /** Inside a checkpoint: where a note or attachment it holds is opened. Its links stay in it, an embed stays a
    * link, and a note it lacks cannot be created. Without it, the note is today's. */
@@ -118,7 +122,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   const checked = taskChecked(node);
   const line = node.position!.start.line;
   return (
-    <li className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
+    <li data-line={useLine(node)} className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
       <button
         type="button"
         role="checkbox"
@@ -138,10 +142,11 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
 }
 
 /**
- * An embedded note (`![[plan]]`, `![[plan#Goals]]`): its text (or the heading's section) in a frame, with the way
- * to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks don't tick from here.
+ * An embedded note (`![[plan]]`, `![[plan#Goals]]`, `![[plan#^id]]`): its text (or the heading's section, or the
+ * block) in a frame, with the way to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks
+ * don't tick from here.
  */
-function EmbeddedNote({ path, heading }: { path: string; heading: string | null }) {
+function EmbeddedNote({ path, heading, block }: { path: string; heading: string | null; block: string | null }) {
   const note = useNote(path);
   const errorFor = useErrorTextFor(path);
   const links = useLinks(path, note.data?.version);
@@ -150,10 +155,13 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
     if (!note.data) return null;
     const masked = maskComments(note.data.content);
     const { body } = splitFrontmatter(masked.source);
-    const shown = heading === null ? body : section(body, heading);
+    // The block is found in the note as stored, whose lines the body keeps.
+    const found = block === null ? null : findBlock(note.data.content, block);
+    const shown = block !== null ? found && blockSource(body, found) : heading === null ? body : section(body, heading);
     return shown === null ? null : { source: shown, mask: masked.mask };
-  }, [note.data, heading]);
-  const title = heading ? `${titleOf(path)} › ${heading}` : titleOf(path);
+  }, [note.data, heading, block]);
+  const subpath = block !== null ? `^${block}` : heading;
+  const title = subpath ? `${titleOf(path)} › ${subpath}` : titleOf(path);
 
   return (
     <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
@@ -167,7 +175,9 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
       </Link>
       {note.isPending && <p className="text-sm text-muted">Loading …</p>}
       {note.isError && <p className="text-sm text-muted">{errorFor(note.error)}</p>}
-      {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
+      {note.data && body === null && (
+        <p className="text-sm text-muted">{block !== null ? `This note has no block ^${block}.` : `This note has no heading “${heading}”.`}</p>
+      )}
       {body !== null && (
         <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
       )}
@@ -212,7 +222,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   const [choosing, setChoosing] = useState(false);
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
   if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
-    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
+    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} block={subpathBlock(link.raw)} />;
   }
   switch (link?.kind) {
     case "attachment":
@@ -220,12 +230,18 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       return link.path ? <AttachmentChip path={link.path} /> : <span className="text-text-body">{children}</span>;
     case undefined:
       return <span>{children}</span>;
-    case "note":
+    case "note": {
+      const block = subpathBlock(link.raw);
       return (
-        <Link to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+        <Link
+          to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
+          state={block ? ({ block } satisfies NoteAt) : undefined}
+          className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
+        >
           {children}
         </Link>
       );
+    }
     case "not_found":
       // A checkpoint is read-only, and the note may well exist today: only say it isn't in this one.
       if (checkpointLink) {
@@ -272,14 +288,27 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
               target={link.target}
               candidates={link.candidates}
               hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
+              stateOf={(p) => {
+                const block = isAttachment(p) ? null : subpathBlock(link.raw);
+                return block ? ({ block } satisfies NoteAt) : undefined;
+              }}
               onClose={() => setChoosing(false)}
             />
           )}
         </>
       );
-    default:
-      // A heading of this note (`self`): named, not opened.
+    default: {
+      // A block of the note shown (`[[#^id]]`) is jumped to; a heading of this note (`self`) is named, not opened.
+      const block = link?.kind === "self" ? subpathBlock(link.raw) : null;
+      if (block && path && !checkpointLink) {
+        return (
+          <Link to={noteUrl(path)} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+            {children}
+          </Link>
+        );
+      }
       return <span className="text-text-body">{children}</span>;
+    }
   }
 }
 
@@ -340,7 +369,7 @@ function useHeadingId(id: string | undefined) {
   return id === footnoteLabel ? prefix + footnoteLabel : id;
 }
 
-/** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
+/** A block's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
 function useLine(node: HastNode | undefined) {
   const { nested } = useContext(NoteContext);
   return nested ? undefined : node?.position?.start.line;
@@ -373,18 +402,30 @@ function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldabl
 }
 
 
+/** A fenced `mermaid` block's `code`; `remarkChanged`'s marks sit on it, as `pre` is a bare wrapper. */
+function mermaidCode(pre: HastNode | undefined) {
+  const elements = pre?.children.filter((c) => c.type === "element") ?? [];
+  const [code] = elements;
+  if (elements.length !== 1 || code.type !== "element" || code.tagName !== "code") return null;
+  return [code.properties.className].flat().includes("language-mermaid") ? code : null;
+}
+
+function Mermaid({ source }: { source: string }) {
+  return <MermaidDiagram source={source} dark={useDarkScheme()} />;
+}
+
 const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
   aside: ({ node, children, ...props }) =>
     node?.properties.dataCallout ? (
-      <aside {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
+      <aside data-line={useLine(node)} {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
         {children}
       </aside>
     ) : (
       <aside {...props}>{children}</aside>
     ),
   details: ({ node, children, ...props }) => (
-    <details {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
+    <details data-line={useLine(node)} {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
       {children}
     </details>
   ),
@@ -419,7 +460,7 @@ const components: Components = {
         </CalloutTitle>
       </p>
     ) : (
-      <p className="my-3" {...props}>
+      <p data-line={useLine(node)} className="my-3" {...props}>
         {children}
       </p>
     ),
@@ -442,18 +483,26 @@ const components: Components = {
       <TaskItem node={node} {...props}>
         {children}
       </TaskItem>
-    ) : <li className="my-1 marker:text-dim" {...props}>{children}</li>,
+    ) : <li data-line={useLine(node)} className="my-1 marker:text-dim" {...props}>{children}</li>,
   // The task's checkbox is the button of its item, above.
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
-  blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
-  pre: ({ node: _, ...props }) => (
-    <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
-  ),
+  blockquote: ({ node, ...props }) => <blockquote data-line={useLine(node)} className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
+  pre: ({ node, ...props }) => {
+    const code = mermaidCode(node);
+    const line = useLine(node);
+    return code ? (
+      <div data-line={line} data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
+        <Mermaid source={textOf(code).replace(/\n$/, "")} />
+      </div>
+    ) : (
+      <pre data-line={line} className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
+    );
+  },
   code: ({ node: _, ...props }) => <code className="rounded-[4px] bg-surface-2 px-[5px] py-px font-mono text-[0.85em]" {...props} />,
   strong: ({ node: _, ...props }) => <strong className="font-bold text-text" {...props} />,
   hr: () => <hr className="my-6 border-line" />,
-  table: ({ node: _, ...props }) => (
-    <div className="my-3 overflow-x-auto">
+  table: ({ node, ...props }) => (
+    <div data-line={useLine(node)} className="my-3 overflow-x-auto">
       <table className="border-collapse text-[15px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left" {...props} />
     </div>
   ),
@@ -474,6 +523,8 @@ const components: Components = {
     ),
   // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when. One of the vault's
   // own (`![](/Screenshots/shot.png)`) is an attachment chip instead (`remarkWikiLinks`).
+  // A line of embeds (`remarkWikiLinks`) and a display of maths.
+  div: ({ node, ...props }) => <div data-line={useLine(node)} {...props} />,
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
@@ -529,6 +580,7 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
         remarkCallouts,
         remarkTags,
         [remarkWikiLinks, { links: links ?? [] }],
+        remarkHideBlockIds,
         remarkHighlights,
         [remarkFind, { query, current }],
         // Before the agent's highlights, which land on the `div` a display gets.

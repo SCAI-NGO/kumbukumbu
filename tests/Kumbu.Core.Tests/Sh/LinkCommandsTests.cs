@@ -407,4 +407,220 @@ public class LinkCommandsTests
     [Fact]
     public async Task BacklinksOfAnUnlinkedNote() =>
         Assert.Equal("(no notes link here)", (await Run("backlinks /Ideas/x.md")).Output);
+
+    private const string BlockPlan = "# Plan\n\nThe pump needs a new controller. ^controller\n\nSee [[Tasks]] and [[Ruling]] ^refs\n\nOther [[Ruling]]\n";
+
+    private const string BlockTasks =
+        "- see [[Plan#^controller]]\n[[Plan#^contoller]]\n[c](Plan.md#%5Econtroller)\n[[#^here]]\n[[#^gone]]\n[[Plan#Plan]]\n\nAnchor ^here\n";
+
+    // Its own store, so the shared fixtures stay as they are.
+    private static Func<string, Task<ShellResult>> WithBlockNotes()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Pump/Plan.md", BlockPlan),
+            ("/Work/Pump/Tasks.md", BlockTasks),
+            ("/Work/Pump/Ruling.md", "# Ruling\n## Decision\nGo.\n"));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return line => sh.RunAsync(line, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Links_to_a_block_name_it()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("1: [[Plan#^controller]] → /Work/Pump/Plan.md#^controller", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_missing_block_is_not_found()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("2: [[Plan#^contoller]] → not found: no block ^contoller in /Work/Pump/Plan.md", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_percent_encoded_caret_counts()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("3: [c](Plan.md#%5Econtroller) → /Work/Pump/Plan.md#^controller", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_block_of_the_note_itself()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output.Split('\n');
+
+        Assert.Contains("4: [[#^here]] → this note", output);
+        Assert.Contains("5: [[#^gone]] → not found: no block ^gone in this note", output);
+    }
+
+    [Fact]
+    public async Task A_heading_subpath_prints_as_before()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump/Tasks.md")).Output;
+
+        Assert.Contains("6: [[Plan#Plan]] → /Work/Pump/Plan.md", output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_directory_lists_missing_blocks_among_the_broken()
+    {
+        var output = (await WithBlockNotes()("links /Work/Pump")).Output.Split('\n');
+
+        Assert.Contains("/Work/Pump/Tasks.md:2: [[Plan#^contoller]] → not found: no block ^contoller in /Work/Pump/Plan.md", output);
+        Assert.Contains("/Work/Pump/Tasks.md:5: [[#^gone]] → not found: no block ^gone in this note", output);
+        Assert.DoesNotContain(output, l => l.Contains("^controller") || l.Contains("^here"));
+    }
+
+    [Fact]
+    public async Task Links_of_a_block()
+    {
+        var output = (await WithBlockNotes()("links \"/Work/Pump/Plan.md#^refs\"")).Output;
+
+        Assert.Equal("5: [[Tasks]] → /Work/Pump/Tasks.md\n5: [[Ruling]] → /Work/Pump/Ruling.md", output);
+    }
+
+    [Fact]
+    public async Task A_block_link_to_an_ambiguous_or_missing_note_prints_as_before()
+    {
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/b.md", out var p) ? p : null!,
+            "[[plan#^x]]\n[[nope#^x]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
+
+        Assert.Equal(
+            "1: [[plan#^x]] → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md\n2: [[nope#^x]] → not found",
+            (await Run("links /Demo/b.md")).Output);
+    }
+
+    [Fact]
+    public async Task Links_of_a_version_find_blocks_in_the_notes_as_they_are_now()
+    {
+        var store = new InMemoryNoteStore(("/Work/Pump/Plan.md", BlockPlan), ("/Work/Pump/Tasks.md", BlockTasks));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var writer = new NoteWriter(store, time, new FixedCaller(Writers.Dev));
+        var sh = new Shell(store, writer, new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        Assert.False((await writer.WriteAsync("/Work/Pump/Tasks.md", "Done.\n", VersionToken.Of(BlockTasks), CancellationToken.None)).IsError);
+        var plan = BlockPlan.Replace("^controller", "^contoller");
+        Assert.False((await writer.WriteAsync("/Work/Pump/Plan.md", plan, VersionToken.Of(BlockPlan), CancellationToken.None)).IsError);
+
+        var output = (await sh.RunAsync($"links --version {VersionToken.Of(BlockTasks)} /Work/Pump/Tasks.md", CancellationToken.None)).Output.Split('\n');
+
+        Assert.Contains("1: [[Plan#^controller]] → not found: no block ^controller in /Work/Pump/Plan.md", output);
+        Assert.Contains("2: [[Plan#^contoller]] → /Work/Pump/Plan.md#^contoller", output);
+    }
+
+    // The spec's vault, with a vault beside it and the given notes: the shell.
+    private static Func<string, Task<ShellResult>> WithSpecVault(params (string Path, string Content)[] notes)
+    {
+        var store = new InMemoryNoteStore([
+            ("/Work/Pump/Plan.md", BlockPlan),
+            ("/Work/Pump/Tasks.md", BlockTasks),
+            ("/Work/Pump/Ruling.md", "# Ruling\n## Decision\nGo.\n"),
+            ("/Work/Diary/2026-11-12.md", "Talked about the plan with Bob.\nTook shot.png of the pump.\n"),
+            ("/Home/Garden.md", "The plan for the garden.\n"),
+            .. notes]);
+        store.AddAttachment("/Work/Pump/shot.png");
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return line => sh.RunAsync(line, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_lists_plain_mentions() => Assert.Equal(
+        "/Work/Diary/2026-11-12.md:1:Talked about the plan with Bob.",
+        (await WithSpecVault()("backlinks --unlinked /Work/Pump/Plan.md")).Output);
+
+    [Fact]
+    public async Task The_note_itself_doesnt_count()
+    {
+        // Plan.md's own heading "# Plan" names it.
+        var output = (await WithSpecVault()("backlinks --unlinked /Work/Pump/Plan.md")).Output;
+
+        Assert.DoesNotContain("/Work/Pump/Plan.md:", output);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_in_order_of_source_and_line() => Assert.Equal(
+        """
+        /Work/Diary/2026-11-12.md:1:Talked about the plan with Bob.
+        /Work/Notes.md:2:plan again, and the plan
+        /Work/Notes.md:4:last plan
+        """,
+        (await WithSpecVault(("/Work/Notes.md", "one\nplan again, and the plan\n\nlast plan\n"))("backlinks --unlinked /Work/Pump/Plan.md")).Output);
+
+    [Fact]
+    public async Task Backlinks_unlinked_none() =>
+        Assert.Equal("(no unlinked mentions)", (await WithSpecVault()("backlinks --unlinked /Work/Pump/Ruling.md")).Output);
+
+    [Fact]
+    public async Task Backlinks_unlinked_leaves_the_archive_out_unless_asked()
+    {
+        var run = WithSpecVault(("/Work/_archive/Old.md", "The old plan.\n"));
+
+        Assert.DoesNotContain("_archive", (await run("backlinks --unlinked /Work/Pump/Plan.md")).Output);
+        Assert.Equal(
+            "/Work/_archive/Old.md:1:The old plan.\n/Work/Diary/2026-11-12.md:1:Talked about the plan with Bob.",
+            (await run("backlinks --archive --unlinked /Work/Pump/Plan.md")).Output);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_says_when_only_archived_notes_mention_it()
+    {
+        var run = WithSpecVault(("/Work/_archive/Old.md", "The ruling stood.\n"), ("/Work/_archive/Older.md", "A ruling.\n"));
+
+        Assert.Equal(
+            "(no unlinked mentions outside the archive; 2 archived notes do: backlinks --unlinked --archive /Work/Pump/Ruling.md)",
+            (await run("backlinks --unlinked /Work/Pump/Ruling.md")).Output);
+        Assert.Equal(
+            "(no unlinked mentions outside the archive; 1 archived note does: backlinks --unlinked --archive /Work/Pump/Tasks.md)",
+            (await WithSpecVault(("/Work/_archive/Old.md", "Old tasks.\n"))("backlinks --unlinked /Work/Pump/Tasks.md")).Output);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_says_when_notes_archived_mentions_too()
+    {
+        var run = WithSpecVault(("/Work/_archive/Old.md", "The old plan.\n"), ("/Work/_archive/Older.md", "An older plan.\n"));
+
+        Assert.Equal(
+            "2 archived notes mention it too: backlinks --unlinked --archive /Work/Pump/Plan.md\n/Work/Diary/2026-11-12.md:1:Talked about the plan with Bob.",
+            (await run("backlinks --unlinked /Work/Pump/Plan.md")).Output);
+        Assert.Equal(
+            "1 archived note mentions it too: backlinks --unlinked --archive /Work/Pump/Plan.md\n/Work/Diary/2026-11-12.md:1:Talked about the plan with Bob.",
+            (await WithSpecVault(("/Work/_archive/Old.md", "The old plan.\n"))("backlinks --unlinked /Work/Pump/Plan.md")).Output);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_stays_in_the_vault()
+    {
+        var output = (await WithSpecVault()("backlinks --unlinked /Work/Pump/Plan.md")).Output;
+
+        Assert.DoesNotContain("/Home/", output);
+        Assert.Equal("(no unlinked mentions)", (await WithSpecVault()("backlinks --unlinked /Home/Garden.md")).Output);
+    }
+
+    [Fact]
+    public async Task Backlinks_unlinked_of_an_attachment() =>
+        Assert.Equal("(no unlinked mentions)", (await WithSpecVault()("backlinks --unlinked /Work/Pump/shot.png")).Output);
+
+    [Fact]
+    public async Task Backlinks_without_unlinked_is_unchanged()
+    {
+        var run = WithSpecVault();
+
+        Assert.Equal(
+            """
+            /Work/Pump/Tasks.md:1:- see [[Plan#^controller]]
+            /Work/Pump/Tasks.md:2:[[Plan#^contoller]]
+            /Work/Pump/Tasks.md:3:[c](Plan.md#%5Econtroller)
+            /Work/Pump/Tasks.md:6:[[Plan#Plan]]
+            """,
+            (await run("backlinks /Work/Pump/Plan.md")).Output);
+        Assert.Equal("(no notes link here)", (await run("backlinks /Work/Diary/2026-11-12.md")).Output);
+        Assert.Equal(
+            "/Demo/Meeting Notes.md:2:Related: [[kumbu#Goal]]\n/Demo/welcome.md:2:See [[kumbu]] and [[Meeting Notes|the meeting]].",
+            (await Run("backlinks /Demo/projects/kumbu.md")).Output);
+    }
 }

@@ -6,6 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Reader from "./Reader";
 import { snapshotText } from "./snapshot";
 
+// Counts the loads of the Mermaid module: the reader page never loads it. The factory runs only on the first import in
+// this file, so the count is no mock that restoreAllMocks would clear: a load in any earlier test still shows.
+const mermaid = vi.hoisted(() => ({ loads: 0 }));
+vi.mock("./mermaidRender", () => {
+  mermaid.loads++;
+  return { renderDiagram: vi.fn() };
+});
+
 const code = "K7QM-4XDA-9PRT-2VNB-6HJC-8EWS-3FGY-5KZD";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -384,6 +392,58 @@ describe("Reader", () => {
     const mail = screen.getByRole("link", { name: "Bob" });
     expect(mail).toHaveAttribute("href", "mailto:bob@example.org");
     expect(mail).not.toHaveAttribute("target");
+  });
+});
+
+describe("Mermaid on the reader page", () => {
+  const plan = "The pump needs a new controller.\n\n```mermaid\nflowchart LR\n  Sensor --> Controller --> Pump\n```\n";
+
+  // Drawing a diagram puts inline styles into the document, which this page's CSP (style-src 'self') refuses.
+  it("shows a mermaid block as code", async () => {
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    const { container } = render(<Reader />);
+
+    expect(await screen.findByText("The pump needs a new controller.")).toBeInTheDocument();
+    const code = container.querySelector("pre > code.language-mermaid");
+    expect(code).toHaveTextContent("flowchart LR Sensor --> Controller --> Pump");
+    expect(code?.closest("pre")).toBeVisible();
+    expect(screen.queryByRole("img")).toBeNull();
+    await vi.dynamicImportSettled();
+    expect(mermaid.loads).toBe(0);
+  });
+
+  it("Copy as Markdown keeps the mermaid source", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy as Markdown" }));
+    expect(writeText).toHaveBeenCalledWith(`# Questions on routing\n\n${plan}`);
+    expect(writeText.mock.calls[0]).toEqual([expect.stringContaining("```mermaid\nflowchart LR\n  Sensor --> Controller --> Pump\n```")]);
+  });
+});
+
+describe("Block ids on the reader page", () => {
+  const plan = "The pump needs a new controller. ^controller\n";
+
+  it("hides block ids", async () => {
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    const { container } = render(<Reader />);
+
+    expect(await screen.findByText("The pump needs a new controller.")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("^controller");
+  });
+
+  it("Copy as Markdown keeps them", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy as Markdown" }));
+    expect(writeText).toHaveBeenCalledWith(`# Questions on routing\n\n${plan}`);
+    expect(writeText.mock.calls[0]).toEqual([expect.stringContaining("controller. ^controller")]);
   });
 });
 

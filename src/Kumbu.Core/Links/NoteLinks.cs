@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -52,5 +53,28 @@ public static class NoteLinks
         }
 
         return [.. exact, .. maybe];
+    }
+
+    /// <summary>The lines of the other notes in the vault that name <paramref name="path"/> without linking to it (see
+    /// <see cref="Mentions"/>), by source path and line; archived notes only when <see cref="ArchiveFolder.Shown"/>.
+    /// An attachment has none.</summary>
+    public static async Task<IReadOnlyList<Mention>> MentionsAsync(INoteReader notes, VaultPath path, bool archive, CancellationToken ct)
+    {
+        if (!path.IsNote) return [];
+        var title = path.Name[..^".md".Length].Normalize(NormalizationForm.FormC);
+        if (title.Length < Mentions.MinTitleLength) return [];
+
+        var vault = VaultPath.Root.Child(path.Segments[0]);
+        var shown = ArchiveFolder.Shown(path, archive);
+        var result = new List<Mention>();
+        foreach (var source in (await notes.ReadNotesUnderAsync(vault, ct)).OrderBy(n => n.Path.Value, TextOrder.Default))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (source.Path == path || (!shown && ArchiveFolder.Contains(source.Path))) continue;
+            var lines = Lines.Split(source.Content);
+            result.AddRange(Mentions.In(source.Content, title).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
+        }
+
+        return result;
     }
 }

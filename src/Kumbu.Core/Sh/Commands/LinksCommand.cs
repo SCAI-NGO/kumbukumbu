@@ -20,7 +20,8 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
           List the [[wikilinks]], ![[embeds]], Markdown links [text](target) and images ![alt](target)
           of a note (or of one section), one per line: line, the link as written, and where it leads: a note's or an
           attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment' for other
-          files, or 'this note' for [[#Heading]].
+          files, or 'this note' for [[#Heading]]. A link to a block ([[plan#^id]]) leads to the note and
+          its block: 'not found: no block ^id in …' when the note has no such block.
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.
           A link resolves within its vault, ignoring case: the note whose path ends with the link
@@ -76,15 +77,25 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         if (version is not null) content = await notes.ReadVersionAsync(path, version, ct);
 
         var range = (From: 0, To: int.MaxValue);
-        if (fragment is not null && SectionLookup.TryFind(path, content!, fragment, out var match, out _))
+        var noteLines = Lines.Split(content!);
+        if (fragment is not null && Blocks.TryId(fragment, out var blockId))
+        {
+            if (Blocks.Find(noteLines, blockId) is { } block) range = (block.Start, block.End);
+        }
+        else if (fragment is not null && SectionLookup.TryFind(path, content!, fragment, out var match, out _))
         {
             range = (match.Heading.Line, match.Heading.ContentEnd);
         }
 
-        var lines = (await NoteLinks.OfAsync(notes, path, content!, ct))
-            .Where(l => l.Link.Line >= range.From && l.Link.Line < range.To)
-            .Select(l => $"{l.Link.Line + 1}: {l.Link.Raw} → {Describe(l.Resolution)}");
-        return note with { Output = Lines.Join(lines) is { Length: > 0 } text ? text : "(no links)" };
+        var targets = new Dictionary<VaultPath, IReadOnlyList<string>?>();
+        var described = new List<string>();
+        foreach (var l in (await NoteLinks.OfAsync(notes, path, content!, ct)).Where(l => l.Link.Line >= range.From && l.Link.Line < range.To))
+        {
+            var (text, _) = await DescribeAsync(l.Link, l.Resolution, noteLines, targets, ct);
+            described.Add($"{l.Link.Line + 1}: {l.Link.Raw} → {text}");
+        }
+
+        return note with { Output = Lines.Join(described) is { Length: > 0 } joined ? joined : "(no links)" };
     }
 
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
@@ -93,14 +104,17 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
         var prefix = dir.Value + "/";
         var output = new List<string>();
+        var targets = all.ToDictionary(n => n.Path, n => (IReadOnlyList<string>?)Lines.Split(n.Content));
         foreach (var source in all.Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
+            var sourceLines = targets[source.Path]!;
             foreach (var link in NoteLink.Parse(source.Content))
             {
                 var r = resolver.Resolve(source.Path, link.Target);
-                if (r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)
+                var (text, broken) = await DescribeAsync(link, r, sourceLines, targets, ct);
+                if (broken || r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)
                 {
-                    output.Add($"{source.Path.Value}:{link.Line + 1}: {link.Raw} → {Describe(r)}");
+                    output.Add($"{source.Path.Value}:{link.Line + 1}: {link.Raw} → {text}");
                 }
             }
         }
@@ -108,7 +122,40 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         return ShellResult.Ok(output.Count > 0 ? Lines.Join(output) : $"(no broken or ambiguous links below {dir.Value})");
     }
 
-    private static string Describe(LinkResolution r) => r.Kind switch
+    /// <summary>Where a link leads; <c>Broken</c> when it names a block its note doesn't have. The lines of each
+    /// target note are read once and kept in <paramref name="targets"/>.</summary>
+    private async Task<(string Text, bool Broken)> DescribeAsync(
+        NoteLink link, LinkResolution r, IReadOnlyList<string> sourceLines,
+        Dictionary<VaultPath, IReadOnlyList<string>?> targets, CancellationToken ct)
+    {
+        if (link.Subpath.StartsWith('#') && Blocks.TryId(link.Subpath[1..], out var id))
+        {
+            if (r.Kind == LinkKind.Self)
+            {
+                return Blocks.Find(sourceLines, id) is null ? ($"not found: no block ^{id} in this note", true) : (Describe(r), false);
+            }
+
+            if (r.Kind == LinkKind.Note && r.Target is { } target)
+            {
+                if (!targets.TryGetValue(target, out var lines))
+                {
+                    lines = await notes.ReadAsync(target, ct) is { } text ? Lines.Split(text) : null;
+                    targets[target] = lines;
+                }
+
+                if (lines is not null)
+                {
+                    return Blocks.Find(lines, id) is null
+                        ? ($"not found: no block ^{id} in {target.Value}", true)
+                        : ($"{target.Value}#^{id}", false);
+                }
+            }
+        }
+
+        return (Describe(r), false);
+    }
+
+    internal static string Describe(LinkResolution r) => r.Kind switch
     {
         LinkKind.Note or LinkKind.Attachment when r.Target is not null => r.Target.Value,
         LinkKind.Self => "this note",

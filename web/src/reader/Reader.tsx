@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkHideBlockIds } from "./blockIds";
 import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReadResult } from "./readerApi";
 import { snapshotText, untilText } from "./snapshot";
 
@@ -55,7 +56,7 @@ function CopyImage({ src, alt }: { src?: string; alt?: string }) {
   return index !== undefined && files.indices.has(Number(index)) ? <CopiedImage copy={files.copy} index={Number(index)} alt={alt ?? ""} /> : null;
 }
 
-const remarkPlugins = [remarkGfm];
+const remarkPlugins = [remarkGfm, remarkHideBlockIds];
 
 // At module level, so a render keeps each component, and its images, as they are. The title is the page's h1: the
 // note's headings go one level down.
@@ -71,6 +72,8 @@ const components: Components = {
   ol: ({ node: _, ...props }) => <ol className="my-3 list-decimal pl-6" {...props} />,
   li: ({ node: _, ...props }) => <li className="my-1 marker:text-dim" {...props} />,
   blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 [&>p]:my-1" {...props} />,
+  // A `mermaid` block too stays code here: Mermaid sets inline styles in the document while it draws, which this page's
+  // CSP (style-src 'self') refuses.
   pre: ({ node: _, ...props }) => (
     <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] [&>code]:bg-transparent [&>code]:p-0" {...props} />
   ),

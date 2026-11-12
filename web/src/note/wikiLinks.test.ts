@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { createdPath } from "./wikiLinks";
+import { createdPath, subpathBlock } from "./wikiLinks";
 
 describe("createdPath", () => {
   it.each([
@@ -11,5 +11,22 @@ describe("createdPath", () => {
     ["Meeting Notes.md", "/V/a/Meeting Notes.md"],
   ])("creates %s from /V/a/n.md as %s", (target, expected) => {
     expect(createdPath("/V/a/n.md", target)).toBe(expected);
+  });
+});
+
+describe("subpathBlock", () => {
+  it.each([
+    ["[[Plan#^controller|x]]", "controller"],
+    ["![[Plan#^controller]]", "controller"],
+    ["[c](Plan.md#%5Econtroller)", "controller"],
+    ["[c](Plan.md#^controller)", "controller"],
+    ["[x](<My Plan.md#^controller>)", "controller"],
+    ["[x](<My Plan.md#^controller> \"title\")", "controller"],
+    ["[[Plan#Goals]]", null],
+    ["[[Plan]]", null],
+    ["[c](Plan.md#Goals)", null],
+    ["[c](Plan.md)", null],
+  ])("reads %s as %s", (raw, expected) => {
+    expect(subpathBlock(raw)).toBe(expected);
   });
 });

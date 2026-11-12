@@ -105,6 +105,9 @@ export const viewUrl = (path: string, at: FileAt = {}) =>
 /** The lightbox's router state: the attachments (paths from the root of the tree) in the order it pages through. */
 export type LightboxState = { paths: string[] };
 
+/** Where a note opens: router state for noteUrl(path) — at a block (`^id`) or at a 1-based line. */
+export type NoteAt = { block: string } | { line: number };
+
 export const vaultOf = (path: string) => path.split("/")[1];
 
 export const folderOf = (path: string) => path.slice(0, path.lastIndexOf("/"));

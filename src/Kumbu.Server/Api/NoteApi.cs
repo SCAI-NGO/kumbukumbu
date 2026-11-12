@@ -171,6 +171,13 @@ public sealed record LinkView(int Line, string Raw, string Target, string Kind, 
 /// <summary>A line linking to the note, 1-based; <c>ambiguous</c>: its link matches several notes, this one among them.</summary>
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
+/// <summary>A line of another note naming the note without linking to it, 1-based; <c>marks</c>: where in <c>text</c>
+/// the title stands (UTF-16 offsets).</summary>
+public sealed record MentionView(string Path, int Line, string Text, MentionMarkView[] Marks);
+
+/// <summary>Where a mention's title stands in its line: <c>start</c> and <c>length</c> in UTF-16 code units.</summary>
+public sealed record MentionMarkView(int Start, int Length);
+
 /// <summary>A version of a note or attachment, newest first; <c>size</c> in bytes (a note's UTF-8), <c>changeset</c> the
 /// short id of its changeset, if it is in one. <c>writerKind</c>, for sessions only, as <c>lastWriterKind</c> on a note.
 /// <c>kind</c> and <c>mediaType</c> as in the tree; an attachment has no <c>lines</c> (0), and its version's bytes
@@ -235,6 +242,7 @@ public static class NoteApi
 
         api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
         api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/mentions/{vault}/{**path}", MentionsAsync).Errors(400, 401, 404, 503);
         api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
         api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
@@ -763,6 +771,18 @@ public static class NoteApi
         if (!exists) throw await MissingAsync(store, notePath, ct);
         return TypedResults.Ok((await NoteLinks.ToAsync(store, notePath, ct))
             .Select(b => new BacklinkView(b.Source.Value, b.Line + 1, b.Text, b.Ambiguous))
+            .ToArray());
+    }
+
+    /// <summary>The unlinked mentions of a note: its title as a whole word in other notes of its vault; archived ones
+    /// only with <paramref name="archive"/> (or for a note in the archive). An attachment has none.</summary>
+    private static async Task<Ok<MentionView[]>> MentionsAsync(string vault, string? path, bool? archive, INoteStore store, CancellationToken ct)
+    {
+        var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
+        var exists = notePath.IsAttachment ? await StoreAttachments.GetAsync(store, notePath, ct) is not null : await store.GetAsync(notePath, ct) is not null;
+        if (!exists) throw await MissingAsync(store, notePath, ct);
+        return TypedResults.Ok((await NoteLinks.MentionsAsync(store, notePath, archive ?? false, ct))
+            .Select(m => new MentionView(m.Source.Value, m.Line + 1, m.Text, [.. m.Marks.Select(k => new MentionMarkView(k.Start, k.Length))]))
             .ToArray());
     }
 

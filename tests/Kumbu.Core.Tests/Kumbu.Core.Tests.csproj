@@ -21,6 +21,7 @@
     <None Update="Search/tokenizer-reference-arctic-l.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared with the web's tests, which find it beside them: the Docker web stage copies only web/. -->
     <None Include="../../web/src/note/comments.cases.json" Link="Publishing/comments.cases.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../web/src/note/blocks.cases.json" Link="Sections/blocks.cases.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

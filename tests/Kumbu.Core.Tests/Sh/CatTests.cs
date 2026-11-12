@@ -79,4 +79,29 @@ public class CatTests
         alone.Infos.Clear();
         Assert.Equal("Beete planen\n", (await TestShell.Of(alone).RunAsync("cat /Garten/plan.md", CancellationToken.None)).Output);
     }
+
+    private const string Plan = "# Plan\n\nThe pump needs a new controller. ^controller\n\n## Next\n";
+
+    private static Task<ShellResult> RunPlan(string arg) =>
+        new Cat(new InMemoryNoteStore(("/Work/Pump/Plan.md", Plan))).RunAsync([arg], null, CancellationToken.None);
+
+    [Fact]
+    public async Task A_block_prints_with_its_marker() => Assert.Equal(
+        ShellResult.Ok("The pump needs a new controller. ^controller") with { Version = new NoteVersion("/Work/Pump/Plan.md", VersionToken.Of(Plan)) },
+        await RunPlan("/Work/Pump/Plan.md#^controller"));
+
+    [Fact]
+    public async Task An_unknown_block_is_an_error() => Assert.Equal(
+        ShellResult.Error("cat: /Work/Pump/Plan.md#^contoller: no such block (a block id is written as ^contoller at the end of a paragraph, item or heading)"),
+        await RunPlan("/Work/Pump/Plan.md#^contoller"));
+
+    [Fact]
+    public async Task A_percent_encoded_caret_names_a_block() => Assert.Equal(
+        ShellResult.Ok("The pump needs a new controller. ^controller") with { Version = new NoteVersion("/Work/Pump/Plan.md", VersionToken.Of(Plan)) },
+        await RunPlan("/Work/Pump/Plan.md#%5Econtroller"));
+
+    [Fact]
+    public async Task A_section_still_prints_as_before() => Assert.Equal(
+        ShellResult.Ok("## Next") with { Version = new NoteVersion("/Work/Pump/Plan.md", VersionToken.Of(Plan)) },
+        await RunPlan("/Work/Pump/Plan.md#Next"));
 }

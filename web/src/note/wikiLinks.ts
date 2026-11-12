@@ -150,13 +150,37 @@ export function createdPath(notePath: string, target: string): string {
   return path.endsWith(".md") ? path : `${path}.md`;
 }
 
-/** The heading of an embed's subpath (`![[plan#Goals]]` → `Goals`); null without one, or for a block (`#^id`). */
-export function embedHeading(raw: string): string | null {
+/** A wikilink's target with its subpath, without the brackets and the label: `![[plan#Goals|x]]` → `plan#Goals`. */
+function wikiTarget(raw: string) {
   const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
   const bar = inner.search(/\\?\|/);
-  const target = bar >= 0 ? inner.slice(0, bar) : inner;
+  return bar >= 0 ? inner.slice(0, bar) : inner;
+}
+
+/** The heading of an embed's subpath (`![[plan#Goals]]` → `Goals`); null without one, or for a block (`#^id`). */
+export function embedHeading(raw: string): string | null {
+  const target = wikiTarget(raw);
   const hash = target.indexOf("#");
   if (hash < 0) return null;
   const heading = target.slice(hash + 1).trim();
   return heading && !heading.startsWith("^") ? heading : null;
+}
+
+/**
+ * The block id of a link's subpath (`[[Plan#^controller|x]]`, `[c](Plan.md#%5Econtroller)` → `controller`); null
+ * without one, or for a heading.
+ */
+export function subpathBlock(raw: string): string | null {
+  // A Markdown destination in angle brackets may hold spaces: `[x](<My Plan.md#^id>)`.
+  const destination = /\]\(\s*(?:<([^>]*)>|([^)\s]*))/.exec(raw);
+  const target = /^!?\[\[/.test(raw) ? wikiTarget(raw) : (destination?.[1] ?? destination?.[2] ?? "");
+  const hash = target.indexOf("#");
+  if (hash < 0) return null;
+  let fragment = target.slice(hash + 1).trim();
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    // A stray `%` is no escape: the fragment is read as it stands.
+  }
+  return /^\^([A-Za-z0-9-]+)$/.exec(fragment)?.[1] ?? null;
 }
