@@ -25,7 +25,9 @@ public enum LinkKind
     NotFound,
 }
 
-public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyList<VaultPath> Candidates);
+/// <param name="ViaAlias">True if the target was found by a note's <c>aliases</c>, not by its name: for one note or
+/// an ambiguity among aliased notes.</param>
+public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyList<VaultPath> Candidates, bool ViaAlias = false);
 
 /// <summary>
 /// Resolves link paths to notes within one vault, close to Obsidian's rules: case-insensitive; relative to the
@@ -33,23 +35,40 @@ public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyL
 /// with a folder the one below the source's folder, then the one at that path from the vault's root, and for a bare
 /// name the source's own folder. A source outside the vault's archive prefers, after the folder preferences, what lies
 /// outside it over what lies in it; an archived source's links resolve without that preference. Never guesses beyond
-/// that. Attachments resolve by the same rules, by their name with its extension ("shot.png"), before notes.
+/// that. Attachments resolve by the same rules, by their name with its extension ("shot.png"), before notes. Only when
+/// neither finds anything does a bare name (no "/", no ".md") lead to the notes whose aliases contain it, with the same
+/// archive and same-folder preferences.
 /// </summary>
 public sealed class LinkResolver
 {
     private readonly string _vault;
     private readonly Dictionary<string, List<VaultPath>> _byName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<VaultPath>>? _attachmentsByName;
+    private readonly Dictionary<string, List<VaultPath>> _byAlias = new(StringComparer.OrdinalIgnoreCase);
 
     /// <param name="notes">Every note of one vault.</param>
     /// <param name="attachments">Every attachment of the vault; null if unknown, so a link to a file is then
     /// <see cref="LinkKind.Attachment"/> without a target, whether the file exists or not.</param>
-    public LinkResolver(string vault, IEnumerable<VaultPath> notes, IEnumerable<VaultPath>? attachments = null)
+    /// <param name="noteAliases">The aliases of notes, as <see cref="NoteAliases"/> reads them; they count only for
+    /// paths among <paramref name="notes"/>.</param>
+    public LinkResolver(
+        string vault, IEnumerable<VaultPath> notes, IEnumerable<VaultPath>? attachments = null,
+        IReadOnlyDictionary<VaultPath, IReadOnlyList<string>>? noteAliases = null)
     {
         _vault = vault;
         foreach (var note in notes)
         {
-            if (note.Vault == vault) Add(_byName, StripMd(note.Name), note);
+            if (note.Vault != vault) continue;
+            var name = StripMd(note.Name);
+            Add(_byName, name, note);
+            if (noteAliases?.GetValueOrDefault(note) is not { } aliases) continue;
+            foreach (var alias in aliases)
+            {
+                // An alias that is the note's own name already finds it by its name.
+                if (alias.Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!_byAlias.TryGetValue(alias, out var list)) _byAlias[alias] = list = [];
+                if (!list.Contains(note)) list.Add(note);
+            }
         }
 
         if (attachments is null) return;
@@ -104,6 +123,14 @@ public sealed class LinkResolver
         var name = path[(path.LastIndexOf('/') + 1)..];
         if (Find(_byName, LinkKind.Note, source, path, name, "/" + path + ".md", exact) is { } note) return note;
 
+        // A bare name that no note or attachment carries may be a note's alias; "Kumbu.md" names a file, never an alias.
+        if (!exact && !full.Contains('/') && !full.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            && _byAlias.TryGetValue(name, out var aliased)
+            && Choose(LinkKind.Note, source, [.. aliased], exact) is { } byAlias)
+        {
+            return byAlias with { ViaAlias = true };
+        }
+
         var looksLikeFile = name.LastIndexOf('.') is var dot and > 0 && dot < name.Length - 1 && !name[(dot + 1)..].Contains(' ');
         // A file of a kind the vault keeps, known to be missing, leads nowhere, as a missing note's link does.
         return new LinkResolution(looksLikeFile && !attachmentName ? LinkKind.Attachment : LinkKind.NotFound, null, []);
@@ -127,6 +154,13 @@ public sealed class LinkResolver
             if (preferred is not null) return new LinkResolution(kind, preferred, candidates);
         }
 
+        return Choose(kind, source, candidates, exact);
+    }
+
+    /// <summary>The one of <paramref name="candidates"/> a link from <paramref name="source"/> leads to, after the
+    /// archive and same-folder preferences; ambiguous if several remain; null if there are none.</summary>
+    private static LinkResolution? Choose(LinkKind kind, VaultPath source, List<VaultPath> candidates, bool exact)
+    {
         // For a living note, what lies in the vault's archive counts only when nothing else matches: an archived copy
         // never makes its link ambiguous. An archived note keeps leading to its archived siblings.
         if (!exact && !ArchiveFolder.Contains(source) && candidates.Any(ArchiveFolder.Contains) && candidates.Any(c => !ArchiveFolder.Contains(c)))
