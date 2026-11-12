@@ -71,6 +71,8 @@ const components: Components = {
   ol: ({ node: _, ...props }) => <ol className="my-3 list-decimal pl-6" {...props} />,
   li: ({ node: _, ...props }) => <li className="my-1 marker:text-dim" {...props} />,
   blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 [&>p]:my-1" {...props} />,
+  // A `mermaid` block too stays code here: Mermaid sets inline styles in the document while it draws, which this page's
+  // CSP (style-src 'self') refuses.
   pre: ({ node: _, ...props }) => (
     <pre className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] [&>code]:bg-transparent [&>code]:p-0" {...props} />
   ),

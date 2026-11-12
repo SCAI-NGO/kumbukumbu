@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Reader from "./Reader";
 import { snapshotText } from "./snapshot";
 
+// Counts the loads of the Mermaid module: the reader page never loads it.
+const { mermaidLoaded } = vi.hoisted(() => ({ mermaidLoaded: vi.fn() }));
+vi.mock("./mermaidRender", () => {
+  mermaidLoaded();
+  return { renderDiagram: vi.fn() };
+});
+
 const code = "K7QM-4XDA-9PRT-2VNB-6HJC-8EWS-3FGY-5KZD";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -384,6 +391,35 @@ describe("Reader", () => {
     const mail = screen.getByRole("link", { name: "Bob" });
     expect(mail).toHaveAttribute("href", "mailto:bob@example.org");
     expect(mail).not.toHaveAttribute("target");
+  });
+});
+
+describe("Mermaid on the reader page", () => {
+  const plan = "The pump needs a new controller.\n\n```mermaid\nflowchart LR\n  Sensor --> Controller --> Pump\n```\n";
+
+  // Drawing a diagram puts inline styles into the document, which this page's CSP (style-src 'self') refuses.
+  it("shows a mermaid block as code", async () => {
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    const { container } = render(<Reader />);
+
+    expect(await screen.findByText("The pump needs a new controller.")).toBeInTheDocument();
+    const code = container.querySelector("pre > code.language-mermaid");
+    expect(code).toHaveTextContent("flowchart LR Sensor --> Controller --> Pump");
+    expect(code?.closest("pre")).toBeVisible();
+    expect(screen.queryByRole("img")).toBeNull();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mermaidLoaded).not.toHaveBeenCalled();
+  });
+
+  it("Copy as Markdown keeps the mermaid source", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    stubFetch({ "GET /api/s": () => json(200, copy(plan)) });
+    render(<Reader />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy as Markdown" }));
+    expect(writeText).toHaveBeenCalledWith(`# Questions on routing\n\n${plan}`);
+    expect(writeText.mock.calls[0]).toEqual([expect.stringContaining("```mermaid\nflowchart LR\n  Sensor --> Controller --> Pump\n```")]);
   });
 });
 
