@@ -110,6 +110,26 @@ describe("Block ids in the note view", () => {
     expect(await screen.findByText('state {"block":"controller"}')).toBeInTheDocument();
   });
 
+  it("an ambiguous link to a block carries the block to the note chosen", async () => {
+    function State() {
+      return <p>state {JSON.stringify(useLocation().state)}</p>;
+    }
+    const link: LinkView = { line: 1, raw: "[[Plan#^controller]]", kind: "ambiguous", path: null, target: "Plan", candidates: [PLAN, "/Work/Home/Plan.md"] };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
+            <Route path="*" element={<MarkdownView source="See [[Plan#^controller]]." links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /2 notes/ }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("link", { name: /Work \/ Pump/ }));
+    expect(await screen.findByText('state {"block":"controller"}')).toBeInTheDocument();
+  });
+
   it("an embed of a missing block says so", async () => {
     planApi();
     show("![[Plan#^contoller]]", [embed("![[Plan#^contoller]]")]);

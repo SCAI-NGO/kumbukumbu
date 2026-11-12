@@ -19,12 +19,12 @@ const tree = {
   root: { name: "Work", path: "/Work", folders: [{ name: "Pump", path: "/Work/Pump", folders: [], notes: [{ name: "Plan.md", path: PLAN, size: 1 }] }], notes: [] },
 };
 
-function planApi() {
+function planApi(content = plan) {
   fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1 }]),
     "GET /api/vaults/Work/tree": () => json(200, tree),
-    [`GET /api/notes${PLAN}`]: () => json(200, { path: PLAN, content: plan, version: "v1", lastWriter: "alice", lastWriteAt: "2026-11-12T09:00:00Z" }),
+    [`GET /api/notes${PLAN}`]: () => json(200, { path: PLAN, content, version: "v1", lastWriter: "alice", lastWriteAt: "2026-11-12T09:00:00Z" }),
     [`GET /api/links${PLAN}`]: () => json(200, []),
     [`GET /api/backlinks${PLAN}`]: () => json(200, []),
     "GET /api/changes": () => json(200, []),
@@ -73,6 +73,32 @@ describe("opening a note at a block or a line", () => {
     const paragraph = await screen.findByText(/^The valve stays\./, { selector: "p" });
     await vi.waitFor(() => expect(scrolled()).toEqual([paragraph]));
     expect(paragraph).toHaveClass("k-flash");
+  });
+
+  it("a footnote's definition above the line doesn't take the jump", async () => {
+    // The definition (line 3) renders at the end of the note but keeps its source line.
+    const content = ["# Plan", "", "[^1]: Alice said so.", "", "The pump is loud[^1].", "", "The valve stays.", "", "Done."].join("\n");
+    planApi(content);
+    renderApp({ pathname: planUrl, state: { line: 7 } satisfies NoteAt });
+    const paragraph = await screen.findByText("The valve stays.", { selector: "p" });
+    await vi.waitFor(() => expect(scrolled()).toEqual([paragraph]));
+    expect(paragraph).toHaveClass("k-flash");
+  });
+
+  it("a line inside a footnote's definition opens at the footnote", async () => {
+    planApi(["# Plan", "", "[^1]: Alice said so.", "", "The pump is loud[^1].", "", "Done."].join("\n"));
+    renderApp({ pathname: planUrl, state: { line: 3 } satisfies NoteAt });
+    const item = (await screen.findByText(/^Alice said so\./, { selector: "p" })).closest("li")!;
+    await vi.waitFor(() => expect(scrolled()).toEqual([item]));
+    expect(item).toHaveClass("k-flash");
+  });
+
+  it("a block id naming a whole quote lights up the quote", async () => {
+    planApi(["# Plan", "", "> The pump is loud.", "> Bob heard it. ^noise", "", "Done."].join("\n"));
+    renderApp({ pathname: planUrl, state: { block: "noise" } satisfies NoteAt });
+    const quote = (await screen.findByText(/^The pump is loud\./, { selector: "p" })).closest("blockquote")!;
+    await vi.waitFor(() => expect(scrolled()).toEqual([quote]));
+    expect(quote).toHaveClass("k-flash");
   });
 
   it("nothing inside an embed carries data-line", () => {

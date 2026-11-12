@@ -288,6 +288,10 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
               target={link.target}
               candidates={link.candidates}
               hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
+              stateOf={(p) => {
+                const block = isAttachment(p) ? null : subpathBlock(link.raw);
+                return block ? ({ block } satisfies NoteAt) : undefined;
+              }}
               onClose={() => setChoosing(false)}
             />
           )}

@@ -11,12 +11,15 @@ export default function AmbiguousLinkDialog({
   candidates,
   onClose,
   hrefOf = noteUrl,
+  stateOf,
 }: {
   target: string;
   candidates: string[];
   onClose(): void;
   /** Where a candidate is opened; a checkpoint's links stay inside it. */
   hrefOf?: (path: string) => string;
+  /** The router state a candidate is opened with (a link's block, `NoteAt`). */
+  stateOf?: (path: string) => unknown;
 }) {
   const dialog = useDialog<HTMLDivElement>(onClose);
   // Not inside the note's text: a dialog there would sit in a paragraph.
@@ -37,6 +40,7 @@ export default function AmbiguousLinkDialog({
             <li key={path}>
               <Link
                 to={hrefOf(path)}
+                state={stateOf?.(path)}
                 onClick={onClose}
                 className="flex min-h-11 min-w-0 flex-col justify-center rounded-[8px] px-2 py-1 focus-visible:outline-2 focus-visible:outline-accent"
               >

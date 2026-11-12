@@ -248,13 +248,20 @@ export default function NoteView({ path }: { path: string }) {
     let line = typeof at?.line === "number" ? at.line : undefined;
     if (typeof at?.block === "string") {
       const found = findBlock(shown.body, at.block);
-      if (!found) return setNotice({ kind: "block", id: at.block });
+      if (!found) {
+        setNotice({ kind: "block", id: at.block });
+        return;
+      }
       line = found.start;
     }
     if (line === undefined) return;
-    const target = [...article.current.querySelectorAll<HTMLElement>("[data-line]")]
-      .filter((e) => !e.closest(".k-embed") && Number(e.dataset.line) <= line)
-      .at(-1);
+    // The greatest line, not the last in the page: footnotes render at the end but keep their lines. On equal lines
+    // the first, the outermost: a quote over its first paragraph.
+    let target: HTMLElement | undefined;
+    for (const e of article.current.querySelectorAll<HTMLElement>("[data-line]")) {
+      const n = Number(e.dataset.line);
+      if (n <= line && (!target || n > Number(target.dataset.line)) && !e.closest(".k-embed")) target = e;
+    }
     if (!target) return;
     target.scrollIntoView({ block: "center" });
     unflash();
