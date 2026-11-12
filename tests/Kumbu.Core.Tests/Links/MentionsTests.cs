@@ -94,4 +94,23 @@ public class MentionsTests
         Assert.InRange(watch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         Assert.Equal([.. Enumerable.Range(0, 80_000).Select(k => (k * unit.Length, 4))], mention.Marks);
     }
+
+    [Fact]
+    public void Several_terms_mark_one_line_once()
+    {
+        var mention = Assert.Single(Mentions.In("Kumbu, also Kumbukumbu.", ["Kumbukumbu", "Kumbu"]));
+        Assert.Equal([(0, 5), (12, 10)], mention.Marks.ToArray());
+    }
+
+    [Fact]
+    public void Overlapping_marks_keep_the_longest() =>
+        Assert.Equal([(0, 9)], Assert.Single(Mentions.In("Kumbu Two here", ["Kumbu", "Kumbu Two"])).Marks.ToArray());
+
+    [Fact]
+    public void The_minimum_length_counts_per_term() =>
+        Assert.Equal([(0, 5)], Assert.Single(Mentions.In("Kumbu and K² here", ["K²", "Kumbu"])).Marks.ToArray());
+
+    [Fact]
+    public void A_single_title_keeps_its_overlapping_marks() =>
+        Assert.Equal([(0, 3), (2, 3)], Assert.Single(Of("a-a-a", "a-a")).Marks);
 }

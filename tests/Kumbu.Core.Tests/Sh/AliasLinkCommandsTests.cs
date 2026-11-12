@@ -121,4 +121,16 @@ public class AliasLinkCommandsTests
             Assert.True(l.Resolution.ViaAlias);
         });
     }
+
+    [Fact]
+    public async Task Backlinks_unlinked_finds_a_mention_by_alias() => Assert.Equal(
+        "/Work/Diary/2026-11-12.md:2:Kumbu needs a calendar.",
+        (await Run("backlinks --unlinked /Work/Projects/Kumbukumbu.md")).Output);
+
+    [Fact]
+    public async Task A_short_title_still_finds_its_aliases()
+    {
+        await Add("/Work/K².md", "---\naliases: [Kumbu]\n---\n");
+        Assert.Equal("/Work/Diary/2026-11-12.md:2:Kumbu needs a calendar.", (await Run("backlinks --unlinked /Work/K².md")).Output);
+    }
 }

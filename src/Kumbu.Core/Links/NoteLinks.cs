@@ -64,17 +64,19 @@ public static class NoteLinks
     {
         if (!path.IsNote) return [];
         var title = path.Name[..^".md".Length].Normalize(NormalizationForm.FormC);
-        if (title.Length < Mentions.MinTitleLength) return [];
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
+        // The minimum length counts per term: a short title may still have long aliases.
+        string[] terms = [title, .. all.FirstOrDefault(n => n.Path == path) is { } own ? NoteAliases.Of(own.Content) : []];
         var shown = ArchiveFolder.Shown(path, archive);
         var result = new List<Mention>();
-        foreach (var source in (await notes.ReadNotesUnderAsync(vault, ct)).OrderBy(n => n.Path.Value, TextOrder.Default))
+        foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             ct.ThrowIfCancellationRequested();
             if (source.Path == path || (!shown && ArchiveFolder.Contains(source.Path))) continue;
             var lines = Lines.Split(source.Content);
-            result.AddRange(Mentions.In(source.Content, title).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
+            result.AddRange(Mentions.In(source.Content, terms).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
         }
 
         return result;
