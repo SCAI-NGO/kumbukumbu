@@ -63,7 +63,7 @@ What follows `#` stays in the browser: no fetch tool sends it, Claude's included
 
 - 160 random bits as 32 Crockford Base32 characters, without hyphens in the URL. It is **in the path**, by design: that is what makes it fetchable. It therefore may reach a proxy's access log or a chat preview; it is short-lived and opens one copy for an hour, which is the accepted cost (§6).
 - The database never holds the token: it holds a lookup id derived from it (HKDF, as the share code's), the publication it opens, the publication key sealed under a key derived from the token (the reader key's way, publish design §4), its expiry and its request count. The token alone opens the copy; a database dump without it opens nothing.
-- Expired tokens are removed by a TTL index; a withdrawal or deletion removes the publication's tokens with it (vault and account deletion: the collection is in `ContentCollections`, and in the re-key order if it holds anything sealed under the vault, which it shouldn't).
+- Expired tokens are removed by a TTL index; a withdrawal or deletion removes the publication's tokens with it (vault and account deletion: deleted by `vault` in `DeleteVaultsAsync`, in the transaction and the sweep after it, and in `DeleteCopiesOfVaultsAsync`; the collection is **not** in `ContentCollections`, so tokens readers make never count towards the owner's storage, and it holds nothing sealed under the vault). *Amended 2026-11-12 after the overnighter, which followed the brief here: Chris: the space is surely tiny, but it should be correct.*
 - **The server never logs the token**, its lookup id or the `/s/t/…` path's last segments, and leaves `/s/t/` out of the HTTP metrics' route labels, as it does for the reader paths (`ReaderPaths`).
 
 ### 3.5 Answers
