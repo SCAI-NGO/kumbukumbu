@@ -3,6 +3,7 @@ using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
 using Microsoft.Extensions.Time.Testing;
 
@@ -193,6 +194,82 @@ public class CatEmbedsTests
             "\n" + Header + "\n[line 5: ![[Small]] → /Work/Pump/Small.md]\nsmall"
             + "\n[embedded notes cut here; read the rest with cat \"/Work/Pump/Big.md\"]",
             Appendix(result, content));
+    }
+
+    private static string NoteOf(int length, string embed)
+    {
+        var head = $"# Plan\n\n{embed}\n\n";
+        return head + new string('p', length - head.Length - 1) + "\n";
+    }
+
+    [Fact]
+    public async Task A_note_just_under_the_limit_gets_no_block_rather_than_a_cut_one()
+    {
+        var content = NoteOf(OutputLimit.MaxChars - 100, "![[Ruling]]");
+        var result = await Cat(content);
+
+        Assert.Equal(content, result.Output);
+        Assert.DoesNotContain("[truncated", result.Output);
+    }
+
+    [Fact]
+    public async Task A_cut_line_with_a_long_target_is_measured_whole()
+    {
+        var name = new string('n', 100);
+        var target = $"/Work/{new string('d', 120)}/{name}.md";
+        var cut = $"\n[embedded notes cut here; read the rest with cat \"{target}\"]";
+        var more = (target, "# Long\n" + new string('x', 5_000) + "\n");
+        // Room for the header and the cut line, to the character, below the limit less the notice's room.
+        var length = OutputLimit.MaxChars - 200 - 1 - Header.Length - cut.Length;
+
+        var content = NoteOf(length, $"![[{name}]]");
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", more);
+        Assert.Equal(content + "\n" + Header + cut, result.Output);
+        Assert.DoesNotContain("[truncated", result.Output);
+
+        // One character more and the cut line would not fit whole: no block.
+        var longer = NoteOf(length + 1, $"![[{name}]]");
+        Assert.Equal(longer, (await Cat(longer, "cat /Work/Pump/Plan.md", more)).Output);
+    }
+
+    [Fact]
+    public async Task An_embed_is_added_only_with_room_for_the_next_cut_line()
+    {
+        var name = new string('n', 100);
+        var target = $"/Work/{new string('d', 120)}/{name}.md";
+        var small = new string('s', 100);
+        var entry = $"\n[line 3: ![[Small]] → /Work/Pump/Small.md]\n{small}";
+        // Small fits, but the cut line naming the long target would not fit after it: the cut comes before Small.
+        var content = NoteOf(OutputLimit.MaxChars - 200 - 1 - Header.Length - entry.Length - 10, $"![[Small]]\n![[{name}]]");
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Small.md", small + "\n"), (target, "long\n"));
+
+        Assert.Equal("\n" + Header + "\n[embedded notes cut here; read the rest with cat \"/Work/Pump/Small.md\"]", Appendix(result, content));
+    }
+
+    [Fact]
+    public async Task Embeds_as_list_items_and_in_quotes_are_appended()
+    {
+        const string content = "# Plan\n\n- ![[Small]]\n> ![[Ruling#Decision]]\n> > 1. [x] ![[Other]]\n- see ![[Missing]]\n-![[Missing]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Small.md", "small\n"), ("/Work/Pump/Other.md", "other\n"));
+
+        Assert.Equal(
+            "\n" + Header + "\n[line 3: ![[Small]] → /Work/Pump/Small.md]\nsmall"
+            + "\n[line 4: ![[Ruling#Decision]] → /Work/Pump/Ruling.md#Decision]\n## Decision\n\nWe buy the controller."
+            + "\n[line 5: ![[Other]] → /Work/Pump/Other.md]\nother",
+            Appendix(result, content));
+    }
+
+    [Fact]
+    public async Task A_note_changed_between_the_reads_gets_no_block()
+    {
+        const string content = "# Plan\n\n![[Ruling]]\n";
+        var cat = new Cat(Store(content));
+        // A section read from an earlier state of the note: its token is not the stored note's.
+        var read = ShellResult.Ok("# Plan\n\n![[Ruling]]") with { Version = new NoteVersion("/Work/Pump/Plan.md", VersionToken.Of("# Plan\n")) };
+
+        Assert.Equal(read, await cat.AppendEmbedsAsync("/Work/Pump/Plan.md#Plan", read, read, Ct));
+        var current = read with { Version = new NoteVersion("/Work/Pump/Plan.md", VersionToken.Of(content)) };
+        Assert.Contains(Header, (await cat.AppendEmbedsAsync("/Work/Pump/Plan.md#Plan", current, current, Ct)).Output);
     }
 
     [Fact]

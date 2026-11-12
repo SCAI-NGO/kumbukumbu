@@ -155,7 +155,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         return (Describe(r), false);
     }
 
-    private static string Describe(LinkResolution r) => r.Kind switch
+    internal static string Describe(LinkResolution r) => r.Kind switch
     {
         LinkKind.Note or LinkKind.Attachment when r.Target is not null => r.Target.Value,
         LinkKind.Self => "this note",
