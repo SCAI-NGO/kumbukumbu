@@ -7,7 +7,8 @@ using Kumbu.Core.Tags;
 namespace Kumbu.Core.Calendar;
 
 /// <summary>A vault's entries and the notes whose dates couldn't be read, both in path order.</summary>
-public sealed record VaultCalendar(string Vault, IReadOnlyList<Entry> Entries, IReadOnlyList<CalendarProblem> Problems);
+/// <param name="Board">The vault's board definition as read with the entries, if it has one that reads.</param>
+public sealed record VaultCalendar(string Vault, IReadOnlyList<Entry> Entries, IReadOnlyList<CalendarProblem> Problems, BoardDefinition? Board = null);
 
 /// <summary>
 /// Reads a vault's calendar on demand (spec §4, "Reading cost"): every note of the vault, wherever it lives, board cards included;
@@ -35,7 +36,7 @@ public static class CalendarReader
             if (problem is not null) problems.Add(problem);
         }
 
-        return new VaultCalendar(vault, entries, problems);
+        return new VaultCalendar(vault, entries, problems, board);
     }
 
     /// <summary>The calendar of every vault the caller can read, in the order the reader lists them (spec §4: What's on covers them all).</summary>

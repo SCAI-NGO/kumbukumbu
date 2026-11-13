@@ -79,9 +79,9 @@ public static class CalendarLayout
         return new CalendarWeek(isoYear, week, monday, [.. spanning.Select(p => p.Item)], days);
     }
 
-    // The viewer's first and last day of an entry. A time window ends at its instant, so one ending at midnight doesn't touch
-    // the day that midnight opens.
-    private static (DateOnly First, DateOnly Last) DaysOf(Entry entry, TimeZoneInfo zone)
+    /// <summary>The viewer's first and last day of an entry. A time window ends at its instant, so one ending at midnight doesn't
+    /// touch the day that midnight opens.</summary>
+    public static (DateOnly First, DateOnly Last) DaysOf(Entry entry, TimeZoneInfo zone)
     {
         var first = Day(entry, zone);
         var end = entry.Until ?? entry.When;

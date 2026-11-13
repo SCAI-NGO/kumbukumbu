@@ -384,7 +384,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         public string Spanning(DayEntry item) => Row(SpanOf(item.Entry), item.Entry, item.Status);
 
         /// <summary>"14:00  Zahnarzt  /Work/Zahnarzt.md", a day without a time without one.</summary>
-        public string OnDay(DayEntry item) => Row(item.Entry.When.Kind == TimeKind.Time ? ClockOf(item.Entry) : null, item.Entry, item.Status);
+        public string OnDay(DayEntry item) => Row(item.Entry.When.Kind == TimeKind.Time ? EntryText.Clock(item.Entry, zone) : null, item.Entry, item.Status);
 
         /// <summary>"overdue · 1 day  Certificate  /Work/Pump/Certificate.md  to do".</summary>
         public string Notification(WhatsOnItem item)
@@ -452,35 +452,17 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
                     : $"{first.ToString("ddd d MMM", Invariant)} – {last.ToString("ddd d MMM", Invariant)}";
             }
 
-            var (shownZone, pinned) = Shown(entry);
-            var (startDay, startClock) = Local(when, entry, shownZone);
+            var (shownZone, pinned) = EntryText.Shown(entry, zone);
+            var (startDay, startClock) = EntryText.Local(when, entry, zone, shownZone);
             var text = $"{startDay.ToString("ddd d MMM", Invariant)} {startClock.ToString("HH:mm", Invariant)}";
             if (entry.Until is { } until)
             {
-                var (endDay, endClock) = Local(until, entry, shownZone);
+                var (endDay, endClock) = EntryText.Local(until, entry, zone, shownZone);
                 text += $" – {endDay.ToString("ddd d MMM", Invariant)} {endClock.ToString("HH:mm", Invariant)}";
             }
 
             return text + pinned;
         }
-
-        /// <summary>"14:00", "11:00–12:30", "14:00 (Europe/London)".</summary>
-        private string ClockOf(Entry entry)
-        {
-            var (shownZone, pinned) = Shown(entry);
-            var text = Local(entry.When, entry, shownZone).Clock.ToString("HH:mm", Invariant);
-            if (entry.Until is { } until) text += "–" + Local(until, entry, shownZone).Clock.ToString("HH:mm", Invariant);
-            return text + pinned;
-        }
-
-        // A time pinned by tz to another zone than the caller's is shown on that zone's clock, and names it (spec §3).
-        private (TimeZoneInfo Zone, string Suffix) Shown(Entry entry) =>
-            entry.Zone is { } own && own.Id != zone.Id && entry.When.Offset is null ? (own, $" ({own.Id})") : (zone, "");
-
-        private TimeZoneInfo ZoneOf(Entry entry) => entry.Zone ?? zone;
-
-        private (DateOnly Day, TimeOnly Clock) Local(CalendarTime value, Entry entry, TimeZoneInfo shownZone) =>
-            Zones.ToLocal(value.StartUtc(ZoneOf(entry)), shownZone);
 
         private static string OneLine(string text) => new string([.. text.Select(c => char.IsControl(c) ? ' ' : c)]).Trim();
     }

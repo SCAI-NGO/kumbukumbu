@@ -24,11 +24,11 @@ public sealed class CalendarSettingsTests(KumbuAppFactory app) : IAsyncDisposabl
 {
     private const string ViewSentence = "Only a signed-in person keeps a calendar view.";
 
-    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 11, 15, 23, 30, 0, TimeSpan.Zero));
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2037, 11, 15, 23, 30, 0, TimeSpan.Zero));
 
     private WebApplicationFactory<Program>? _api;
 
-    /// <summary>The server's zone UTC, whatever the machine's, and the clock at 15 November 2026, 23:30 UTC.</summary>
+    /// <summary>The server's zone UTC, whatever the machine's, and the clock at 15 November 2037, 23:30 UTC (a year with 2026's weekdays, later than the real clock: MongoDB expires sessions by the real one).</summary>
     private WebApplicationFactory<Program> Api => _api ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
     {
         s.RemoveAll<TimeProvider>();
@@ -220,7 +220,7 @@ public sealed class CalendarSettingsTests(KumbuAppFactory app) : IAsyncDisposabl
     public async Task Sh_calendar_uses_the_users_zone()
     {
         var alice = await NewAsync(Api, vault: "Work");
-        await alice.CreateAsync("Certificate.md", "---\nwhen: 2026-11-15\ntask: open\n---\n");
+        await alice.CreateAsync("Certificate.md", "---\nwhen: 2037-11-15\ntask: open\n---\n");
         var key = await alice.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Read);
 
         // 23:30 UTC on the 15th: still the 15th on the server's UTC.
