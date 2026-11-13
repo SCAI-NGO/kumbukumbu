@@ -63,10 +63,36 @@ public class CalendarTimeTests
     {
         Assert.True(CalendarTime.TryParse((object?)"2026-11-20", out var text));
         Assert.Equal(TimeKind.Day, text.Kind);
-        Assert.True(CalendarTime.TryParse((object?)new DateOnly(2026, 11, 20), out var day));
-        Assert.Equal(text, day);
-        Assert.True(CalendarTime.TryParse((object?)new DateTime(2026, 11, 20, 14, 0, 0), out var time));
-        Assert.Equal(Parse("2026-11-20T14:00"), time);
+        Assert.False(CalendarTime.TryParse((object?)new DateOnly(2026, 11, 20), out _));
+    }
+
+    [Theory]
+    [InlineData("٢٠٢٦-W47")]
+    [InlineData("2026-W47\n")]
+    [InlineData("2026-11-20\n")]
+    public void Refuses_other_digits_and_a_trailing_newline(string text) => Assert.False(CalendarTime.TryParse(text, out _));
+
+    [Fact]
+    public void A_day_across_the_spring_change_is_23_hours()
+    {
+        var day = Parse("2026-03-29");
+        Assert.Equal(new DateTime(2026, 3, 28, 23, 0, 0, DateTimeKind.Utc), day.StartUtc(Vienna));
+        Assert.Equal(new DateTime(2026, 3, 29, 22, 0, 0, DateTimeKind.Utc), day.EndUtc(Vienna));
+    }
+
+    [Fact]
+    public void An_offset_becomes_local_time_in_a_zone()
+    {
+        Assert.Equal(Parse("2026-11-20T15:00"), Parse("2026-11-20T14:00Z").Local(Vienna));
+        Assert.Equal(Parse("2026-11-20"), Parse("2026-11-20").Local(Vienna));
+    }
+
+    [Fact]
+    public void Moving_past_the_last_year_is_refused_not_thrown_at_random()
+    {
+        Assert.False(Parse("9998-12-31").CanAddDays(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Parse("9998-12-31").AddDays(1));
+        Assert.True(Parse("2026-11-20").CanAddDays(7));
     }
 
     [Theory]

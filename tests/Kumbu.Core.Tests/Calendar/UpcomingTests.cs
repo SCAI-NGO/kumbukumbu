@@ -34,6 +34,7 @@ public class UpcomingTests
     [InlineData("P1DT12H")]
     [InlineData("99999d")]
     [InlineData("")]
+    [InlineData("7d\n")]
     public void Upcoming_refuses_months_nothing_and_the_rest(string text)
     {
         Assert.False(Upcoming.TryParse(text, out _), text);

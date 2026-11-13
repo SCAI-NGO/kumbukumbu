@@ -12,7 +12,7 @@ namespace Kumbu.Core.Calendar;
 public sealed partial record Upcoming(int Count, char Unit)
 {
     // Four digits at most: 9999 weeks are still a TimeSpan, and no one means more.
-    [GeneratedRegex(@"^(?:([1-9][0-9]{0,3})([dwh])|P([1-9][0-9]{0,3})([DW])|PT([1-9][0-9]{0,3})H)$")]
+    [GeneratedRegex(@"\A(?:([1-9][0-9]{0,3})([dwh])|P([1-9][0-9]{0,3})([DW])|PT([1-9][0-9]{0,3})H)\z")]
     private static partial Regex Form();
 
     public static bool TryParse(string text, out Upcoming value)

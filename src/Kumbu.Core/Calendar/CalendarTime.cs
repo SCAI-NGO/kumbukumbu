@@ -18,26 +18,15 @@ public sealed partial record CalendarTime(TimeKind Kind, DateOnly Date, TimeOnly
     private static readonly string[] OffsetForms = ["yyyy-MM-dd'T'HH:mmzzz", "yyyy-MM-dd'T'HH:mm:sszzz", "yyyy-MM-dd HH:mmzzz", "yyyy-MM-dd HH:mm:sszzz"];
     private static readonly string[] UtcForms = ["yyyy-MM-dd'T'HH:mm'Z'", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd HH:mm'Z'", "yyyy-MM-dd HH:mm:ss'Z'"];
 
-    [GeneratedRegex(@"^(\d{4})-W(\d{2})$")]
+    // ASCII digits only, to the very end: "\d" takes any script's digits, and "$" a final newline.
+    [GeneratedRegex(@"\A([0-9]{4})-W([0-9]{2})\z")]
     private static partial Regex WeekForm();
 
-    /// <summary>
-    /// Reads a frontmatter value: the string <see cref="Board.Frontmatter.Read"/> hands over, or a <see cref="DateOnly"/>,
-    /// <see cref="DateTime"/> or <see cref="DateTimeOffset"/>. A list, a map or anything else is not a date.
-    /// </summary>
+    /// <summary>Reads a frontmatter value as <see cref="Board.Frontmatter.Read"/> hands it over: a string. A list, a map or nothing is not a date.</summary>
     public static bool TryParse(object? raw, out CalendarTime value)
     {
-        CalendarTime? read = raw switch
-        {
-            string text => TryParse(text, out var parsed) ? parsed : null,
-            DateOnly day => new CalendarTime(TimeKind.Day, day),
-            DateTime time => new CalendarTime(TimeKind.Time, DateOnly.FromDateTime(time), Seconds(time),
-                time.Kind == DateTimeKind.Utc ? TimeSpan.Zero : null),
-            DateTimeOffset time => new CalendarTime(TimeKind.Time, DateOnly.FromDateTime(time.DateTime), Seconds(time.DateTime), time.Offset),
-            _ => null,
-        };
-        value = read is not null && InRange(read.Date) ? read : default!;
-        return value is not null;
+        value = default!;
+        return raw is string text && TryParse(text, out value);
     }
 
     public static bool TryParse(string text, out CalendarTime value)
@@ -103,15 +92,35 @@ public sealed partial record CalendarTime(TimeKind Kind, DateOnly Date, TimeOnly
     public CalendarTime AddDays(int days)
     {
         if (Kind == TimeKind.Week && days % 7 != 0) throw new ArgumentException("A week moves by whole weeks only.", nameof(days));
-        return this with { Date = Date.AddDays(days) };
+        if (!TryMove(Date, days, out var moved)) throw new ArgumentOutOfRangeException(nameof(days), "The day would leave the years 2 to 9998.");
+        return this with { Date = moved };
+    }
+
+    /// <summary>Whether <see cref="AddDays"/> stays within the years a value can be read in.</summary>
+    public bool CanAddDays(int days) => TryMove(Date, days, out _);
+
+    /// <summary>A time with an offset as the local time it is in <paramref name="zone"/>, without the offset (Kumbu² never writes one);
+    /// every other value as it is.</summary>
+    public CalendarTime Local(TimeZoneInfo zone)
+    {
+        if (Kind != TimeKind.Time || Offset is null) return this;
+        var (day, clock) = Zones.ToLocal(Instant(zone), zone);
+        return new CalendarTime(TimeKind.Time, day, clock);
+    }
+
+    private static bool TryMove(DateOnly day, int days, out DateOnly moved)
+    {
+        moved = default;
+        var number = (long)day.DayNumber + days;
+        if (number < DateOnly.MinValue.DayNumber || number > DateOnly.MaxValue.DayNumber) return false;
+        moved = DateOnly.FromDayNumber((int)number);
+        return InRange(moved);
     }
 
     private DateTime Instant(TimeZoneInfo zone) =>
         Offset is { } offset
             ? DateTime.SpecifyKind(Date.ToDateTime(Clock) - offset, DateTimeKind.Utc)
             : Zones.ToUtc(Date, Clock, zone);
-
-    private static TimeOnly Seconds(DateTime time) => new(time.Hour, time.Minute, time.Second);
 
     // Years 1 and 9999 are refused, so that a day's end and any zone's shift stay within DateTime's range.
     private static bool InRange(DateOnly day) => day.Year is > 1 and < 9999;
