@@ -69,7 +69,7 @@ public static partial class EntryReader
         }
         else if (untilValue is not null)
         {
-            problems.Add("until without when; give the start as when too", "`until` without `when` – I need the start too");
+            problems.Add("until without when; give the start as when too", "This has an end but no start – I need the start too");
         }
         else
         {
@@ -150,15 +150,22 @@ public static partial class EntryReader
 
     // The board decides by place (spec §4): directly in /<vault>/Board/, not Board.md itself.
     private static bool IsCardPlace(VaultPath path) =>
-        path.Segments.Count == 3 && path.Segments[1] == "Board" && path.Name != "Board.md";
+        path.Segments.Count == 3 && BoardPaths.Folder(path.Segments[0]).Child(path.Name) == path && path != BoardPaths.Definition(path.Segments[0]);
 
     /// <summary>A card's <c>due</c> is its <c>when</c>; its column is its status (spec §2.5).</summary>
     private static (Entry? Entry, CalendarProblem? Problem) ReadCard(
         VaultPath path, string title, IReadOnlyDictionary<string, object?> values, BoardDefinition board, string written)
     {
-        if (Given(values, "due") is not { } dueValue) return (null, null);
-
         var problems = new Problems(path, title);
+        var marked = Given(values, "task") is not null || Given(values, "closed") is not null;
+        if (Given(values, "due") is not { } dueValue)
+        {
+            // A card's date is its due; a when or a task on it would otherwise vanish without a word (anti-goal 1).
+            if (Given(values, "when") is null && !marked) return (null, null);
+            problems.Add("on a card the date is its due; set it with the board tool", "On a card the date goes in `due`; set it on the board");
+            return (null, problems.Problem());
+        }
+
         CalendarTime? due = null;
         if (CalendarTime.TryParse(dueValue, out var day) && day.Kind == TimeKind.Day)
         {
@@ -172,7 +179,8 @@ public static partial class EntryReader
 
         var reason = ReadReason(values, problems);
         var upcoming = ReadUpcoming(values, problems);
-        if (problems.Any) return (null, problems.Problem());
+        if (marked) problems.Add(CardMarked, CardMarkedPlain);
+        if (due is null || upcoming is null && Given(values, "upcoming") is not null) return (null, problems.Problem());
 
         // A column the board doesn't have is the board's problem; for the calendar the deadline is still open.
         var column = board.Find(written);
@@ -180,11 +188,11 @@ public static partial class EntryReader
         var entry = new Entry(path, title, EntryKind.Card, due!, null, closed ? TaskMark.Closed : TaskMark.Open, null,
             closed ? reason : null, upcoming, null, false, column?.Name ?? written);
 
-        if (Given(values, "task") is null && Given(values, "closed") is null) return (entry, null);
-        problems.Add("on a card the column is the status; move it with the board tool",
-            "On a card the column is the status; move it on the board");
-        return (entry, problems.Problem());
+        return (entry, problems.Any ? problems.Problem() : null);
     }
+
+    private const string CardMarked = "on a card the column is the status; move it with the board tool";
+    private const string CardMarkedPlain = "Whether this card is done is its column on the board; change it there";
 
     private static TimeZoneInfo? ReadZone(IReadOnlyDictionary<string, object?> values, Problems problems)
     {
@@ -228,13 +236,21 @@ public static partial class EntryReader
             var value => value,
         };
 
-    private static string Text(object? value) => value switch
+    private const int ShownLength = 60;
+
+    /// <summary>A value as the person wrote it, on one line and cut short: it is shown back, not stored.</summary>
+    private static string Text(object? value)
     {
-        string text => text,
-        IReadOnlyList<object?> list => "[" + string.Join(", ", list.Select(Text)) + "]",
-        IReadOnlyDictionary<string, object?> => "{…}",
-        _ => value?.ToString() ?? "",
-    };
+        var text = value switch
+        {
+            string s => s,
+            IReadOnlyList<object?> list => "[" + string.Join(", ", list.Take(10).Select(Text)) + (list.Count > 10 ? ", …" : "") + "]",
+            IReadOnlyDictionary<string, object?> => "{…}",
+            _ => value?.ToString() ?? "",
+        };
+        text = new string([.. text.Select(c => char.IsControl(c) ? ' ' : c)]).Trim();
+        return text.Length > ShownLength ? text[..ShownLength].TrimEnd() + "…" : text;
+    }
 
     private static string KindName(TimeKind kind) => kind switch
     {

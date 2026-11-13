@@ -201,9 +201,12 @@ public class EntryReaderTests
     }
 
     [Fact]
-    public void A_card_without_due_is_no_entry_and_its_when_is_ignored()
+    public void A_card_with_a_when_but_no_due_is_a_problem_and_a_when_beside_due_is_ignored()
     {
-        Assert.Equal((null, null), Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\nwhen: 2026-11-20\n---\n", Board));
+        Assert.Equal((null, null), Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\n---\n", Board));
+        var (none, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\nwhen: 2026-11-20\n---\n", Board);
+        Assert.Null(none);
+        Assert.Equal("on a card the date is its due; set it with the board tool", problem?.What);
 
         var entry = EntryOf("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: 2026-11-20\nwhen: 2026-12-24\n---\n", Board);
         Assert.Equal(new DateOnly(2026, 11, 20), entry.When.Date);
@@ -212,10 +215,21 @@ public class EntryReaderTests
     [Fact]
     public void A_card_whose_due_cannot_be_read_is_a_problem()
     {
-        var (entry, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: soon\n---\n", Board);
+        var (entry, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: soon\ntask: open\n---\n", Board);
 
         Assert.Null(entry);
         Assert.StartsWith("due: soon is not a date", problem?.What);
+        Assert.Contains("on a card the column is the status", problem?.What);
+    }
+
+    [Fact]
+    public void A_value_shown_back_is_one_line_and_cut_short()
+    {
+        var (_, problem) = Read("/Work/x.md", $"---\nwhen: |\n  line one\n  line two {new string('x', 500)}\n---\n", null);
+
+        Assert.DoesNotContain('\n', problem!.Plain);
+        Assert.Contains("line one line two", problem.Plain);
+        Assert.True(problem.Plain.Length < 140, problem.Plain);
     }
 
     [Fact]
