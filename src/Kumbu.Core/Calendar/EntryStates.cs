@@ -100,7 +100,7 @@ public static class EntryStates
     private static string Clock(CalendarTime end, DateTime endUtc, Entry entry, TimeZoneInfo zone)
     {
         if (entry.Zone is { } pinned && end.Offset is null && pinned.Id != zone.Id)
-            return end.Clock.ToString("HH:mm", CultureInfo.InvariantCulture) + $" ({pinned.Id})";
+            return Zones.ToLocal(endUtc, pinned).Clock.ToString("HH:mm", CultureInfo.InvariantCulture) + $" ({pinned.Id})";
         return Zones.ToLocal(endUtc, zone).Clock.ToString("HH:mm", CultureInfo.InvariantCulture);
     }
 
