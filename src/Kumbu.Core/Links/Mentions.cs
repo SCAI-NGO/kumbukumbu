@@ -18,12 +18,23 @@ public static partial class Mentions
     internal const int MinTitleLength = 3;
 
     /// <summary>The lines of <paramref name="content"/> that mention <paramref name="title"/>, each with its marks.</summary>
-    public static IReadOnlyList<(int Line, IReadOnlyList<(int Start, int Length)> Marks)> In(string content, string title)
+    public static IReadOnlyList<(int Line, IReadOnlyList<(int Start, int Length)> Marks)> In(string content, string title) =>
+        In(content, [title]);
+
+    /// <summary>The lines of <paramref name="content"/> that mention any of <paramref name="terms"/> (a note's title and
+    /// aliases), each line once with the marks of all terms; where marks of different terms overlap, the longest term's
+    /// stays.</summary>
+    public static IReadOnlyList<(int Line, IReadOnlyList<(int Start, int Length)> Marks)> In(string content, IReadOnlyList<string> terms)
     {
-        title = title.Normalize(NormalizationForm.FormC);
-        if (title.Length < MinTitleLength) return [];
+        // Longest first, so a shorter term's mark inside a longer one's gives way; a term's own marks never do.
+        var kept = terms.Select(t => t.Normalize(NormalizationForm.FormC))
+            .Where(t => t.Length >= MinTitleLength)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(t => t.Length)
+            .ToList();
+        if (kept.Count == 0) return [];
         // The raw line may hold either form; the marks stay offsets in it.
-        string[] forms = [.. new[] { title, title.Normalize(NormalizationForm.FormD) }.Distinct(StringComparer.Ordinal)];
+        var forms = kept.ConvertAll(t => new[] { t, t.Normalize(NormalizationForm.FormD) }.Distinct(StringComparer.Ordinal).ToArray());
 
         var lines = Lines.Split(content);
         var start = Outline.FrontmatterEnd(lines);
@@ -34,31 +45,45 @@ public static partial class Mentions
         {
             if (fenced[i] || indented[i]) continue;
             var line = lines[i];
-            if (!forms.Any(f => line.Contains(f, StringComparison.OrdinalIgnoreCase))) continue;
+            if (!forms.Any(term => term.Any(f => line.Contains(f, StringComparison.OrdinalIgnoreCase)))) continue;
 
             var masked = Masked(line);
             masked.Sort();
-            var starts = masked.ConvertAll(m => m.Start).ToArray();
-            var reach = new int[masked.Count];
-            for (var k = 0; k < reach.Length; k++) reach[k] = k == 0 ? masked[0].End : Math.Max(reach[k - 1], masked[k].End);
+            var (starts, reach) = Spans(masked);
             var marks = new SortedSet<(int Start, int Length)>();
-            foreach (var form in forms)
+            foreach (var term in forms)
             {
-                for (var at = line.IndexOf(form, StringComparison.OrdinalIgnoreCase); at >= 0;
-                     at = line.IndexOf(form, at + 1, StringComparison.OrdinalIgnoreCase))
+                var own = new SortedSet<(int Start, int Length)>();
+                foreach (var form in term)
                 {
-                    var end = at + form.Length;
-                    if (at > 0 && char.IsLetterOrDigit(line[at - 1])) continue;
-                    if (end < line.Length && char.IsLetterOrDigit(line[end])) continue;
-                    if (Overlaps(starts, reach, at, end)) continue;
-                    marks.Add((at, form.Length));
+                    for (var at = line.IndexOf(form, StringComparison.OrdinalIgnoreCase); at >= 0;
+                         at = line.IndexOf(form, at + 1, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var end = at + form.Length;
+                        if (at > 0 && char.IsLetterOrDigit(line[at - 1])) continue;
+                        if (end < line.Length && char.IsLetterOrDigit(line[end])) continue;
+                        if (Overlaps(starts, reach, at, end)) continue;
+                        own.Add((at, form.Length));
+                    }
                 }
+
+                var (taken, takenReach) = Spans([.. marks.Select(m => (m.Start, m.Start + m.Length))]);
+                marks.UnionWith(own.Where(m => !Overlaps(taken, takenReach, m.Start, m.Start + m.Length)));
             }
 
             if (marks.Count > 0) result.Add((i, [.. marks]));
         }
 
         return result;
+    }
+
+    // The starts of spans sorted by start, and for each the furthest end of it and those before it.
+    private static (int[] Starts, int[] Reach) Spans(List<(int Start, int End)> sorted)
+    {
+        var starts = sorted.ConvertAll(m => m.Start).ToArray();
+        var reach = new int[sorted.Count];
+        for (var k = 0; k < reach.Length; k++) reach[k] = k == 0 ? sorted[0].End : Math.Max(reach[k - 1], sorted[k].End);
+        return (starts, reach);
     }
 
     // Whether [at, end) overlaps a span, the spans sorted by start and reach[k] the furthest end of the first k + 1.

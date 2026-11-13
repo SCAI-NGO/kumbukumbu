@@ -462,16 +462,22 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var trashed = trash.Select(t => t.Path).Concat(files.Trash.Select(t => t.Path)).ToHashSet();
         var afterPaths = notes.Select(n => n.Path).Where(p => !trashed.Contains(p) && !leaving.Contains(p)).Concat(back.Keys).Concat(moved.Keys).Distinct().ToList();
         var afterAttachments = attachments?.Where(p => !trashed.Contains(p) && !leaving.Contains(p)).Concat(files.Back.Keys).Concat(files.Moved.Keys).Distinct().ToList();
-        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path), attachments);
-        var after = new Links.LinkResolver(vault.Segments[0], afterPaths, afterAttachments);
+        // The aliases after the restore are those of the content each note will have then.
+        var afterContent = notes.ToDictionary(n => n.Path, n => n.Content);
+        foreach (var (path, (_, content)) in changed) afterContent[path] = content;
+        foreach (var (path, content) in back) afterContent[path] = content;
+        foreach (var (path, (_, content)) in moved) afterContent[path] = content;
+        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path), attachments, Links.NoteAliases.Of(notes, ct));
+        var after = new Links.LinkResolver(
+            vault.Segments[0], afterPaths, afterAttachments, Links.NoteAliases.Of(afterContent.Select(c => new Note(c.Key, c.Value)), ct));
         foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
             foreach (var link in Links.NoteLink.Parse(content))
             {
                 if (link.Target.Trim().Length == 0) continue;
-                var was = before.Resolve(note.Path, link.Target);
-                if (!Leads(was) || Leads(after.Resolve(note.Path, link.Target))) continue;
+                var was = before.Resolve(note.Path, link);
+                if (!Leads(was) || Leads(after.Resolve(note.Path, link))) continue;
                 var why = trashed.Contains(was.Target!) ? "going to the trash" : "gone after the restore";
                 broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} (now {was.Target!.Value}, {why})");
             }

@@ -115,8 +115,9 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         VaultPath path, List<(Note Note, List<int> Matches)> affected, string oldText, string newText, CancellationToken ct)
     {
         var vault = path.Segments[0];
-        var paths = await store.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct);
-        var resolver = new LinkResolver(vault, paths);
+        var all = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
+        var paths = all.Select(n => n.Path).ToList();
+        var resolver = new LinkResolver(vault, paths, noteAliases: NoteAliases.Of(all, ct));
         var output = new List<string>();
 
         var named = paths
@@ -144,8 +145,8 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
                 var raw = Replace(link.Raw, inside, oldText.Length, newText);
                 if (NoteLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
-                var after = resolver.Resolve(note.Path, changed.Target);
-                var now = resolver.Resolve(note.Path, link.Target);
+                var after = resolver.Resolve(note.Path, changed);
+                var now = resolver.Resolve(note.Path, link);
                 var was = now.Kind == LinkKind.Note ? $"now {now.Target!.Value}" : "now it leads nowhere";
                 var where = $"  {note.Path.Value}:{link.Line + 1}: {link.Raw} → {raw}";
                 if (after.Kind == LinkKind.NotFound) broken.Add($"{where}: no such note ({was})");

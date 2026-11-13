@@ -23,9 +23,10 @@ public static class NoteLinks
     public static async Task<IReadOnlyList<ResolvedLink>> OfAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(
-            vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
-        return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
+        return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link)))];
     }
 
     /// <summary>The lines in the vault that link to <paramref name="path"/>, by source path and line; then the lines
@@ -34,7 +35,8 @@ public static class NoteLinks
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
+        var resolver = new LinkResolver(
+            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
         var exact = new List<Backlink>();
         var maybe = new List<Backlink>();
         foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
@@ -42,7 +44,7 @@ public static class NoteLinks
             var lines = Lines.Split(source.Content);
             var resolved = NoteLink.Parse(source.Content)
                 .Where(l => l.Target.Trim().Length > 0)
-                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l.Target)))
+                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l)))
                 .ToList();
             exact.AddRange(resolved.Where(r => r.Resolution.Target == path).Select(r => r.Line).Distinct()
                 .Select(line => new Backlink(source.Path, line, lines[line], Ambiguous: false)));
@@ -62,17 +64,19 @@ public static class NoteLinks
     {
         if (!path.IsNote) return [];
         var title = path.Name[..^".md".Length].Normalize(NormalizationForm.FormC);
-        if (title.Length < Mentions.MinTitleLength) return [];
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
+        // The minimum length counts per term: a short title may still have long aliases.
+        string[] terms = [title, .. all.FirstOrDefault(n => n.Path == path) is { } own ? NoteAliases.Of(own.Content) : []];
         var shown = ArchiveFolder.Shown(path, archive);
         var result = new List<Mention>();
-        foreach (var source in (await notes.ReadNotesUnderAsync(vault, ct)).OrderBy(n => n.Path.Value, TextOrder.Default))
+        foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             ct.ThrowIfCancellationRequested();
             if (source.Path == path || (!shown && ArchiveFolder.Contains(source.Path))) continue;
             var lines = Lines.Split(source.Content);
-            result.AddRange(Mentions.In(source.Content, title).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
+            result.AddRange(Mentions.In(source.Content, terms).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
         }
 
         return result;
