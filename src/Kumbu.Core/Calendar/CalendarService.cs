@@ -30,7 +30,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
     private const string Tool = "calendar";
     private const int Attempts = 3;
     private const int MaxReason = 2000;
-    private const string EmptyBlock = "---\n---\n";
+    private const int ShownReason = 80;
     private const string DateHint = "give 2026-11-20, 2026-11-20T14:00 or 2026-W47";
 
     /// <summary>The calendar's keys, in the order new ones are written (spec §2.2).</summary>
@@ -110,7 +110,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
             {
                 if (reason is not null && task != "closed") return Plan.Refused(Error($"{c.Path.Value} is not closed; calendar close <note> --reason <text> closes it with one"));
                 changes.Add(("reason", reason is null ? null : FrontmatterWrites.Scalar(reason)));
-                said.Add(reason is null ? "no reason" : $"reason {reason}");
+                said.Add(reason is null ? "no reason" : $"reason {Shown(reason)}");
             }
 
             if (change.Upcoming.IsGiven)
@@ -121,8 +121,8 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
 
             if (change.Tz.IsGiven)
             {
-                changes.Add(("tz", tzText));
-                said.Add(tzText is null ? "no tz" : $"tz {tzText}");
+                changes.Add(("tz", tz?.Id));
+                said.Add(tz is null ? "no tz" : $"tz {tz.Id}");
             }
 
             return new Plan(changes, $"set {string.Join(", ", said)} on {c.Path.Value}");
@@ -157,7 +157,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
                 var day = c.Values.GetValueOrDefault("closed") is string closed && CalendarTime.TryParse(closed, out var read) ? $" ({Human(read, c.Today)})" : "";
                 return reason is null
                     ? new Plan([], "", Unchanged: $"{c.Path.Value} is closed already{day}")
-                    : new Plan([("reason", FrontmatterWrites.Scalar(reason))], $"gave {c.Path.Value} the reason {reason}");
+                    : new Plan([("reason", FrontmatterWrites.Scalar(reason))], $"gave {c.Path.Value} the reason {Shown(reason)}");
             }
 
             List<(string Key, string? Yaml)> changes = [("task", "closed"), ("closed", Day(c.Today))];
@@ -206,13 +206,14 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
         }
 
         if (!TryNote(path, out var notePath, out var error)) return error;
+        if (Refuse(notePath) is { } refused) return refused;
         if (await store.GetAsync(notePath, ct) is { } note && Frontmatter.Read(note.Content) is { Problem: null } read && EntryReader.IsCard(notePath, read.Values))
             return await LaterCardAsync(notePath, read.Values, part, step, picked, ct);
 
         return await WriteAsync(path, check: true, c =>
         {
             if (c.Card) return Plan.Refused(CardDue(c.Path));
-            if (NotAnEntry(c) is { } refused) return Plan.Refused(refused);
+            if (NotAnEntry(c) is { } notAnEntry) return Plan.Refused(notAnEntry);
             var entry = c.Entry!;
             if (entry.Task == TaskMark.Closed) return Plan.Refused(Error($"{c.Path.Value} is closed; calendar reopen <note> opens it again"));
             var timeZone = entry.Zone ?? c.Zone;
@@ -378,6 +379,8 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
 
             var end = until.Local(timeZone);
             var shift = target.Date.ToDateTime(target.Clock) - from.Date.ToDateTime(from.Clock);
+            // Within the years the day moves to, a part of a day more can't leave DateTime's range.
+            if (!end.CanAddDays(shift.Days)) return Plan.Refused(Error("a calendar has the years 2 to 9998"));
             var moved = end.Date.ToDateTime(end.Clock) + shift;
             if (moved.Year is <= 1 or >= 9999) return Plan.Refused(Error("a calendar has the years 2 to 9998"));
             var next = end.Kind == TimeKind.Time
@@ -431,8 +434,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
             if (planned.Error is not null) return planned.Error;
             if (!FrontmatterWrites.TryOwnedKeys(Tool, path, note.Content, planned.Changes, out var content, out error)) return error;
             // A block that held only calendar keys goes with them; one that was empty before stays.
-            if (content.StartsWith(EmptyBlock, StringComparison.Ordinal) && !note.Content.StartsWith(EmptyBlock, StringComparison.Ordinal))
-                content = content[EmptyBlock.Length..];
+            if (EmptyBlock(content) is var empty and > 0 && EmptyBlock(note.Content) == 0) content = content[empty..];
             if (content == note.Content) return Written(planned.Unchanged ?? $"{path.Value} is unchanged", note);
             if (check && !current.Card)
             {
@@ -500,6 +502,20 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
             TimeKind.Time => value.Date.ToString("d MMM", Invariant) + suffix + " " + value.Clock.ToString("HH:mm", Invariant),
             _ => value.Date.ToString("d MMM", Invariant) + suffix,
         };
+    }
+
+    /// <summary>The length of an empty frontmatter block at the start of <paramref name="content"/>, in either line ending; 0 without one.</summary>
+    private static int EmptyBlock(string content) =>
+        content.StartsWith("---\n---\n", StringComparison.Ordinal) ? "---\n---\n".Length
+        : content.StartsWith("---\r\n---\r\n", StringComparison.Ordinal) ? "---\r\n---\r\n".Length
+        : 0;
+
+    /// <summary>A reason as an answer shows it back: on one line and cut short.</summary>
+    private static string Shown(string reason)
+    {
+        var line = string.Join(' ', reason.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        line = new string([.. line.Select(c => char.IsControl(c) ? ' ' : c)]);
+        return line.Length > ShownReason ? line[..ShownReason].TrimEnd() + "…" : line;
     }
 
     private static string Day(DateOnly day) => day.ToString("yyyy-MM-dd", Invariant);

@@ -44,10 +44,10 @@ public static partial class EntryReader
         }
 
         var values = read.Values;
-        if (cardPlace && values.GetValueOrDefault("column") is string { Length: > 0 } column)
-            return ReadCard(path, title, values, board!, column.Trim());
+        if (cardPlace && HasColumn(values))
+            return ReadCard(path, title, values, board!, (values["column"] as string ?? Text(values["column"])).Trim());
         // A card of a board that can't be read: its due would otherwise be nobody's (anti-goal 1).
-        if (board is null && IsCardPlace(path) && Given(values, "column") is not null && Given(values, "due") is { } due)
+        if (board is null && IsCard(path, values) && Given(values, "due") is { } due)
         {
             return (null, new CalendarProblem(path, title, $"due: {Text(due)} is on a card of a board that can't be read (Board.md); fix the board",
                 "This card's date can't be shown until its board can be read again", new Dictionary<string, string>()));
@@ -158,7 +158,10 @@ public static partial class EntryReader
     /// <summary>Whether a note is a board card by its place and its <c>column</c>, whether or not its board can be read: the
     /// calendar never writes a card's status or date (spec §2.5).</summary>
     internal static bool IsCard(VaultPath path, IReadOnlyDictionary<string, object?> values) =>
-        IsCardPlace(path) && values.GetValueOrDefault("column") is string { Length: > 0 };
+        IsCardPlace(path) && HasColumn(values);
+
+    // Any column value makes a card, a number or a list too; only an empty one doesn't.
+    private static bool HasColumn(IReadOnlyDictionary<string, object?> values) => Given(values, "column") is not null;
 
     // The board decides by place (spec §4): directly in /<vault>/Board/, not Board.md itself.
     private static bool IsCardPlace(VaultPath path) =>

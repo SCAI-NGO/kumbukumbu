@@ -569,4 +569,110 @@ public class CalendarServiceTests
         Assert.Equal(ShellErrorKind.Invalid, bad.Kind);
         Assert.Equal(ShellResult.Error("calendar: 17.12.2026 is not a day; give 2026-11-20") with { Kind = ShellErrorKind.Invalid }, day);
     }
+
+    [Theory]
+    [InlineData("3")]
+    [InlineData("[Doing]")]
+    public async Task A_card_is_a_card_by_any_column_value(string column)
+    {
+        var card = $"---\ncolumn: {column}\ndue: 2026-12-10\nwhen: 2026-12-10\ntask: open\n---\nText\n";
+        var store = Board(card);
+
+        var result = await Service(store).CloseAsync("/Work/Board/X.md", null, Ct);
+
+        Assert.Equal(ShellResult.Error("calendar: /Work/Board/X.md is a card; on a card the column is the status: move it with the board tool")
+            with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(card, await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
+    public async Task Move_refuses_an_until_beyond_the_years_a_calendar_has()
+    {
+        const string note = "---\nwhen: 2026-11-20\nuntil: 9998-12-01\n---\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", note));
+
+        var result = await Service(store).MoveAsync("/Work/x.md", "2030-11-20", Ct);
+
+        Assert.Equal(ShellResult.Error("calendar: a calendar has the years 2 to 9998") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(note, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task Set_tz_writes_the_zones_own_id()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\nwhen: 2026-12-01\n---\n"));
+        var tz = Zones.Find("europe/vienna") is null ? "Europe/Vienna" : "europe/vienna";
+
+        var result = await Service(store).SetAsync("/Work/x.md", new CalendarChange(Tz: $" {tz} "), Ct);
+
+        Assert.Equal("calendar: set tz Europe/Vienna on /Work/x.md", result.Output);
+        Assert.Equal("---\nwhen: 2026-12-01\ntz: Europe/Vienna\n---\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task A_read_only_member_can_postpone_nothing()
+    {
+        const string card = "---\ncolumn: Doing\nrank: V\ndue: 2026-12-10\n---\nText\n";
+        const string note = "---\nwhen: 2026-12-15\ntask: open\n---\n";
+        var store = new InMemoryNoteStore(("/Garten/Board/Board.md", BoardDefinition), ("/Garten/Board/X.md", card), ("/Garten/x.md", note));
+        store.Infos["Garten"] = new VaultInfo("\"Alice\"", AccessLevel.Read, true);
+        var service = Service(store, new FixedCaller("bob", LevelOf: _ => AccessLevel.Read));
+
+        var onCard = await service.LaterAsync("/Garten/Board/X.md", LaterPart.Postpone, LaterStep.Day, null, Ct);
+        var onNote = await service.LaterAsync("/Garten/x.md", LaterPart.Postpone, LaterStep.Day, null, Ct);
+        var missing = await service.LaterAsync("/Garten/nope.md", LaterPart.Postpone, LaterStep.Day, null, Ct);
+
+        Assert.Equal(ShellErrorKind.Refused, onCard.Kind);
+        Assert.StartsWith("calendar: ", onCard.Output);
+        Assert.Equal(ShellErrorKind.Refused, onNote.Kind);
+        Assert.Equal(ShellErrorKind.Refused, missing.Kind);
+        Assert.Equal(card, await Content(store, "/Garten/Board/X.md"));
+        Assert.Equal(note, await Content(store, "/Garten/x.md"));
+    }
+
+    [Fact]
+    public async Task Unset_takes_an_emptied_crlf_block_away()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\r\nwhen: 2026-11-20\r\n---\r\nBody\r\n"), ("/Work/empty.md", "---\r\n---\r\nBody\r\n"));
+        var service = Service(store);
+
+        Ok(await service.UnsetAsync("/Work/x.md", Ct));
+        Ok(await service.UnsetAsync("/Work/empty.md", Ct));
+
+        Assert.Equal("Body\r\n", await Content(store, "/Work/x.md"));
+        Assert.Equal("---\r\n---\r\nBody\r\n", await Content(store, "/Work/empty.md"));
+    }
+
+    [Fact]
+    public async Task Set_keeps_a_crlf_block_and_replaces_a_quoted_key()
+    {
+        var store = new InMemoryNoteStore(("/Work/crlf.md", "---\r\ntitle: x\r\nwhen: 2026-11-20\r\n---\r\n"),
+            ("/Work/quoted.md", "---\n\"when\": 2026-11-20\n---\n"));
+        var service = Service(store);
+
+        Ok(await service.SetAsync("/Work/crlf.md", new CalendarChange(Task: true), Ct));
+        Ok(await service.SetAsync("/Work/quoted.md", new CalendarChange(When: "2026-12-01"), Ct));
+
+        var crlf = (await Content(store, "/Work/crlf.md"))!;
+        Assert.StartsWith("---\r\ntitle: x\r\n", crlf);
+        Assert.Equal("open", Frontmatter.Read(crlf).Values["task"]);
+        Assert.Equal("---\nwhen: 2026-12-01\n---\n", await Content(store, "/Work/quoted.md"));
+    }
+
+    [Fact]
+    public async Task A_reason_is_echoed_on_one_line_and_cut_short()
+    {
+        var reason = "first line\nsecond line " + new string('x', 100);
+        var store = new InMemoryNoteStore(("/Work/a.md", "---\nwhen: 2026-12-15\ntask: closed\nclosed: 2026-12-16\n---\n"),
+            ("/Work/b.md", "---\nwhen: 2026-12-15\ntask: closed\nclosed: 2026-12-16\n---\n"));
+        var service = Service(store);
+        var shown = ("first line second line " + new string('x', 100))[..80] + "…";
+
+        var set = await service.SetAsync("/Work/a.md", new CalendarChange(Reason: reason), Ct);
+        var close = await service.CloseAsync("/Work/b.md", reason, Ct);
+
+        Assert.Equal($"calendar: set reason {shown} on /Work/a.md", set.Output);
+        Assert.Equal($"calendar: gave /Work/b.md the reason {shown}", close.Output);
+        Assert.Equal(reason, Frontmatter.Read((await Content(store, "/Work/a.md"))!).Values["reason"]);
+    }
 }

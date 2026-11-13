@@ -287,4 +287,17 @@ public class EntryReaderTests
         Assert.Null(entry);
         Assert.Contains("board that can't be read", problem?.What);
     }
+
+    [Fact]
+    public void A_column_that_is_no_text_still_makes_a_card()
+    {
+        var entry = EntryOf("/Work/Board/Offsite.md", "---\ncolumn: 3\ndue: 2026-11-20\n---\n", Board);
+        var (listed, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: [Ideas]\ndue: 2026-11-20\nwhen: 2026-12-24\n---\n", Board);
+
+        Assert.Equal(EntryKind.Card, entry.Kind);
+        Assert.Equal("3", entry.Column);
+        Assert.Equal(EntryKind.Card, listed?.Kind);
+        Assert.Equal(new DateOnly(2026, 11, 20), listed?.When.Date);
+        Assert.Null(problem);
+    }
 }
