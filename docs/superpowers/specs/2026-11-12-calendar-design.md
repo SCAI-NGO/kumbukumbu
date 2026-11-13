@@ -161,18 +161,18 @@ calendar notifications [--tag <tag>]
 ### 6.2 Writing
 
 ```
-calendar set <note> --when <value> [--until <value>] [--task | --no-task] [--upcoming 7d] [--tz <zone>]
+calendar set <note> --when <value> [--until <value>] [--task | --no-task] [--upcoming 7d] [--tz <zone>] [--reason <text>]
 calendar move <note> <when>
 calendar close <note> [--reason <text>]
 calendar reopen <note>
 calendar unset <note>
 ```
 
-- `set` makes an existing note an entry or changes it; making a new entry is writing the note, then `set` (an entry *is* a note: no `create`). Each option sets its key; `--no-task` removes `task` and `reason`.
+- `set` makes an existing note an entry or changes it; making a new entry is writing the note, then `set` (an entry *is* a note: no `create`). Each option sets its key; `--no-task` removes `task`, `closed` and `reason`.
 - `move` sets a new `when`; a window keeps its length (`until` moves with it).
 - `close` sets `task: closed`, `closed` (today in the caller's zone) and `reason` if given; `reopen` sets `task: open` and removes `closed` and `reason`. `calendar set <note> --reason <text>` adds or changes the reason of a closed task later. On an entry without `task` they refuse with a hint (`calendar set <note> --task`).
 - `unset` removes `when`, `until`, `task`, `closed`, `reason`, `upcoming` and `tz`; the note stays. On a day or week note by name it refuses honestly: "<path> is the day note of 12 November by its name; rename it to take it out of the calendar".
-- **On a board card**, `close`, `reopen` and `move` refuse and name the board tool ("on a card the column is the status: move it with the board tool"); `set --when` on a card refuses likewise (its `due` is the board's). One truth.
+- **On a board card**, `close`, `reopen` and `move` refuse and name the board tool ("on a card the column is the status: move it with the board tool"); `set` refuses every option but `--upcoming` likewise (its `due` and status are the board's). One truth. *Maintainer, 2026-11-13:* the basis for this version; he wants to experience how it works with cards in practice and expects feedback.
 - Each write goes through `NoteWriter` with the caller's permissions and leaves a version in the history, like `edit`; the answer names the new version token. Values are validated (§2.2); a bad one is refused with what would be valid.
 - `calendar`'s help and the manual (`src/Kumbu.Core/Sh/Manual.cs`) say all of this in the style of `board`'s.
 
@@ -236,7 +236,7 @@ A page of its own: the list of §5 over every vault the session shows, each item
 
 ### 7.7 The badge
 
-*Maintainer: one rule.* Its number is the length of "What's on" for the vaults the session shows; the scheme's warning colour when anything is overdue, a calm one otherwise; no badge at zero. On What's on in the navigation, on each calendar vault in the tree, on the phone's menu button; and on the installed app's icon through the Badging API (`navigator.setAppBadge`, set while the app runs, so still pull; nothing where it isn't supported). Its count is refreshed when the app opens, when it comes back to the foreground, and after a change to an entry.
+*Maintainer: one rule.* Its number is the length of "What's on" for the vaults the session shows; the scheme's warning colour when anything is overdue, a calm one otherwise; no badge at zero. On What's on in the navigation, on the **Calendar** entry of the active vault's menu in the tree and beside each vault in the vault switcher (that vault's share of the count), on the phone's menu button *(maintainer, 2026-11-13)*; and on the installed app's icon through the Badging API (`navigator.setAppBadge`, set while the app runs, so still pull; nothing where it isn't supported). Its count is refreshed when the app opens, when it comes back to the foreground, and after a change to an entry.
 
 ### 7.8 From the note
 
@@ -272,7 +272,9 @@ The web app's name for §2.7's problems, in the calendar views and at the bottom
 
 ### 7.13 Later
 
-*Maintainer, 2026-11-13: "a function I would so often wish for from calendars".* Every open task, upcoming or overdue, has **Later** beside ✓, in What's on, the calendar views and the note's header: **+1 day**, **+1 week**, **Pick a date…**. It is `calendar move` (§6.2): the new `when` is set, a window keeps its length, a time of day is kept. **+1 day and +1 week count from the later of today and the entry's current `when`**, so Later never moves anything earlier: an overdue task goes to tomorrow or a week from today, an upcoming one a day or a week past its date. On a week entry, +1 week moves it to the next week and +1 day is not offered. *(Claude's call, accepted by the maintainer 2026-11-13: one rule, intuitive in every case he tried.)* Why: someone who didn't get to something moves it on honestly in two taps instead of facing a growing pile (anti-goal: stress). On a board card **Later** sets the card's `due` through the board's code, as the only calendar write a card allows *(Claude's call: rescheduling doesn't touch the column, so it is no second truth)*.
+*Maintainer, 2026-11-13: "a function I would so often wish for from calendars".* **Every open task**, whatever its state (not yet relevant, upcoming, ongoing or overdue), has **Later** beside ✓, in What's on, the calendar views and the note's header *(maintainer, 2026-11-13, after the review of spec and brief)*: **+1 day**, **+1 week**, **Pick a date…**. It is `calendar move` (§6.2): the new `when` is set, a window keeps its length, a time of day is kept. **+1 day and +1 week count from the later of today and the entry's current `when`**, so Later never moves anything earlier: an overdue task goes to tomorrow or a week from today, an upcoming one a day or a week past its date. On a week entry, +1 week moves it to the next week and +1 day is not offered.
+
+**Postpone and more time** *(maintainer, 2026-11-13)*. A task with a window (`until`) offers two things under **Later**: **Postpone** moves the whole task, start and end together (as above), and **More time** moves only its end (`until`), the start stays. The same three choices under each, counted from the later of today and the end. A task without `until` has only Postpone, since its `when` is its end, and the menu shows no headings then. For agents, Postpone is `calendar move`, More time is `calendar set <note> --until <value>`. *(Claude's call, accepted by the maintainer 2026-11-13: one rule, intuitive in every case he tried.)* Why: someone who didn't get to something moves it on honestly in two taps instead of facing a growing pile (anti-goal: stress). On a board card **Later** (Postpone only: a card has no `until`) sets the card's `due` through the board's code; a card's `due` is a day, so there is no time to keep *(Claude's call: rescheduling doesn't touch the column, so it is no second truth)*.
 
 ## 9. Tests
 
@@ -286,4 +288,4 @@ README (the calendar, the fields, the time-zone setting), `calendar`'s help and 
 
 The maintainer asked for a read of this spec through the eyes of a user who expects Kumbu² to be human-centric, not process-centric. Seven findings, decided one by one and folded in above: the time in the day's + (§7.5), closing at once with the reason as the user's own memory and `closed` as its date (§2.1, §7.8), **Later** (§7.13), one word for one thing ("To do", "Show early", §7.5, §7.8), no question about folders (§4), the inviting empty week (§7.2), and "Dates I couldn't read" (§7.12). The working notes are in the idea note's last section.
 
-A builder check followed (a fresh agent reading the spec as if planning from it). Its four questions, settled the same day: the reading cost (no index, measured), entries spanning several days in the views (once per week, plus **Also ongoing** per day, the maintainer's addition), a timed appointment without `until` (ongoing on its day until its time), and what **Later** counts from (the later of today and `when`). Every vault's menu now has **Calendar**.
+A builder check followed (a fresh agent reading the spec as if planning from it). Its four questions, settled the same day: the reading cost (no index, measured), entries spanning several days in the views (once per week, plus **Also ongoing** per day, the maintainer's addition), a timed appointment without `until` (ongoing on its day until its time), and what **Later** counts from (the later of today and `when`). Every vault's menu now has **Calendar**. The review of spec and brief before the overnighter added: **Later** on every open task, **Postpone** and **More time** for a task with a window, where the per-vault badge sits, and what `set` does on a board card.
