@@ -425,6 +425,19 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expectForgotten(queryClient));
   });
 
+  it("a discreet vault's calendar is left when hidden again", async () => {
+    const { log, queryClient, router } = await openDiary(null, {
+      "GET /api/vaults/Tagebuch/calendar": () => json(200, { vault: "Tagebuch", today: "2026-11-13", zone: "Europe/Vienna", weeks: [], couldntRead: [], canWrite: true }),
+    });
+    editorOn(log);
+    await act(() => router.navigate("/calendar/Tagebuch"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Tagebuch" })).toBeInTheDocument();
+    await hideAgain(queryClient, router.navigate, { tell: true, pathname: "/calendar/Tagebuch" });
+    await doneHiding(router);
+    expect(log).toEqual(["save", "hide"]);
+    await waitFor(() => expectForgotten(queryClient));
+  });
+
   it("ends its hiding even when a step fails", async () => {
     const { queryClient, router } = await openDiary(null);
     vi.spyOn(useConsole.getState(), "reset").mockImplementation(() => {

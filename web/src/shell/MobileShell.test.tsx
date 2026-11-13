@@ -791,8 +791,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
+    // Reading, the trash, activity, checkpoints, the calendar, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(await menuItems("Actions for soup")).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
   });

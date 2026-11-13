@@ -83,6 +83,16 @@ describe("attachments in the tree", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/gallery/Work"));
   });
 
+  it("the tree's vault menu has Calendar for every vault", async () => {
+    const router = await openDrawer();
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    // Every vault has a calendar: no folder to look for first, and before the board.
+    expect(items.indexOf("Calendar")).toBe(items.indexOf("Create board") - 1);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Calendar" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/calendar/Work"));
+  });
+
   it("renames or moves an attachment from its menu in the tree, keeping its extension", async () => {
     await openDrawer();
     await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for report.pdf" }));

@@ -61,7 +61,7 @@ afterEach(() => {
 
 describe("Discreet in the vault's menu", () => {
   // The menu as it was before the entry: outside the mode nothing tells whether a vault is discreet.
-  const before = ["New note here", "New folder…", "Upload here", "Trash", "Activity", "Checkpoints", "Create board", "Gallery", "Share…", "Rename vault…", "Connect Obsidian…", "Export as ZIP…", "Delete vault…"];
+  const before = ["New note here", "New folder…", "Upload here", "Trash", "Activity", "Checkpoints", "Calendar", "Create board", "Gallery", "Share…", "Rename vault…", "Connect Obsidian…", "Export as ZIP…", "Delete vault…"];
 
   // While hidden the server leaves discreet vaults out; a list that still names one is read again.
   it.each([

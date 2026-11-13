@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
-import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -524,6 +524,10 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(boardUrl(vault));
   };
+  const openCalendar = (vault: string) => {
+    setOverlay("none");
+    navigate(calendarUrl(vault));
+  };
   const openGallery = (vault: string) => {
     setOverlay("none");
     navigate(galleryUrl(vault));
@@ -548,6 +552,8 @@ export default function TreeDrawer(props: {
           { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
           { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+          // Every vault has a calendar, a view of its notes with a time: nothing to make first, nothing to look for.
+          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault) },
           // Made from the template at once, so no ellipsis: that would promise a dialog.
           ...(hasBoard
             ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }]

@@ -15,6 +15,12 @@ import MarkdownToolbar from "./MarkdownToolbar";
 import { cancelRename, scheduleRename } from "./nameFromHeading";
 import { useAutosave } from "./useAutosave";
 
+/** Where the line below a note's heading starts, when the note (after its frontmatter) is that heading alone; else null. */
+function belowOnlyHeading(text: string): number | null {
+  const heading = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?# [^\r\n]*\r?\n/.exec(text);
+  return heading && text.slice(heading[0].length).trim() === "" ? heading[0].length : null;
+}
+
 /**
  * Write mode (MOBILE_EDITOR §4, §7): the raw Markdown in a plain textarea (16 px, so iOS doesn't zoom), saved as
  * the user types. Nothing leaves Write mode, the note or the page while text is unsaved without saving it first;
@@ -108,6 +114,9 @@ export default function MarkdownEditor({
     area?.focus({ preventScroll: true });
     // A new note: the caret after its `# `, where the title goes (a focus by script leaves it at the start in Chrome).
     if (area?.value === "# ") area.setSelectionRange(2, 2);
+    // A note that is only its heading (a day note, an entry made on a day): the caret on the line below, to write there.
+    const below = area ? belowOnlyHeading(area.value) : null;
+    if (below !== null) area!.setSelectionRange(below, below);
   }, []);
 
   useEffect(() => {
