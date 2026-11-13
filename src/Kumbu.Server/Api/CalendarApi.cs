@@ -5,6 +5,7 @@ using Kumbu.Core.Board;
 using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sh;
 using Kumbu.Core.Tags;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
@@ -59,6 +60,30 @@ public sealed record VaultCountView(string Vault, int Count, bool Overdue);
 /// neither when it isn't an entry.</summary>
 public sealed record NoteEntryView(EntryView? Entry, CouldntReadView? CouldntRead, bool CanWrite);
 
+/// <summary>A change of a note's calendar keys (spec §6.2, §7.8): a key given is set; <c>clearUntil</c>, <c>clearUpcoming</c> and
+/// <c>clearReason</c> remove theirs, and not together with it. <c>task</c> true makes it a to-do (a closed one stays closed),
+/// false removes <c>task</c>, <c>closed</c> and <c>reason</c>. <c>when</c> can't be removed here: <c>unset</c> takes a note out.</summary>
+public sealed record SetEntryRequest(string Path, string? When = null, string? Until = null, bool ClearUntil = false, bool? Task = null,
+    string? Upcoming = null, bool ClearUpcoming = false, string? Reason = null, bool ClearReason = false);
+
+public sealed record PathRequest(string Path);
+
+public sealed record CloseRequest(string Path, string? Reason = null);
+
+/// <summary>A new <c>when</c>; a window keeps its length.</summary>
+public sealed record MoveEntryRequest(string Path, string When);
+
+/// <summary>Later (spec §7.13): <c>part</c> <c>postpone</c> or <c>moreTime</c>; <c>step</c> <c>day</c> or <c>week</c>, or a
+/// <c>date</c> (<c>2026-11-20</c>) instead.</summary>
+public sealed record LaterRequest(string Path, string Part, string? Step = null, string? Date = null);
+
+/// <summary>A day's + (spec §7.5): <c>/&lt;vault&gt;/Calendar/&lt;title&gt;.md</c> on <c>day</c> (<c>2026-11-20</c>), at
+/// <c>time</c> (<c>14:00</c>); <c>task</c> makes it a to-do, shown <c>upcoming</c> (<c>7d</c>) early.</summary>
+public sealed record NewEntryRequest(string Day, string Title, string? Time = null, bool Task = false, string? Upcoming = null);
+
+/// <summary>The note a write changed, opened or made, with its new version and its place in the calendar.</summary>
+public sealed record WrittenView(string Path, string Version, NoteEntryView Note);
+
 /// <summary>The calendar for the web app (calendar spec §7): a vault's week or month, What's on and its badge, a note's entry,
 /// the person's time zone and her last view per calendar. Notes are read on demand, through the session's store.</summary>
 public static partial class CalendarApi
@@ -78,6 +103,17 @@ public static partial class CalendarApi
         vault.MapGet("entry", EntryAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404, 503);
         vault.MapGet("view", ViewAsync).Errors(400, 401, 404, 503);
         vault.MapPut("view", SetViewAsync).Errors(400, 401, 403, 404, 409, 503);
+
+        // The same writes as sh calendar, through CalendarService with the caller's rights.
+        vault.MapPost("set", SetAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("move", MoveAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("close", CloseAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("reopen", ReopenAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("unset", UnsetAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("later", LaterAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("today", TodayAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("this-week", ThisWeekAsync).Errors(400, 401, 403, 404, 409, 503, 507);
+        vault.MapPost("entries", AddAsync).Errors(400, 401, 403, 404, 409, 503, 507);
 
         app.MapGroup("/api/calendar").AddEndpointFilter(ApiErrors.Filter)
             .MapGet("whats-on", WhatsOnAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 503);
@@ -152,22 +188,164 @@ public static partial class CalendarApi
     private static async Task<Ok<NoteEntryView>> EntryAsync(
         string vault, string path, INoteStore store, RequestCaller caller, ICallerZone callerZone, TimeProvider time, CancellationToken ct)
     {
+        var notePath = await NoteInAsync(vault, path, store, ct);
+        return TypedResults.Ok(await NoteEntryAsync(notePath, store, caller, callerZone, time, ct));
+    }
+
+    /// <summary>The note <paramref name="path"/> in the caller's vault <paramref name="vault"/>: a vault she doesn't have, or
+    /// that her session hides, is 404 before anything else; a path outside it is 400.</summary>
+    private static async Task<VaultPath> NoteInAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
         var name = root.Segments[0];
-        if (!VaultPath.TryParse(path, out var notePath) || notePath.Segments.Count < 2 || notePath.Segments[0] != name)
+        if (!VaultPath.TryParse(path ?? "", out var notePath) || notePath.Segments.Count < 2 || notePath.Segments[0] != name)
             throw ApiErrors.BadRequest($"{path} is not a note in {name}.");
         if (!notePath.IsNote) throw ApiErrors.BadRequest($"{notePath.Value} is no note: note paths end in .md.");
+        return notePath;
+    }
 
-        var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
-        // A card's status is its column, and the board's definition says which one closes it.
-        var definition = await store.GetAsync(BoardPaths.Definition(name), ct);
-        var board = definition is null ? null : BoardDefinition.Parse(definition.Content).Definition;
-        var (entry, problem) = EntryReader.Read(new Note(notePath, note.Content), board);
-
+    private static async Task<NoteEntryView> NoteEntryAsync(
+        VaultPath notePath, INoteStore store, RequestCaller caller, ICallerZone callerZone, TimeProvider time, CancellationToken ct)
+    {
+        var (entry, problem, board) = await ReadEntryAsync(notePath, store, ct);
         var zone = await callerZone.ZoneAsync(ct);
         var view = entry is null ? null : View(entry, EntryStates.Of(entry, time.GetUtcNow().UtcDateTime, zone), zone, board);
-        return TypedResults.Ok(new NoteEntryView(view, problem is null ? null : CouldntRead(problem), caller.CanWrite(name)));
+        return new NoteEntryView(view, problem is null ? null : CouldntRead(problem), caller.CanWrite(notePath.Segments[0]));
+    }
+
+    private static async Task<(Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
+        VaultPath notePath, INoteStore store, CancellationToken ct)
+    {
+        var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
+        // A card's status is its column, and the board's definition says which one closes it.
+        var definition = await store.GetAsync(BoardPaths.Definition(notePath.Segments[0]), ct);
+        var board = definition is null ? null : BoardDefinition.Parse(definition.Content).Definition;
+        var (entry, problem) = EntryReader.Read(new Note(notePath, note.Content), board);
+        return (entry, problem, board);
+    }
+
+    private static async Task<Ok<WrittenView>> SetAsync(
+        string vault, SetEntryRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        var change = new CalendarChange(
+            When: body.When is null ? default : new Optional<string?>(body.When),
+            Until: Change(body.Until, body.ClearUntil, "until"),
+            Task: body.Task,
+            Upcoming: Change(body.Upcoming, body.ClearUpcoming, "upcoming"),
+            Reason: Change(body.Reason, body.ClearReason, "reason"));
+        return TypedResults.Ok(await WrittenAsync(await calendar.SetAsync(path.Value, change, ct), store, caller, zone, time, ct));
+    }
+
+    /// <summary>A key left out is "not given"; removal is asked for explicitly.</summary>
+    private static Optional<string?> Change(string? value, bool clear, string key)
+    {
+        var flag = "clear" + char.ToUpperInvariant(key[0]) + key[1..];
+        if (value is not null && clear) throw ApiErrors.BadRequest($"Give {key} or {flag}, not both.");
+        return value is not null ? new Optional<string?>(value) : clear ? new Optional<string?>(null) : default;
+    }
+
+    private static async Task<Ok<WrittenView>> MoveAsync(
+        string vault, MoveEntryRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.MoveAsync(path.Value, body.When, ct), store, caller, zone, time, ct));
+    }
+
+    private static async Task<Ok<WrittenView>> CloseAsync(
+        string vault, CloseRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.CloseAsync(path.Value, body.Reason, ct), store, caller, zone, time, ct));
+    }
+
+    private static async Task<Ok<WrittenView>> ReopenAsync(
+        string vault, PathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.ReopenAsync(path.Value, ct), store, caller, zone, time, ct));
+    }
+
+    private static async Task<Ok<WrittenView>> UnsetAsync(
+        string vault, PathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.UnsetAsync(path.Value, ct), store, caller, zone, time, ct));
+    }
+
+    /// <summary>Later, offered by the web app beside ✓ only (spec §7.13): on an open task, or a card not closed by its column.</summary>
+    private static async Task<Ok<WrittenView>> LaterAsync(
+        string vault, LaterRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var path = await NoteInAsync(vault, body.Path, store, ct);
+        var part = body.Part switch
+        {
+            "postpone" => LaterPart.Postpone,
+            "moreTime" => LaterPart.MoreTime,
+            _ => throw ApiErrors.BadRequest("Later's part is postpone or moreTime."),
+        };
+        LaterStep? step = body.Step switch
+        {
+            null => null,
+            "day" => LaterStep.Day,
+            "week" => LaterStep.Week,
+            _ => throw ApiErrors.BadRequest("Later's step is day or week."),
+        };
+        var (entry, _, _) = await ReadEntryAsync(path, store, ct);
+        if (entry is not { Task: TaskMark.Open }) throw ApiErrors.BadRequest("Later is for something still to do.");
+        return TypedResults.Ok(await WrittenAsync(await calendar.LaterAsync(path.Value, part, step, body.Date, ct), store, caller, zone, time, ct));
+    }
+
+    /// <summary>Today's day note (spec §7.5), found anywhere in the vault or made in <c>Calendar/</c>.</summary>
+    private static async Task<Ok<WrittenView>> TodayAsync(
+        string vault, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone, TimeProvider time, CancellationToken ct)
+    {
+        var name = await VaultNameAsync(vault, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.TodayAsync(name, ct), store, caller, zone, time, ct));
+    }
+
+    private static async Task<Ok<WrittenView>> ThisWeekAsync(
+        string vault, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone, TimeProvider time, CancellationToken ct)
+    {
+        var name = await VaultNameAsync(vault, store, ct);
+        return TypedResults.Ok(await WrittenAsync(await calendar.ThisWeekAsync(name, ct), store, caller, zone, time, ct));
+    }
+
+    private static async Task<Created<WrittenView>> AddAsync(
+        string vault, NewEntryRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        TimeProvider time, CancellationToken ct)
+    {
+        var name = await VaultNameAsync(vault, store, ct);
+        var written = await WrittenAsync(
+            await calendar.AddAsync(name, body.Title, body.Day, body.Time, body.Task, body.Upcoming, ct), store, caller, zone, time, ct);
+        return TypedResults.Created(ApiPaths.Url("notes", Written(written.Path)), written);
+    }
+
+    private static VaultPath Written(string path) =>
+        VaultPath.TryParse(path, out var parsed) ? parsed : throw new InvalidOperationException($"A calendar write answered with the path {path}.");
+
+    private static async Task<string> VaultNameAsync(string vault, INoteStore store, CancellationToken ct)
+    {
+        var root = ApiPaths.Parse(vault, null, note: false);
+        await NoteApi.RequireVaultAsync(store, root, ct);
+        return root.Segments[0];
+    }
+
+    /// <summary>A write's answer as the board's (<see cref="BoardApi.Check"/>), else the note as it is now.</summary>
+    private static async Task<WrittenView> WrittenAsync(
+        ShellResult result, INoteStore store, RequestCaller caller, ICallerZone zone, TimeProvider time, CancellationToken ct)
+    {
+        BoardApi.Check(result, "calendar");
+        var version = result.Version ?? throw new InvalidOperationException("A calendar write answered without the note's version.");
+        var path = Written(version.Path);
+        return new WrittenView(path.Value, version.Token, await NoteEntryAsync(path, store, caller, zone, time, ct));
     }
 
     private static EntryView View(Entry entry, EntryStatus status, TimeZoneInfo zone, BoardDefinition? board)
@@ -198,10 +376,11 @@ public static partial class CalendarApi
     // Kumbu² writes no offset: a time given with one is shown as the local time it is, in the note's tz, else the caller's zone.
     private static string Written(CalendarTime value, Entry entry, TimeZoneInfo zone) => value.Local(entry.Zone ?? zone).Write();
 
-    /// <summary>"Move to Done" (spec §7.8): only when the board has exactly one archivable column, and the card is elsewhere.</summary>
+    /// <summary>"Move to Done" (spec §7.8): only when the board has exactly one archivable column, and the card isn't closed
+    /// (in it, or in a reason column).</summary>
     private static string? BoardAction(Entry entry, BoardDefinition? board)
     {
-        if (entry.Kind != EntryKind.Card || board is null) return null;
+        if (entry.Kind != EntryKind.Card || entry.Task == TaskMark.Closed || board is null) return null;
         return board.Columns.Where(c => c.Archivable).ToList() is [var only] && only.Name != entry.Column ? only.Name : null;
     }
 

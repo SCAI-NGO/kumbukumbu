@@ -95,6 +95,42 @@ public sealed class CalendarDiscreetTests(KumbuAppFactory app) : IAsyncDisposabl
     }
 
     [Fact]
+    public async Task Every_write_on_a_hidden_vault_is_the_unknown_vaults_404()
+    {
+        var w = await WorldAsync(hiddenEntries: true);
+        await w.HideAsync();
+
+        var writes = new (string Action, Func<string, object?>? Body)[]
+        {
+            ("set", v => new { path = $"/{v}/Frist.md", when = "2037-11-20" }),
+            ("move", v => new { path = $"/{v}/Frist.md", when = "2037-11-20" }),
+            ("close", v => new { path = $"/{v}/Frist.md" }),
+            ("close", v => new { path = $"/{v}/Nothing.md", reason = "gone" }),
+            ("reopen", v => new { path = $"/{v}/Frist.md" }),
+            ("unset", v => new { path = $"/{v}/Frist.md" }),
+            ("later", v => new { path = $"/{v}/Frist.md", part = "postpone", step = "day" }),
+            ("later", v => new { path = $"/{v}/Frist.md", part = "sideways" }),
+            ("today", null),
+            ("this-week", null),
+            ("entries", _ => new { day = "2037-11-12", title = "Neu" }),
+            ("entries", _ => new { day = "never", title = "" }),
+        };
+        foreach (var vault in new[] { "Tagebuch", "Familie" })
+        {
+            foreach (var (action, body) in writes) await w.AsNowhereAsync(vault, HttpMethod.Post, $"/api/vaults/{{v}}/calendar/{action}", body);
+        }
+
+        // Asked from a vault it shows, a hidden vault's note is no more than a path elsewhere.
+        await w.AsNowhereAsync("Tagebuch", HttpMethod.Post, "/api/vaults/Work/calendar/close", v => new { path = $"/{v}/Frist.md" });
+
+        var tagebuch = w.In("Tagebuch");
+        await w.RevealAsync();
+        Assert.Equal("---\nwhen: 2037-11-02\ntask: open\n---\n#privat\n", (await tagebuch.ReadAsync("Frist.md"))["content"]!.GetValue<string>());
+        using var closed = await w.Alice.SendAsync(HttpMethod.Post, "/api/vaults/Tagebuch/calendar/close", new { path = "/Tagebuch/Frist.md" });
+        Assert.Equal(HttpStatusCode.OK, closed.StatusCode);
+    }
+
+    [Fact]
     public async Task A_hidden_vaults_calendar_and_entry_are_404_as_an_unknown_vault()
     {
         var w = await WorldAsync(hiddenEntries: true);

@@ -199,6 +199,13 @@ builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
 builder.Services.AddScoped<ISkillUpdates, RecordedSkillUpdates>();
 // The shell takes it through ActivatorUtilities: sh calendar's today is the caller's.
 builder.Services.AddScoped<ICallerZone, AccountCallerZone>();
+// The calendar's writes for the REST API; the shell makes its own. Today is the writer's clock, in the caller's zone.
+builder.Services.AddScoped(sp =>
+{
+    var writer = sp.GetRequiredService<NoteWriter>();
+    return new CalendarService(
+        sp.GetRequiredService<INoteStore>(), writer, sp.GetRequiredService<BoardService>(), () => writer.Now, sp.GetRequiredService<ICallerZone>());
+});
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.

@@ -149,8 +149,9 @@ public static class BoardApi
         throw ApiErrors.BadRequest($"due '{text}' is not a date; write it as YYYY-MM-DD.");
     }
 
-    /// <summary>A failed write becomes its status by the result's kind, with the sentence minus the tool's prefix.</summary>
-    private static void Check(ShellResult result)
+    /// <summary>A failed write becomes its status by the result's kind, with the sentence minus the tool's prefix
+    /// (<paramref name="tool"/>: the calendar's writes answer as theirs).</summary>
+    internal static void Check(ShellResult result, string tool = "board")
     {
         if (!result.IsError) return;
         var status = result.Kind switch
@@ -161,7 +162,7 @@ public static class BoardApi
             _ => StatusCodes.Status400BadRequest,
         };
         if (status == StatusCodes.Status409Conflict) KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
-        const string prefix = "board: ";
+        var prefix = tool + ": ";
         throw new ApiException(status, result.Output.StartsWith(prefix, StringComparison.Ordinal) ? result.Output[prefix.Length..] : result.Output, code: result.Code);
     }
 }

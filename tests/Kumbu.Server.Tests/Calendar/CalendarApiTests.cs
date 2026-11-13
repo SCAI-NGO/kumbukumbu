@@ -290,6 +290,19 @@ public sealed class CalendarApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_card_closed_in_a_reason_column_offers_no_move()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Board/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Doing\n  - Done: [archivable]\n  - Dropped: [reason]\n---\n# Roadmap\n");
+        await alice.CreateAsync("Board/Idea.md", "---\ncolumn: Dropped\nrank: a1\ndue: 2037-11-20\nreason: too early\n---\n");
+
+        var idea = await GetOkAsync(alice, Entry("Work", "/Work/Board/Idea.md"));
+
+        Assert.Equal(("Dropped", "closed"), (S(idea["entry"], "column"), S(idea["entry"], "task")));
+        Assert.Null(idea["entry"]!["boardAction"]);
+    }
+
+    [Fact]
     public async Task A_shared_vault_shows_its_entries_to_every_member_in_their_own_zone()
     {
         // 15:00 UTC: 16:00 in Vienna, 10:00 in New York.
