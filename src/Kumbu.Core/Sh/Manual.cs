@@ -20,7 +20,7 @@ public static class Manual
           backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
-          calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on
+          calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
@@ -46,6 +46,7 @@ public static class Manual
 
         Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
+        Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day (2026-11-12.md); calendar set, move, close, reopen and unset change only those keys and leave a version. On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
         Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes only there, not PDFs.

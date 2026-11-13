@@ -64,6 +64,10 @@ public sealed class Shell
         {
             _commands[command.Name] = command;
         }
+
+        // calendar reads and writes under one name; the reader in ReadingCommands stays for checkpoints. Replacing it keeps its place in help.
+        var board = new Board.BoardService(notes, writer, mover, mover.Time, writer.Caller);
+        _commands["calendar"] = new CalendarCommand(notes, _now, _zone, new CalendarService(notes, writer, board, _now, _zone));
     }
 
     /// <summary>Adds a command after the built-in ones; for tests of what the shell does with a kind of command.</summary>

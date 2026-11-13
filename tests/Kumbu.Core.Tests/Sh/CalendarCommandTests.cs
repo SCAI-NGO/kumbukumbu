@@ -330,13 +330,76 @@ public class CalendarCommandTests
     }
 
     [Fact]
-    public async Task The_write_forms_are_not_here_yet()
+    public async Task Set_close_and_reopen_from_sh_report_the_version()
+    {
+        var (shell, store, _) = Make(("/Work/Pump/Certificate.md", "Text\n"));
+
+        var set = await Run(shell, "calendar set /Work/Pump/Certificate.md --when 2026-11-20 --task --upcoming 14d");
+        Assert.Equal("calendar: set when 2026-11-20, task open, upcoming 14d on /Work/Pump/Certificate.md", set.Output);
+        Assert.Equal("---\nwhen: 2026-11-20\ntask: open\nupcoming: 14d\n---\nText\n", await store.ReadAsync(P("/Work/Pump/Certificate.md"), CancellationToken.None));
+        Assert.Equal("/Work/Pump/Certificate.md", set.Version?.Path);
+
+        var close = await Run(shell, "calendar close /Work/Pump/Certificate.md --reason \"renewed until 2027\"");
+        Assert.Equal("calendar: closed /Work/Pump/Certificate.md (12 Nov)", close.Output);
+        var content = await store.ReadAsync(P("/Work/Pump/Certificate.md"), CancellationToken.None);
+        Assert.Equal("---\nwhen: 2026-11-20\ntask: closed\nupcoming: 14d\nclosed: 2026-11-12\nreason: renewed until 2027\n---\nText\n", content);
+        Assert.Equal(new NoteVersion("/Work/Pump/Certificate.md", VersionToken.Of(content!)), close.Version);
+
+        var reopen = await Run(shell, "calendar reopen /Work/Pump/Certificate.md");
+        Assert.Equal("calendar: reopened /Work/Pump/Certificate.md", reopen.Output);
+        Assert.NotNull(reopen.Version);
+
+        Assert.Equal("calendar: moved /Work/Pump/Certificate.md to 27 Nov", (await Run(shell, "calendar move /Work/Pump/Certificate.md 2026-11-27")).Output);
+        Assert.False((await Run(shell, "calendar set /Work/Pump/Certificate.md --until 2026-11-30")).IsError);
+        Assert.False((await Run(shell, "calendar set /Work/Pump/Certificate.md --no-until --no-task --tz Europe/London")).IsError);
+        Assert.Equal("---\nwhen: 2026-11-27\nupcoming: 14d\ntz: Europe/London\n---\nText\n", await store.ReadAsync(P("/Work/Pump/Certificate.md"), CancellationToken.None));
+        Assert.Equal("calendar: took /Work/Pump/Certificate.md out of the calendar; the note stays", (await Run(shell, "calendar unset /Work/Pump/Certificate.md")).Output);
+        Assert.Equal("Text\n", await store.ReadAsync(P("/Work/Pump/Certificate.md"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_write_from_sh_names_the_board_tool_on_a_card()
+    {
+        var (shell, _, _) = Make(
+            ("/Work/Board/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Doing\n  - Done: [archivable]\n---\n"),
+            ("/Work/Board/X.md", "---\ncolumn: Doing\ndue: 2026-11-20\n---\n"));
+
+        Assert.Equal(ShellResult.Error("calendar: /Work/Board/X.md is a card; on a card the column is the status: move it with the board tool")
+            with { Kind = ShellErrorKind.Invalid }, await Run(shell, "calendar close /Work/Board/X.md"));
+    }
+
+    [Theory]
+    [InlineData("calendar close", "calendar: close needs a note, e.g. calendar close /Work/Plan.md")]
+    [InlineData("calendar move /Work/x.md", "calendar: move needs a note and its new when, e.g. calendar move /Work/Plan.md 2026-11-20")]
+    [InlineData("calendar close /Work/x.md /Work/y.md", "calendar: too many arguments (quote paths and sections that contain spaces: cat \"/Work/My Note.md#Next steps\")")]
+    [InlineData("calendar set /Work/x.md", "calendar: set needs at least one of --when, --until, --no-until, --task, --no-task, --upcoming, --tz, --reason")]
+    [InlineData("calendar set /Work/x.md --task --no-task", "calendar: --task and --no-task can't go together; give one")]
+    [InlineData("calendar set /Work/x.md --until 2026-11-20 --no-until", "calendar: --until and --no-until can't go together; give one")]
+    [InlineData("calendar reopen /Work/x.md --reason r", "calendar: unrecognized option '--reason'")]
+    [InlineData("calendar close Work/x.md", "calendar: Work/x.md: paths must be absolute (there is no working directory)")]
+    [InlineData("calendar close /Work", "calendar: close takes a note, e.g. calendar close /Work/Plan.md")]
+    [InlineData("calendar close /Work/nope.md", "calendar: /Work/nope.md: No such note")]
+    [InlineData("calendar done /Work/x.md", "calendar: done is not a form of calendar: calendar <vault>, calendar notifications, or set, move, close, reopen, unset (help calendar)")]
+    public async Task Unknown_verb_or_missing_note_says_how(string line, string error)
+    {
+        var (shell, _, _) = Make(("/Work/x.md", "---\nwhen: 2026-11-20\ntask: open\n---\n"));
+
+        var result = await Run(shell, line);
+
+        Assert.True(result.IsError);
+        Assert.Equal(error, result.Output);
+    }
+
+    [Fact]
+    public async Task Help_lists_calendar_once()
     {
         var (shell, _, _) = Make(Week46);
+        var help = (await Run(shell, "help")).Output;
 
-        Assert.Equal(ShellResult.Error("calendar: close is not available in this shell; calendar <vault> and calendar notifications read the calendar"),
-            await Run(shell, "calendar close /Work/x.md"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(help, @"\n  calendar "));
     }
+
+    private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
 
     [Fact]
     public async Task Help_names_every_form()

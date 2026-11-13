@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Kumbu.Core.Board;
 using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -10,12 +11,21 @@ namespace Kumbu.Core.Sh.Commands;
 
 /// <summary>
 /// <c>calendar</c> for agents (spec §6): a vault's week or month, and what's on over every vault the caller can read, in the
-/// caller's zone. Reads only; the write forms are recognised, so that a checkpoint can refuse them by name.
+/// caller's zone; with a <paramref name="service"/>, also the write forms (spec §6.2). Without one (a checkpoint's reader) the
+/// write forms are still recognised, so that a checkpoint can refuse them by name.
 /// </summary>
-public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> now, ICallerZone zone) : ICommand
+public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> now, ICallerZone zone, CalendarService? service = null) : ICommand
 {
     private static readonly Option[] ReadSpec = [new(null, "week", TakesValue: true), new(null, "month", TakesValue: true), new(null, "tag", TakesValue: true)];
     private static readonly Option[] NotificationsSpec = [new(null, "tag", TakesValue: true)];
+
+    private static readonly Option[] SetSpec =
+    [
+        new(null, "when", TakesValue: true), new(null, "until", TakesValue: true), new(null, "no-until"), new(null, "task"), new(null, "no-task"),
+        new(null, "upcoming", TakesValue: true), new(null, "tz", TakesValue: true), new(null, "reason", TakesValue: true),
+    ];
+
+    private static readonly Option[] CloseSpec = [new(null, "reason", TakesValue: true)];
 
     private static readonly string[] WriteVerbs = ["set", "move", "close", "reopen", "unset"];
 
@@ -27,7 +37,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     public string Usage => "calendar <vault> [--week W | --month M] [--tag T] | calendar notifications";
 
-    public string Summary => "the notes with a time: a vault's week or month; notifications: what's on in every vault";
+    public string Summary => "the notes with a time: a vault's week or month; notifications: what's on in every vault; set, move, close, reopen, unset change one";
 
     public string Help => """
         calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11] [--tag <tag>]
@@ -57,7 +67,12 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
           set makes a note an entry or changes it; move gives it a new 'when' (a window keeps its
           length); close marks a to-do done (today, with a reason if given) and reopen undoes it;
           unset takes a note out of the calendar, the note stays. Each write leaves a version.
-          On a board card the column is the status: move it with the board tool.
+          set sets each key it is given: --task makes a note a to-do (task: open), --no-task
+          removes task, closed and reason, --no-until (or --until "") removes until, --reason
+          adds or changes the reason of a closed to-do. Values are checked and written in
+          Kumbu²'s form; every other line of the note stays as it is. A note is given by its path.
+          On a board card the column is the status: move it with the board tool; its date is its
+          due, which the board tool changes too. Only --upcoming can be set on a card.
 
           calendar /Work
           calendar /Work --week 47
@@ -65,6 +80,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
           calendar notifications
           calendar set "/Work/Pump/Certificate.md" --when 2026-12-15 --task --upcoming 14d
           calendar close "/Work/Pump/Certificate.md" --reason "renewed until 2027"
+          calendar move /Work/Urlaub.md 2026-12-21
         """;
 
     public bool ReadsInput => false;
@@ -93,7 +109,9 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         if (CommandArgs.RefuseVersion(Name, args, "a calendar is read as it is now, or from a checkpoint") is { } versionError) return versionError;
         if (WriteVerb(args) is { } verb)
         {
-            return ShellResult.Error($"calendar: {verb} is not available in this shell; calendar <vault> and calendar notifications read the calendar");
+            return service is null
+                ? ShellResult.Error($"calendar: {verb} is not available in this shell; calendar <vault> and calendar notifications read the calendar")
+                : await WriteAsync(service, verb, args, ct);
         }
 
         return FirstWord(args) == Notifications ? await NotificationsAsync(args, ct) : await ReadAsync(args, ct);
@@ -103,6 +121,11 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
     {
         if (!Options.TryParse(Name, args, ReadSpec, out var options, out var error)) return error;
         if (options.Operands.Count == 0) return ShellResult.Error("calendar: missing operand (calendar <vault>, or calendar notifications)");
+        if (options.Operands.Count > 1 && !options.Operands[0].StartsWith('/'))
+        {
+            return ShellResult.Error($"calendar: {options.Operands[0]} is not a form of calendar: calendar <vault>, calendar notifications, or set, move, close, reopen, unset (help calendar)");
+        }
+
         if (options.Operands.Count > 1) return ShellResult.Error($"calendar: too many arguments{CommandArgs.QuoteHint}");
         var (vault, vaultError) = await VaultAsync(options.Operands[0], "calendar /Work", ct);
         if (vault is null) return vaultError!;
@@ -177,6 +200,52 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         }
 
         return ShellResult.Ok(string.Join('\n', lines));
+    }
+
+    private async Task<ShellResult> WriteAsync(CalendarService calendar, string verb, IReadOnlyList<string> args, CancellationToken ct)
+    {
+        var spec = verb switch { "set" => SetSpec, "close" => CloseSpec, _ => [] };
+        if (!Options.TryParse(Name, args, spec, out var options, out var error)) return error;
+        var operands = options.Operands.Skip(1).ToList();
+        var count = verb == "move" ? 2 : 1;
+        if (operands.Count < count)
+        {
+            return ShellResult.Error(verb == "move"
+                ? "calendar: move needs a note and its new when, e.g. calendar move /Work/Plan.md 2026-11-20"
+                : $"calendar: {verb} needs a note, e.g. calendar {verb} /Work/Plan.md");
+        }
+
+        if (operands.Count > count) return ShellResult.Error($"calendar: too many arguments{CommandArgs.QuoteHint}");
+        if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
+        if (path.Segments.Count < 2 || !path.IsNote) return ShellResult.Error($"calendar: {verb} takes a note, e.g. calendar {verb} /Work/Plan.md");
+
+        switch (verb)
+        {
+            case "move":
+                return await calendar.MoveAsync(path.Value, operands[1], ct);
+            case "close":
+                return await calendar.CloseAsync(path.Value, options.Value("reason"), ct);
+            case "reopen":
+                return await calendar.ReopenAsync(path.Value, ct);
+            case "unset":
+                return await calendar.UnsetAsync(path.Value, ct);
+        }
+
+        if (options.Has("task") && options.Has("no-task")) return ShellResult.Error("calendar: --task and --no-task can't go together; give one");
+        if (options.Has("until") && options.Has("no-until")) return ShellResult.Error("calendar: --until and --no-until can't go together; give one");
+        if (!new[] { "when", "until", "no-until", "task", "no-task", "upcoming", "tz", "reason" }.Any(options.Has))
+            return ShellResult.Error("calendar: set needs at least one of --when, --until, --no-until, --task, --no-task, --upcoming, --tz, --reason");
+
+        var change = new CalendarChange(
+            When: Given(options, "when"),
+            Until: options.Has("no-until") ? new Optional<string?>(null) : Given(options, "until"),
+            Task: options.Has("task") ? true : options.Has("no-task") ? false : null,
+            Upcoming: Given(options, "upcoming"),
+            Tz: Given(options, "tz"),
+            Reason: Given(options, "reason"));
+        return await calendar.SetAsync(path.Value, change, ct);
+
+        static Optional<string?> Given(Options options, string name) => options.Has(name) ? new Optional<string?>(options.Value(name)) : default;
     }
 
     private async Task<ShellResult> NotificationsAsync(IReadOnlyList<string> args, CancellationToken ct)

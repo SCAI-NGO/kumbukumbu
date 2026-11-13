@@ -155,6 +155,11 @@ public static partial class EntryReader
             && when.Kind is TimeKind.Day or TimeKind.Week;
     }
 
+    /// <summary>Whether a note is a board card by its place and its <c>column</c>, whether or not its board can be read: the
+    /// calendar never writes a card's status or date (spec §2.5).</summary>
+    internal static bool IsCard(VaultPath path, IReadOnlyDictionary<string, object?> values) =>
+        IsCardPlace(path) && values.GetValueOrDefault("column") is string { Length: > 0 };
+
     // The board decides by place (spec §4): directly in /<vault>/Board/, not Board.md itself.
     private static bool IsCardPlace(VaultPath path) =>
         path.Segments.Count == 3 && BoardPaths.Folder(path.Segments[0]).Child(path.Name) == path && path != BoardPaths.Definition(path.Segments[0]);
