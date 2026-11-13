@@ -169,6 +169,22 @@ describe("the calendar's week", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Done: Certificate" }));
     await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([{ path: "/Work/Certificate.md" }]));
+    // The same short message as the note's header.
+    expect(await screen.findByRole("status", { name: "Closed" })).toHaveTextContent("Closed · Undo · Add a reason");
+  });
+
+  it("Later in the week moves a to-do on", async () => {
+    const fetch = api(calendar({ "2026-11-11": [certificate] }), {
+      "POST /api/vaults/Work/calendar/later": () => json(200, written("/Work/Certificate.md")),
+    });
+    renderApp("/calendar/Work");
+    await title();
+    await userEvent.click(screen.getByRole("button", { name: "Later: Certificate" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["+1 day", "+1 week", "Pick a date…"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "+1 day" }));
+    await waitFor(async () =>
+      expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/later")).toEqual([{ path: "/Work/Certificate.md", part: "postpone", step: "day" }]),
+    );
   });
 
   it("overdue is said calmly with an icon and the word", async () => {

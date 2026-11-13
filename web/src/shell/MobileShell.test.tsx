@@ -813,7 +813,7 @@ describe("vaults shared with the user", () => {
     await openDrawer();
     await within(drawer()).findByRole("button", { name: "Board" });
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
-    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
+    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
     expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
     expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
@@ -1051,5 +1051,79 @@ describe("More vaults… on a phone", () => {
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
     // Settings is outside the shell, which unmounts: the drawer is closed in the store, not only out of sight.
     expect(useEditor.getState().overlay).toBe("none");
+  });
+});
+
+describe("the calendar in the note's menus", () => {
+  const entryOf = (path: string, extra: Record<string, unknown> = {}) => ({
+    path, vault: "Work", title: path.split("/").at(-1)!.replace(/\.md$/, ""), kind: "dated", when: "2026-11-20", until: null, task: "none", closed: null, reason: null,
+    upcoming: null, tz: null, byName: false, column: null, state: "upcoming", span: "in 7 days", time: null, firstDay: "2026-11-20", lastDay: "2026-11-20",
+    spans: false, boardAction: null, ...extra,
+  });
+  /** The calendar knows inbox as given 20 November, every other note as given no day. */
+  const calendarApi = (extra: Parameters<typeof fakeApi>[0] = {}, level = "owner") =>
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", canWrite: level !== "read", level, ...(level === "owner" ? {} : { owner: '"Alice"', shared: true, membership: "m1" }) }]),
+      "GET /api/vaults/Work/calendar/entry": (r) => {
+        const path = new URL(r.url).searchParams.get("path")!;
+        return json(200, { entry: path === "/Work/inbox.md" ? entryOf(path) : null, couldntRead: null, canWrite: level !== "read" });
+      },
+      ...extra,
+    });
+  const dockItems = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await userEvent.keyboard("{Escape}");
+    return items;
+  };
+  const treeItems = async (label: string) => {
+    await userEvent.click(within(drawer()).getByRole("button", { name: label }));
+    await waitFor(() => expect(screen.getAllByRole("menuitem").every((i) => !i.hasAttribute("disabled"))).toBe(true));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await userEvent.keyboard("{Escape}");
+    return items;
+  };
+  const entryAsks = (fetch: ReturnType<typeof fakeApi>) =>
+    fetch.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname === "/api/vaults/Work/calendar/entry").map((u) => u.searchParams.get("path"));
+
+  it("Add to calendar is in the note menu only with write access", async () => {
+    const fetch = calendarApi();
+    renderApp("/notes/Work/readme.md");
+    await waitFor(() => expect(entryAsks(fetch)).toEqual(["/Work/readme.md"]));
+    expect(await dockItems()).toContain("Add to calendar…");
+
+    await openDrawer();
+    // The tree asks about a note only once its menu opens.
+    expect(entryAsks(fetch)).toEqual(["/Work/readme.md"]);
+    const inbox = await treeItems("Actions for inbox");
+    expect(inbox).toEqual(expect.arrayContaining(["Edit date…", "Remove from calendar"]));
+    expect(inbox).not.toContain("Add to calendar…");
+    expect(entryAsks(fetch)).toEqual(["/Work/readme.md", "/Work/inbox.md"]);
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for readme" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to calendar…" }));
+    expect(await screen.findByRole("dialog", { name: "Add to calendar" })).toBeInTheDocument();
+    cleanup();
+    useEditor.getState().reset();
+
+    const reading = calendarApi({}, "read");
+    renderApp("/notes/Work/inbox.md");
+    expect(await screen.findByRole("group", { name: "In the calendar" })).toHaveTextContent("Fri 20 Nov");
+    expect((await dockItems()).filter((i) => /calendar|date/i.test(i ?? ""))).toEqual([]);
+    await openDrawer();
+    expect((await treeItems("Actions for readme")).filter((i) => /calendar|date/i.test(i ?? ""))).toEqual([]);
+    expect(entryAsks(reading)).toEqual(["/Work/inbox.md"]);
+  });
+
+  it("Remove from calendar takes the note out at once and says so", async () => {
+    const fetch = calendarApi({
+      "POST /api/vaults/Work/calendar/unset": () => json(200, { path: "/Work/inbox.md", version: "v2", note: { entry: null, couldntRead: null, canWrite: true } }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("group", { name: "In the calendar" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove from calendar" }));
+    expect(await screen.findByText("Removed from the calendar.")).toBeInTheDocument();
+    const unset = fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/vaults/Work/calendar/unset");
+    expect(await Promise.all(unset.map((r) => r.clone().json()))).toEqual([{ path: "/Work/inbox.md" }]);
   });
 });

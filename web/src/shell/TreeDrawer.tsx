@@ -37,6 +37,8 @@ import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
+import { useNoteEntry } from "../calendar/api";
+import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -210,6 +212,8 @@ function FileMenu({
   copy,
   onMove,
   onDelete,
+  onDate,
+  onRemoveDate,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -218,12 +222,17 @@ function FileMenu({
   copy(text: string): void;
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
+  onDate?: (path: string) => void;
+  onRemoveDate(path: string): void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
   const changes = mayChange(level, path);
   // Not while the note is being named from its heading: a name given by hand must not lose that race.
   const renaming = useEditor((s) => s.renaming.includes(path));
+  // Whether the note has a date is asked for once its menu opens, not for every note in the tree.
+  const [asked, setAsked] = useState(false);
+  const dated = useNoteEntry(note ? path : null, asked && changes && !!onDate);
   const items: MenuItem[] = [
     ...copyItems(path, names, note, copy),
     ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
@@ -234,9 +243,10 @@ function FileMenu({
       : note
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
+    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
   ];
   return (
-    <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
+    <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass} onOpen={() => setAsked(true)}>
       <Ellipsis size={18} aria-hidden />
     </Menu>
   );
@@ -432,8 +442,10 @@ export default function TreeDrawer(props: {
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
   onVaultSheet(sheet: VaultSheet): void;
+  /** Add to calendar… and Edit date… of a note's menu. */
+  onDate?: (path: string) => void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -473,6 +485,7 @@ export default function TreeDrawer(props: {
   const marking = useMarking(published);
   // Said here, not over the note: the drawer covers that on a phone.
   const copied = useCopied("mx-[18px] mb-2.5");
+  const removeDate = useRemoveFromCalendar(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
@@ -656,7 +669,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} />
                   </>
                 )}
               </li>

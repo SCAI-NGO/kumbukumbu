@@ -8,7 +8,9 @@ import { FormError, secondaryButtonClass } from "../components/form";
 import { useEditor } from "../state/editor";
 import { useCalendar, useCalendarAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
 import { addDays, formatWeekTitle, monthId, monthTitle, weekId, weekOf } from "./dates";
+import { useClosing } from "./ClosedToast";
 import type { EntryActions } from "./EntryItem";
+import LaterMenu from "./LaterMenu";
 import NewEntryDialog from "./NewEntryDialog";
 import WeekList, { emptyWeek } from "./WeekList";
 
@@ -79,12 +81,18 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
     navigate(calendarUrl(vault, weekId(inMonth || !shown ? weekOf(view.today) : weekOf(shown.monday))));
   };
 
+  const closing = useClosing();
+  const say = (text: string | null) => {
+    closing.setProblem(null);
+    setProblem(text);
+  };
   const actions: EntryActions | undefined = view.canWrite
     ? {
         onDone: (entry: EntryView) => {
           setProblem(null);
-          action.mutate({ kind: "close", path: entry.path }, { onError: (err) => setProblem(errorText(err)) });
+          closing.close(entry);
         },
+        renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} />,
       }
     : undefined;
   const previous = month ? `${calendarUrl(vault)}?month=${shiftMonth(month, -1)}` : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, -7))));
@@ -123,7 +131,7 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
         </div>
       </nav>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
-        {problem && <FormError>{problem}</FormError>}
+        {(problem ?? closing.problem) && <FormError>{problem ?? closing.problem}</FormError>}
         <div className="flex flex-col gap-6">
           {view.weeks.map((w) => (
             <WeekList key={w.monday} week={w} today={view.today} actions={actions} onAdd={view.canWrite ? setAdding : undefined} />
@@ -131,6 +139,7 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
         </div>
         {!month && view.weeks.every(emptyWeek) && <p className="mt-4 max-w-prose text-text-body">{view.canWrite ? EMPTY_WEEK : "Nothing this week yet."}</p>}
       </main>
+      {closing.toast}
       {adding && (
         <NewEntryDialog
           day={adding}

@@ -38,6 +38,8 @@ import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
+import { useNoteEntry } from "../calendar/api";
+import DateDialog, { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -163,6 +165,8 @@ export default function MobileShell() {
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
+  /** The note whose date the date dialog gives or changes. */
+  const [dating, setDating] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<VaultSheet | null>(null);
   // A sheet or dialog about a vault hidden again goes with it: its title and its answers name the note or the vault.
   useEffect(
@@ -294,6 +298,9 @@ export default function MobileShell() {
       ? publishingItems({ path, note: true, marks: publications?.unpublishable, mayPublish, onPublish: () => setPublishing(path), onMark: (marked) => marking.mark(path, marked) })
       : [];
 
+  // The note's header line asks the calendar about the note shown; its menu takes the same answer, asking nothing itself.
+  const dated = useNoteEntry(path, false);
+  const removeDate = useRemoveFromCalendar(copied.say);
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
@@ -311,7 +318,7 @@ export default function MobileShell() {
   const noteChanges = !!path && mayChange(noteLevel, path);
   // On a phone the tree is a drawer: the frame and the pill go around and under the top bar instead (spec §3.7).
   const framed = discreetShown && !docked;
-  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet };
+  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
@@ -375,6 +382,7 @@ export default function MobileShell() {
                             // Not while it is being named from its heading: a name given by hand must not lose that race.
                             ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
+                            ...calendarItems(path, dated, setDating, removeDate),
                           ]
                         : []),
                     ]
@@ -445,6 +453,7 @@ export default function MobileShell() {
       {deleting?.kind === "attachment" && (
         <DeleteFileDialog path={deleting.path} version={deleting.version} onDeleted={() => setDeleting(null)} onClose={() => setDeleting(null)} />
       )}
+      {dating && <DateDialog path={dating} onClose={() => setDating(null)} />}
       {folderDialog && <NewFolderDialog parent={folderDialog} onClose={() => setFolderDialog(null)} />}
       {vaultDialog && (
         <NewVaultDialog

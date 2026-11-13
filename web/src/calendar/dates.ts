@@ -77,3 +77,9 @@ export function dayLabel(day: string, entries: readonly { state: string }[]): st
   const overdue = entries.filter((e) => e.state === "overdue").length;
   return `${dayHeading(day)}, ${count}${overdue > 0 ? `, ${overdue} overdue` : ""}`;
 }
+
+/** "16 Dec"; with `long`, "16 December". */
+export function dayAndMonth(day: string, long = false): string {
+  const { month, day: date } = partsOf(day);
+  return `${date} ${long ? MONTHS[month - 1] : MONTHS[month - 1].slice(0, 3)}`;
+}
