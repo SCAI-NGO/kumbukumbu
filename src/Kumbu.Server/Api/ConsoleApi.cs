@@ -38,12 +38,14 @@ public static class ConsoleApi
     /// <summary>The commands the console runs; every other command of the shell is refused.</summary>
     internal static readonly FrozenSet<string> Allowed = FrozenSet.Create(
         StringComparer.Ordinal,
-        "ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort",
+        "ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "tags", "board", "calendar", "head", "tail", "wc", "sort",
         "history", "diff", "trash", "df", "du", "lscp", "publish", "skills", "uname", "help");
 
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>
     internal static readonly FrozenSet<string> Refused = FrozenSet.Create(StringComparer.Ordinal, "pdfimages", "restore", "mv", "archive", "mkdir", "rm", "mkcp", "rmcp");
+
+    private static readonly FrozenSet<string> CalendarWrites = FrozenSet.Create(StringComparer.Ordinal, "set", "move", "close", "reopen", "unset");
 
     public static void MapConsoleApi(this IEndpointRouteBuilder app)
     {
@@ -83,6 +85,12 @@ public static class ConsoleApi
             if (stages.FirstOrDefault(s => s[0] == "publish" && (s.Count < 2 || s[1] != "ls")) is { } publish)
             {
                 return ShellResult.Error($"{string.Join(' ', publish.Take(2))}: not in this console, which only reads");
+            }
+
+            // Of calendar, the vault's view and notifications read; set, move, close, reopen and unset write.
+            if (stages.FirstOrDefault(s => s[0] == "calendar" && s.Count > 1 && CalendarWrites.Contains(s[1])) is { } calendar)
+            {
+                return ShellResult.Error($"calendar {calendar[1]}: not in this console, which only reads");
             }
 
             // Of skills, copy writes; ls, find, cat and check read.

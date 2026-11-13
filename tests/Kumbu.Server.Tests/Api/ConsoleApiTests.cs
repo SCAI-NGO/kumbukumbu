@@ -267,6 +267,22 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     }
 
     [Theory]
+    [InlineData("calendar close /Work/plan.md", "calendar close")]
+    [InlineData("calendar set /Work/plan.md --when 2026-11-20", "calendar set")]
+    [InlineData("ls /Work | calendar unset /Work/plan.md", "calendar unset")]
+    public async Task The_console_reads_the_calendar_but_refuses_its_writes(string line, string refused)
+    {
+        var user = await WorkAsync();
+
+        var view = await ConsoleAsync(user, line);
+
+        Assert.True(IsError(view));
+        Assert.Equal($"{refused}: not in this console, which only reads", Text(view));
+        Assert.False(IsError(await ConsoleAsync(user, "calendar /Work")));
+        Assert.False(IsError(await ConsoleAsync(user, "calendar notifications")));
+    }
+
+    [Theory]
     [InlineData("skills ls", "create-skill (system)")]
     [InlineData("skills cat create-skill", "name: create-skill")]
     [InlineData("skills find \"write a skill\"", "create-skill")]
