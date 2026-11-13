@@ -1,6 +1,6 @@
 # The calendar
 
-Date: 2026-11-12, amended 2026-11-13 after a human-centric review (§11). Status: approved by the maintainer, pending the builder check.
+Date: 2026-11-12, amended 2026-11-13 after a human-centric review (§11). Status: approved by the maintainer; builder check done.
 
 The flagship of 0.5.0. Every calendar entry is a note: its time lives in the frontmatter, and the calendar is a view of the notes that have one. Search, links, tags, vaults, history, sync, WebDAV and agents work for entries without anything new to learn. Two users asked for a calendar; the maintainer made it the flagship of 0.5.0 on 2026-11-12, in place of the kill switch (now 0.6.0). Why: it brings more, isn't a fringe feature and lifts work, hobbies, thoughts and ideas directly.
 
@@ -36,14 +36,18 @@ Anti-goals, which make this a failure even if it works:
 
 ### An example from end to end
 
-Alice has the vaults `Home` and `Work`. In `Work` she taps **Create calendar** in the vault's menu: the folder `/Work/Calendar/` appears and the calendar opens in the week view, week 46, 9–15 November 2026.
+Alice has the vaults `Home` and `Work`. In `Work` she taps **Calendar** in the vault's menu: the calendar opens in the week view, week 46, 9–15 November 2026, empty, with one line inviting her to add something.
 
-- She taps **Today**: `/Work/Calendar/2026-11-12.md` is created with `# Thursday, 12 November 2026` and the cursor below it; she writes what's on today, with `#kumbu` beside one paragraph.
+- She taps **Today**: the folder `/Work/Calendar/` and `/Work/Calendar/2026-11-12.md` are created with `# Thursday, 12 November 2026` and the cursor below it; she writes what's on today, with `#kumbu` beside one paragraph.
 - She opens her note `/Work/Pump/Certificate.md`, taps ⋯ → **Add to calendar…**, picks 15 December, ticks **To do** and sets **Show early: 7 days before**. The note's frontmatter now holds `when: 2026-12-15`, `task: open`, `upcoming: 7d`; its header shows "📅 Tue 15 Dec · To do · ✓ · Later".
-- In `Home`, which has no `Calendar/` folder, she gives her note "Zahnarzt" 20 November at 14:00 from its ⋯ menu; nothing asks about folders, the note stays where it is, and `Home`'s menu now says **Calendar**.
+- In `Home`, which has no `Calendar/` folder, she gives her note "Zahnarzt" 20 November at 14:00 from its ⋯ menu; nothing asks about folders and the note stays where it is.
 - On 8 December the badge on the calendar in the navigation shows 1. "What's on" lists "Certificate · upcoming · in 7 days". On 16 December it says "Certificate · overdue · 1 day", calmly. She renews the certificate and taps ✓; the message "Closed · Undo · Add a reason" appears, she taps **Add a reason** and writes "renewed until 2027"; the frontmatter gets `task: closed`, `closed: 2026-12-16` and `reason: renewed until 2027`, the entry leaves "What's on", and a week later the note's header still says "Closed 16 Dec · renewed until 2027".
 - Her agent, at the start of a session, runs `sh calendar notifications` and tells her what's on. On Friday it runs `calendar /Work --week 46 --tag kumbu`, reads the notes it lists with `cat`, and writes her weekly report.
 - The month view of `Work` shows November as a stack of weeks, empty days left out; **Show grid** adds a small month grid with the weekend darkened, in which 12 and 15 are marked.
+
+### Reading cost
+
+*Maintainer, 2026-11-13.* The calendar, What's on and the badge read the notes of the vaults they cover on demand, as `rg` and `tags` do: **no persistent index, no stored copy of entries**, so encryption at rest is untouched. Requests are cheap to repeat (a note's version can short-cut re-parsing within a request), and the plan measures it: a vault of 5000 notes should answer What's on in about a second. If it doesn't, the builder reports it rather than adding an index.
 
 ### Security boundary
 
@@ -93,7 +97,8 @@ tz: Europe/Vienna           # optional: the zone of the times above
 
 - An entry's **end** is `until`, else `when`; a day ends at the end of that day, a week at the end of its Sunday, a time at that time.
 - Without `upcoming`, an entry starts to matter at `when`.
-- A task with only a time (`when: …T14:00`, no `until`) is ongoing for no time: upcoming, then overdue.
+- An appointment with only a time (`when: …T14:00`, no `until`, the common "Zahnarzt 14:00") is ongoing from the start of its day until that time, then nothing *(Claude's call, accepted by the maintainer 2026-11-13: it shows in What's on and the badge on its day)*.
+- A task with only a time is ongoing from the start of its day until that time, then overdue.
 - **"What's on" holds upcoming, ongoing and overdue, ever; never what isn't relevant yet, never what is done or merely past.** *Maintainer, explicitly.*
 - An appointment over a window counts as ongoing all along (a holiday of two weeks is two weeks in "What's on" and the badge). *Maintainer:* a deliberate expression of being campy, one rule, no exceptions.
 
@@ -126,7 +131,7 @@ A value the calendar can't read (`when: tomorrow`, `task: maybe`, `until` before
 *Maintainer, 2026-11-12, after the domain collision with the board: "das Board ist ein Ort, der Kalender ist eine Sicht"; he had reached the same resolution on a walk.*
 
 - The board decides by location (every note directly in `/<vault>/Board/` must be a card, flat, or it is a problem); the calendar decides by property. A shared folder would soften the board's problem detection, so they stay apart.
-- **A vault has a calendar when it has the folder `/<vault>/Calendar/` or at least one entry.** No `Calendar.md`, no definition file. *Maintainer, 2026-11-13:* nobody should have to learn "folder = calendar"; a vault with dates has a calendar. The folder appears quietly the first time something needs a home there (**Today**, **This week**, a day's +); **Create calendar** in the web app only exists for a vault with neither, and only creates the folder.
+- **Every vault has a calendar.** No `Calendar.md`, no definition file, no "Create calendar". *Maintainer, 2026-11-13:* nobody should have to learn "folder = calendar"; the calendar is a view, so every vault has one, and an empty one invites (§7.2). This also spares the tree a scan of every vault to decide what its menu says. The folder `/<vault>/Calendar/` appears quietly the first time something needs a home there (**Today**, **This week**, a day's +).
 - `Calendar/` is the home of the additional layer: day and week notes, and the entries made by tapping a day (§7.5). Sub-folders are fine (`Calendar/Week 2026-46/2026-11-12.md`): day notes are found by name, not by place, so no naming pattern is needed.
 - **The calendar view of a vault shows every entry of the vault**, wherever its note lives, board cards included. New entries made in the calendar land in `Calendar/`; a note given a day stays where it is. *Maintainer:* letting people organise and work with their notes their own way is a virtue (campy), not a mess the calendar should tidy. Notes in `_archive/` are left out, as `backlinks` leaves them out.
 - **"What's on", the badge and `calendar notifications` cover every vault the caller can read, with or without `Calendar/`.** Time is a property; nothing that is on gets lost.
@@ -148,7 +153,7 @@ calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11] [--tag <tag>]
 calendar notifications [--tag <tag>]
 ```
 
-- `calendar /Work` prints the current week of the caller's zone: each day with its entries (time, title, path, kind, state), week entries at the top, then problems. `--week 46` is week 46 of the current ISO year. `--month` prints the month as its weeks (§7.4).
+- `calendar /Work` prints the current week of the caller's zone: week entries and entries spanning several days at the top (with their span), then each day with its entries (time, title, path, kind, state), then problems. `--week 46` is week 46 of the current ISO year. `--month` prints the month as its weeks (§7.4).
 - A vault without `Calendar/` answers like any other (§4).
 - `--tag` as in `board` and `rg` (nested tags, with or without `#`, ignoring case; frontmatter and inline tags, `TagReader`): whole notes, not lines. For a weekly report the agent reads the listed notes with `cat` (or combines with `rg --tag`). *Maintainer:* no `--lines` option.
 - `calendar` is a reader: it runs on a checkpoint as the others in `Shell.Readers` do.
@@ -177,13 +182,14 @@ calendar unset <note>
 
 ### 7.1 Navigation
 
-As the board's (`web/src/shell/TreeDrawer.tsx`, the board's menu entry): the vault's menu in the tree says **Calendar** when the vault has a calendar (§4), else **Create calendar** (creates the folder and opens the calendar). The calendar is a page of its own. **What's on** is in the navigation, with the badge (§7.7).
+As the board's (`web/src/shell/TreeDrawer.tsx`, the board's menu entry): every vault's menu in the tree has **Calendar** (§4). The calendar is a page of its own. **What's on** is in the navigation, with the badge (§7.7).
 
 ### 7.2 Week view (the default)
 
 - Semantically a list of the seven days, each a heading ("Thursday, 12 November") with its entries beneath; laid out as seven columns on wide screens and stacked on a phone, from one markup. A screen reader reads it as a document; heading navigation jumps from day to day.
 - At the top: "Week 46 · 9–15 November 2026", previous and next week, **Today**, **This week** (§7.5), the view switch (week, month), **Show grid** (§7.4), the tag filter (§7.10).
-- Week entries (`when: 2026-W46`, week notes) stand above the days.
+- Week entries (`when: 2026-W46`, week notes) stand above the days, and so does **every entry spanning more than one day**, once in each week it touches, with its span ("Urlaub · Mon 3 – Fri 14") *(Claude's call, accepted by the maintainer 2026-11-13: it is missing from no week and crowds no day; nothing that is on gets lost)*.
+- **Also ongoing** *(maintainer, 2026-11-13)*: each day has a collapsed line "Also ongoing (2)" that opens to the entries spanning several days that touch it, so a day shows everything on it. Collapsed by default; left out when there are none. The day heading's count (§7.11) counts the day's own entries; "Also ongoing" has its own count.
 - An entry shows its time (if any), title, state with icon and word, and a small mark for its kind. **A to-do and a note given a day are told apart at a glance** *(maintainer: memories and notes given to a day are not tasks)*: a to-do has a ✓ box and **Later**, a note given a day only its title. Tapping opens the note.
 - **An empty week invites** *(maintainer: "lädt ihn ein")*: beneath the days one calm line, "Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: \"put this on Friday\".", gone with the first entry. No tour, no pop-up.
 - Tapping a day's empty space or its **+** makes an entry on that day (§7.5).
@@ -194,7 +200,7 @@ The view (week or month) is remembered **per user and per calendar** on the serv
 
 ### 7.4 Month view and grid
 
-- **The month is a stack of weeks** *(maintainer, after "do we need a table?")*: each week a heading ("Week 46 · 9–15 Nov", the current week marked) with its entries by day; **empty days are left out**; an empty week says "nothing yet"; week entries have their natural place. Same on phone and desktop. Tapping a week heading opens that week. Example:
+- **The month is a stack of weeks** *(maintainer, after "do we need a table?")*: each week a heading ("Week 46 · 9–15 Nov", the current week marked) with its entries by day; **empty days are left out**; an empty week says "nothing yet"; week entries and entries spanning several days stand at the top of each week they touch, with their span, and an empty day holding only those stays left out. Same on phone and desktop. Tapping a week heading opens that week. Example:
 
   ```
   November 2026
@@ -266,7 +272,7 @@ The web app's name for §2.7's problems, in the calendar views and at the bottom
 
 ### 7.13 Later
 
-*Maintainer, 2026-11-13: "a function I would so often wish for from calendars".* Every open task, upcoming or overdue, has **Later** beside ✓, in What's on, the calendar views and the note's header: **Tomorrow**, **Next week**, **Pick a date…**. It is `calendar move` (§6.2): the new `when` is set, a window keeps its length, a time of day is kept. Why: someone who didn't get to something moves it on honestly in two taps instead of facing a growing pile (anti-goal: stress). On a board card **Later** sets the card's `due` through the board's code, as the only calendar write a card allows *(Claude's call: rescheduling doesn't touch the column, so it is no second truth)*.
+*Maintainer, 2026-11-13: "a function I would so often wish for from calendars".* Every open task, upcoming or overdue, has **Later** beside ✓, in What's on, the calendar views and the note's header: **+1 day**, **+1 week**, **Pick a date…**. It is `calendar move` (§6.2): the new `when` is set, a window keeps its length, a time of day is kept. **+1 day and +1 week count from the later of today and the entry's current `when`**, so Later never moves anything earlier: an overdue task goes to tomorrow or a week from today, an upcoming one a day or a week past its date. On a week entry, +1 week moves it to the next week and +1 day is not offered. *(Claude's call, accepted by the maintainer 2026-11-13: one rule, intuitive in every case he tried.)* Why: someone who didn't get to something moves it on honestly in two taps instead of facing a growing pile (anti-goal: stress). On a board card **Later** sets the card's `due` through the board's code, as the only calendar write a card allows *(Claude's call: rescheduling doesn't touch the column, so it is no second truth)*.
 
 ## 9. Tests
 
@@ -279,3 +285,5 @@ README (the calendar, the fields, the time-zone setting), `calendar`'s help and 
 ## 11. The human-centric review, 2026-11-13
 
 The maintainer asked for a read of this spec through the eyes of a user who expects Kumbu² to be human-centric, not process-centric. Seven findings, decided one by one and folded in above: the time in the day's + (§7.5), closing at once with the reason as the user's own memory and `closed` as its date (§2.1, §7.8), **Later** (§7.13), one word for one thing ("To do", "Show early", §7.5, §7.8), no question about folders (§4), the inviting empty week (§7.2), and "Dates I couldn't read" (§7.12). The working notes are in the idea note's last section.
+
+A builder check followed (a fresh agent reading the spec as if planning from it). Its four questions, settled the same day: the reading cost (no index, measured), entries spanning several days in the views (once per week, plus **Also ongoing** per day, the maintainer's addition), a timed appointment without `until` (ongoing on its day until its time), and what **Later** counts from (the later of today and `when`). Every vault's menu now has **Calendar**.
