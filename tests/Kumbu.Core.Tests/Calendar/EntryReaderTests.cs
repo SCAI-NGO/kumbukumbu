@@ -278,4 +278,13 @@ public class EntryReaderTests
         Assert.Same(EntryReader.Parsed(content), EntryReader.Parsed(content));
         Assert.NotSame(EntryReader.Parsed(content), EntryReader.Parsed(new string(content.AsSpan())));
     }
+
+    [Fact]
+    public void A_card_of_a_board_that_cannot_be_read_is_a_problem()
+    {
+        var (entry, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: 2026-11-20\n---\n", null);
+
+        Assert.Null(entry);
+        Assert.Contains("board that can't be read", problem?.What);
+    }
 }

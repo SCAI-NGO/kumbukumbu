@@ -46,6 +46,13 @@ public static partial class EntryReader
         var values = read.Values;
         if (cardPlace && values.GetValueOrDefault("column") is string { Length: > 0 } column)
             return ReadCard(path, title, values, board!, column.Trim());
+        // A card of a board that can't be read: its due would otherwise be nobody's (anti-goal 1).
+        if (board is null && IsCardPlace(path) && Given(values, "column") is not null && Given(values, "due") is { } due)
+        {
+            return (null, new CalendarProblem(path, title, $"due: {Text(due)} is on a card of a board that can't be read (Board.md); fix the board",
+                "This card's date can't be shown until its board can be read again", new Dictionary<string, string>()));
+        }
+
 
         var problems = new Problems(path, title);
         var whenValue = Given(values, "when");
