@@ -66,7 +66,7 @@ public sealed record NoteEntryView(EntryView? Entry, CouldntReadView? CouldntRea
 public sealed record SetEntryRequest(string Path, string? When = null, string? Until = null, bool ClearUntil = false, bool? Task = null,
     string? Upcoming = null, bool ClearUpcoming = false, string? Reason = null, bool ClearReason = false);
 
-public sealed record PathRequest(string Path);
+public sealed record CalendarPathRequest(string Path);
 
 public sealed record CloseRequest(string Path, string? Reason = null);
 
@@ -264,7 +264,7 @@ public static partial class CalendarApi
     }
 
     private static async Task<Ok<WrittenView>> ReopenAsync(
-        string vault, PathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        string vault, CalendarPathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
         TimeProvider time, CancellationToken ct)
     {
         var path = await NoteInAsync(vault, body.Path, store, ct);
@@ -272,7 +272,7 @@ public static partial class CalendarApi
     }
 
     private static async Task<Ok<WrittenView>> UnsetAsync(
-        string vault, PathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
+        string vault, CalendarPathRequest body, INoteStore store, CalendarService calendar, RequestCaller caller, ICallerZone zone,
         TimeProvider time, CancellationToken ct)
     {
         var path = await NoteInAsync(vault, body.Path, store, ct);
@@ -298,6 +298,8 @@ public static partial class CalendarApi
             "week" => LaterStep.Week,
             _ => throw ApiErrors.BadRequest("Later's step is day or week."),
         };
+        // The caller's rights first, as every other write: a read-only member hears 403 before anything about the entry.
+        if (((ICaller)caller).Refuse("calendar", path) is { } refused) BoardApi.Check(refused with { Kind = ShellErrorKind.Refused }, "calendar");
         var (entry, _, _) = await ReadEntryAsync(path, store, ct);
         if (entry is not { Task: TaskMark.Open }) throw ApiErrors.BadRequest("Later is for something still to do.");
         return TypedResults.Ok(await WrittenAsync(await calendar.LaterAsync(path.Value, part, step, body.Date, ct), store, caller, zone, time, ct));

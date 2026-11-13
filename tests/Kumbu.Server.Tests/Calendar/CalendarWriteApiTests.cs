@@ -132,6 +132,7 @@ public sealed class CalendarWriteApiTests(KumbuAppFactory app) : IAsyncDisposabl
         await alice.ShareWithAsync(bob, "Shared", MemberRole.Read);
         const string task = "---\nwhen: 2037-11-02\ntask: open\n---\n# Task\n";
         await alice.CreateAsync("Task.md", task);
+        await alice.CreateAsync("Meeting.md", "---\nwhen: 2037-11-02\n---\n");
 
         var writes = new (string Action, object? Body)[]
         {
@@ -141,6 +142,8 @@ public sealed class CalendarWriteApiTests(KumbuAppFactory app) : IAsyncDisposabl
             ("move", new { path = "/Shared/Task.md", when = "2037-11-20" }),
             ("unset", new { path = "/Shared/Task.md" }),
             ("later", new { path = "/Shared/Task.md", part = "postpone", step = "day" }),
+            // Refused for her rights first, before anything is said about the entry.
+            ("later", new { path = "/Shared/Meeting.md", part = "postpone", step = "day" }),
             ("today", null),
             ("this-week", null),
             ("entries", new { day = "2037-11-12", title = "Mine" }),
