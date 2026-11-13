@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "calendar", "head", "tail", "wc", "sort", "history", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
 
     // A shell without the pixels has none of these; the tool description names them all the same.
     private static readonly string[] AttachmentCommands = ["img", "pdf", "pdfimages"];
@@ -104,7 +104,7 @@ public class HelpTests
         var result = await Run("help checkpoints");
         Assert.False(result.IsError);
         Assert.StartsWith("checkpoints", result.Output);
-        Assert.Contains("ls, cat, outline, rg, links, backlinks, tags, board, head, tail, wc, sort", result.Output);
+        Assert.Contains("ls, cat, outline, rg, links, backlinks, tags, board, calendar, head, tail, wc, sort", result.Output);
     }
 
     [Fact]

@@ -20,6 +20,7 @@ public static class Manual
           backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
+          calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
