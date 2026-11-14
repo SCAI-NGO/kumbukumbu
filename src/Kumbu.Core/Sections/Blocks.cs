@@ -170,6 +170,6 @@ public static partial class Blocks
     [GeneratedRegex(@"^ {0,3}>")]
     private static partial Regex QuoteRegex();
 
-    [GeneratedRegex(@"^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$")]
+    [GeneratedRegex(@"^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$", RegexOptions.NonBacktracking)]
     private static partial Regex DelimiterRowRegex();
 }
