@@ -118,6 +118,8 @@ async function withPublished(
   try {
     for (const name of files) await seedAs(`tags/ailink/${name}`, `/Work/${folder}/${name}`);
     const link = await publishViaUi(page, testInfo, note(folder));
+    await page.getByRole("dialog", { name: "Publish this note" }).getByRole("button", { name: "Done" }).click();
+    await expect(page.getByRole("dialog", { name: "Publish this note" })).toHaveCount(0);
     await run({ link, context, anon });
   } finally {
     // Withdrawn even when the test failed (a withdrawal that was made already answers 404: no matter).

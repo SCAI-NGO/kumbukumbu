@@ -3,7 +3,7 @@
 // The page is paged and shared by every test in Work: each test narrows to its own folder with the words filter.
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { encodePath } from "../support/api";
-import { revealDiscreet, hideDiscreet } from "../support/session";
+import { endHidden, revealDiscreet, hideDiscreet } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
 
 /** Opens a note by its address; the install hint is answered with Not now, as a person would. */
@@ -46,6 +46,8 @@ const vaultChips = (page: Page) => page.getByRole("group", { name: "Vaults" });
 test("flags #14: Recent changes lists the newest first with path, who, when and flag @recent @serial @phone", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
   // The older note first, the flagged certificate after it.
   await aliceApi.putNote(`/Work/${folder}/Pump/Valve.md`, "# Valve\n\nThe pump's valve.\n");
+  // Read back before the second is written, so that the order of the two writes is settled.
+  await aliceApi.getNote(`/Work/${folder}/Pump/Valve.md`);
   await seedAs("tags/recent/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
   await openNote(page, `/Work/${folder}/Pump/Certificate.md`);
   await toRecent(page, testInfo);
@@ -96,6 +98,7 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
 
     // A flag chip: the red ones of the folder, the certificate; Green has none.
     await words(page).fill(folder);
+    // 50 is the page size (PAGE in web/src/recent/RecentPage.tsx).
     await expect(rows(page)).toHaveCount(50);
     const flags = page.getByRole("group", { name: "Find by flag" });
     await flags.getByRole("button", { name: "Red" }).click();
@@ -126,6 +129,8 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
     await rows(page).getByRole("link").click();
     await expect(page).toHaveURL(new RegExp(`/view/Work/${folder}/Pump/manual\\.pdf$`));
     await expect(page.getByRole("main", { name: "manual.pdf" })).toBeVisible();
+    // The PDF's first page is drawn into a canvas by pdf.js.
+    await expect(page.getByRole("main", { name: "manual.pdf" }).locator("canvas").first()).toBeVisible();
     await page.getByRole("main", { name: "manual.pdf" }).getByRole("button", { name: "Close" }).click();
 
     await page.goto("/recent");
@@ -135,9 +140,7 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Pump/Certificate\\.md$`));
     await expect(page.locator("article").getByRole("heading", { name: "Certificate", level: 1 })).toBeVisible();
   } finally {
-    await page.goto("/");
-    await closeDrawer(page);
-    if (await page.getByRole("button", { name: "Hide discreet vaults" }).first().isVisible()) await hideDiscreet(page);
+    await endHidden(page);
   }
 });
 
@@ -146,9 +149,10 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
   const { context, page } = await freshSession("alice");
   const note = `/Work/${folder}/Pump/Certificate.md`;
   const pill = (p: Page) => p.getByRole("group", { name: "Discreet vaults shown" });
+  // Once, without retrying: a stale Home chip shown for a moment must fail, so it is called after the page has answered.
   const homeGone = async (p: Page) => {
-    await expect(vaultChips(p).getByRole("button", { name: "Home" })).toHaveCount(0);
-    await expect(p.getByText("Zahnarzt")).toHaveCount(0);
+    expect(await vaultChips(p).getByRole("button", { name: "Home" }).count(), "no Home chip").toBe(0);
+    expect(await p.getByText("Zahnarzt").count(), "no Zahnarzt").toBe(0);
   };
   const other = await context.newPage();
   try {
@@ -165,7 +169,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await page.getByRole("link", { name: "Back to the notes" }).click();
     await closeDrawer(page);
     await hideDiscreet(page);
-    // The tree and the vault menu, then Recent changes again: nothing of Home.
+    // The tree and the vault menu (the tree's own check means something because the menu shows no Home), then Recent changes again: nothing of Home.
     const tree = await openTree(page, testInfo);
     await expect(tree.getByText("Zahnarzt")).toHaveCount(0);
     await page.getByRole("button", { name: /^Switch vault/ }).click();
@@ -173,6 +177,9 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await expect(page.getByRole("dialog", { name: /vault/i }).getByText("Home")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await toRecent(page, testInfo);
+    await expect(rows(page).first()).toBeVisible();
+    await expect(vaultChips(page).getByRole("button", { name: "Work" })).toBeVisible();
+    await homeGone(page);
     await words(page).fill("Zahnarzt");
     await expect(page.getByRole("status")).toHaveText("Nothing matches that.");
     await homeGone(page);
@@ -193,15 +200,16 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await expect(pill(other).first()).toBeVisible();
     await hideDiscreet(other);
 
+    // The filters start again on a hide (RecentPage): the words are empty once the page has learnt of it.
+    await expect(words(page)).toHaveValue("");
+    await expect(rows(page).first()).toBeVisible();
     await homeGone(page);
-    await expect(rows(page).filter({ hasText: "Zahnarzt" })).toHaveCount(0);
+    await words(page).fill("Zahnarzt");
+    await expect(page.getByRole("status")).toHaveText("Nothing matches that.");
+    await homeGone(page);
     expect(await page.evaluate(() => (window as unknown as { __mark?: number }).__mark), "no reload").toBe(1);
   } finally {
-    for (const p of [other, page]) {
-      await p.goto("/");
-      await closeDrawer(p);
-      if (await p.getByRole("button", { name: "Hide discreet vaults" }).first().isVisible()) await hideDiscreet(p);
-    }
+    await endHidden(page);
   }
 });
 
@@ -221,6 +229,8 @@ test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent 
   await words(bobPage).fill("");
   await expect(rows(bobPage).first()).toBeVisible();
   await expect(vaultChips(bobPage).getByRole("button", { name: "Work" })).toBeVisible();
+  // Bob's chips are exactly his vaults: a leaked vault of Alice's would add one. (Alice's own Welcome and Skills
+  // vaults can't be told from his by name; only Home, the discreet one, is named here.)
+  await expect(vaultChips(bobPage).getByRole("button")).toHaveText(["Skills", "Welcome", "Work"]);
   await expect(vaultChips(bobPage).getByRole("button", { name: "Home" })).toHaveCount(0);
-  await expect(rows(bobPage).filter({ hasText: /^[^·]*·\s*Home\// })).toHaveCount(0);
 });
