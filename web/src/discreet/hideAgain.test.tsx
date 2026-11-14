@@ -426,6 +426,50 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expectForgotten(queryClient));
   });
 
+  /** On a wide screen, where the tree is docked beside the note and stays mounted. */
+  async function docked(test: () => Promise<void>) {
+    const width = window.innerWidth;
+    window.innerWidth = 1280;
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+    try {
+      await test();
+    } finally {
+      window.innerWidth = width;
+    }
+  }
+
+  /** Opens the docked tree's Find by name and types `words` into it. */
+  async function findInTree(words: string) {
+    const tree = screen.getByRole("complementary", { name: "File tree" });
+    await userEvent.click(await within(tree).findByRole("button", { name: "Find in this vault" }));
+    await userEvent.type(within(tree).getByRole("searchbox"), words);
+  }
+
+  it("the docked tree forgets the words typed to find a note when the vault is hidden", () =>
+    docked(async () => {
+      const { router, hidden } = await openDiary(null);
+      await findInTree("Brief");
+      await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+      hidden();
+      FakeSocket.all.at(-1)!.open();
+      FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+      await doneHiding(router);
+      expect(screen.queryByDisplayValue("Brief")).toBeNull();
+    }));
+
+  it("the docked tree forgets the words typed in a vault left before it is hidden", () =>
+    docked(async () => {
+      const { router, hidden } = await openDiary(null);
+      await findInTree("Brief");
+      act(() => useEditor.getState().setActiveVault("Work"));
+      await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+      hidden();
+      FakeSocket.all.at(-1)!.open();
+      FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+      await doneHiding(router);
+      expect(screen.queryByDisplayValue("Brief")).toBeNull();
+    }));
+
   it("a discreet vault's calendar is left when hidden again", async () => {
     const { log, queryClient, router } = await openDiary(null, {
       "GET /api/vaults/Tagebuch/calendar": () => json(200, { vault: "Tagebuch", today: "2026-11-13", zone: "Europe/Vienna", weeks: [], couldntRead: [], canWrite: true }),
