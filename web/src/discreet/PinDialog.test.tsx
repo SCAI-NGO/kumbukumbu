@@ -130,6 +130,15 @@ describe("PinDialog", () => {
     expect(queryClient.getQueryState(["whats-on", "count"])?.isInvalidated).toBe(true);
   });
 
+  it("asks Recent changes again once they are shown", async () => {
+    fakeApi({ "POST /api/account/discreet/reveal": () => revealed(null) });
+    const { dialog, onClose, queryClient } = renderDialog();
+    queryClient.setQueryData(["recent", "", null, [], 50], { items: [], more: false, vaults: ["Work"] });
+    await enter(dialog, "1234");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(queryClient.getQueryState(["recent", "", null, [], 50])?.isInvalidated).toBe(true);
+  });
+
   it("Never sends no minutes", async () => {
     const fetch = fakeApi({ "POST /api/account/discreet/reveal": () => revealed(null) });
     const { dialog, onClose } = renderDialog();

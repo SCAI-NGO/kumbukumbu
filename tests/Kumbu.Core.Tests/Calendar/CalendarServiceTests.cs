@@ -675,4 +675,49 @@ public class CalendarServiceTests
         Assert.Equal($"calendar: gave /Work/b.md the reason {shown}", close.Output);
         Assert.Equal(reason, Frontmatter.Read((await Content(store, "/Work/a.md"))!).Values["reason"]);
     }
+
+    [Fact]
+    public async Task A_write_keeps_When()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\ntitle: x\nWhen: 2026-12-15\nTz: Europe/London\n---\nBody\n"));
+
+        Ok(await Service(store).SetAsync("/Work/x.md", new CalendarChange(Until: "2026-12-17"), Ct));
+
+        Assert.Equal("---\ntitle: x\nWhen: 2026-12-15\nTz: Europe/London\nuntil: 2026-12-17\n---\nBody\n", await Content(store, "/Work/x.md"));
+
+        Ok(await Service(store).SetAsync("/Work/x.md", new CalendarChange(When: "2026-12-14"), Ct));
+
+        Assert.Equal("---\ntitle: x\nWhen: 2026-12-14\nTz: Europe/London\nuntil: 2026-12-17\n---\nBody\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task Close_keeps_Task()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\nWHEN: 2026-12-15\nTask: open\n---\nText\n"));
+
+        Ok(await Service(store).CloseAsync("/Work/x.md", null, Ct));
+
+        Assert.Equal("---\nWHEN: 2026-12-15\nTask: closed\nclosed: 2026-12-16\n---\nText\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task Unset_removes_every_spelling()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\ntitle: x\nwhen: 2026-12-15\nWhen: 2026-12-16\nTASK: open\nTags: [a]\nDue: 2026-12-20\n---\nBody\n"));
+
+        Ok(await Service(store).UnsetAsync("/Work/x.md", Ct));
+
+        Assert.Equal("---\ntitle: x\nTags: [a]\nDue: 2026-12-20\n---\nBody\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task A_set_on_two_spellings_keeps_the_first_and_fixes_the_note()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\nwhen: 2026-12-15\ntitle: x\nWhen: 2026-12-16\n---\n"));
+
+        var result = await Service(store).SetAsync("/Work/x.md", new CalendarChange(When: "2026-12-18"), Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("---\nwhen: 2026-12-18\ntitle: x\n---\n", await Content(store, "/Work/x.md"));
+    }
 }

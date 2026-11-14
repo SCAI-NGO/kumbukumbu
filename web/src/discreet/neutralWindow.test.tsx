@@ -11,7 +11,7 @@ import { useSession } from "../state/session";
 import { fakeApi, json, noContent, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
 import { forgetHeld } from "./hideAgain";
-import { createNeutralWindow, discreetUrl, forgetDiscreet, neutralWindow, wrapCreateHref } from "./neutralWindow";
+import { createNeutralWindow, discreetUrl, forgetDiscreet, neutralWindow, vaultOfRoute, wrapCreateHref } from "./neutralWindow";
 import { useDiscreet } from "./state";
 
 let disposeRouter: (() => void) | null = null;
@@ -84,6 +84,15 @@ describe("the neutral window", () => {
     for (const url of ["/notes/Tagebuch/a.md", "/board/Tagebuch", "/gallery/Tagebuch", "/view/Tagebuch/b.png", "/checkpoints/Tagebuch/c1/a.md", "/notes/Tagebuch"])
       expect(discreetUrl(url), url).toBe(true);
     for (const url of ["/notes/Work/a.md", "/", "/settings", "/discreet", "/notes/Tagebuchx/a.md"]) expect(discreetUrl(url), url).toBe(false);
+  });
+
+  it("Recent changes is no vault's route: its address names none, whatever is shown", () => {
+    shown("Tagebuch", "recent");
+    neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/recent");
+
+    expect(vaultOfRoute("/recent")).toBeNull();
+    expect(discreetUrl("/recent")).toBe(false);
+    expect(window.location.pathname).toBe("/recent");
   });
 
   it("a discreet vault's calendar is neutral in the address bar", () => {

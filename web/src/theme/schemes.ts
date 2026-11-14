@@ -22,6 +22,12 @@ export interface Tokens {
   success: string;
   /** Behind `==highlighted==` text: a highlighter's yellow, muted and dark on dark schemes; `text` on it 4.5:1. */
   highlight: string;
+  /** A flag's icon (red, green, blue, purple, yellow; the white one is outlined in `text`): a mark, 3:1 on every ground. */
+  flagRed: string;
+  flagGreen: string;
+  flagBlue: string;
+  flagPurple: string;
+  flagYellow: string;
 }
 
 export interface Scheme {
@@ -37,6 +43,9 @@ export interface Scheme {
 // `warning` is each palette's orange or yellow, lightened (dark schemes) or darkened (light ones) to 4.5:1 where it fell short;
 // Kumbu's is a coral, as its accent is already amber. `success` is each palette's green, darkened on light schemes to 3:1;
 // Rosé Pine has none, so its foam stands in. `highlight` is a warm yellow in every scheme, as Obsidian's, nearer each palette's yellow.
+// The flags are each palette's red, green, blue, purple and yellow, lightened (dark schemes) or darkened (light ones)
+// to 3:1 where they fell short. Where a palette has none, Kumbu chose one near it: Dracula's blue, both Rosé Pines' green,
+// and Rosé Pine's blue (its pine is too dark on its grounds).
 export const schemes: readonly Scheme[] = [
   {
     id: "kumbu",
@@ -57,6 +66,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#ff9466",
       success: "#6cc070",
       highlight: "#5c4a0c",
+      flagRed: "#ff6b6b",
+      flagGreen: "#6cc070",
+      flagBlue: "#6aa8f0",
+      flagPurple: "#b08cf0",
+      flagYellow: "#f0d048",
     },
   },
   {
@@ -80,6 +94,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#fab387",
       success: "#a6e3a1",
       highlight: "#5a4a1c",
+      flagRed: "#f38ba8",
+      flagGreen: "#a6e3a1",
+      flagBlue: "#89b4fa",
+      flagPurple: "#cba6f7",
+      flagYellow: "#f9e2af",
     },
   },
   {
@@ -102,6 +121,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#a64107",
       success: "#3a9027",
       highlight: "#fbe68f",
+      flagRed: "#d20f39",
+      flagGreen: "#3a9027",
+      flagBlue: "#1e66f5",
+      flagPurple: "#8839ef",
+      flagYellow: "#ae6f17",
     },
   },
   {
@@ -125,6 +149,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#ff9e64",
       success: "#9ece6a",
       highlight: "#5c4a1c",
+      flagRed: "#f7768e",
+      flagGreen: "#9ece6a",
+      flagBlue: "#7aa2f7",
+      flagPurple: "#bb9af7",
+      flagYellow: "#e0af68",
     },
   },
   {
@@ -148,6 +177,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#804300",
       success: "#587539",
       highlight: "#f5e283",
+      flagRed: "#ce2355",
+      flagGreen: "#587539",
+      flagBlue: "#286cc8",
+      flagPurple: "#894cd9",
+      flagYellow: "#86683c",
     },
   },
   {
@@ -171,6 +205,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#feaa64",
       success: "#b8bb26",
       highlight: "#6b5212",
+      flagRed: "#fc6a59",
+      flagGreen: "#b8bb26",
+      flagBlue: "#83a598",
+      flagPurple: "#d3869b",
+      flagYellow: "#fabd2f",
     },
   },
   {
@@ -194,6 +233,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#923003",
       success: "#746f0d",
       highlight: "#f9dc6c",
+      flagRed: "#9d0006",
+      flagGreen: "#726d0d",
+      flagBlue: "#076678",
+      flagPurple: "#8f3f71",
+      flagYellow: "#946110",
     },
   },
   {
@@ -217,6 +261,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#ebcb8b",
       success: "#a3be8c",
       highlight: "#635533",
+      flagRed: "#ce878e",
+      flagGreen: "#a3be8c",
+      flagBlue: "#81a1c1",
+      flagPurple: "#b690af",
+      flagYellow: "#ebcb8b",
     },
   },
   {
@@ -240,6 +289,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#ffb86c",
       success: "#50fa7b",
       highlight: "#5e5318",
+      flagRed: "#ff5555",
+      flagGreen: "#50fa7b",
+      flagBlue: "#7ea7ff",
+      flagPurple: "#bd93f9",
+      flagYellow: "#f1fa8c",
     },
   },
   {
@@ -263,6 +317,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#ccad4e",
       success: "#859900",
       highlight: "#5b4a00",
+      flagRed: "#e56765",
+      flagGreen: "#859900",
+      flagBlue: "#3794d6",
+      flagPurple: "#8488cd",
+      flagYellow: "#b58900",
     },
   },
   {
@@ -286,6 +345,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#765a00",
       success: "#708100",
       highlight: "#f6dd75",
+      flagRed: "#dc322f",
+      flagGreen: "#708100",
+      flagBlue: "#227dbd",
+      flagPurple: "#6c71c4",
+      flagYellow: "#987300",
     },
   },
   {
@@ -309,6 +373,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#eaa788",
       success: "#a7c080",
       highlight: "#5e5130",
+      flagRed: "#e67e80",
+      flagGreen: "#a7c080",
+      flagBlue: "#7fbbb3",
+      flagPurple: "#d699b6",
+      flagYellow: "#dbbc7f",
     },
   },
   {
@@ -332,6 +401,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#974d17",
       success: "#768701",
       highlight: "#f7e38c",
+      flagRed: "#da4b48",
+      flagGreen: "#768701",
+      flagBlue: "#3485b1",
+      flagPurple: "#c05aa0",
+      flagYellow: "#a57600",
     },
   },
   {
@@ -355,6 +429,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#f6c177",
       success: "#9ccfd8",
       highlight: "#5e4a22",
+      flagRed: "#eb6f92",
+      flagGreen: "#95c99a",
+      flagBlue: "#6e9fd8",
+      flagPurple: "#c4a7e7",
+      flagYellow: "#f6c177",
     },
   },
   {
@@ -378,6 +457,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#8d5f1f",
       success: "#538e99",
       highlight: "#fbe39c",
+      flagRed: "#b4637a",
+      flagGreen: "#5b8a5e",
+      flagBlue: "#286983",
+      flagPurple: "#907aa9",
+      flagYellow: "#b27728",
     },
   },
   {
@@ -402,6 +486,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#e5c07b",
       success: "#98c379",
       highlight: "#5f4c1e",
+      flagRed: "#e06c75",
+      flagGreen: "#98c379",
+      flagBlue: "#61afef",
+      flagPurple: "#c678dd",
+      flagYellow: "#e5c07b",
     },
   },
   {
@@ -425,6 +514,11 @@ export const schemes: readonly Scheme[] = [
       warning: "#865c01",
       success: "#489147",
       highlight: "#fff09a",
+      flagRed: "#df5448",
+      flagGreen: "#489147",
+      flagBlue: "#4078f2",
+      flagPurple: "#a626a4",
+      flagYellow: "#ae7701",
     },
   },
 ];

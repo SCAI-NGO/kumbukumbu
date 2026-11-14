@@ -43,9 +43,9 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
     if (!hiding) useDiscreet.setState({ hiding: false });
   }
 
-  // What was found, and what changed, lists notes of every vault under keys that name none.
+  // What was found, what changed, and Recent changes list notes of every vault under keys that name none.
   void queryClient.resetQueries({
-    predicate: (q) => (q.queryKey[0] === "search" || q.queryKey[0] === "changes") && q.state.data !== undefined && named(q.state.data, names),
+    predicate: (q) => ["search", "changes", "recent"].includes(q.queryKey[0] as string) && q.state.data !== undefined && named(q.state.data, names),
   });
   sweep(queryClient, names);
   // A command needn't name the vault to have shown it (`ls` at the root).

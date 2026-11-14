@@ -147,9 +147,10 @@ export function SkippedList({ skipped }: { skipped: Skipped[] }) {
  * PDFs go one `PUT` each, only to a free path at first: one that exists is asked about with the notes, and replaced
  * only at the version the server reported. An image over 15 MB is offered for shrinking first. An image pasted
  * (Ctrl/Cmd+V) gets a name the user can change. `folder`: `/Work/projects`. It is the notes view's overlay unless
- * `onClose` is given, as the gallery does, which keeps it open over itself.
+ * `onClose` is given, as the gallery does, which keeps it open over itself. `start`: the dropped files go without the
+ * review when nothing of them is skipped, as a pasted image does (a photo just taken).
  */
-export default function UploadSheet({ folder, dropped, onClose }: { folder: string; dropped: Picked[] | null; onClose?: () => void }) {
+export default function UploadSheet({ folder, dropped, start = false, onClose }: { folder: string; dropped: Picked[] | null; start?: boolean; onClose?: () => void }) {
   const setOverlay = useEditor((s) => s.setOverlay);
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>({ kind: "pick" });
@@ -339,7 +340,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
   useEffect(() => {
     if (!dropped || took.current) return;
     took.current = true;
-    void pick(dropped);
+    void pick(dropped, start);
   }, []);
 
   // Each step replaces the controls the focus was on: it moves to the step's default (Skip all, Retry, Done).

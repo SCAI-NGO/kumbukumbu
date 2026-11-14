@@ -43,8 +43,11 @@ interface EditorState {
   recentPaths: string[];
   /** A search result's section, to scroll to once its note is shown (`line` is the section's first source line). */
   scrollTarget: { path: string; line: number } | null;
-  /** The upload sheet's folder (`/Work/projects`), and the files dropped there if it opened with a drop. */
-  upload: { folder: string; dropped: Picked[] | null } | null;
+  /**
+   * The upload sheet's folder (`/Work/projects`), and the files dropped there if it opened with a drop; `start`: they go
+   * without the review (a photo just taken), unless something of them is skipped.
+   */
+  upload: { folder: string; dropped: Picked[] | null; start?: boolean } | null;
   /**
    * Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure).
    * Afterwards the note is asked for again, unless `reread` is false: signing out, where that read would race the
@@ -77,8 +80,8 @@ interface EditorState {
   refused: { path: string; code: RefusalCode; at: number } | null;
   setRefused(refused: { path: string; code: RefusalCode; at: number } | null): void;
   setOverlay(overlay: Overlay): void;
-  /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */
-  openUpload(folder: string, dropped?: Picked[]): void;
+  /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one; `start`: sent at once. */
+  openUpload(folder: string, dropped?: Picked[], start?: boolean): void;
   toggleFolder(path: string): void;
   /** Shows a folder (`/Work/projects`) in the drawer: it and every folder above it open, and it is the one marked. */
   revealFolder(path: string): void;
@@ -178,7 +181,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
-  openUpload: (folder, dropped) => set({ overlay: "upload", upload: { folder, dropped: dropped ?? null } }),
+  openUpload: (folder, dropped, start = false) => set({ overlay: "upload", upload: { folder, dropped: dropped ?? null, start } }),
   toggleFolder: (path) => set((s) => ({ expandedFolders: { ...s.expandedFolders, [path]: !s.expandedFolders[path] } })),
   revealFolder: (path) =>
     set((s) => ({ selectedFolder: path, revealing: true, expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(path).map((f) => [f, true])) } })),

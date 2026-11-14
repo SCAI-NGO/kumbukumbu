@@ -409,6 +409,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         private static string? State(EntryStatus status) => status.State switch
         {
             EntryState.Upcoming => "upcoming · " + status.Span,
+            EntryState.Ongoing when status.BeforeTime => "today · " + status.Span,
             EntryState.Ongoing => "ongoing · " + status.Span,
             EntryState.Overdue => "overdue · " + status.Span,
             _ => null,

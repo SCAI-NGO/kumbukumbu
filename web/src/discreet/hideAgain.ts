@@ -83,13 +83,29 @@ async function saveOpen(names: ReadonlySet<string>): Promise<boolean> {
 export const saveAhead = () => saveOpen(useDiscreet.getState().names);
 
 /**
- * Tells the server. Offline, the hide didn't reach it: the tab stays hidden, and a session read meanwhile that still
+ * The other tabs of this browser, which share the session: a tab away from the notes (Recent changes, What's on) has
+ * no socket and so hears no `hidden` frame, and would go on showing the vaults until it read the session again. The
+ * message is "hidden" alone, naming no vault.
+ */
+export const DISCREET_CHANNEL = "kumbu-discreet";
+
+function tellOtherTabs() {
+  if (typeof BroadcastChannel === "undefined") return;
+  const channel = new BroadcastChannel(DISCREET_CHANNEL);
+  channel.postMessage("hidden");
+  channel.close();
+}
+
+/**
+ * Tells the server, and once it has heard, this browser's other tabs: told earlier, a tab's session read could still
+ * say shown. Offline, the hide didn't reach it: the tab stays hidden, and a session read meanwhile that still
  * says shown sends it again instead of showing them (`followSession`).
  */
 async function tellServer() {
   try {
     const { response } = await api.POST("/api/account/discreet/hide");
     useDiscreet.setState({ unsent: !response.ok && response.status !== 401 });
+    if (response.ok) tellOtherTabs();
   } catch {
     useDiscreet.setState({ unsent: true });
   }
@@ -159,12 +175,13 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // Going back to a discreet view's entry now finds /discreet, which goes to the vault list.
     forgetDiscreet();
 
-    // What's on and its count named the discreet vaults' entries: the app's icon is cleared, and both, kept for the
-    // views still showing them (the badge, the What's on page), are emptied at once and asked again; a removed query
-    // would stay on screen with what it had until its view rendered again.
+    // What's on and its count named the discreet vaults' entries, as Recent changes did: the app's icon is cleared, and
+    // each, kept for the views still showing them (the badge, the What's on page, Recent changes), is emptied at once
+    // and asked again; a removed query would stay on screen with what it had until its view rendered again.
     clearAppBadge();
-    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" });
+    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" && q.queryKey[0] !== "recent" });
     void queryClient.resetQueries({ queryKey: ["whats-on"] });
+    void queryClient.resetQueries({ queryKey: ["recent"] });
     sweep(queryClient, names);
     for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
     void queryClient.refetchQueries({ queryKey: ["session"] });
@@ -193,7 +210,8 @@ export function useHideAgain() {
 
 /**
  * The discreet mode's clock and ears, once per signed-in tab: a little before the end the open discreet note is
- * saved, at the end the vaults are hidden again; so they are when another tab hid them (the socket's `hidden`), and
+ * saved, at the end the vaults are hidden again; so they are when another tab hid them (the socket's `hidden`, or
+ * that tab's word on {@link DISCREET_CHANNEL}), and
  * the session is asked again when a vault that was discreet answers 404, which then finds the session hidden. The end
  * of the time isn't told to the server, which ends it by its own clock and then takes one late save of the open note
  * (spec §3.8): a hide would forgo that.
@@ -212,6 +230,15 @@ export function useDiscreetMode() {
       }),
     [queryClient, navigate, pathname],
   );
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(DISCREET_CHANNEL);
+    channel.onmessage = (e: MessageEvent) => {
+      if (e.data === "hidden" && useDiscreet.getState().revealed) void hideAgain(queryClient, navigate, { tell: false, pathname: pathname() });
+    };
+    return () => channel.close();
+  }, [queryClient, navigate, pathname]);
 
   useEffect(() => {
     if (!revealed || !until) return;

@@ -26,8 +26,10 @@ export type EntryView = {
   byName: boolean;
   column: string | null;
   state: EntryState;
-  /** "1 day", "in 7 days", "until Fri": beside the state. */
+  /** "1 day", "in 7 days", "until Fri": beside the state; with `beforeTime` the clock ("14:00"). */
   span: string | null;
+  /** Ongoing on its day before its time: shown as "today · 14:00" rather than ongoing. */
+  beforeTime?: boolean;
   /** "14:00", or "14:00 (Europe/London)" for a time in another zone. */
   time: string | null;
   firstDay: string;
@@ -122,7 +124,7 @@ export type CalendarAction =
 export const UNSAVED = "Your typing isn't saved yet; try again in a moment.";
 
 /** A refusal of the app's own, before anything is sent: `errorText` gives its sentence as it gives the server's. */
-class UnsavedError extends HttpError {
+export class UnsavedError extends HttpError {
   constructor() {
     super(409, UNSAVED, "unsaved");
   }

@@ -3,6 +3,7 @@ using Kumbu.Core.Board;
 using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Tests.Calendar;
 
@@ -299,5 +300,77 @@ public class EntryReaderTests
         Assert.Equal(EntryKind.Card, listed?.Kind);
         Assert.Equal(new DateOnly(2026, 11, 20), listed?.When.Date);
         Assert.Null(problem);
+    }
+
+    [Fact]
+    public void When_with_a_capital_is_read()
+    {
+        var entry = EntryOf("/Work/Zahnarzt.md", "---\nWhen: 2026-11-20\n---\n");
+
+        Assert.Equal(new CalendarTime(TimeKind.Day, new DateOnly(2026, 11, 20)), entry.When);
+    }
+
+    [Fact]
+    public void TASK_in_capitals_is_read()
+    {
+        var entry = EntryOf("/Work/Renew passport.md", "---\nwhen: 2026-11-20\nTASK: open\nUpcoming: 7d\n---\n");
+
+        Assert.Equal(EntryKind.Task, entry.Kind);
+        Assert.Equal(TaskMark.Open, entry.Task);
+        Assert.Equal(new Upcoming(7, 'd'), entry.Upcoming);
+    }
+
+    [Fact]
+    public void Two_spellings_of_when_are_a_problem()
+    {
+        var problem = ProblemOf("---\nwhen: 2026-11-20\nWhen: 2026-11-21\nuntil: 2026-11-22\n---\n");
+
+        Assert.Equal("when is written twice (when, When); keep one", problem.What);
+        Assert.Equal("`when` and `When` are both there – I need just one", problem.Plain);
+        // The keys read under their lower-case names; neither spelling of when wins.
+        Assert.Equal(new Dictionary<string, string> { ["until"] = "2026-11-22" }, problem.Readable);
+    }
+
+    [Fact]
+    public void Two_spellings_on_a_card_are_a_problem()
+    {
+        var (entry, problem) = Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: 2026-11-20\nupcoming: 7d\nUPCOMING: 2w\n---\n", Board);
+
+        Assert.Null(entry);
+        Assert.Equal("upcoming is written twice (upcoming, UPCOMING); keep one", problem?.What);
+    }
+
+    [Fact]
+    public void A_cards_reason_is_the_boards_as_written()
+    {
+        // The board reads reason exactly and writes it beside a hand-written Reason: the card stays an entry, with the board's reason.
+        var entry = EntryOf("/Work/Board/Offsite.md", "---\ncolumn: Rejected\ndue: 2026-11-20\nReason: by hand\nreason: too far\n---\n", Board);
+
+        Assert.Equal(("too far", TaskMark.Closed), (entry.Reason, entry.Task));
+        Assert.Null(EntryOf("/Work/Board/Offsite.md", "---\ncolumn: Rejected\ndue: 2026-11-20\nReason: by hand\n---\n", Board).Reason);
+    }
+
+    [Fact]
+    public void Due_stays_case_sensitive_on_a_card()
+    {
+        Assert.Equal((null, null), Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\nDue: 2026-11-20\n---\n", Board));
+        Assert.Equal((null, null), Read("/Work/Offsite.md", "---\nDue: 2026-11-20\n---\n"));
+        // Column is the board's key too: Column doesn't make a card.
+        Assert.Equal(EntryKind.Dated, EntryOf("/Work/Board/Offsite.md", "---\nColumn: Ideas\nwhen: 2026-11-20\n---\n", Board).Kind);
+    }
+
+    [Fact]
+    public void A_capital_key_that_does_not_parse_is_a_problem()
+    {
+        Assert.Contains("does not parse", ProblemOf("---\nWhen: [2026-11-20\n---\n").What);
+        Assert.Equal((null, null), Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\nDue: [2026-11-20\n---\n", Board));
+        Assert.NotNull(Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: [2026-11-20\n---\n", Board).Problem);
+    }
+
+    [Fact]
+    public void Tags_stay_case_sensitive()
+    {
+        Assert.Empty(TagReader.Read("---\nTags: [a]\n---\n"));
+        Assert.Single(TagReader.Read("---\ntags: [a]\n---\n"));
     }
 }

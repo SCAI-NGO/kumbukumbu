@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -239,14 +240,13 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal("pdf", pdf["kind"]!.GetValue<string>());
         Assert.Equal("application/pdf", pdf["mediaType"]!.GetValue<string>());
 
-        // An attachment has its version and time of writing (the gallery's date order); a note's entry has neither.
+        // An attachment has its version and time of writing (the gallery's date order); a note only its time.
         using var state = await user.GetAsync(user.Url("shot.png", "version"));
         var shot = root["notes"]![1]!;
         Assert.Equal((await JsonAsync(state))["version"]!.GetValue<string>(), shot["version"]!.GetValue<string>());
         Assert.True(DateTime.UtcNow - shot["writtenAt"]!.GetValue<DateTime>().ToUniversalTime() < TimeSpan.FromMinutes(1));
         var note = root["notes"]![0]!.AsObject();
         Assert.False(note.ContainsKey("version"));
-        Assert.False(note.ContainsKey("writtenAt"));
 
         // A move changes no bytes: the time of writing stays (as a note's last write does), the one the lightbox shows.
         using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/Berichte/shot.png", keepLinks = false });
@@ -256,6 +256,111 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal(shot["writtenAt"]!.GetValue<DateTime>(), there["writtenAt"]!.GetValue<DateTime>());
         using var info = await user.GetAsync(user.Url("Berichte/shot.png", "version"));
         Assert.Equal(there["writtenAt"]!.GetValue<DateTime>(), (await JsonAsync(info))["lastWriteAt"]!.GetValue<DateTime>());
+    }
+
+    /// <summary>The API on a clock the test moves: each write ten minutes after the one before (an idle half hour ends the session).</summary>
+    private WebApplicationFactory<Program> Clocked(FakeTimeProvider time) =>
+        Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+
+    private static readonly DateTimeOffset Start = new(2037, 11, 14, 10, 0, 0, TimeSpan.Zero);
+
+    private static readonly TimeSpan Step = TimeSpan.FromMinutes(10);
+
+    private static DateTime At(JsonNode? node) => node!["writtenAt"]!.GetValue<DateTime>().ToUniversalTime();
+
+    private static JsonNode Named(JsonNode? list, string name) => list!.AsArray().Single(n => n!["name"]!.GetValue<string>() == name)!;
+
+    private static async Task<JsonNode> TreeRootAsync(RestClient user)
+    {
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/tree");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await JsonAsync(response))["root"]!;
+    }
+
+    [Fact]
+    public async Task The_tree_carries_each_notes_time_and_flag()
+    {
+        var time = new FakeTimeProvider(Start);
+        await using var api = Clocked(time);
+        var user = await RestClient.NewAsync(api, "Arbeit");
+        await user.CreateAsync("plan.md", "---\ntags: [flag/red]\n---\n# Plan\n");
+        time.Advance(Step);
+        await user.CreateAsync("text.md", "# Text\n\nSoon #flag/important\n");
+        time.Advance(Step);
+        await user.CreateAsync("plain.md", "# Plain #flag/maybe\n");
+
+        var notes = (await TreeRootAsync(user))["notes"];
+
+        Assert.Equal(("red", Start.UtcDateTime), (Named(notes, "plan.md")["flag"]!.GetValue<string>(), At(Named(notes, "plan.md"))));
+        Assert.Equal(("important", Start.UtcDateTime + Step * 1), (Named(notes, "text.md")["flag"]!.GetValue<string>(), At(Named(notes, "text.md"))));
+        Assert.False(Named(notes, "plain.md").AsObject().ContainsKey("flag"));
+        Assert.Equal(Start.UtcDateTime + Step * 2, At(Named(notes, "plain.md")));
+    }
+
+    [Fact]
+    public async Task A_folder_is_as_new_as_its_newest_file_at_any_depth()
+    {
+        var time = new FakeTimeProvider(Start);
+        await using var api = Clocked(time);
+        var user = await RestClient.NewAsync(api, "Arbeit");
+        await user.CreateAsync("projects/old.md", "# Old\n");
+        time.Advance(Step);
+        await user.CreateFileAsync("projects/a/b/shot.png", FileApiTests.Png(4, 4));
+        time.Advance(Step);
+        await user.CreateAsync("other/x.md", "# X\n");
+
+        var root = await TreeRootAsync(user);
+
+        var projects = Named(root["folders"], "projects");
+        Assert.Equal(Start.UtcDateTime + Step * 1, At(projects));
+        Assert.Equal(Start.UtcDateTime + Step * 1, At(Named(projects["folders"], "a")));
+        Assert.Equal(Start.UtcDateTime + Step * 2, At(Named(root["folders"], "other")));
+        Assert.Equal(Start.UtcDateTime + Step * 2, At(root));
+    }
+
+    [Fact]
+    public async Task An_empty_folder_counts_by_its_marker()
+    {
+        var time = new FakeTimeProvider(Start);
+        await using var api = Clocked(time);
+        var user = await RestClient.NewAsync(api, "Arbeit");
+        await user.CreateAsync("plan.md", "# Plan\n");
+        time.Advance(Step * 2);
+        await user.CreateFileAsync("Drafts/.vaultkeep", []);
+
+        var root = await TreeRootAsync(user);
+
+        var drafts = Named(root["folders"], "Drafts");
+        Assert.Empty(drafts["notes"]!.AsArray());
+        Assert.Equal(Start.UtcDateTime + Step * 2, At(drafts));
+        Assert.Equal(Start.UtcDateTime + Step * 2, At(root));
+    }
+
+    [Fact]
+    public async Task The_checkpoint_tree_is_unchanged()
+    {
+        var user = await UserAsync();
+        await user.CreateAsync("projects/plan.md", "---\ntags: [flag/red]\n---\n# Plan\n");
+        using (var made = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints", new { name = "before" }))
+        {
+            Assert.True(made.IsSuccessStatusCode, await made.Content.ReadAsStringAsync(Ct));
+        }
+
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/before/tree");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var root = (await JsonAsync(response))["root"]!;
+        var projects = root["folders"]![0]!;
+        var plan = projects["notes"]![0]!.AsObject();
+        Assert.Equal("/Arbeit/projects/plan.md", plan["path"]!.GetValue<string>());
+        Assert.False(plan.ContainsKey("writtenAt"));
+        Assert.False(plan.ContainsKey("flag"));
+        Assert.False(root.AsObject().ContainsKey("writtenAt"));
+        Assert.False(projects.AsObject().ContainsKey("writtenAt"));
     }
 
     [Fact]

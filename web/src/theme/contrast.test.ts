@@ -17,6 +17,7 @@ function contrast(a: string, b: string): number {
 
 const textTokens = ["text", "textBody", "muted", "dim", "accentText", "warning"] as const satisfies readonly (keyof Tokens)[];
 const grounds = ["bg", "surface", "surface2"] as const satisfies readonly (keyof Tokens)[];
+const flagTokens = ["flagRed", "flagGreen", "flagBlue", "flagPurple", "flagYellow"] as const satisfies readonly (keyof Tokens)[];
 
 describe("colour schemes", () => {
   it("ships the schemes decided in MOBILE_EDITOR section 6, each once", () => {
@@ -48,6 +49,11 @@ describe("colour schemes", () => {
     // A mark, not text: 3:1 (WCAG 1.4.11), as the green dot of a publication up to date.
     it.each(grounds)("success on %s is at least 3:1", (ground) => {
       expect(contrast(scheme.tokens.success, scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
+    });
+
+    // A flag's icon, not text: 3:1 (WCAG 1.4.11) where it is drawn, the tree, the note's header and the menus.
+    it.each(flagTokens.flatMap((t) => grounds.map((g) => [t, g] as const)))("%s on %s is at least 3:1", (flag, ground) => {
+      expect(contrast(scheme.tokens[flag], scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
     });
 
     // `==highlighted==` text in the note view.

@@ -321,7 +321,8 @@ public sealed class CalendarApiTests(KumbuAppFactory app) : IAsyncDisposable
         var bobsOn = await GetOkAsync(bob, "/api/calendar/whats-on");
 
         Assert.Equal(("14:00", "past"), (S(forAlice["entry"], "time"), S(forAlice["entry"], "state")));
-        Assert.Equal(("14:00", "ongoing", "until 14:00"), (S(forBob["entry"], "time"), S(forBob["entry"], "state"), S(forBob["entry"], "span")));
+        Assert.Equal(("14:00", "ongoing", "14:00"), (S(forBob["entry"], "time"), S(forBob["entry"], "state"), S(forBob["entry"], "span")));
+        Assert.True(forBob["entry"]!["beforeTime"]!.GetValue<bool>());
         Assert.Equal(("/Shared/Call.md", "Shared"), (S(forBob["entry"], "path"), S(forBob["entry"], "vault")));
         Assert.True(forAlice["canWrite"]!.GetValue<bool>());
         Assert.False(forBob["canWrite"]!.GetValue<bool>());
