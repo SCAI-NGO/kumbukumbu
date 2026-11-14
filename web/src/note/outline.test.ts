@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { outline, section } from "./outline";
+import { atxHeading, outline, section } from "./outline";
 import { embedHeading } from "./wikiLinks";
 
 describe("outline", () => {
@@ -39,6 +39,44 @@ describe("outline", () => {
 
   it("shows a highlight's text without its marks, and a comparison as written", () => {
     expect(outline("# ==Key== point\n## a == b").map((h) => h.text)).toEqual(["Key point", "a == b"]);
+  });
+});
+
+describe("atxHeading", () => {
+  it("reads levels, closing hashes, tabs and empty headings", () => {
+    expect(atxHeading("# Plan")).toEqual({ level: 1, text: "Plan" });
+    expect(atxHeading("## Plan ##")).toEqual({ level: 2, text: "Plan" });
+    expect(atxHeading("# a ## b ##")).toEqual({ level: 1, text: "a ## b" });
+    expect(atxHeading("# a#")).toEqual({ level: 1, text: "a#" });
+    expect(atxHeading("#\tPlan")).toEqual({ level: 1, text: "Plan" });
+    expect(atxHeading("   ###### Plan  ")).toEqual({ level: 6, text: "Plan" });
+    expect(atxHeading("#")).toEqual({ level: 1 });
+    expect(atxHeading("# ")).toEqual({ level: 1, text: "" });
+    expect(atxHeading("#5")).toBeNull();
+    expect(atxHeading("####### a")).toBeNull();
+    expect(atxHeading("    # a")).toBeNull();
+    expect(atxHeading("# a\r")).toBeNull();
+    expect(atxHeading("# a\r", true)).toEqual({ level: 1, text: "a\r" });
+  });
+
+  it("reads every short line as the heading pattern did", () => {
+    const patterns = [/^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/, /^ {0,3}(#{1,6})(?:[ \t]+([^\n]*?))?(?:[ \t]+#+)?[ \t]*$/];
+    const chars = ["#", " ", "\t", "a", "\r"];
+    let lines = [""];
+    for (let length = 0; length <= 7; length++) {
+      for (const line of lines) {
+        patterns.forEach((pattern, anyChar) => {
+          const m = pattern.exec(line);
+          const expected = m ? (m[2] === undefined ? { level: m[1].length } : { level: m[1].length, text: m[2] }) : null;
+          if (JSON.stringify(atxHeading(line, anyChar === 1)) !== JSON.stringify(expected)) expect([line, anyChar === 1, atxHeading(line, anyChar === 1)]).toEqual([line, anyChar === 1, expected]);
+        });
+      }
+      lines = lines.flatMap((line) => chars.map((c) => line + c));
+    }
+  });
+
+  it("lists the headings of a note with closing hashes and tabs", () => {
+    expect(outline("# Plan #\n\ntext\n##\tGoals ##\n").map((h) => h.text)).toEqual(["Plan", "Goals"]);
   });
 });
 

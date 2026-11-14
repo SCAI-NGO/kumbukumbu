@@ -38,6 +38,36 @@ export const headingText = (md: string) =>
 /** A line that can be (part of) a paragraph's text, and so a setext heading's: no other block starts with it. */
 const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3}([-*+>|#]|\d+[.)]\s|`{3}|~{3})/.test(line);
 
+const blank = (c: string) => c === " " || c === "\t";
+
+/**
+ * An ATX heading line's level and text (`text` undefined: none; "" after a lone blank), as CommonMark's pattern
+ * `^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$` reads it. `anyChar`: the text may hold a "\r", as the
+ * Core's `.` takes it (the block finder's lines).
+ */
+export function atxHeading(line: string, anyChar = false): { level: number; text?: string } | null {
+  let i = 0;
+  while (i < 3 && line[i] === " ") i++;
+  let h = i;
+  while (line[h] === "#") h++;
+  const level = h - i;
+  if (level < 1 || level > 6) return null;
+  if (h === line.length) return { level };
+  if (!blank(line[h])) return null;
+  if (!anyChar && /[\r\u2028\u2029]/.test(line.slice(h))) return null;
+  // The text starts after the blanks that follow the hashes, and ends before the trailing blanks and before a closing
+  // hash run that has a blank before it and something before that.
+  let t = h;
+  while (t < line.length && blank(line[t])) t++;
+  let e = line.length;
+  while (e > t && blank(line[e - 1])) e--;
+  let k = e;
+  while (k > t && line[k - 1] === "#") k--;
+  let q = k;
+  while (q > t && blank(line[q - 1])) q--;
+  return { level, text: line.slice(t, k < e && q < k ? q : e) };
+}
+
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
  * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
@@ -70,8 +100,8 @@ export function outline(body: string): Heading[] {
       para = null;
       return;
     }
-    const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
-    if (m && m[2]) headings.push({ level: m[1].length, text: headingText(m[2]), line: i + 1 });
+    const m = atxHeading(line);
+    if (m?.text) headings.push({ level: m.level, text: headingText(m.text), line: i + 1 });
     if (m || !paragraphLine(line)) para = null;
     else if (para) para.text.push(line.trim());
     else para = { start: i, text: [line.trim()] };

@@ -27,7 +27,7 @@ import BacklinksList from "./BacklinksList";
 import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
-import { outline } from "./outline";
+import { atxHeading, outline } from "./outline";
 import { maskedBody } from "./comments";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
@@ -69,8 +69,8 @@ const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap ag
  */
 export const startsWithH1 = (body: string) => {
   const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
-  const atx = /^ {0,3}#(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(first.split("\n", 1)[0].replace(/\r$/, ""));
-  return (!!atx?.[1] && !/^#+$/.test(atx[1])) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
+  const atx = atxHeading(first.split("\n", 1)[0].replace(/\r$/, ""));
+  return (atx?.level === 1 && !!atx.text && !/^#+$/.test(atx.text)) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
 
 /** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block the note lacks. */

@@ -34,5 +34,11 @@
   {"name": "Windows line ends, a heading below a paragraph", "note": "Para\r\n## H ^h\r\n", "id": "h", "lines": [2, 2]},
   {"name": "Windows line ends, an own-line id below a heading", "note": "## H\r\n\r\n^x\r\n", "id": "x", "lines": null},
   {"name": "a list marker with Arabic-Indic digits is no item", "note": "The pump.\n\u0661. order it ^u\n", "id": "u", "lines": [1, 2]},
-  {"name": "a next-line character after an id is no space", "note": "The pump. ^u\u0085\n", "id": "u", "lines": null}
+  {"name": "a next-line character after an id is no space", "note": "The pump. ^u\u0085\n", "id": "u", "lines": null},
+  {"name": "a table without outer pipes", "note": "a | b\n--- | ---\n1 | 2\n\n^tab\n", "id": "tab", "lines": [1, 5]},
+  {"name": "a table with aligned columns and spaces around its pipes", "note": "  | a | b |\n  |  :--- | ---: |  \n  | 1 | 2 |\n\n^tab\n", "id": "tab", "lines": [1, 5]},
+  {"name": "a table whose second line is no delimiter row is a paragraph", "note": "a | b\nx | y\n^p", "id": "p", "lines": [1, 3]},
+  {"name": "a heading with a closing hash run carries its id", "note": "Para\n## Plan ## ^p", "id": "p", "lines": [2, 2]},
+  {"name": "a heading with a tab after its hashes", "note": "Para\n##\tPlan ^p", "id": "p", "lines": [2, 2]},
+  {"name": "seven hashes make a paragraph", "note": "####### a\n^p", "id": "p", "lines": [1, 2]}
 ]
