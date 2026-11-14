@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
+using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
@@ -108,6 +109,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<DiscreetVaults>();
+builder.Services.AddSingleton<CalendarSettings>();
+// The server's zone for a caller without one of her own; tests replace it.
+builder.Services.AddSingleton(ServerZone.Instance);
 builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
@@ -193,6 +197,15 @@ builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();
 builder.Services.AddScoped<ISkillUpdates, RecordedSkillUpdates>();
+// The shell takes it through ActivatorUtilities: sh calendar's today is the caller's.
+builder.Services.AddScoped<ICallerZone, AccountCallerZone>();
+// The calendar's writes for the REST API; the shell makes its own. Today is the writer's clock, in the caller's zone.
+builder.Services.AddScoped(sp =>
+{
+    var writer = sp.GetRequiredService<NoteWriter>();
+    return new CalendarService(
+        sp.GetRequiredService<INoteStore>(), writer, sp.GetRequiredService<BoardService>(), () => writer.Now, sp.GetRequiredService<ICallerZone>());
+});
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
@@ -301,6 +314,7 @@ app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
 app.MapBoardApi();
+app.MapCalendarApi();
 app.MapTagApi();
 app.MapConsoleApi();
 app.MapUploadApi();

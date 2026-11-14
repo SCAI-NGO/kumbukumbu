@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ListTree, PanelLeft } from "lucide-react";
 import { crumbOf, titleOf } from "../api/paths";
+import Badge from "../calendar/Badge";
+import { useBadge } from "../calendar/useBadge";
 import { useEditor } from "../state/editor";
 import ModeToggle from "./ModeToggle";
 import { sidebarId } from "./TreeDrawer";
 
 /** The id of the docked sidebar's toggle, which takes the focus when the shortcut hides the tree it was in. */
 export const sidebarToggleId = "file-tree-toggle";
+const badgeId = "file-tree-badge";
 
 /**
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), its outline, and Read / Write.
@@ -25,6 +28,7 @@ export default function TopBar({
 }) {
   const openTree = () => useEditor.getState().setOverlay("tree");
   const mode = useEditor((s) => s.mode);
+  const badge = useBadge();
   const buttonClass = "flex size-11 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <header className="flex min-h-16 flex-none items-center gap-1 border-b border-line py-2.5 pr-3 pl-1.5">
@@ -43,8 +47,18 @@ export default function TopBar({
           <PanelLeft size={22} strokeWidth={1.8} aria-hidden />
         </button>
       ) : (
-        <button type="button" aria-label="Open file tree" onClick={openTree} className={buttonClass}>
+        // The phone's way to the navigation carries What's on's count, as its description: its name says what it does.
+        // The badge sits on the button's corner within its box, and the button keeps a little more room beside it, so
+        // the count never covers where the note is.
+        <button
+          type="button"
+          aria-label="Open file tree"
+          aria-describedby={badge.count > 0 ? badgeId : undefined}
+          onClick={openTree}
+          className={`relative ${buttonClass} ${badge.count > 0 ? "mr-1.5" : ""}`}
+        >
           <PanelLeft size={22} strokeWidth={1.8} aria-hidden />
+          <Badge id={badgeId} count={badge.count} overdue={badge.overdue} className="pointer-events-none absolute top-0 right-0 translate-x-1" />
         </button>
       )}
       <button

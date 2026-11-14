@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh.Commands;
@@ -31,21 +32,23 @@ public sealed class Shell
     private readonly Func<DateTime> _now;
     private readonly IShellObserver? _observer;
     private readonly IAttachmentPixels? _pixels;
+    private readonly ICallerZone _zone;
 
     public Shell(
         INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
         IAttachmentPixels? pixels = null, IWriterLabels? labels = null, Publishing.IPublisher? publisher = null, string version = "0.0.0-dev",
-        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null)
+        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null, ICallerZone? zone = null)
     {
         _observer = observer;
         _pixels = pixels;
         _now = () => writer.Now;
+        _zone = zone ?? ServerZone.Instance;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans(), labels: labels);
         var files = writer.ForAttachments();
         var marks = new WriterMarks(notes, labels ?? PlainWriterLabels.Instance);
         ICommand[] commands =
         [
-            .. ReadingCommands(notes, _now, pixels, marks: marks),
+            .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
@@ -61,6 +64,10 @@ public sealed class Shell
         {
             _commands[command.Name] = command;
         }
+
+        // calendar reads and writes under one name; the reader in ReadingCommands stays for checkpoints. Replacing it keeps its place in help.
+        var board = new Board.BoardService(notes, writer, mover, mover.Time, writer.Caller);
+        _commands["calendar"] = new CalendarCommand(notes, _now, _zone, new CalendarService(notes, writer, board, _now, _zone));
     }
 
     /// <summary>Adds a command after the built-in ones; for tests of what the shell does with a kind of command.</summary>
@@ -69,13 +76,14 @@ public sealed class Shell
     /// <summary>Whether the shell has a command of this name, built in or registered.</summary>
     public bool HasCommand(string name) => _commands.ContainsKey(name);
 
-    internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
+    internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "calendar", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, ICallerZone zone, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
     [
         new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes), new Rg(notes, live ? pixels : null, marks),
         new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
+        new CalendarCommand(notes, now, zone),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
 
@@ -186,6 +194,9 @@ public sealed class Shell
     {
         if (!Readers.Contains(name)) return ShellResult.Error($"{name}: --checkpoint works with {string.Join(", ", Readers)}, diff and restore (see 'help checkpoints')");
 
+        // calendar reads and writes under one name: only its reading forms run on a checkpoint.
+        if (name == "calendar" && CalendarCommand.WriteVerb(args) is { } verb) return CalendarCommand.CheckpointRefusal(verb);
+
         if (input is not null) return ShellResult.Error($"{name}: --checkpoint reads notes from a checkpoint; right of a pipe there are none to read");
         if (args.Any(a => a == "--version" || a.StartsWith("--version=", StringComparison.Ordinal)))
         {
@@ -220,7 +231,7 @@ public sealed class Shell
             }
         }
 
-        var command = ReadingCommands(view, _now, _pixels, live: false).Single(c => c.Name == name);
+        var command = ReadingCommands(view, _now, _zone, _pixels, live: false).Single(c => c.Name == name);
         var result = await command.RunAsync(args, null, ct);
         if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
         return result with { Version = null };

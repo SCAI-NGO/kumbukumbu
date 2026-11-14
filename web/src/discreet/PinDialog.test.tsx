@@ -121,6 +121,15 @@ describe("PinDialog", () => {
     expect(useDiscreet.getState()).toMatchObject({ revealed: true, until });
   });
 
+  it("asks What's on and its count again once they are shown", async () => {
+    fakeApi({ "POST /api/account/discreet/reveal": () => revealed(null) });
+    const { dialog, onClose, queryClient } = renderDialog();
+    queryClient.setQueryData(["whats-on", "count"], { items: [], count: 1, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] });
+    await enter(dialog, "1234");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(queryClient.getQueryState(["whats-on", "count"])?.isInvalidated).toBe(true);
+  });
+
   it("Never sends no minutes", async () => {
     const fetch = fakeApi({ "POST /api/account/discreet/reveal": () => revealed(null) });
     const { dialog, onClose } = renderDialog();

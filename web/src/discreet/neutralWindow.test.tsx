@@ -86,6 +86,15 @@ describe("the neutral window", () => {
     for (const url of ["/notes/Work/a.md", "/", "/settings", "/discreet", "/notes/Tagebuchx/a.md"]) expect(discreetUrl(url), url).toBe(false);
   });
 
+  it("a discreet vault's calendar is neutral in the address bar", () => {
+    shown("Tagebuch");
+    neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/calendar/Tagebuch?week=2026-W46");
+
+    expect(window.location.pathname + window.location.search).toBe("/discreet");
+    expect(neutralWindow.location.pathname + neutralWindow.location.search).toBe("/calendar/Tagebuch?week=2026-W46");
+    expect(discreetUrl("/calendar/Work")).toBe(false);
+  });
+
   it("forgets on hiding: the entry then reads /discreet", () => {
     shown("Tagebuch");
     neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/notes/Tagebuch/a.md");

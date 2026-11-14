@@ -102,6 +102,15 @@ describe("Write mode", () => {
     expect(screen.queryByRole("navigation", { name: "Vault actions" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["a day note", "# Thursday, 12 November 2026\n\n", "# Thursday, 12 November 2026\n"],
+    ["an entry made on a day", "---\nwhen: 2026-11-12T14:00\n---\n# Zahnarzt\n", "---\nwhen: 2026-11-12T14:00\n---\n# Zahnarzt\n"],
+  ])("opens %s, only its heading, with the caret on the line below it", async (_, content, before) => {
+    editorApi([ok], () => json(200, noteView(PLAN, content, "v1")));
+    await openInWrite();
+    expect([editorBox().selectionStart, editorBox().selectionEnd]).toEqual([before.length, before.length]);
+  });
+
   it("focuses a stand-in inside the tap on Write and, the editor being loaded already, mounts it in that tap", async () => {
     editorApi();
     renderApp(planUrl);

@@ -150,6 +150,15 @@ public sealed class UserDocument
     [BsonElement("discreetPin"), BsonIgnoreIfNull]
     public PinVerifierDocument? DiscreetPin { get; set; }
 
+    /// <summary>Her calendar's time zone, an IANA id (calendar spec §3); null until she chooses one. Plain: it names no vault.</summary>
+    [BsonElement("calendarZone"), BsonIgnoreIfNull]
+    public string? CalendarZone { get; set; }
+
+    /// <summary>Her last view per calendar (calendar spec §7.3), sealed under a key derived from the user key since it
+    /// names vaults (CalendarSettings); null until she keeps one.</summary>
+    [BsonElement("calendarViews"), BsonIgnoreIfNull]
+    public byte[]? CalendarViews { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

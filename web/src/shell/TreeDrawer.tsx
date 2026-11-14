@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
-import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -37,6 +37,10 @@ import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
+import { useNoteEntry } from "../calendar/api";
+import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import Badge from "../calendar/Badge";
+import { useBadge } from "../calendar/useBadge";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -210,6 +214,8 @@ function FileMenu({
   copy,
   onMove,
   onDelete,
+  onDate,
+  onRemoveDate,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -218,12 +224,17 @@ function FileMenu({
   copy(text: string): void;
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
+  onDate?: (path: string) => void;
+  onRemoveDate(path: string): void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
   const changes = mayChange(level, path);
   // Not while the note is being named from its heading: a name given by hand must not lose that race.
   const renaming = useEditor((s) => s.renaming.includes(path));
+  // Whether the note has a date is asked for once its menu opens, not for every note in the tree.
+  const [asked, setAsked] = useState(false);
+  const dated = useNoteEntry(note ? path : null, asked && changes && !!onDate);
   const items: MenuItem[] = [
     ...copyItems(path, names, note, copy),
     ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
@@ -234,9 +245,10 @@ function FileMenu({
       : note
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
+    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
   ];
   return (
-    <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
+    <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass} onOpen={() => setAsked(true)}>
       <Ellipsis size={18} aria-hidden />
     </Menu>
   );
@@ -331,6 +343,7 @@ function AccountRow() {
   const close = () => useEditor.getState().setOverlay("none");
   const [asking, setAsking] = useState(false);
   const [failed, setFailed] = useState(false);
+  const badge = useBadge();
 
   /** The open editor saves first; text it can't save (a conflict, a failure) is given up only when the user says so. */
   const signOut = async (anyway = false) => {
@@ -355,6 +368,11 @@ function AccountRow() {
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
+      <Link to="/whats-on" onClick={close} className={link}>
+        <CalendarClock size={16} aria-hidden className="text-muted" />
+        What's on
+        <Badge count={badge.count} overdue={badge.overdue} />
+      </Link>
       <Link to="/skills/installed" onClick={close} className={link}>
         <Sparkles size={16} aria-hidden className="text-muted" />
         Skills
@@ -432,8 +450,10 @@ export default function TreeDrawer(props: {
   onMove(subject: MoveSubject): void;
   onDelete(subject: DeleteSubject): void;
   onVaultSheet(sheet: VaultSheet): void;
+  /** Add to calendar… and Edit date… of a note's menu. */
+  onDate?: (path: string) => void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -473,6 +493,7 @@ export default function TreeDrawer(props: {
   const marking = useMarking(published);
   // Said here, not over the note: the drawer covers that on a phone.
   const copied = useCopied("mx-[18px] mb-2.5");
+  const removeDate = useRemoveFromCalendar(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
@@ -524,6 +545,10 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(boardUrl(vault));
   };
+  const openCalendar = (vault: string) => {
+    setOverlay("none");
+    navigate(calendarUrl(vault));
+  };
   const openGallery = (vault: string) => {
     setOverlay("none");
     navigate(galleryUrl(vault));
@@ -542,12 +567,16 @@ export default function TreeDrawer(props: {
   // While the discreet vaults are shown, an amber frame around the sidebar (spec §3.7), and the mark in the vault's menu.
   const revealed = useRevealed();
   const markDiscreet = useMarkDiscreet();
+  // The active vault's share of What's on, on its Calendar.
+  const share = useBadge().vaults.get(activeVault ?? "");
   const vaultItems: MenuItem[] = [
     ...(activeVault
       ? [
           { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
           { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+          // Every vault has a calendar, a view of its notes with a time: nothing to make first, nothing to look for.
+          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault), after: share && <Badge count={share.count} overdue={share.overdue} /> },
           // Made from the template at once, so no ellipsis: that would promise a dialog.
           ...(hasBoard
             ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }]
@@ -650,7 +679,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} />
                   </>
                 )}
               </li>

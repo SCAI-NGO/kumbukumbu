@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 
@@ -9,6 +9,14 @@ export interface MenuItem {
   icon: LucideIcon;
   onSelect(): void;
   disabled?: boolean;
+  /** Shown after the label, at the item's end: a count, say. */
+  after?: ReactNode;
+}
+
+/** Items under a heading of their own, as Later's Postpone and More time. */
+export interface MenuSection {
+  heading: string;
+  items: MenuItem[];
 }
 
 /**
@@ -17,7 +25,18 @@ export interface MenuItem {
  * technology that keeps to the dialog still reaches it), so no scrolling or clipping container around the button can
  * cut it off; it turns upward where there is no room below. Any scroll on the page closes it, a resize repositions it.
  */
-export function Menu(props: { label: string; items: MenuItem[]; placement: "above" | "below"; className: string; children: ReactNode }) {
+export function Menu(props: {
+  label: string;
+  items: MenuItem[];
+  /** After the items, each under its heading. */
+  sections?: MenuSection[];
+  placement: "above" | "below";
+  className: string;
+  /** Told when the list opens: what it offers may be asked for only then. */
+  onOpen?: () => void;
+  children: ReactNode;
+}) {
+  const id = useId();
   const [open, setOpen] = useState(false);
   const [host, setHost] = useState<HTMLElement>(document.body);
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
@@ -72,6 +91,26 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
     }
   };
 
+  const renderItem = ({ label, icon: Icon, onSelect, disabled, after }: MenuItem, key: string) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      onClick={() => {
+        setOpen(false);
+        // A dialog the item opens returns its focus here, as it did when the list sat beside the button.
+        button.current?.focus();
+        onSelect();
+      }}
+      className="flex min-h-11 w-full items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] text-text hover:bg-surface disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      <Icon size={18} strokeWidth={1.8} aria-hidden className="text-muted" />
+      {label}
+      {after && <span className="ml-auto flex">{after}</span>}
+    </button>
+  );
+
   return (
     <div
       className="relative flex-none"
@@ -91,6 +130,7 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
         aria-expanded={open}
         onClick={() => {
           setHost(button.current?.closest<HTMLElement>('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]') ?? document.body);
+          if (!open) props.onOpen?.();
           setOpen(!open);
         }}
         onKeyDown={(e) => {
@@ -120,23 +160,14 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
               style={at ? { top: at.top, right: at.right } : { top: 0, right: 0, visibility: "hidden" }}
               className="fixed z-[70] min-w-48 rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg"
             >
-              {props.items.map(({ label, icon: Icon, onSelect, disabled }) => (
-                <button
-                  key={label}
-                  type="button"
-                  role="menuitem"
-                  disabled={disabled}
-                  onClick={() => {
-                    setOpen(false);
-                    // A dialog the item opens returns its focus here, as it did when the list sat beside the button.
-                    button.current?.focus();
-                    onSelect();
-                  }}
-                  className="flex min-h-11 w-full items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] text-text hover:bg-surface disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  <Icon size={18} strokeWidth={1.8} aria-hidden className="text-muted" />
-                  {label}
-                </button>
+              {props.items.map((item) => renderItem(item, item.label))}
+              {props.sections?.map((section, i) => (
+                <div key={section.heading} role="group" aria-labelledby={`${id}-${i}`}>
+                  <div id={`${id}-${i}`} role="presentation" className="px-3 pt-2 pb-1 font-mono text-[11px] tracking-[0.08em] text-muted uppercase">
+                    {section.heading}
+                  </div>
+                  {section.items.map((item) => renderItem(item, `${section.heading}-${item.label}`))}
+                </div>
               ))}
             </div>
           </>,

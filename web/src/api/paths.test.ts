@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, isSkillTextFile, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
+import { calendarUrl, crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, isSkillTextFile, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
 
 describe("note paths", () => {
   it("puts a note into the URL one encoded segment at a time", () => {
     expect(noteUrl("/My Vault/a b/c%?#.md")).toBe("/notes/My%20Vault/a%20b/c%25%3F%23.md");
+  });
+
+  it("names a vault's calendar, at a week if given", () => {
+    expect(calendarUrl("My Vault")).toBe("/calendar/My%20Vault");
+    expect(calendarUrl("Work", "2026-W46")).toBe("/calendar/Work?week=2026-W46");
   });
 
   it("reads the path back from the route's decoded params", () => {

@@ -19,6 +19,9 @@ export const checkpointUrl = (vault: string, name: string, path?: string) =>
 export const boardUrl = (vault: string, checkpoint?: string) =>
   `/board/${encodeURIComponent(vault)}` + (checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "");
 
+/** The app's URL of a vault's calendar, at a week (`2026-W46`) or, without one, at this week. */
+export const calendarUrl = (vault: string, week?: string) => `/calendar/${encodeURIComponent(vault)}` + (week ? `?week=${encodeURIComponent(week)}` : "");
+
 /**
  * Whether a note can be published as a note: not one of the vault Skills, nor one in a vault's `_skills` folder; a skill
  * is shared as a whole, by link, from the Skills screen.

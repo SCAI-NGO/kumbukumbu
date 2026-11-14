@@ -379,7 +379,7 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public void Polling_the_version_and_the_board_does_not_count_as_the_sessions_activity()
+    public void Polling_the_version_the_board_and_the_calendar_does_not_count_as_the_sessions_activity()
     {
         var endpoints = Api.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>().Endpoints
             .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>()
@@ -387,7 +387,10 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             .Select(e => e.RoutePattern.RawText)
             .Order(StringComparer.Ordinal);
 
-        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}", "/api/ws-ticket"], endpoints);
+        Assert.Equal(
+            ["/api/calendar/whats-on", "/api/vaults/{vault}/board/", "/api/vaults/{vault}/calendar/", "/api/vaults/{vault}/calendar/entry",
+                "/api/version/{vault}/{**path}", "/api/ws-ticket"],
+            endpoints);
     }
 
     [Fact]

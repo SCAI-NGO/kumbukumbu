@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
+import { useZonePreset } from "./calendar/preferences";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
@@ -66,6 +67,8 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const pathname = useLatestPathname();
   useDiscreetMode();
+  // Here, not in the shell: a deep link to the calendar presets the zone too.
+  useZonePreset();
 
   useEffect(() => followVaults(queryClient), [queryClient]);
 
@@ -138,6 +141,8 @@ export const routes: RouteObject[] = [
           },
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
+          { path: "/calendar/:vault", lazy: lazyPage(() => import("./calendar/CalendarPage")) },
+          { path: "/whats-on", lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
           { path: "/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },

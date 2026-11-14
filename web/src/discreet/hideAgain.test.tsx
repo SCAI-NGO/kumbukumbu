@@ -8,6 +8,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
+import { entryView } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import { forgetHeld, hideAgain, holding, SAVE_AHEAD } from "./hideAgain";
 import { useDiscreet } from "./state";
@@ -425,6 +426,19 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expectForgotten(queryClient));
   });
 
+  it("a discreet vault's calendar is left when hidden again", async () => {
+    const { log, queryClient, router } = await openDiary(null, {
+      "GET /api/vaults/Tagebuch/calendar": () => json(200, { vault: "Tagebuch", today: "2026-11-13", zone: "Europe/Vienna", weeks: [], couldntRead: [], canWrite: true }),
+    });
+    editorOn(log);
+    await act(() => router.navigate("/calendar/Tagebuch"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Tagebuch" })).toBeInTheDocument();
+    await hideAgain(queryClient, router.navigate, { tell: true, pathname: "/calendar/Tagebuch" });
+    await doneHiding(router);
+    expect(log).toEqual(["save", "hide"]);
+    await waitFor(() => expectForgotten(queryClient));
+  });
+
   it("ends its hiding even when a step fails", async () => {
     const { queryClient, router } = await openDiary(null);
     vi.spyOn(useConsole.getState(), "reset").mockImplementation(() => {
@@ -604,5 +618,68 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expect(sent).toHaveLength(failed + 1));
     expect(sent.at(-1)).toBe("Text. Mehr.");
     expect(router.state.location.pathname).toBe("/notes/Work/a.md");
+  });
+});
+
+describe("What's on and the badge, as the discreet vaults are hidden again", () => {
+  const setAppBadge = vi.fn(async (_count?: number) => {});
+  const clearAppBadge = vi.fn(async () => {});
+  afterEach(() => {
+    delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+    delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+    setAppBadge.mockClear();
+    clearAppBadge.mockClear();
+  });
+
+  it("drops the hidden vault's share at once, on screen and on the app's icon, and asks again", async () => {
+    Object.defineProperty(navigator, "setAppBadge", { value: setAppBadge, configurable: true });
+    Object.defineProperty(navigator, "clearAppBadge", { value: clearAppBadge, configurable: true });
+    let diary: Awaited<ReturnType<typeof openDiary>> | undefined;
+    const shown = () => !diary?.log.includes("hide");
+    diary = await openDiary(null, {
+      "GET /api/calendar/whats-on": () =>
+        json(200, {
+          items: [],
+          ...(shown()
+            ? { count: 3, overdue: true, vaults: [{ vault: "Work", count: 1, overdue: false }, { vault: "Tagebuch", count: 2, overdue: true }] }
+            : { count: 1, overdue: false, vaults: [{ vault: "Work", count: 1, overdue: false }] }),
+          couldntRead: 0,
+          couldntReadVaults: [],
+        }),
+    });
+    // The phone's tree button carries the count.
+    const badge = () => screen.getByRole("button", { name: "Open file tree" });
+    await waitFor(() => expect(badge()).toHaveAccessibleDescription("3 on, some overdue"));
+    expect(setAppBadge).toHaveBeenLastCalledWith(3);
+    editorOn(diary.log);
+    await userEvent.click(hideButton());
+    await doneHiding(diary.router);
+    // Nothing of the count as it was stays, not even for a moment: the icon is cleared first, the count asked again.
+    expect(clearAppBadge).toHaveBeenCalled();
+    expect(badge()).not.toHaveAccessibleDescription(/3 on/);
+    await waitFor(() => expect(badge()).toHaveAccessibleDescription("1 on"));
+    expect(setAppBadge).toHaveBeenLastCalledWith(1);
+    await waitFor(() => expectForgotten(diary!.queryClient));
+  });
+
+  it("takes the hidden vault's entries off a What's on page left open", async () => {
+    let hidden = false;
+    const entry = (vault: string, title: string) => ({ ...entryView(title, { path: `/${vault}/${title}.md`, vault }) });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+      "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+      "GET /api/calendar/whats-on": () =>
+        json(200, { items: hidden ? [entry("Work", "Report")] : [entry("Tagebuch", "Brief"), entry("Work", "Report")], count: hidden ? 1 : 2, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/whats-on", queryClient);
+    expect(await screen.findByRole("link", { name: "Brief" })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    hidden = true;
+    await act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname: "/whats-on" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Brief" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("link", { name: "Report" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Brief" })).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/whats-on");
   });
 });

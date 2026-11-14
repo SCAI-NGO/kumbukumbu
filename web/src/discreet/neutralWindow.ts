@@ -5,8 +5,8 @@ import { useDiscreet } from "./state";
 /** What the address bar, the history and every link show of a URL in a discreet vault (spec §3.5, §4). */
 export const NEUTRAL = "/discreet";
 
-/** The routes that name a vault first: `/notes/Tagebuch/…`, `/board/Tagebuch`, `/gallery/…`, `/view/…`, `/checkpoints/…`. */
-const vaultRoute = /^\/(?:notes|board|gallery|view|checkpoints)\/([^/?#]+)/;
+/** The routes that name a vault first: `/notes/Tagebuch/…`, `/board/Tagebuch`, `/calendar/…`, `/gallery/…`, `/view/…`, `/checkpoints/…`. */
+const vaultRoute = /^\/(?:notes|board|calendar|gallery|view|checkpoints)\/([^/?#]+)/;
 
 /** The vault a URL of the app shows, if it shows one. */
 export function vaultOfRoute(pathname: string): string | null {

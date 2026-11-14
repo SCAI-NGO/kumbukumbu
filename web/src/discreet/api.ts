@@ -3,9 +3,13 @@ import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-q
 import { api, call } from "../api/client";
 import { useDiscreet } from "./state";
 
-/** The session and the vault list are asked again: what the session shows changed. */
+/** The session, the vault list and What's on are asked again: what the session shows changed. */
 const shownChanged = (queryClient: QueryClient) =>
-  Promise.all([queryClient.invalidateQueries({ queryKey: ["session"] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["session"] }),
+    queryClient.invalidateQueries({ queryKey: ["vaults"] }),
+    queryClient.invalidateQueries({ queryKey: ["whats-on"] }),
+  ]);
 
 /**
  * The PIN shows the discreet vaults for `minutes` (null: until the session ends or hides them). `pin` is read through
