@@ -33,6 +33,8 @@ public sealed class FlagService(INoteStore store, NoteWriter writer, Func<DateTi
             return Error($"{pathText} is not a note's path; give one such as /Work/Plan.md");
         if (Caller.Refuse(Tool, path) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
         if (flag is not null && !Flags.IsFlag(flag)) return Error($"there is no flag '{flag}'; the flags are {string.Join(", ", Flags.Names)}");
+        // Mark done is the tick and the closing together; Undo's Reopen puts back whichever flag was there before.
+        if (task == FlagTask.Close && flag != "done") return Error("only the done flag also marks the to-do done; choose done, or leave the calendar as it is");
         var today = Zones.ToLocal(now(), await zone.ZoneAsync(ct)).Day;
         var vault = path.Segments[0];
 

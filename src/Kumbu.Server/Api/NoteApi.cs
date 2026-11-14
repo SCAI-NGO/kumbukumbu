@@ -8,6 +8,7 @@ using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
+using Kumbu.Core.Tags;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
@@ -115,14 +116,21 @@ public sealed record ArchiveItem(string Path, string Name, string OriginalPath, 
 public sealed record TrashFolderRequest(string Path);
 
 /// <summary><c>path</c> is the folder's path from the root of the vault tree, e.g. <c>/Work/projects</c>; <c>notes</c>
-/// holds its files, notes and attachments together.</summary>
-public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFolder> Folders, IReadOnlyList<TreeNote> Notes);
+/// holds its files, notes and attachments together. <c>writtenAt</c>: the newest write of any file below it, at any depth, its
+/// folder markers included (so an empty folder is as new as its marker); a checkpoint's tree has none.</summary>
+public sealed record TreeFolder(
+    string Name,
+    string Path,
+    IReadOnlyList<TreeFolder> Folders,
+    IReadOnlyList<TreeNote> Notes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
 
 /// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
 /// <c>pdf</c> (never <c>folder</c>: a folder marker keeps its folder in the tree and is no entry of it); <c>mediaType</c>
-/// <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment also has its <c>version</c>
-/// and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows); a note has neither, its entry
-/// is as before.</summary>
+/// <c>text/markdown</c> for a note, an attachment's from its checked format. <c>writtenAt</c>: its last write (the gallery
+/// orders by date); an attachment also has its <c>version</c> (the gallery trashes at the version it shows). A note has its
+/// <c>flag</c> (<c>red</c>, <c>done</c>, …) when it carries one, in the frontmatter or the text. A checkpoint's tree has a
+/// note's entry without <c>writtenAt</c> and <c>flag</c>.</summary>
 public sealed record TreeNote(
     string Name,
     string Path,
@@ -130,7 +138,8 @@ public sealed record TreeNote(
     string Kind = "note",
     string MediaType = NoteApi.NoteMediaType,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Version = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Flag = null);
 
 /// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
 /// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
@@ -469,13 +478,24 @@ public static class NoteApi
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await RequireVaultAsync(store, root, ct);
-        var notes = await store.ReadNotesUnderAsync(root, ct);
+        // Each note read whole for its time of writing (in memory in the vault's store); one gone in between is left out.
+        var stored = new List<StoredNote>();
+        foreach (var path in await store.ListNotesUnderAsync(root, ct))
+        {
+            if (await store.GetAsync(path, ct) is { } found) stored.Add(found);
+        }
+
+        var notes = stored.Select(n => new Note(n.Path, n.Content)).ToList();
         var attachments = await StoreAttachments.UnderAsync(store, root, ct);
         // Here, not in TreeOf: a checkpoint's tree shows the archive as it was.
         var archived = Archived(notes, attachments).ToList();
         var files = archived.Count(f => !FolderMarker.Is(f.Path));
         var summary = files == 0 ? null : new ArchiveSummary(files, archived.Sum(f => f.Bytes));
-        var tree = TreeOf(root, notes.Where(n => !ArchiveFolder.Contains(n.Path)), attachments.Where(a => !ArchiveFolder.Contains(a.Path)));
+        var written = stored.Select(n => (n.Path, n.LastWriteAt)).Concat(attachments.Select(a => (a.Path, a.LastWriteAt)))
+            .ToDictionary(w => w.Path, w => w.LastWriteAt);
+        var tree = TreeOf(
+            root, notes.Where(n => !ArchiveFolder.Contains(n.Path)), attachments.Where(a => !ArchiveFolder.Contains(a.Path)),
+            p => written.TryGetValue(p, out var at) ? at : null);
         return TypedResults.Ok(new TreeView(tree, await store.CountDamagedAsync(root, ct), summary));
     }
 
@@ -537,22 +557,31 @@ public static class NoteApi
     /// <summary>A stamp's local time in UTC; null for one the zone skips (no stamp the server gave).</summary>
     private static DateTime? Utc(DateTime local, TimeZoneInfo zone) => zone.IsInvalidTime(local) ? null : TimeZoneInfo.ConvertTimeToUtc(local, zone);
 
-    /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
+    /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way,
+    /// without times or flags.</summary>
     internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments) =>
         TreeOf(dir, notes.Select(n => (n.Path, new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content))))
-            .Concat(attachments.Select(a => (a.Path, TreeFile(a)))));
+            .Concat(attachments.Select(a => (a.Path, TreeFile(a)))), null);
+
+    /// <summary>The live tree: each note with its flag and <paramref name="writtenAt"/>'s time, each folder as new as the newest
+    /// file below it.</summary>
+    internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments, Func<VaultPath, DateTime?> writtenAt) =>
+        TreeOf(dir, notes.Select(n => (n.Path, new TreeNote(
+                n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content), WrittenAt: writtenAt(n.Path), Flag: Flags.Of(n.Content)?.Name)))
+            .Concat(attachments.Select(a => (a.Path, TreeFile(a)))), writtenAt);
 
     private static TreeNote TreeFile(StoredAttachment file) =>
         new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
-    private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below)
+    private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below, Func<VaultPath, DateTime?>? writtenAt)
     {
+        below = below.ToList();
         var depth = dir.Segments.Count;
         var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
         var folders = groups.GetValueOrDefault(true, [])
             .GroupBy(n => n.Path.Segments[depth], StringComparer.Ordinal)
             .OrderBy(g => g.Key, TextOrder.Default)
-            .Select(g => TreeOf(dir.Child(g.Key), g))
+            .Select(g => TreeOf(dir.Child(g.Key), g, writtenAt))
             .ToList();
         // A folder marker keeps its folder in the tree (it reached here through it) but is never one of its files.
         var files = groups.GetValueOrDefault(false, [])
@@ -560,7 +589,8 @@ public static class NoteApi
             .OrderBy(n => n.Path.Name, TextOrder.Default)
             .Select(n => n.File)
             .ToList();
-        return new TreeFolder(dir.Name, dir.Value, folders, files);
+        // Every file below counts, folder markers too: an empty folder is as new as its marker.
+        return new TreeFolder(dir.Name, dir.Value, folders, files, writtenAt is null ? null : below.Max(n => writtenAt(n.Path)));
     }
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one

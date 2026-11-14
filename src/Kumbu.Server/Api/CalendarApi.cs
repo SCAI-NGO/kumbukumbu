@@ -195,7 +195,7 @@ public static partial class CalendarApi
 
     /// <summary>The note <paramref name="path"/> in the caller's vault <paramref name="vault"/>: a vault she doesn't have, or
     /// that her session hides, is 404 before anything else; a path outside it is 400.</summary>
-    private static async Task<VaultPath> NoteInAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    internal static async Task<VaultPath> NoteInAsync(string vault, string? path, INoteStore store, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
@@ -215,7 +215,7 @@ public static partial class CalendarApi
         return new NoteEntryView(view, problem is null ? null : CouldntRead(problem), caller.CanWrite(notePath.Segments[0]));
     }
 
-    private static async Task<(Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
+    internal static async Task<(Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
         VaultPath notePath, INoteStore store, CancellationToken ct)
     {
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);

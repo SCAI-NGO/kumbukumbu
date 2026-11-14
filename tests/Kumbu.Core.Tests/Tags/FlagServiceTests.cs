@@ -180,6 +180,19 @@ public class FlagServiceTests
     }
 
     [Theory]
+    [InlineData("red")]
+    [InlineData(null)]
+    public async Task Close_comes_only_with_the_done_flag(string? flag)
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", Task));
+
+        var result = await Service(store).SetAsync("/Work/x.md", flag, FlagTask.Close, Ct);
+
+        Assert.Equal(ShellResult.Error("flag: only the done flag also marks the to-do done; choose done, or leave the calendar as it is") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(Task, await Content(store, "/Work/x.md"));
+    }
+
+    [Theory]
     [InlineData("---\nwhen: 2026-11-20\ntask: closed\nclosed: 2026-11-12\n---\n")]
     [InlineData("---\nwhen: 2026-11-20\n---\n")]
     public async Task Close_on_a_closed_task_is_refused(string note)
