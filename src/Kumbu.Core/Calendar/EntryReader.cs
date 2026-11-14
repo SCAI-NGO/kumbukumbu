@@ -257,7 +257,17 @@ public static partial class EntryReader
     {
         if (Given(values, "reason") is not string reason) return null;
         problems.Readable("reason", reason);
-        return reason;
+        return Cut(reason);
+    }
+
+    /// <summary>The longest value the calendar answers with, as long as a write may make a reason (CalendarService's MaxReason);
+    /// a longer hand-written one is cut, never at half a character.</summary>
+    private const int MaxShown = 2000;
+
+    private static string Cut(string text)
+    {
+        if (text.Length <= MaxShown) return text;
+        return text[..(char.IsHighSurrogate(text[MaxShown - 1]) ? MaxShown - 1 : MaxShown)];
     }
 
     private static Upcoming? ReadUpcoming(IReadOnlyDictionary<string, object?> values, Problems problems)
@@ -357,7 +367,7 @@ public static partial class EntryReader
 
         public void Readable(string key, object value)
         {
-            if (value is string written && !twice.Contains(key)) readable[key] = written;
+            if (value is string written && !twice.Contains(key)) readable[key] = Cut(written);
         }
 
         public CalendarProblem Problem() =>

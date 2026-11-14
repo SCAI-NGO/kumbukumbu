@@ -73,6 +73,20 @@ public class EntryReaderTests
     }
 
     [Fact]
+    public void A_reason_is_read_up_to_2000_characters()
+    {
+        var entry = EntryOf("/Work/Pump.md", $"---\nwhen: 2026-11-20\ntask: closed\nclosed: 2026-11-20\nreason: {new string('r', 2_500)}\n---\n");
+        Assert.Equal(new string('r', 2_000), entry.Reason);
+
+        var emoji = EntryOf("/Work/Beds.md", $"---\nwhen: 2026-11-20\ntask: closed\nclosed: 2026-11-20\nreason: \"{new string('r', 1_999)}🌱 more\"\n---\n");
+        Assert.Equal(new string('r', 1_999), emoji.Reason);
+
+        var (_, problem) = Read("/Work/Seal.md", $"---\nwhen: soon\ntask: \"open{new string(' ', 2_500)}\"\nreason: {new string('r', 2_500)}\n---\n");
+        Assert.Equal(2_000, problem!.Readable["reason"].Length);
+        Assert.Equal(2_000, problem.Readable["task"].Length);
+    }
+
+    [Fact]
     public void A_day_note_by_name_anywhere()
     {
         var entry = EntryOf("/Work/Diary/Week 2026-46/2026-11-12.md", "Standup went well.\n");
