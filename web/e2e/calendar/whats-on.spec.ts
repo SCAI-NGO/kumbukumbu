@@ -20,6 +20,7 @@ import {
   monthTitle,
   note,
   noteActions,
+  notePage,
   onPhone,
   shortDay,
   shortWeekTitle,
@@ -31,7 +32,6 @@ import {
   weekUrl,
 } from "./helpers";
 
-const notePage = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 
 type Item = { path: string; vault: string; title: string; state: string };
 type WhatsOn = { items: Item[]; count: number; overdue: boolean; vaults: { vault: string; count: number; overdue: boolean }[]; couldntRead: number };
@@ -89,10 +89,11 @@ test("calendar #5: in discreet Home, Add to calendar… with a time asks nothing
   const original = withoutCr(readFileSync(join(fixturesDir, "Home", "Zahnarzt.md"), "utf8"));
   const { context, page } = await freshSession("alice");
   await dismissInstallHint(page);
-  await revealDiscreet(page);
-  // An agent for Home, made while this session shows it, puts the note right at the end whatever happened.
-  const home = await makeAgent({ Home: "write" }, "home", context);
+  let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {
+    await revealDiscreet(page);
+    // An agent for Home, made while this session shows it, puts the note right at the end whatever happened.
+    home = await makeAgent({ Home: "write" }, "home", context);
     const panel = await treePanel(page, testInfo);
     await switchVault(page, panel, "Home");
     await panel.getByRole("button", { name: "Zahnarzt", exact: true }).click();
@@ -120,12 +121,20 @@ test("calendar #5: in discreet Home, Add to calendar… with a time asks nothing
     await expect(entryLine(page)).toHaveCount(0);
     expect(((await (await context.request.get("/api/notes/Home/Zahnarzt.md")).json()) as { content: string }).content).toBe(original);
   } finally {
-    await home.mcp.sh("calendar unset /Home/Zahnarzt.md");
-    await home.dispose();
-    await page.goto("/");
-    await hideDiscreet(page);
+    await endHidden(page, home);
   }
 });
+
+/** The end of a discreet step, whatever happened: Home's note out of the calendar, the key revoked, Home hidden. */
+async function endHidden(page: Page, home: Awaited<ReturnType<typeof makeAgent>> | undefined) {
+  if (home) {
+    await home.mcp.sh("calendar unset /Home/Zahnarzt.md");
+    await home.dispose();
+  }
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first()).toBeVisible();
+  if (await page.getByRole("button", { name: "Hide discreet vaults" }).count()) await hideDiscreet(page);
+}
 
 const withoutCr = (text: string) => text.replace(/\r\n/g, "\n");
 
@@ -218,7 +227,9 @@ test("calendar #9: the month is a stack of weeks, the grid marks weekends and da
     const checkGrid = async () => {
       await expect(grid.locator("caption")).toHaveText(monthTitle(t));
       await expect(grid.getByRole("rowheader")).toHaveText(mondays.map((m) => String(isoWeek(m).week)));
-      const backgrounds = await grid.locator("tbody tr").first().locator("td").evaluateAll((cells) => cells.map((c) => getComputedStyle(c).backgroundColor));
+      // A week without today and without the entry, so neither marks a cell.
+      const quiet = mondays.findIndex((m) => m !== monday(t));
+      const backgrounds = await grid.locator("tbody tr").nth(quiet).locator("td").evaluateAll((cells) => cells.map((c) => getComputedStyle(c).backgroundColor));
       expect(backgrounds.length).toBe(7);
       expect(new Set(backgrounds.slice(0, 5)).size, "the weekdays alike").toBe(1);
       expect(backgrounds[5], "Saturday apart from the weekdays").not.toBe(backgrounds[0]);
@@ -311,9 +322,10 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
   const headers = { Origin: baseURL };
   const before = await whatsOn(aliceApi);
   expect(before.overdue, "nothing overdue in the vaults the shared session shows").toBe(false);
-  await revealDiscreet(page);
-  const home = await makeAgent({ Home: "write" }, "home", context);
+  let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {
+    await revealDiscreet(page);
+    home = await makeAgent({ Home: "write" }, "home", context);
     // Home gets an overdue to-do through this session, which shows it.
     const set = await context.request.post("/api/vaults/Home/calendar/set", { data: { path: "/Home/Zahnarzt.md", when: addDays(t, -1), task: true }, headers });
     expect(set.status()).toBe(200);
@@ -343,6 +355,10 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     expect([hidden.count, hidden.overdue, hidden.vaults.map((v) => v.vault)]).toEqual([before.count, false, before.vaults.map((v) => v.vault)]);
     const { panel: shell, link } = await whatsOnLink(page, testInfo);
     await expect(link).toHaveAccessibleName(named("What's on", before.count, false));
+    if (before.count > 0) {
+      const badge = link.getByText(badgeWords(before.count, false), { exact: true }).locator("..");
+      expect(await badge.evaluate((e) => getComputedStyle(e).backgroundColor), "the badge's colour tells nothing of Home's overdue entry").not.toBe(await warningColour(page));
+    }
     await shell.getByRole("button", { name: /^Switch vault/ }).click();
     const vaults = page.getByRole("dialog", { name: "Vaults" });
     await expect(vaults.getByRole("button", { name: /^Work\b/ })).toBeVisible();
@@ -369,8 +385,7 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     await page.getByRole("link", { name: "Back to the notes" }).click();
     await hideDiscreet(page);
   } finally {
-    await home.mcp.sh("calendar unset /Home/Zahnarzt.md");
-    await home.dispose();
+    await endHidden(page, home);
   }
 });
 

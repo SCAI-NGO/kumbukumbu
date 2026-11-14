@@ -97,6 +97,9 @@ export const rangeText = (first: Day, last: Day) => {
   return `${shortDay(first, months)} – ${shortDay(last, months)}`;
 };
 
+/** The address of a note in the web app. */
+export const notePage = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
+
 /** A tag of the test's own (letters and digits), for the calendar's tag filter: other tests' entries stay out. */
 export const tagOf = (folder: string) => `t${folder.replace(/[^a-z0-9]/g, "")}`;
 

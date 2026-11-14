@@ -62,7 +62,9 @@ test("smoke #2: a note renders its text, a wikilink and an image @smoke @phone",
   await expect(article.getByText("lighthouse")).toBeVisible();
 
   // A note shows an image as a chip; it opens in the lightbox, where the image has loaded.
-  await article.getByRole("link", { name: "Open the image pixel.png" }).click();
+  const chip = article.getByRole("link", { name: "Open the image pixel.png" });
+  await expect(chip).toHaveAttribute("href", `/view/Work/${folder}/pixel.png`);
+  await chip.click();
   const viewer = page.getByRole("main", { name: "pixel.png" });
   const image = viewer.getByRole("img", { name: "pixel.png" });
   await expect(image).toBeVisible();
@@ -134,7 +136,7 @@ test("smoke #5: search by words and by tag finds the note @smoke", async ({ page
   await input.fill("#smoketag");
   await sheet.getByRole("button", { name: "#smoketag" }).first().click();
   await expect(sheet.getByRole("heading", { name: /tagged #smoketag$/ })).toBeVisible();
-  await expect(sheet.getByRole("list", { name: "Notes tagged #smoketag" }).getByRole("button", { name: new RegExp(folder) })).toBeVisible();
+  await expect(sheet.getByRole("list", { name: "Notes tagged #smoketag" }).getByRole("button", { name: new RegExp(`${folder}.*Note|Note.*${folder}`) })).toBeVisible();
 });
 
 test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, seedAs, folder }, testInfo) => {
@@ -156,12 +158,12 @@ test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, se
   await expect(tree.getByRole("button", { name: "Other", exact: true })).toBeVisible();
   await expect(tree.getByRole("button", { name: "Note", exact: true })).toHaveCount(0);
 
-  // The tree may still be scrolling to the open note, and any scroll closes a menu: opened again if it closed.
+  // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
   await expect(async () => {
     await page.keyboard.press("Escape");
     await tree.getByRole("button", { name: "Actions for Work" }).click();
     await page.getByRole("menuitem", { name: "Trash" }).click({ timeout: 2_000 });
-  }).toPass();
+  }).toPass({ timeout: 10_000 });
   const trash = page.getByRole("dialog", { name: "Trash" });
   await trash.getByRole("listitem").filter({ hasText: folder }).getByRole("button", { name: "Restore Note" }).click();
   await expect(trash.getByRole("list", { name: "Restored notes" })).toContainText("Restored Note");
@@ -178,16 +180,16 @@ test("smoke #7: an uploaded image opens @smoke", async ({ page, seedAs, folder }
   await openNote(page, `/Work/${folder}/Other.md`);
 
   const tree = await openTree(page, testInfo);
-  // The tree may still be scrolling to the open note, and any scroll closes a menu: opened again if it closed.
+  // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
   await expect(async () => {
     await page.keyboard.press("Escape");
     await tree.getByRole("button", { name: `Actions for ${folder}` }).click();
     await page.getByRole("menuitem", { name: "Upload here" }).click({ timeout: 2_000 });
-  }).toPass();
+  }).toPass({ timeout: 10_000 });
   const sheet = page.getByRole("dialog", { name: "Upload" });
   await sheet.getByLabel("Choose files").setInputFiles(join(fixturesDir, "tags", "smoke", "upload.png"));
   await sheet.getByRole("button", { name: "Upload", exact: true }).click();
-  await expect(sheet.getByRole("status")).toContainText("1");
+  await expect(sheet.getByRole("status")).toHaveText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped");
   await sheet.getByRole("button", { name: "Done" }).click();
 
   const files = await openTree(page, testInfo);
@@ -230,14 +232,18 @@ test("smoke #9: an edit in one tab shows in the other without a reload @smoke", 
   const other = await page.context().newPage();
   await openNote(other, path);
   await expect(other.locator("article").getByText("lighthouse")).toBeVisible();
+  // A marker on the page itself: it is gone if the page is ever reloaded.
+  await other.evaluate(() => ((window as unknown as { __mark: number }).__mark = 1));
 
   await write(page, "\nThe fog horn sounds twice.\n");
 
   // The other tab hears of it by itself and offers the new version: Refresh takes it, the page isn't reloaded.
   const bar = other.getByRole("region", { name: "Changed elsewhere" });
-  await expect(bar).toBeVisible();
+  await expect(bar.getByRole("status")).toContainText("You changed this note elsewhere");
+  await expect(other.locator("article").getByText("The fog horn sounds twice.")).toHaveCount(0);
   await bar.getByRole("button", { name: "Refresh" }).click();
   await expect(other.locator("article").getByText("The fog horn sounds twice.")).toBeVisible();
+  expect(await other.evaluate(() => (window as unknown as { __mark?: number }).__mark), "no reload").toBe(1);
 });
 
 test("smoke #10: hidden Home leaves no trace in the tree, search or Recent changes; shown again with the PIN @smoke @serial", async ({ freshSession }, testInfo) => {
@@ -261,17 +267,30 @@ test("smoke #10: hidden Home leaves no trace in the tree, search or Recent chang
   await expect(sheet.getByText("No notes found.")).toBeVisible();
   await expect(sheet.getByText("Zahnarzt")).toHaveCount(0);
 
-  // Recent changes.
-  await page.goto("/recent");
-  await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Recent changes" })).toBeVisible();
-  await expect(page.getByText("Zahnarzt")).toHaveCount(0);
+  // Recent changes (paged, so asked for by name): nothing matches, and Home is no vault chip.
+  const recent = async () => {
+    await page.goto("/recent");
+    await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+    await page.getByRole("searchbox", { name: "Find by name" }).fill("Zahnarzt");
+  };
+  await recent();
+  await expect(page.getByRole("status")).toHaveText("Nothing matches that.");
+  const chips = page.getByRole("group", { name: "Vaults" });
+  await expect(chips.getByRole("button", { name: "Work" })).toBeVisible();
+  await expect(chips.getByRole("button", { name: "Home" })).toHaveCount(0);
 
-  // With the PIN Home is back.
+  // With the PIN Home is back: its switcher entry, its note in the search, in Recent changes and as a chip.
   await page.goto("/");
   await revealDiscreet(page);
   await page.getByRole("button", { name: /^Switch vault/ }).click();
   await expect(page.getByRole("dialog", { name: /vault/i }).getByRole("button", { name: /^Home/ })).toBeVisible();
   await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByRole("dialog", { name: "Search" }).getByRole("searchbox", { name: "Search" }).fill("Zahnarzt");
+  await expect(page.getByRole("dialog", { name: "Search" }).getByRole("button", { name: /Zahnarzt/ })).toBeVisible();
+  await recent();
+  await expect(page.getByRole("list", { name: "Recent changes" }).getByText("Zahnarzt")).toBeVisible();
+  await expect(chips.getByRole("button", { name: "Home" })).toBeVisible();
+  await page.goto("/");
   await hideDiscreet(page);
 });

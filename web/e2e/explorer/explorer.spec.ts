@@ -2,7 +2,6 @@
 // The explorer's search and order (flags report, hand-test checklist 10–13; spec §3).
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { encodePath } from "../support/api";
-import { hideDiscreet, revealDiscreet } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
 
 const FILES = ["Pump/Certificate.md", "Pump/Valve.md", "Diary/Day.md"];
@@ -27,7 +26,6 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
 
 /** A tree row of a folder (its name and count) or of a note (its title, a flag's name after it). */
 const folderRow = (tree: Locator, name: string) => tree.getByRole("button", { name: new RegExp(`^${name}\\b`) });
-const noteRow = (tree: Locator, title: string) => tree.getByRole("button", { name: new RegExp(`^${title}\\b`) });
 
 /** Opens the tree's search and types `words`. */
 async function find(tree: Locator, words: string) {
@@ -35,11 +33,19 @@ async function find(tree: Locator, words: string) {
   await tree.getByRole("searchbox", { name: "Find by name" }).fill(words);
 }
 
-/** The tree's rows below `folder`'s own row, in order (the rows of other test folders stay out). */
+/** The titles of the rows below `folder`'s own row, as the tree nests them (the rows of other test folders stay out). */
 async function rowsOf(tree: Locator, folder: string): Promise<string[]> {
-  const all = await tree.locator("[data-tree-row]").evaluateAll((rows) => rows.map((r) => (r.textContent ?? "").trim()));
-  const at = all.findIndex((t) => t.startsWith(folder));
-  return at < 0 ? [] : all.slice(at + 1);
+  const all = await tree.locator("[data-tree-row]").evaluateAll((rows) =>
+    rows.map((r) => ({ title: r.querySelector("span.truncate")?.textContent?.trim() ?? "", depth: parseInt((r.closest("li") as HTMLElement | null)?.style.paddingLeft ?? "0", 10) })),
+  );
+  const at = all.findIndex((r) => r.title === folder);
+  if (at < 0) return [];
+  const below: string[] = [];
+  for (const row of all.slice(at + 1)) {
+    if (row.depth <= all[at].depth) break;
+    below.push(row.title);
+  }
+  return below;
 }
 
 test("flags #10: the tree search keeps only Pump › Certificate, opened @explorer @phone", async ({ page, seedAs, folder }, testInfo) => {
@@ -50,7 +56,7 @@ test("flags #10: the tree search keeps only Pump › Certificate, opened @explor
   // Pump is opened by the search; the test folder is the way to it. Other test folders may show theirs: only this one's rows count.
   const mine = folderRow(tree, folder);
   await expect(mine).toHaveAttribute("aria-expanded", "true");
-  await expect.poll(() => rowsOf(tree, folder)).toEqual([expect.stringMatching(/^Pump\b/), "Certificate"]);
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate"]);
   await expect(tree.getByRole("button", { name: /^Pump\b/ }).first()).toHaveAttribute("aria-expanded", "true");
   await expect(tree.getByRole("button", { name: /^(Valve|Day|Diary)\b/ })).toHaveCount(0);
   await shot(page, testInfo, "explorer");
@@ -66,17 +72,17 @@ test("flags #11: flag chips narrow the tree; no match offers Search the contents
   await expect.poll(() => rowsOf(tree, folder)).toHaveLength(5); // Diary, Day, Pump, Certificate, Valve
   await chips.getByRole("button", { name: "Red" }).click();
   await expect(chips.getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => rowsOf(tree, folder)).toEqual([expect.stringMatching(/^Pump\b/), expect.stringMatching(/^Certificate\b/)]);
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate"]);
 
   await chips.getByRole("button", { name: "Any flag" }).click();
-  await expect.poll(() => rowsOf(tree, folder)).toEqual([expect.stringMatching(/^Pump\b/), expect.stringMatching(/^Certificate\b/), expect.stringMatching(/^Valve\b/)]);
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate", "Valve"]);
   await chips.getByRole("button", { name: "Any flag" }).click(); // lets go
 
   await tree.getByRole("searchbox", { name: "Find by name" }).fill("zzqxj nothing");
   await expect(tree.getByRole("status")).toHaveText("Nothing called that here.");
   await tree.getByRole("button", { name: "Search the contents…" }).click();
   const sheet = page.getByRole("dialog", { name: "Search" });
-  await expect(sheet.getByRole("textbox", { name: "Search" })).toHaveValue("zzqxj nothing");
+  await expect(sheet.getByRole("searchbox", { name: "Search" })).toHaveValue("zzqxj nothing");
   await shot(page, testInfo, "explorer-search");
 });
 
@@ -99,19 +105,16 @@ test("flags #12: Escape and ✕ bring the full tree back @explorer @phone", asyn
   await full();
   // The tree itself (the phone's drawer) stays: Escape closed the search alone.
   await expect(tree).toBeVisible();
-  await expect.poll(() => rowsOf(tree, folder)).not.toContain("Valve");
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Diary", "Pump", "Certificate", "Valve"]);
 
   await find(tree, "pump cert");
   await expect.poll(() => rowsOf(tree, folder)).toHaveLength(2);
   await tree.getByRole("button", { name: "Close the search" }).click();
   await full();
-  // The notes the search had hidden are reachable: opening the test folder shows its Diary and Pump again.
-  const mine = folderRow(tree, folder);
-  if ((await mine.getAttribute("aria-expanded")) !== "true") await mine.click();
-  await expect.poll(() => rowsOf(tree, folder)).toEqual(expect.arrayContaining([expect.stringMatching(/^Diary\b/), expect.stringMatching(/^Pump\b/)]));
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Diary", "Pump", "Certificate", "Valve"]);
 });
 
-test("flags #13: Last changed puts the latest folder first, folders above files, kept on reload @explorer @serial", async ({ page, aliceApi, mcp, seedAs, folder }, testInfo) => {
+test("flags #13: Last changed puts the latest folder first, folders above files, kept on reload @explorer @serial", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
   // Work/<folder>: Pump (2 notes) and Diary (1) as folders, and a file of its own; Diary is written last.
   await seedAs("tags/explorer/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
   await seedAs("tags/explorer/Pump/Valve.md", `/Work/${folder}/Pump/Valve.md`);
@@ -135,7 +138,7 @@ test("flags #13: Last changed puts the latest folder first, folders above files,
     // Inside it: Diary (written last) before Pump, both folders above the file Index.
     const mine = folderRow(tree, folder);
     if ((await mine.getAttribute("aria-expanded")) !== "true") await mine.click();
-    await expect.poll(async () => (await rowsOf(tree, folder)).slice(0, 3)).toEqual([expect.stringMatching(/^Diary\b/), expect.stringMatching(/^Pump\b/), expect.stringMatching(/^Index\b/)]);
+    await expect.poll(async () => (await rowsOf(tree, folder)).slice(0, 3)).toEqual(["Diary", "Pump", "Index"]);
 
     // Kept on this device after a reload, and for another vault.
     await page.reload();

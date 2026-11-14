@@ -192,10 +192,14 @@ test("flags #5: Done asks whether to mark it done in the calendar @flags @phone"
   }
 });
 
-test("flags #6: Mark done writes flag, task and closed in one version, Undo gives both back @flags", async ({ page, aliceApi, seedAs, folder }) => {
+test("flags #6: Mark done writes flag, task and closed in one version, Undo gives both back @flags", async ({ page, aliceApi, mcp, seedAs, folder }) => {
   const path = await seedCertificate(seedAs, folder);
   try {
-    const open = await aliceApi.putNote(path, openTodo());
+    // By the agent, not by Alice's own session: writes of one writer close together join one version (a changeset), which would hide the new one.
+    const set = await mcp.sh(`calendar set "${path}" --when ${today()} --task`);
+    expect(set.isError, set.text).toBe(false);
+    const open = await aliceApi.getNote(path);
+    expect(open.content).toContain("task: open");
     const versions = (await aliceApi.history(path)).length;
     await openNote(page, path);
     await (await openFlagMenu(page)).getByRole("button", { name: "Done", exact: true }).click();
@@ -206,7 +210,7 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
     expect(closed).toContain("flag/done");
     expect(closed).toContain("task: closed");
     expect(closed).toContain(`closed: ${today()}`);
-    expect((await aliceApi.history(path)).length, "one version more").toBe(versions + 1);
+    await expect.poll(async () => (await aliceApi.history(path)).length, "one version more").toBe(versions + 1);
     await expect(page.getByRole("group", { name: "In the calendar" })).toContainText(/closed/i);
 
     await message(page).getByRole("button", { name: "Undo" }).click();
@@ -255,7 +259,7 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   await expect(bobPage.getByRole("menuitem", { name: /^Flag$/ })).toHaveCount(0);
   await expect(tree.getByRole("button", { name: `Actions for ${folder}` })).toHaveCount(0);
   await expect(bobPage.getByText(/Take photo/)).toHaveCount(0);
-  await expect(bobPage.getByRole("button", { name: "Flag" })).toHaveCount(0);
+  await expect(bobPage.getByRole("button", { name: "Flag", exact: true })).toHaveCount(0);
 });
 
 test("flags #9: the agent's tags flag and rg --tag flag/red list the flagged note @flags", async ({ aliceApi, seedAs, folder }) => {
@@ -266,9 +270,9 @@ test("flags #9: the agent's tags flag and rg --tag flag/red list the flagged not
   const flagged = await aliceApi.console(`tags flag /Work/${folder}`);
   expect(flagged.isError, flagged.text).toBe(false);
   expect(flagged.text).toContain(`${path}:`);
-  const red = await aliceApi.console(`rg --tag flag/red /Work/${folder}`);
+  const red = await aliceApi.console(`rg --tag flag/red -l "" /Work/${folder}`);
   expect(red.isError, red.text).toBe(false);
-  expect(red.text).toContain(`${path}:`);
+  expect(red.text).toContain(`${path}`);
 
   // The eight flags as the app has them (web/src/flags/api.ts): help names each by its tag.
   const source = readFileSync(join(e2eDir, "..", "src", "flags", "api.ts"), "utf8");

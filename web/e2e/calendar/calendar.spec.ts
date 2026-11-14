@@ -13,6 +13,7 @@ import {
   makeAgent,
   note,
   noteActions,
+  notePage,
   onPhone,
   rangeText,
   shortDay,
@@ -26,7 +27,6 @@ import {
 import { shot } from "../support/test";
 
 const EMPTY_WEEK = 'Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: "put this on Friday".';
-const notePage = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 
 test.beforeEach(async ({ page }) => {
   await dismissInstallHint(page);
@@ -200,8 +200,10 @@ test("calendar #13: at 375 px, dark and light, the days stack, nothing scrolls s
   test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
   const t = today();
   const title = "A to-do with a rather long title that has to wrap on a phone of 375 pixels";
-  await aliceApi.putNote(`/Work/${folder}/${title}.md`, note({ when: t, task: "open" }, `# ${title}\n`));
-  await page.goto(weekUrl("Work", t));
+  // Narrowed to a tag of its own, so other tests' entries in Work add no days, lines or controls of theirs.
+  const tag = tagOf(folder);
+  await aliceApi.putNote(`/Work/${folder}/${title}.md`, note({ when: t, task: "open", tags: `[${tag}]` }, `# ${title}\n`));
+  await page.goto(weekUrl("Work", t, tag));
   await expect(page.getByRole("link", { name: title })).toBeVisible();
 
   const backgrounds: string[] = [];
@@ -211,7 +213,7 @@ test("calendar #13: at 375 px, dark and light, the days stack, nothing scrolls s
     await expect.poll(() => page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(scheme === "dark");
     backgrounds.push(await page.evaluate(() => getComputedStyle(document.body).backgroundColor));
 
-    const boxes = await page.locator("main section[aria-labelledby]").evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y, w: r.width })));
+    const boxes = await page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / }).evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y, w: r.width })));
     expect(boxes.length, scheme).toBe(7);
     for (let i = 1; i < 7; i++) {
       expect(boxes[i].x, `${scheme}: day ${i} under the one before`).toBe(boxes[0].x);
@@ -281,12 +283,16 @@ test("calendar #17: an agent reads and writes the calendar through sh, and the c
   await seedAs("tags/calendar/Tags/Kumbu.md", `/Work/${folder}/Kumbu.md`);
   await aliceApi.putNote(`/Work/${folder}/Due.md`, note({ when: addDays(t, -2), task: "open" }, "# Due\n"));
   await aliceApi.putNote(dayNote, `# ${t}\n`);
+  await aliceApi.putNote(`/Work/${folder}/Someday.md`, note({ when: "someday" }, "# Someday\n"));
   const version = /version of .+: [0-9a-f]+/;
 
   const notifications = await mcp.sh("calendar notifications");
   expect(notifications.isError).toBe(false);
-  expect(notifications.text).toContain(`/Work/${folder}/Due.md`);
-  expect(notifications.text).toMatch(/overdue · 2 days/);
+  const due = notifications.text.split("\n").filter((l) => l.includes(`/Work/${folder}/Due.md`));
+  expect(due, "one line for Due.md").toHaveLength(1);
+  expect(due[0]).toContain("overdue · 2 days");
+  // At least this folder's Someday.md; other tests' dates may be counted too.
+  expect(notifications.text).toMatch(/^Problems: (1 date|\d+ dates) can't be read \((\/\S+ \d+, )*\/Work \d+(, \/\S+ \d+)*\); calendar \/\S+ lists (it|them)$/m);
 
   const week = await mcp.sh("calendar /Work");
   expect(week.isError).toBe(false);
@@ -345,8 +351,9 @@ test("calendar #17: an agent reads and writes the calendar through sh, and the c
     expect(refused.isError).toBe(true);
     expect(refused.text).toMatch(/checkpoint can't be changed/);
   } finally {
-    await keeper.mcp.sh(`rmcp /Work ${cp}`);
+    const removed = await keeper.mcp.sh(`rmcp /Work ${cp}`);
     await keeper.dispose();
+    expect(removed.isError, "rmcp removes the checkpoint").toBe(false);
   }
 
   const reads = await aliceApi.console("calendar /Work");
