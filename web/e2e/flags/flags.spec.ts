@@ -267,6 +267,8 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   })() : bobPage.getByRole("complementary", { name: "File tree" });
   const row = tree.locator('[aria-current="page"]');
   await expect(row).toBeVisible();
+  // The folder's menu button, absent with the tree open (checked before the row's menu, whose Escape may close a drawer).
+  await expect(tree.getByRole("button", { name: `Actions for ${folder}` })).toHaveCount(0);
   const rowActions = row.locator("..").getByRole("button", { name: "Actions for Certificate" });
   await (onPhone(testInfo) ? rowActions.tap() : rowActions.click());
   const rowMenu = bobPage.getByRole("menu", { name: "Actions for Certificate" });
@@ -274,7 +276,6 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   await expect(rowMenu.getByRole("menuitem", { name: "Flag" })).toHaveCount(0);
   await expect(rowMenu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
   await bobPage.keyboard.press("Escape");
-  await expect(tree.getByRole("button", { name: `Actions for ${folder}` })).toHaveCount(0);
   await expect(bobPage.getByText(/Take photo/)).toHaveCount(0);
 });
 

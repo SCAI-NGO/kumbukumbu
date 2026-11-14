@@ -2,9 +2,33 @@
 // Aliases (the aliases report's hand-test checklist, steps 1-8 and 11-13; spec 2026-11-12-aliases-design.md).
 // Aliases resolve vault-wide: two folders with `aliases: [Kumbu, K²]` would make `[[Kumbu]]` ambiguous. So every test is
 // serial and removes its notes at its end, even when it fails; steps 9 (Bob with Write) and 10 (Carol) are left out.
-import type { Page } from "@playwright/test";
+import { request, type Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { Api, Mcp } from "../support/api";
+import { baseURL } from "../support/env";
 import { expect, shot, test } from "../support/test";
-import type { Api } from "../support/api";
+
+/** An agent of Alice's that may publish in Work too (the shared `mcp` may not: "May publish" is a right of its own). */
+async function publisher() {
+  const owner = await Api.as("alice");
+  const data = { name: `e2e aliases ${randomBytes(3).toString("hex")}`, vaults: { Work: "write" }, expiresInDays: 30, publish: ["Work"] };
+  // The password is confirmed only when the session's window has closed (it counts against a rate limit).
+  let answer = await owner.context.post("/api/keys", { data });
+  if (answer.status() === 401) {
+    await owner.confirmPassword();
+    answer = await owner.context.post("/api/keys", { data });
+  }
+  expect(answer.status(), `POST /api/keys: ${answer.status()}`).toBe(201);
+  const created = (await answer.json()) as { key: string; apiKey: { id: string } };
+  const mcp = new Mcp(await request.newContext({ baseURL }), created.key, { api: owner, id: created.apiKey.id });
+  return {
+    mcp,
+    dispose: async () => {
+      await mcp.dispose();
+      await owner.dispose();
+    },
+  };
+}
 
 const url = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 
@@ -159,8 +183,10 @@ test("aliases #8: mv keeps alias links unchanged and leads them to the new place
   );
 });
 
-test("aliases #11: the published diary reads plain text @aliases @serial @phone", async ({ aliceApi, mcp, browser, projectContextOptions, seedAs, folder }) => {
+test("aliases #11: the published diary reads plain text @aliases @serial @phone", async ({ aliceApi, browser, projectContextOptions, seedAs, folder }) => {
   let published: string | undefined;
+  const agent = await publisher();
+  const mcp = agent.mcp;
   const context = await browser.newContext(projectContextOptions);
   try {
     await withNotes({ aliceApi, seedAs, folder }, [projects, diary], async (at) => {
@@ -186,6 +212,7 @@ test("aliases #11: the published diary reads plain text @aliases @serial @phone"
     // Withdrawn even when the test failed: a publication outlives the note's removal.
     if (published) await mcp.sh(`publish rm ${published}`).catch(() => undefined);
     await context.close();
+    await agent.dispose();
   }
 });
 

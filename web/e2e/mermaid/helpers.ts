@@ -2,7 +2,8 @@
 // What the Mermaid and parity tests share (the mermaid report's checklist; spec 2026-11-12-mermaid-and-parity-design.md):
 // the spec's example below the test's folder, the way to a note, and the clean-up of the folder.
 import type { Locator, Page } from "@playwright/test";
-import type { Api } from "../support/api";
+import { encodePath, type Api } from "../support/api";
+import { secrets } from "../support/env";
 import { test as base, expect } from "../support/test";
 
 export const test = base;
@@ -83,4 +84,32 @@ export async function cleanFolder(api: Api, folder: string) {
   for (const path of listed.text.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/Work/"))) {
     await api.deleteNote(path).catch(() => {});
   }
+}
+
+/**
+ * ⋯ → Publish…, through the dialog (her password only if the password window is closed): the link, never printed.
+ * Withdrawn by `withdraw` at the test's end.
+ */
+export async function publish(page: Page) {
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await page.getByRole("menu", { name: "Note actions" }).getByRole("menuitem", { name: "Publish…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Publish this note" });
+  const password = dialog.getByLabel("Your password");
+  const linkField = dialog.getByRole("textbox", { name: "Link" });
+  // Once the session says whether the window is open: the password field, or Publish enabled without it.
+  await expect(password.or(dialog.getByRole("button", { name: "Publish", exact: true, disabled: false })).first()).toBeVisible();
+  if (await password.isVisible()) await password.fill(secrets().passwords.alice);
+  await dialog.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(linkField).toHaveValue(/\S/);
+  const link = await linkField.inputValue();
+  expect(/^http:\/\/localhost:8080\/s#\S+$/.test(link), "the publish link's shape").toBe(true);
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(dialog).toHaveCount(0);
+  return link;
+}
+
+/** Withdraws the note's publication, if there is one. */
+export async function withdraw(api: Api, path: string) {
+  const answer = await api.context.delete(`/api/publications/${encodePath(path)}`);
+  expect([200, 204, 404], `withdrawing: ${answer.status()}`).toContain(answer.status());
 }
