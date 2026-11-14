@@ -123,8 +123,9 @@ export class Mcp {
   ) {}
 
   /** A key of the API's user, revoked again by `dispose`. */
-  static async create(api: Api, name: string, vaults: Record<string, "read" | "write" | "maintain">) {
-    const body = { name, vaults, expiresInDays: 30 };
+  static async create(api: Api, name: string, vaults: Record<string, "read" | "write" | "maintain">, publish: string[] = []) {
+    // May publish is a right of its own, by vault (`publish add` needs it).
+    const body = { name, vaults, expiresInDays: 30, ...(publish.length ? { publish } : {}) };
     // Confirming the password counts against a rate limit: only when the session's password window has closed.
     let response = await api.context.post("/api/keys", { data: body });
     if (response.status() === 401) {
