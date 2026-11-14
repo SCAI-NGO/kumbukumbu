@@ -122,12 +122,80 @@ describe("Menu", () => {
     expect(screen.getByRole("button", { name: "after" })).toHaveFocus();
   });
 
-  it("closes when the page scrolls", async () => {
+  it("closes when the person scrolls with the wheel", async () => {
     layout({ top: 100, bottom: 130, left: 900, right: 940 });
     render(<Clipped />);
     await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.wheel(screen.getByTestId("clip"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes when the person scrolls with a finger", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.touchMove(screen.getByTestId("clip"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes when the page scrolls while the person holds a press (a scrollbar)", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.pointerDown(document.documentElement);
     fireEvent.scroll(screen.getByTestId("clip"));
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes when the page scrolls while the person holds a key", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    const button = screen.getByRole("button", { name: "Actions" });
+    await userEvent.click(button);
+    fireEvent.keyDown(button, { key: "PageDown" });
+    fireEvent.scroll(screen.getByTestId("clip"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("stays open and follows its button when a container scrolls by itself", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    layout({ top: 200, bottom: 230, left: 900, right: 940 });
+    fireEvent.scroll(screen.getByTestId("clip"));
+    expect(screen.getByRole("menu").style.top).toBe("234px");
+  });
+
+  it.each([
+    ["released", fireEvent.pointerUp],
+    ["cancelled", fireEvent.pointerCancel],
+  ])("a press that was %s no longer counts: a scroll by itself is followed", async (_, end) => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.pointerDown(document.documentElement);
+    end(document.documentElement);
+    fireEvent.scroll(screen.getByTestId("clip"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("a key that was released no longer counts: a scroll by itself is followed", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    const button = screen.getByRole("button", { name: "Actions" });
+    await userEvent.click(button);
+    fireEvent.keyDown(button, { key: "PageDown" });
+    fireEvent.keyUp(button, { key: "PageDown" });
+    fireEvent.scroll(screen.getByTestId("clip"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("a wheel inside the list keeps it open", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.wheel(screen.getByRole("menu"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("follows the button when the window is resized", async () => {
