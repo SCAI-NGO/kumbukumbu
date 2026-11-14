@@ -30,6 +30,7 @@ export const noteUrl = (path: string) => `/notes/${path.replace(/^\//, "").split
 
 /** Opens a note by its address; on the phone the install hint is answered with Not now, as a person would, whenever it shows. */
 export async function openNote(page: Page, path: string) {
+  await keepDiagramBlobs(page);
   const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
   await page.addLocatorHandler(hint, async () => {
     await hint.getByRole("button", { name: "Not now" }).click();
@@ -53,8 +54,34 @@ export async function expectLoaded(image: Locator) {
   await expect.poll(() => image.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth), "the image loaded").toBeGreaterThan(0);
 }
 
+const watched = new WeakSet<Page>();
+
+/**
+ * Keeps each Blob the page makes an object URL of, by its URL: the app's CSP doesn't let a page fetch a `blob:` URL,
+ * so the SVG behind a diagram's image is read from its Blob (`svgOf`). Once per page, before the note is opened.
+ */
+async function keepDiagramBlobs(page: Page) {
+  if (watched.has(page)) return;
+  watched.add(page);
+  await page.addInitScript(() => {
+    const w = window as unknown as { __blobs: Map<string, Blob> };
+    w.__blobs = new Map();
+    const make = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (object: Blob | MediaSource) => {
+      const url = make(object);
+      if (object instanceof Blob) w.__blobs.set(url, object);
+      return url;
+    };
+  });
+}
+
 /** The SVG behind a diagram's `blob:` image, as text: what it draws and in which colours. */
-export const svgOf = (image: Locator) => image.evaluate(async (i: HTMLImageElement) => (await fetch(i.src)).text());
+export const svgOf = (image: Locator) =>
+  image.evaluate(async (i: HTMLImageElement) => {
+    const blob = (window as unknown as { __blobs: Map<string, Blob> }).__blobs.get(i.src);
+    if (!blob) throw new Error("No Blob kept for the image (opened without openNote?).");
+    return blob.text();
+  });
 
 /** Mermaid's `default` theme fills a flowchart's nodes with #ECECFF; its `dark` theme doesn't use it. */
 export const lightFill = /#ececff/i;

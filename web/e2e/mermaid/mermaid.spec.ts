@@ -58,7 +58,7 @@ test("mermaid #2: Show source toggles the code with aria-expanded @mermaid", asy
   const hide = article(page).getByRole("button", { name: "Hide source" });
   await expect(hide).toHaveAttribute("aria-expanded", "true");
   await expect(code).toBeVisible();
-  await expect(article(page).locator("pre", { has: code })).toHaveText(/^flowchart LR\n\s+Sensor --> Controller --> Pump\s*$/);
+  await expect(article(page).locator("pre").filter({ hasText: "Sensor --> Controller --> Pump" })).toHaveText(/^flowchart LR\n\s+Sensor --> Controller --> Pump\s*$/);
 
   await hide.click();
   await expect(show).toHaveAttribute("aria-expanded", "false");

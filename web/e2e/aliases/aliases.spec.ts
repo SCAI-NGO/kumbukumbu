@@ -203,7 +203,7 @@ test("aliases #11: the published diary reads plain text @aliases @serial @phone"
       const article = reader.locator("article");
       await expect(article.getByRole("heading", { name: "2026-11-12", level: 1 })).toBeVisible();
       // One paragraph of two lines, the links as plain words.
-      await expect(article.locator("p")).toHaveText("Talked with Bob about Kumbu and the roadmap. Kumbu needs a calendar.");
+      await expect(article.locator("p.my-3")).toHaveText("Talked with Bob about Kumbu and the roadmap. Kumbu needs a calendar.");
       await expect(article.getByRole("link")).toHaveCount(0);
       await expect(reader.getByText(/Kumbukumbu|Projects|Roadmap/)).toHaveCount(0);
       expect(await fitsWidth(reader), "no sideways scroll").toBe(true);
