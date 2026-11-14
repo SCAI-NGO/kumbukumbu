@@ -124,8 +124,15 @@ export class Mcp {
 
   /** A key of the API's user, revoked again by `dispose`. */
   static async create(api: Api, name: string, vaults: Record<string, "read" | "write" | "maintain">) {
-    await api.confirmPassword();
-    const created = await api.json<{ key: string; apiKey: { id: string } }>("POST", "/api/keys", { name, vaults, expiresInDays: 30 });
+    const body = { name, vaults, expiresInDays: 30 };
+    // Confirming the password counts against a rate limit: only when the session's password window has closed.
+    let response = await api.context.post("/api/keys", { data: body });
+    if (response.status() === 401) {
+      await api.confirmPassword();
+      response = await api.context.post("/api/keys", { data: body });
+    }
+    await ok(response, "POST /api/keys");
+    const created = (await response.json()) as { key: string; apiKey: { id: string } };
     return new Mcp(await request.newContext({ baseURL }), created.key, { api, id: created.apiKey.id });
   }
 

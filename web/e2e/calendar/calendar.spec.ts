@@ -211,7 +211,7 @@ test("calendar #13: at 375 px, dark and light, the days stack, nothing scrolls s
   for (const scheme of ["dark", "light"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await expect.poll(() => page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(scheme === "dark");
-    backgrounds.push(await page.evaluate(() => getComputedStyle(document.body).backgroundColor));
+    backgrounds.push(await page.evaluate(() => `${document.documentElement.dataset.scheme} ${getComputedStyle(document.querySelector("main")!).color}`));
 
     const boxes = await page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / }).evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y, w: r.width })));
     expect(boxes.length, scheme).toBe(7);
