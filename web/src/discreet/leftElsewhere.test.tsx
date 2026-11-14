@@ -9,6 +9,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, renderApp, user } from "../test/app";
+import { entryView } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import { forgetHeld } from "./hideAgain";
 import { forgetDiscreet } from "./neutralWindow";
@@ -247,6 +248,75 @@ describe("a vault marked discreet in another session", () => {
 
     expect(queryClient.getQueryData(["recent", "", null, [], 50])).toBeUndefined();
     expect(queryClient.getQueryData(["recent", "a", null, [], 50])).toEqual(recent("Work"));
+  });
+
+  /** What's on with one entry of each of `vaults`, and the count to go with it. */
+  const whatsOn = (...vaults: string[]) => {
+    const items = vaults.map((v) => entryView("a", { path: `/${v}/a.md`, vault: v }));
+    return { items, count: items.length, overdue: false, vaults: vaults.map((vault) => ({ vault, count: 1, overdue: false })), couldntRead: 0, couldntReadVaults: [] };
+  };
+
+  /** A tab whose What's on answers `whatsOn("Work")` once `at.hold` lets it, with What's on and its count of both vaults in. */
+  async function withWhatsOn() {
+    const hold = { hold: Promise.resolve() };
+    const { at } = server(["Work", "Tagebuch"], { "GET /api/calendar/whats-on": () => hold.hold.then(() => json(200, whatsOn("Work"))) });
+    const { queryClient } = await tabOn("/notes/Work/inbox.md", at);
+    await settle();
+    hold.hold = new Promise(() => {});
+    queryClient.setQueryData(["whats-on", "items", null], whatsOn("Work", "Tagebuch"));
+    queryClient.setQueryData(["whats-on", "count"], whatsOn("Work", "Tagebuch"));
+    return { at, queryClient };
+  }
+
+  it("drops What's on and its count, which listed its entries", async () => {
+    const { at, queryClient } = await withWhatsOn();
+
+    await markedElsewhere(queryClient, at, ["Work"]);
+    await settle();
+
+    expect(JSON.stringify(queryClient.getQueryData(["whats-on", "items", null]) ?? null)).not.toContain("Tagebuch");
+    expect(JSON.stringify(queryClient.getQueryData(["whats-on", "count"]) ?? null)).not.toContain("Tagebuch");
+  });
+
+  it("takes the count off the app's icon until it is in again", async () => {
+    const icon = { setAppBadge: vi.fn(() => Promise.resolve()), clearAppBadge: vi.fn(() => Promise.resolve()) };
+    Object.assign(navigator, icon);
+    try {
+      const { at, queryClient } = await withWhatsOn();
+      await waitFor(() => expect(icon.setAppBadge).toHaveBeenLastCalledWith(2));
+      icon.clearAppBadge.mockClear();
+
+      await markedElsewhere(queryClient, at, ["Work"]);
+      await settle();
+
+      expect(icon.clearAppBadge).toHaveBeenCalled();
+      expect(icon.setAppBadge).toHaveBeenLastCalledWith(2);
+    } finally {
+      delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+      delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+    }
+  });
+
+  it("keeps What's on and the app's count when they listed none of its entries", async () => {
+    const icon = { setAppBadge: vi.fn(() => Promise.resolve()), clearAppBadge: vi.fn(() => Promise.resolve()) };
+    Object.assign(navigator, icon);
+    try {
+      const { at, queryClient } = await withWhatsOn();
+      queryClient.setQueryData(["whats-on", "items", null], whatsOn("Work"));
+      queryClient.setQueryData(["whats-on", "count"], whatsOn("Work"));
+      await waitFor(() => expect(icon.setAppBadge).toHaveBeenLastCalledWith(1));
+      icon.clearAppBadge.mockClear();
+
+      await markedElsewhere(queryClient, at, ["Work"]);
+      await settle();
+
+      expect(icon.clearAppBadge).not.toHaveBeenCalled();
+      expect(queryClient.getQueryData(["whats-on", "count"])).toEqual(whatsOn("Work"));
+      expect(queryClient.getQueryData(["whats-on", "items", null])).toEqual(whatsOn("Work"));
+    } finally {
+      delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+      delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+    }
   });
 
   it("leaves this tab's view when it was marked while the connection was down", async () => {

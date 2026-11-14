@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 import type { NavigateFunction } from "react-router-dom";
 import { vaultOf } from "../api/paths";
+import { badgeQuery } from "../calendar/api";
+import { clearAppBadge } from "../calendar/useBadge";
 import { useConsole } from "../console/store";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -43,10 +45,12 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
     if (!hiding) useDiscreet.setState({ hiding: false });
   }
 
-  // What was found, what changed, and Recent changes list notes of every vault under keys that name none.
-  void queryClient.resetQueries({
-    predicate: (q) => ["search", "changes", "recent"].includes(q.queryKey[0] as string) && q.state.data !== undefined && named(q.state.data, names),
-  });
+  // What was found, what changed, Recent changes and What's on list notes of every vault under keys that name none. As
+  // hiding again does, the app's icon is cleared when the count counted them, until the new count is in.
+  const left = (q: Query) =>
+    ["search", "changes", "recent", "whats-on"].includes(q.queryKey[0] as string) && q.state.data !== undefined && named(q.state.data, names);
+  if (queryClient.getQueryCache().findAll({ queryKey: badgeQuery.queryKey, exact: true, predicate: left }).length > 0) clearAppBadge();
+  void queryClient.resetQueries({ predicate: left });
   sweep(queryClient, names);
   // A command needn't name the vault to have shown it (`ls` at the root).
   useConsole.getState().reset();
