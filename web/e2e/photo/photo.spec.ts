@@ -30,8 +30,8 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
 async function folderMenu(page: Page, tree: Locator, name: string) {
   const menu = page.getByRole("menu", { name: `Actions for ${name}` });
   await expect(async () => {
-    await page.keyboard.press("Escape");
-    await tree.getByRole("button", { name: `Actions for ${name}` }).click();
+    // Not Escape: on the phone it would close the drawer too.
+    if (!(await menu.isVisible())) await tree.getByRole("button", { name: `Actions for ${name}` }).click();
     await expect(menu.getByRole("menuitem").first()).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 10_000 });
   return menu;
@@ -57,10 +57,14 @@ test("flags #18: Take photo sits beside Upload here on the phone @photo @phone",
 test("flags #18: Bob is not offered Take photo @photo @phone", async ({ bobPage }, testInfo) => {
   await openNote(bobPage, "/Work/Pump/Certificate.md");
   const tree = await openTree(bobPage, testInfo);
-  // Work's folders from the setup: a reader has no folder menu at all, so no Take photo and no Upload here.
+  // Work's folders from the setup: a reader has no menu on a folder, so no Take photo and no Upload here.
   await expect(tree.getByRole("button", { name: /^Pump\b/ })).toBeVisible();
-  await expect(tree.getByRole("button", { name: /^Actions for (Work|Pump)$/ })).toHaveCount(0);
-  await expect(bobPage.getByRole("menuitem", { name: /photo|upload/i })).toHaveCount(0);
+  await expect(tree.getByRole("button", { name: "Actions for Pump" })).toHaveCount(0);
+  // Only the vault's own menu is left (Work's root); it offers neither.
+  await tree.getByRole("button", { name: "Actions for Work" }).click();
+  const menu = bobPage.getByRole("menu", { name: "Actions for Work" });
+  await expect(menu.getByRole("menuitem").first()).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /photo|upload/i })).toHaveCount(0);
   await expect(bobPage.getByText(/Take photo/)).toHaveCount(0);
 });
 

@@ -261,9 +261,12 @@ test("calendar #13: every control is at least 48 px high @calendar @phone", asyn
   test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
   const small: { scheme: string; name: string; height: number }[] = [];
   await phoneWeek(page, aliceApi, folder, async (scheme) => {
+    // The week is in, with the two controls the finding is about.
+    await expect(page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / })).toHaveCount(7);
+    for (const name of FOUND_SMALL) await expect(page.getByRole("button", { name, exact: true }), `${scheme}: ${name}`).toBeVisible();
     small.push(...(await smallControls(page)).map((c) => ({ scheme, ...c })));
   });
-  expect(small, "every control at least 48 px high").toEqual([]);
+  expect(small, "F-01: every control is at least 48 px high").toEqual([]);
 });
 
 test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, Today, This week, Fix… or the note's calendar items @calendar @phone", async ({ bobPage, bobApi, aliceApi, folder }) => {

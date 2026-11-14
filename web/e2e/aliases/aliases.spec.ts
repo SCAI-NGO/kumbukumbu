@@ -89,8 +89,12 @@ test("aliases #2: roadmap opens Kumbukumbu at its Roadmap section @aliases @seri
     await press(testInfo, page.locator("article").getByRole("link", { name: "roadmap", exact: true }));
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Long/Kumbukumbu\\.md$`));
     const roadmap = page.locator("article").getByRole("heading", { name: "Roadmap", level: 2 });
-    await expect(roadmap).toBeInViewport();
-    await expect(page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 })).not.toBeInViewport();
+    const top = page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 });
+    // The note rendered: both headings are in the page (not necessarily in view).
+    await expect(top).toHaveCount(1);
+    await expect(roadmap).toBeAttached();
+    await expect(roadmap, "F-03: the Roadmap heading is in view").toBeInViewport();
+    await expect(top, "F-03: the note's top is scrolled away").not.toBeInViewport();
   });
 });
 
