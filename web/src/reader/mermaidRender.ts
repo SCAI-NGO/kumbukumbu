@@ -145,6 +145,8 @@ const hasHtml = (decoded: string) => /<(?!\/?br\s*\/?>)[A-Za-z!/?]/i.test(decode
 function asImage(svg: string) {
   const root = new DOMParser().parseFromString(svg, "text/html").querySelector("svg");
   if (!root) throw new Error("Mermaid's drawing is no SVG.");
+  // An image needs no link: a link is unwrapped, in the drawing and in its HTML boxes, its text staying in the picture.
+  for (const a of [...root.querySelectorAll("a")]) a.replaceWith(...a.childNodes);
   const box = root.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
   if (box?.length === 4 && box.every(Number.isFinite)) {
     root.setAttribute("width", String(box[2]));

@@ -84,6 +84,22 @@ describe("MermaidDiagram", () => {
     expect(text).not.toContain("&nbsp;");
   });
 
+  it("the image keeps a linked node's text, but no link", async () => {
+    m.render.mockResolvedValue(
+      drawn(
+        '<svg viewBox="0 0 10 10"><a href="https://example.org/pump"><g><text>Pump</text></g></a>' +
+          '<foreignObject width="10" height="10"><div><a href="https://example.org/home">Home</a></div></foreignObject></svg>',
+      ),
+    );
+    render(<MermaidDiagram source={flowchart} dark={false} />);
+    await screen.findByRole("img");
+    const text = await (urls.create.mock.calls[0][0] as Blob).text();
+    expect(text).toContain("Pump");
+    expect(text).not.toMatch(/<a[\s>]/);
+    expect(text).toContain("Home");
+    expect(text).not.toMatch(/href=/);
+  });
+
   it("an image that can't be shown shows the source and says so", async () => {
     render(<MermaidDiagram source={flowchart} dark={false} />);
     const img = await screen.findByRole("img");
