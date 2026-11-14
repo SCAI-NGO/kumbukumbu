@@ -17,7 +17,7 @@ import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
 import MonthGrid from "./MonthGrid";
 import MonthList, { dayAnchor, weekAnchor } from "./MonthList";
 import NewEntryDialog from "./NewEntryDialog";
-import TagFilter, { useTag, withTag } from "./TagFilter";
+import TagFilter, { useTagFilter, withTag } from "./TagFilter";
 import WeekList, { emptyWeek } from "./WeekList";
 
 const EMPTY_WEEK = 'Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: "put this on Friday".';
@@ -51,7 +51,7 @@ export default function CalendarPage() {
   const { hash } = useLocation();
   const week = params.get("week") ?? undefined;
   const month = week ? undefined : (params.get("month") ?? undefined);
-  const tag = useTag();
+  const [tag, chooseTag] = useTagFilter();
   const remembered = useCalendarViewState(vault);
   // Asked at once, the month too: this week is also what gives today, and the month's address needs it.
   const calendar = useCalendar(vault, { week, month }, tag);
@@ -76,12 +76,12 @@ export default function CalendarPage() {
       </header>
       {waiting && <p className="p-4 text-sm text-muted">Loading …</p>}
       {calendar.isError && <p className="p-4 text-text">{errorText(calendar.error)}</p>}
-      {view && !waiting && <Calendar vault={vault} view={view} month={month} tag={tag} grid={remembered.data?.grid ?? false} />}
+      {view && !waiting && <Calendar vault={vault} view={view} month={month} tag={tag} chooseTag={chooseTag} grid={remembered.data?.grid ?? false} />}
     </div>
   );
 }
 
-function Calendar({ vault, view, month, tag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; grid: boolean }) {
+function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; chooseTag(next: string | null): void; grid: boolean }) {
   const navigate = useNavigate();
   const { hash } = useLocation();
   const desktop = useDesktop();
@@ -214,7 +214,7 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
           <button type="button" aria-pressed={grid} onClick={toggleGrid} className={`min-h-12 rounded-[10px] border border-line px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${grid ? "bg-surface-2 text-text" : "text-muted"}`}>
             Show grid
           </button>
-          <TagFilter />
+          <TagFilter tag={tag} choose={chooseTag} />
         </div>
       </nav>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">

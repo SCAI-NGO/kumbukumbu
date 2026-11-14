@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hideAgain } from "../discreet/hideAgain";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -14,12 +17,15 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeSocket);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await waitFor(() => expect(useDiscreet.getState().hiding).toBe(false));
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
+  useDiscreet.setState({ gone: new Set() });
 });
 
 const report = entryView("Weekly report", { when: "2026-11-13", firstDay: "2026-11-13", lastDay: "2026-11-13" });
@@ -90,5 +96,82 @@ describe("the tag filter", () => {
     await waitFor(() => expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument());
     expect(asked).toEqual([null, "kumbu"]);
     expect(fetch).toHaveBeenCalled();
+  });
+});
+
+/** What's on of `Work` and, while `at.shown`, the discreet `Home`; `asked` the tags it was asked for. */
+function whatsOnServer() {
+  const at = { shown: true };
+  const asked: (string | null)[] = [];
+  const vault = (name: string, discreet = false) => ({ name, notes: 4, embeddings: "internal", canWrite: true, level: "owner", discreet });
+  fakeApi({
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
+    "GET /api/vaults": () => json(200, at.shown ? [vault("Work"), vault("Home", true)] : [vault("Work")]),
+    "GET /api/calendar/whats-on": (r) => {
+      const query = new URL(r.url).searchParams;
+      if (query.get("count") !== "true") asked.push(query.get("tag"));
+      const items = query.get("tag") === "kumbu" ? [report] : [dentist, report];
+      return json(200, { items, count: items.length, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] });
+    },
+  });
+  return { at, asked };
+}
+
+describe("the tag filter of What's on, while discreet vaults are shown", () => {
+  it("while discreet vaults are shown, What's on narrows by tag and the address stays as it was", async () => {
+    const { asked } = whatsOnServer();
+    const router = renderApp("/whats-on");
+    await screen.findByRole("link", { name: "Zahnarzt" });
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    await filter("kumbu");
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "Weekly report" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "#kumbu (show everything)" })).toBeInTheDocument();
+    expect(asked.at(-1)).toBe("kumbu");
+    expect(router.state.location.search).toBe("");
+  });
+
+  /** What's on, opened while shown, and the call that hides them again. */
+  const openShown = async () => {
+    const { at } = whatsOnServer();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/whats-on", queryClient);
+    await screen.findByRole("link", { name: "Zahnarzt" });
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    const hide = async () => {
+      at.shown = false;
+      await act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname: "/whats-on" }));
+    };
+    return { router, hide };
+  };
+
+  it("hidden again, What's on shows everything", async () => {
+    const { router, hide } = await openShown();
+    await filter("kumbu");
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument());
+    await hide();
+    expect(await screen.findByRole("link", { name: "Zahnarzt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "#kumbu (show everything)" })).not.toBeInTheDocument();
+    expect(router.state.location.search).toBe("");
+  });
+
+  it("hidden again, its Tag field is empty", async () => {
+    const { hide } = await openShown();
+    await userEvent.type(screen.getByRole("textbox", { name: "Tag" }), "plan");
+    await hide();
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Tag" })).toHaveValue(""));
+  });
+
+  it("a tag in the address before they were shown stays shown", async () => {
+    const { asked } = whatsOnServer();
+    const router = renderApp("/whats-on?tag=kumbu");
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    expect(await screen.findByRole("button", { name: "#kumbu (show everything)" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument();
+    expect(asked.at(-1)).toBe("kumbu");
+    // Taken away, it goes from the address too.
+    await userEvent.click(screen.getByRole("button", { name: "#kumbu (show everything)" }));
+    await screen.findByRole("link", { name: "Zahnarzt" });
+    expect(router.state.location.search).toBe("");
   });
 });

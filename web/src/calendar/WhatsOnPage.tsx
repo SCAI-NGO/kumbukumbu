@@ -6,19 +6,27 @@ import { errorText } from "../api/error-text";
 import { useMayChange } from "../api/notes";
 import { calendarUrl } from "../api/paths";
 import { FormError } from "../components/form";
+import { useDiscreet } from "../discreet/state";
 import { useWhatsOn, type EntryView, type WhatsOnView } from "./api";
 import { useClosing } from "./ClosedToast";
 import EntryItem, { type EntryActions } from "./EntryItem";
 import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
-import TagFilter, { useTag } from "./TagFilter";
+import TagFilter, { useTagFilter } from "./TagFilter";
 
 /**
  * `/whats-on`: what is on over every vault the session shows (spec §7.6), overdue first, then ongoing, then upcoming;
  * each with its vault, and ✓ and Later on an open to-do. At the bottom, the dates that couldn't be read, if any. `?tag=`
- * narrows it to a tag.
+ * narrows it to a tag; while discreet vaults are shown, the tag stays on the page instead, out of the address.
  */
 export default function WhatsOnPage() {
-  const whatsOn = useWhatsOn(useTag());
+  const shown = useDiscreet((s) => s.revealed);
+  // Afresh as the reveal starts or ends: a tag chosen while shown, and words typed in the field, go with it.
+  return <WhatsOnFiltered key={shown ? "shown" : "hidden"} inAddress={!shown} />;
+}
+
+function WhatsOnFiltered({ inAddress }: { inAddress: boolean }) {
+  const [tag, choose] = useTagFilter(inAddress);
+  const whatsOn = useWhatsOn(tag);
   return (
     <div className="relative flex h-dvh flex-col bg-bg">
       <header className="flex flex-none items-center gap-1 border-b border-line px-2 py-1.5 lg:px-3">
@@ -26,7 +34,7 @@ export default function WhatsOnPage() {
           <ArrowLeft size={20} aria-hidden />
         </Link>
         <h1 className="min-w-0 flex-1 truncate px-2 text-[20px] font-bold text-text">What's on</h1>
-        <TagFilter />
+        <TagFilter tag={tag} choose={choose} />
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
         {whatsOn.isPending && <p className="text-sm text-muted">Loading …</p>}
