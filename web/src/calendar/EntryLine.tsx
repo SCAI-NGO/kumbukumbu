@@ -11,6 +11,7 @@ import { useClosing, ReasonField } from "./ClosedToast";
 import DateDialog, { readableFields } from "./DateDialog";
 import { dayAndMonth, dayHeading, shortDay, weekId, weekOf } from "./dates";
 import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
+import TaskCheckbox from "./TaskCheckbox";
 import { rangeOf } from "./WeekList";
 
 const actionClass =
@@ -35,10 +36,11 @@ function byNameText(entry: EntryView): string {
 }
 
 /**
- * The line in a note's header for every entry (spec §7.8): "📅 Tue 15 Dec · To do · ✓ · Later"; a closed to-do says
- * when and why, with Reopen and its reason; a board card its column, with Move to Done through the board or a link to
- * it; a day or week note by its name says so. The date opens the calendar at that week. Asked only for the note
- * shown, and again with each new version of it. A member who may only read sees the line without its actions.
+ * The line in a note's header for every entry (spec §7.8): "📅 Tue 15 Dec", then ☐ To do and Later after a gap; a
+ * closed to-do's ☑ Done says when and why, with its reason; a board card its column, with Move to Done through the
+ * board or a link to it; a day or week note by its name says so. The text keeps its dots, the controls follow without.
+ * The date opens the calendar at that week. Asked only for the note shown, and again with each new version of it. A
+ * member who may only read sees the line without its actions.
  */
 export default function EntryLine({ path, version }: { path: string; version: string }) {
   const queryClient = useQueryClient();
@@ -83,21 +85,22 @@ export default function EntryLine({ path, version }: { path: string; version: st
     action.mutate(request, { onSuccess: then, onError: (err) => setProblem(errorText(err)) });
   };
 
-  const parts: ReactNode[] = [];
+  const texts: ReactNode[] = [];
+  const controls: ReactNode[] = [];
   const entry = view.entry;
   if (entry) {
     const open = entry.state !== "done" && entry.state !== "past";
-    parts.push(
+    texts.push(
       <Link key="date" to={calendarUrl(entry.vault, weekId(weekOf(entry.firstDay)))} title="Open the calendar at this week" className={linkClass}>
         {dateText(entry)}
       </Link>,
     );
-    if (entry.time && !entry.byName) parts.push(<span key="time">{entry.time}</span>);
+    if (entry.time && !entry.byName) texts.push(<span key="time">{entry.time}</span>);
     if (entry.kind === "card") {
-      if (entry.column) parts.push(<span key="column">{entry.column}</span>);
+      if (entry.column) texts.push(<span key="column">{entry.column}</span>);
       const moves = canWrite && entry.boardAction && entry.column !== entry.boardAction;
       if (moves) {
-        parts.push(
+        controls.push(
           <button
             key="move"
             type="button"
@@ -116,60 +119,61 @@ export default function EntryLine({ path, version }: { path: string; version: st
           </button>,
         );
       } else if (!entry.boardAction && open) {
-        parts.push(
+        controls.push(
           <Link key="board" to={boardUrl(entry.vault)} className={linkClass}>
             Open the board
           </Link>,
         );
       }
-      if (canWrite && open) parts.push(<LaterMenu key="later" entry={entry} onProblem={say} onMoved={onMoved} className={actionClass} />);
+      if (canWrite && open) controls.push(<LaterMenu key="later" entry={entry} onProblem={say} onMoved={onMoved} className={actionClass} />);
     } else if (entry.task === "open") {
-      parts.push(<span key="todo">To do</span>);
       if (canWrite) {
-        parts.push(
-          <button
+        controls.push(
+          <TaskCheckbox
             key="done"
-            type="button"
-            aria-label={`Done: ${entry.title}`}
+            closed={false}
             disabled={action.isPending}
-            onClick={() => {
+            onChange={() => {
               moving.dismiss();
               closing.close(entry);
             }}
-            className={`${actionClass} min-w-12 justify-center`}
-          >
-            ✓
-          </button>,
+          />,
           <LaterMenu key="later" entry={entry} onProblem={say} onMoved={onMoved} className={actionClass} />,
         );
-      }
+      } else texts.push(<span key="todo">To do</span>);
     } else if (entry.task === "closed") {
-      parts.push(<span key="closed">{entry.closed ? `Closed ${dayAndMonth(entry.closed)}` : "Closed"}</span>);
-      if (entry.reason) parts.push(<span key="reason" className="[overflow-wrap:anywhere]">{entry.reason}</span>);
+      const closed = entry.closed ? `Closed ${dayAndMonth(entry.closed)}` : "Closed";
+      const reason = entry.reason && <span className="[overflow-wrap:anywhere]">{entry.reason}</span>;
       if (canWrite) {
-        parts.push(
-          <button key="reopen" type="button" disabled={action.isPending} onClick={() => send({ kind: "reopen", path: entry.path })} className={actionClass}>
-            Reopen
-          </button>,
+        controls.push(
+          <TaskCheckbox key="done" closed disabled={action.isPending} onChange={() => send({ kind: "reopen", path: entry.path })} />,
+          <span key="closed">
+            {closed}
+            {reason && <span aria-hidden>{" · "}</span>}
+            {reason}
+          </span>,
           // While "Closed · Undo · Add a reason" is up, its own field opens: one field, in the message.
           <button key="why" type="button" onClick={() => (closing.showing === entry.path ? closing.askReason() : setReasoning(true))} className={actionClass}>
             {entry.reason ? "Edit reason" : "Add a reason"}
           </button>,
         );
+      } else {
+        texts.push(<span key="closed">{closed}</span>);
+        if (reason) texts.push(<Fragment key="reason">{reason}</Fragment>);
       }
     }
-    if (entry.byName) parts.push(<span key="name">{byNameText(entry)}</span>);
+    if (entry.byName) texts.push(<span key="name">{byNameText(entry)}</span>);
   } else if (view.couldntRead) {
-    parts.push(<span key="plain">{view.couldntRead.plain}</span>);
+    texts.push(<span key="plain">{view.couldntRead.plain}</span>);
     // A card's date is its board's: the board is where it is put right, not the date dialog.
     if (onBoard(path))
-      parts.push(
+      controls.push(
         <Link key="board" to={boardUrl(vaultOf(path))} className={linkClass}>
           Open the board
         </Link>,
       );
     else if (canWrite)
-      parts.push(
+      controls.push(
         <button key="fix" type="button" onClick={() => setFixing(true)} className={actionClass}>
           Fix…
         </button>,
@@ -179,14 +183,26 @@ export default function EntryLine({ path, version }: { path: string; version: st
   return (
     <>
       <div role="group" aria-label="In the calendar" className="flex flex-none flex-col border-b border-line bg-surface px-4 text-sm text-text">
-        <div className="flex min-h-12 flex-wrap items-center gap-x-1">
-          <span aria-hidden>📅 </span>
-          {parts.map((part, i) => (
-            <Fragment key={i}>
-              {i > 0 && <span aria-hidden>{" · "}</span>}
-              {part}
-            </Fragment>
-          ))}
+        <div className="flex min-h-12 flex-wrap items-center gap-x-4">
+          <span>
+            <span aria-hidden>📅 </span>
+            {texts.map((text, i) => (
+              <Fragment key={i}>
+                {i > 0 && <span aria-hidden>{" · "}</span>}
+                {text}
+              </Fragment>
+            ))}
+          </span>
+          {controls.length > 0 && (
+            <span className="flex flex-wrap items-center gap-x-3">
+              {controls.map((control, i) => (
+                <Fragment key={i}>
+                  {" "}
+                  {control}
+                </Fragment>
+              ))}
+            </span>
+          )}
         </div>
         {reasoning && entry && (
           <ReasonField

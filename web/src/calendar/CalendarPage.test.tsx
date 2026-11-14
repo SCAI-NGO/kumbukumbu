@@ -161,16 +161,30 @@ describe("the calendar's week", () => {
     expect(screen.getByRole("link", { name: "Certificate" })).toHaveAttribute("href", "/notes/Work/Certificate.md");
     expect(screen.getByRole("link", { name: "Zahnarzt" })).toHaveAttribute("href", "/notes/Work/Zahnarzt.md");
     expect(screen.getByRole("button", { name: "Later: Certificate" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Done: Zahnarzt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /Zahnarzt/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Later: Zahnarzt" })).not.toBeInTheDocument();
     const zahnarzt = screen.getByRole("link", { name: "Zahnarzt" }).closest("li")!;
     expect(zahnarzt).toHaveTextContent("14:00");
     expect(zahnarzt).toHaveTextContent("upcoming · in 1 day");
 
-    await userEvent.click(screen.getByRole("button", { name: "Done: Certificate" }));
+    expect(screen.getByRole("checkbox", { name: "To do: Certificate" })).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(screen.getByRole("checkbox", { name: "To do: Certificate" }));
     await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([{ path: "/Work/Certificate.md" }]));
     // The same short message as the note's header.
     expect(await screen.findByRole("status", { name: "Closed" })).toHaveTextContent("Closed · Undo · Add a reason");
+  });
+
+  it("a closed to-do's card shows ☑, and unticking it reopens the to-do", async () => {
+    const report = entry("Report", { kind: "task", task: "closed", state: "done", closed: "2026-11-12", when: "2026-11-11", firstDay: "2026-11-11", lastDay: "2026-11-11" });
+    const fetch = api(calendar({ "2026-11-11": [report] }), {
+      "POST /api/vaults/Work/calendar/reopen": () => json(200, written("/Work/Report.md")),
+    });
+    renderApp("/calendar/Work");
+    await title();
+    const box = screen.getByRole("checkbox", { name: "Done: Report" });
+    expect(box).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(box);
+    await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/reopen")).toEqual([{ path: "/Work/Report.md" }]));
   });
 
   it("Later in the week moves a to-do on", async () => {
@@ -277,7 +291,7 @@ describe("the calendar's week", () => {
     renderApp("/calendar/Work");
     await title();
     expect(screen.getByRole("link", { name: "Certificate" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Done: Certificate" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
     expect(screen.queryByRole("button", { name: "Later: Certificate" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Add something on/ })).not.toBeInTheDocument();
   });
@@ -343,7 +357,7 @@ describe("the calendar's week", () => {
     // The title's block takes a line of its own unless the entry is wide enough (a container query).
     const block = link.closest(".basis-full")!;
     expect(block).not.toBeNull();
-    expect(block).not.toContainElement(screen.getByRole("button", { name: "Done: Report" }));
+    expect(block).not.toContainElement(screen.getByRole("checkbox", { name: "To do: Report" }));
     expect(block).not.toContainElement(screen.getByRole("button", { name: "Later: Report" }));
     expect(link.closest("li")).toHaveClass("@container");
   });

@@ -195,6 +195,6 @@ describe("the calendar's month", () => {
     expect(h1.parentElement).toHaveTextContent(/^WorkNovember 2026$/);
     const link = screen.getByRole("link", { name: "Certificate" });
     expect(link).toHaveClass("break-words", "min-h-12");
-    expect(link.closest(".basis-full")).not.toContainElement(screen.getByRole("button", { name: "Done: Certificate" }));
+    expect(link.closest(".basis-full")).not.toContainElement(screen.getByRole("checkbox", { name: "To do: Certificate" }));
   });
 });

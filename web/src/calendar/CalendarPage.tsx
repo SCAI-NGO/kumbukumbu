@@ -6,7 +6,7 @@ import { errorText } from "../api/error-text";
 import { calendarUrl, noteUrl } from "../api/paths";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { useEditor } from "../state/editor";
-import { useCalendar, useCalendarAction, useCalendarViewState, useSetCalendarView, type CalendarView, type EntryView } from "./api";
+import { useCalendar, useCalendarAction, useCalendarViewState, useEntryAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
 import { addDays, formatWeekTitle, monthId, monthTitle, weekId, weekOf } from "./dates";
 import { useClosing } from "./ClosedToast";
 import CouldntRead from "./CouldntRead";
@@ -118,6 +118,7 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
 
   const closing = useClosing();
   const moving = useMoved();
+  const reopen = useEntryAction();
   const say = (text: string | null) => {
     closing.setProblem(null);
     setProblem(text);
@@ -132,6 +133,12 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
           setProblem(null);
           moving.dismiss();
           closing.close(entry);
+        },
+        onReopen: (entry: EntryView) => {
+          say(null);
+          moving.dismiss();
+          closing.dismiss();
+          reopen.mutate({ kind: "reopen", path: entry.path }, { onError: (err) => setProblem(errorText(err)) });
         },
         renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} onMoved={onMoved} />,
       }
