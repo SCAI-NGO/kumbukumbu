@@ -79,9 +79,13 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
   await openNote(page, `/Work/${folder}/Meetings/Agenda.md`);
 
   for (let n = 1; n <= 3; n++) {
-    const menu = await folderMenu(page, await openTree(page, testInfo), "Meetings");
+    const tree = await openTree(page, testInfo);
     const chooser = page.waitForEvent("filechooser");
-    await menu.getByRole("menuitem", { name: "Take photo" }).click();
+    // F-02 again: the menu may close before the item is tapped; opened and tried again.
+    await expect(async () => {
+      const menu = await folderMenu(page, tree, "Meetings");
+      await menu.getByRole("menuitem", { name: "Take photo" }).click({ timeout: 2_000 });
+    }).toPass({ timeout: 10_000 });
     await (await chooser).setFiles(whiteboard);
 
     const sheet = page.getByRole("dialog", { name: "Upload" });
@@ -92,7 +96,7 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
 
   const listing = await aliceApi.console(`ls /Work/${folder}/Meetings`);
   const photos = listing.text.split("\n").map((name) => name.trim()).filter((name) => name.endsWith(".jpg")).sort();
-  expect(photos).toHaveLength(3);
+  expect(photos, listing.text).toHaveLength(3);
   for (const name of photos) expect(name).toMatch(new RegExp(`^Photo ${day} \\d{6}( [23])?\\.jpg$`));
   const stem = photos[0].replace(/\.jpg$/, "");
   expect(photos).toEqual([`${stem}.jpg`, `${stem} 2.jpg`, `${stem} 3.jpg`]);

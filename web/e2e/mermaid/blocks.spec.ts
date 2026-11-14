@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Embeds, block references and unlinked mentions (the mermaid report's hand-test checklist 1, 7-10, 12, 15-20; spec
 // 2026-11-12-mermaid-and-parity-design.md §3-§5).
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+import type { Api } from "../support/api";
 import { shot } from "../support/test";
 import {
   article,
   cleanFolder,
   controllerLine,
   diaryRow,
+  example,
   expect,
+  filler,
   lit,
   mentions,
   noteUrl,
@@ -25,6 +28,18 @@ const embeddedHeader = "--- embedded notes: shown for reading, not part of this 
 
 /** The console's lines, without blank ones. */
 const lines = (text: string) => text.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+
+/** Plan with filler paragraphs above its block: the jump has to scroll to it. */
+async function pushDownBlock(api: Api, plan: string) {
+  const stored = (await api.getNote(plan)).content;
+  await api.putNote(plan, stored.replace("# Plan\n\n", `# Plan\n\n${filler}\n\n`));
+}
+
+/** The jump scrolled: the target in view, the note's top (its title, the first filler) out of it. */
+async function expectScrolledTo(page: Page, target: Locator) {
+  await expect(target).toBeInViewport();
+  await expect(article(page).getByText("Filler paragraph 1 about", { exact: false })).not.toBeInViewport();
+}
 
 /** From Tasks, the link to Plan's block. */
 async function followBlockLink(page: Page, tasks: string, name = "Plan › ^controller") {
@@ -47,17 +62,21 @@ test("mermaid #1: the embed frame shows Ruling › Decision @embeds", async ({ p
   await shot(page, testInfo, "embeds");
 });
 
-test("mermaid #7: a block link opens the note at the block, highlighted, without a hash @blockrefs", async ({ page, seedAs, folder }, testInfo) => {
-  const { tasks } = await seedExample(seedAs, folder);
+test("mermaid #7: a block link opens the note at the block, highlighted, without a hash @blockrefs", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
+  const { plan, tasks } = await seedExample(seedAs, folder);
+  await pushDownBlock(aliceApi, plan);
   await followBlockLink(page, tasks);
 
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Pump/Plan\\.md$`));
   expect(new URL(page.url()).hash, "no hash in the address").toBe("");
   const line = controllerLine(page);
   await expect(line).toHaveClass(lit);
-  await expect(line).toBeInViewport();
-  // A fade while lit, then gone: briefly.
-  expect(await line.evaluate((e) => e.getAnimations().length), "the highlight fades").toBeGreaterThan(0);
+  await expectScrolledTo(page, line);
+  await expect(page.getByRole("heading", { name: "Plan", level: 1 })).not.toBeInViewport();
+  // A fade while lit, then gone: briefly. Read in one go while it is lit.
+  const look = await line.evaluate((e) => ({ lit: e.classList.contains("k-flash"), animations: e.getAnimations().length }));
+  expect(look.lit, "still lit while read").toBe(true);
+  expect(look.animations, "the highlight fades").toBeGreaterThan(0);
   await shot(page, testInfo, "blockrefs");
   await expect(line).not.toHaveClass(lit);
 });
@@ -73,8 +92,10 @@ test("mermaid #8: a missing block opens the note at the top with a sentence @blo
   await expect(controllerLine(page)).not.toHaveClass(lit);
 });
 
-test("mermaid #9: Unlinked mentions lists the diary line with plan marked @mentions", async ({ page, seedAs, folder }, testInfo) => {
-  const { plan } = await seedExample(seedAs, folder);
+test("mermaid #9: Unlinked mentions lists the diary line with plan marked @mentions", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
+  const { plan, diary } = await seedExample(seedAs, folder);
+  // The diary's line below filler paragraphs: opening it at that line has to scroll.
+  await aliceApi.putNote(diary, `${filler}\n\nTalked about the plan with Bob.\n`);
   await openNote(page, plan);
 
   const linked = page.getByRole("region", { name: "Linked from" });
@@ -105,7 +126,7 @@ test("mermaid #9: Unlinked mentions lists the diary line with plan marked @menti
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Diary/2026-11-12\\.md$`));
   const said = article(page).getByText("Talked about the plan with Bob.");
   await expect(said).toHaveClass(lit);
-  await expect(said).toBeInViewport();
+  await expectScrolledTo(page, said);
   await expect(said).not.toHaveClass(lit);
 });
 
@@ -125,14 +146,16 @@ test("mermaid #10: Write mode shows the block id and the source @blockrefs", asy
   expect((await aliceApi.getNote(plan)).content, "unchanged").toBe(stored);
 });
 
-test("mermaid #12: with reduced motion the block gets a static outline @blockrefs", async ({ page, seedAs, folder }) => {
-  const { tasks } = await seedExample(seedAs, folder);
+test("mermaid #12: with reduced motion the block gets a static outline @blockrefs", async ({ page, aliceApi, seedAs, folder }) => {
+  const { plan, tasks } = await seedExample(seedAs, folder);
+  await pushDownBlock(aliceApi, plan);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await followBlockLink(page, tasks);
 
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Pump/Plan\\.md$`));
   const line = controllerLine(page);
   await expect(line).toHaveClass(lit);
+  await expectScrolledTo(page, line);
   // Read in one go while it is lit: an outline, and no animation running.
   const look = await line.evaluate((e) => ({
     lit: e.classList.contains("k-flash"),
@@ -183,7 +206,6 @@ test("mermaid #17: cat of a block prints it with its marker; a wrong id is an er
 
   const wrong = await aliceApi.console(`cat "${plan}#^contoller"`);
   expect(wrong.isError).toBe(true);
-  expect(wrong.text.trimEnd()).toMatch(new RegExp(`^cat: ${plan.replace(/[.^]/g, "\\$&")}#\\^contoller: no such block \\(.+\\)$`));
   expect(wrong.text.trimEnd()).toBe(`cat: ${plan}#^contoller: no such block (a block id is written as ^contoller at the end of a paragraph, item or heading)`);
 });
 
@@ -194,6 +216,7 @@ test("mermaid #18: links resolves the block link and reports a missing block amo
   expect(lines(found.text)).toEqual([`1: [[Plan#^controller]] → ${plan}#^controller`]);
   // Before the typo the folder has no broken link.
   const clean = await aliceApi.console(`links /Work/${folder}`);
+  expect(clean.isError, clean.text).toBe(false);
   expect(lines(clean.text).filter((l) => l.startsWith(tasks)), clean.text).toEqual([]);
 
   await aliceApi.putNote(tasks, "- see [[Plan#^contoller]]\n");
