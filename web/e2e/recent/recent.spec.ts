@@ -231,6 +231,6 @@ test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent 
   await expect(vaultChips(bobPage).getByRole("button", { name: "Work" })).toBeVisible();
   // Bob's chips are exactly his vaults: a leaked vault of Alice's would add one. (Alice's own Welcome and Skills
   // vaults can't be told from his by name; only Home, the discreet one, is named here.)
-  await expect(vaultChips(bobPage).getByRole("button")).toHaveText(["Skills", "Welcome", "Work"]);
+  await expect(vaultChips(bobPage).getByRole("button")).toHaveText(["Welcome", "Skills", "Work"]);
   await expect(vaultChips(bobPage).getByRole("button", { name: "Home" })).toHaveCount(0);
 });
