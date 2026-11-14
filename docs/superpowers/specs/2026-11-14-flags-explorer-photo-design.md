@@ -1,6 +1,6 @@
 # Flags, the explorer's search and order, recent changes, Take photo, and the calendar's fixes
 
-Date: 2026-11-14. Status: draft for the maintainer's approval; builder check done (its three questions settled as Claude's calls in §2.2, §2.4, §4 and §6.2).
+Date: 2026-11-14. Status: approved by the maintainer on 2026-11-14; builder check done (its three questions settled as Claude's calls in §2.2, §2.4, §4 and §6.2).
 
 The last features of 0.5.0, after the calendar (#197). They share one idea: in a vault people work in together, you should find what matters and what just changed at a glance, without searching for it. Obsidian can't offer much of this because it isn't collaborative; Kumbu² is.
 
