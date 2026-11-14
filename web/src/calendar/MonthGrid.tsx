@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { WeekView } from "./api";
-import { monthId, monthTitle, partsOf, weekend } from "./dates";
+import { monthId, monthTitle, partsOf } from "./dates";
+import { dayLevelOf, dayShade } from "./dayLevels";
+import { useDays } from "./preferences";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /**
  * The small month grid behind Show grid (spec §7.4): which weekday a date is, whether something is on. A plain table,
- * a week-number column, the weekend darkened, the days with entries marked (a dot, and in words), today marked; the
- * days of other months left blank. No arrow-key grid logic: the list is its full equivalent.
+ * a week-number column, days off shaded and lighter days lightly, the days with entries marked (a dot, and in words),
+ * today marked; the days of other months left blank. No arrow-key grid logic: the list is its full equivalent.
  */
 export default function MonthGrid({ month, weeks, today, onDay }: { month: string; weeks: WeekView[]; today: string; onDay(day: string): void }) {
+  const days = useDays();
   return (
     <table className="w-full max-w-md table-fixed border-collapse text-center text-sm">
       <caption className="pb-1 text-left text-sm font-bold text-text">{monthTitle(`${month}-01`)}</caption>
@@ -35,7 +38,7 @@ export default function MonthGrid({ month, weeks, today, onDay }: { month: strin
             {w.days.map((d) => {
               const has = d.entries.length > 0;
               return (
-                <td key={d.day} className={`p-0.5 ${weekend(d.day) ? "bg-surface-2" : ""}`}>
+                <td key={d.day} className={`p-0.5 ${dayShade[dayLevelOf(days, d.day)]}`}>
                   {monthId(d.day) === month && (
                     <button
                       type="button"

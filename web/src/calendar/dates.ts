@@ -26,6 +26,9 @@ export const addDays = (day: string, days: number) => {
 /** 0 for Sunday to 6 for Saturday, as `Date.getDay`. */
 const weekdayOf = (day: string) => utc(partsOf(day)).getUTCDay();
 
+/** 1 for Monday to 7 for Sunday (ISO). */
+export const isoWeekday = (day: string) => ((weekdayOf(day) + 6) % 7) + 1;
+
 /** The ISO week a day falls in: the week of its Thursday, which also gives the week's year. */
 export function weekOf(day: string): { year: number; week: number } {
   const thursday = utc(partsOf(addDays(day, 3 - ((weekdayOf(day) + 6) % 7))));

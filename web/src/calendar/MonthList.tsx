@@ -4,7 +4,9 @@ import { Link } from "react-router-dom";
 import { calendarUrl } from "../api/paths";
 import type { WeekView } from "./api";
 import { dayHeading, dayLabel, shortDay, shortWeekTitle, weekId } from "./dates";
+import { dayLevelOf, dayShade, dayWord } from "./dayLevels";
 import EntryItem, { type EntryActions } from "./EntryItem";
+import { useDays } from "./preferences";
 import { withTag } from "./TagFilter";
 import { AlsoOngoing, emptyWeek, rangeOf } from "./WeekList";
 
@@ -18,6 +20,7 @@ export const weekAnchor = (week: { year: number; week: number }) => `week-${week
  */
 export default function MonthList({ vault, weeks, actions, tag }: { vault: string; weeks: WeekView[]; actions?: EntryActions; tag?: string }) {
   const id = useId();
+  const levels = useDays();
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {weeks.map((w) => {
@@ -43,8 +46,14 @@ export default function MonthList({ vault, weeks, actions, tag }: { vault: strin
             )}
             {days.map((d) => {
               const dayId = `${heading}-${d.day}`;
+              const level = dayLevelOf(levels, d.day);
               return (
-                <section key={d.day} id={dayAnchor(d.day)} aria-labelledby={dayId} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2">
+                <section
+                  key={d.day}
+                  id={dayAnchor(d.day)}
+                  aria-labelledby={dayId}
+                  className={`grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 rounded-[10px] ${dayShade[level]}`}
+                >
                   <h3
                     id={dayId}
                     tabIndex={-1}
@@ -54,6 +63,7 @@ export default function MonthList({ vault, weeks, actions, tag }: { vault: strin
                     {shortDay(d.day)}
                   </h3>
                   <div className="flex min-w-0 flex-col gap-1">
+                    {dayWord[level] && <span className="sr-only">{dayWord[level]}</span>}
                     <ul aria-label={dayHeading(d.day)} className="flex flex-col gap-1">
                       {d.entries.map((e) => (
                         <EntryItem key={e.path} entry={e} actions={actions} />

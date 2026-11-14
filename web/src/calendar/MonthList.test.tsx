@@ -7,6 +7,7 @@ import { useSession } from "../state/session";
 import { renderApp } from "../test/app";
 import { bodiesOf, calendarApp, calendarOf, calendarQueries, entryView, november, openTask, week46 } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
+import { dayShade } from "./dayLevels";
 
 beforeEach(() => {
   FakeSocket.all = [];
@@ -115,7 +116,7 @@ describe("the calendar's month", () => {
     expect(columns.slice(1).map((c) => c.textContent)).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
     expect(within(rows[3]).getByRole("rowheader")).toHaveTextContent("46");
     const cells = within(rows[3]).getAllByRole("cell");
-    expect(cells.map((c) => c.classList.contains("bg-surface-2"))).toEqual([false, false, false, false, false, true, true]);
+    expect(cells.map((c) => c.classList.contains(dayShade.off))).toEqual([false, false, false, false, false, true, true]);
     // Days with entries are marked in words too; today is today.
     expect(within(grid).getByRole("button", { name: "3, has entries" })).toBeInTheDocument();
     expect(within(grid).getByRole("button", { name: "4" })).toBeInTheDocument();
