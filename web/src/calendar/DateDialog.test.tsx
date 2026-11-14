@@ -36,7 +36,14 @@ describe("the date dialog", () => {
     const todo = within(dialog).getByRole("checkbox", { name: "To do" });
     expect(todo).toHaveAccessibleDescription("something to get done, with a ✓");
     await userEvent.click(todo);
-    await userEvent.type(within(dialog).getByRole("spinbutton", { name: "Show early: days before" }), "7");
+    const early = within(dialog).getByRole("spinbutton", { name: "Show early: days before" });
+    // A few digits wide, with "days before" beside it on the same line.
+    expect(early).toHaveClass("w-24");
+    expect(early).not.toHaveClass("w-full");
+    expect(early.parentElement).toHaveClass("flex-none");
+    expect(early.parentElement).toHaveTextContent(/^days before$/);
+    expect(within(dialog).getByRole("button", { name: "Day" })).toHaveClass("min-h-12");
+    await userEvent.type(early, "7");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(async () =>

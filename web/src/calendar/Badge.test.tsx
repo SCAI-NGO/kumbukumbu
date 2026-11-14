@@ -101,6 +101,11 @@ describe("the badge", () => {
     renderApp("/notes/Work/inbox.md");
     // The phone's menu button carries the total, as its description: its name stays what it does.
     await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on, some overdue"));
+    // On the button's corner, within its box and the room it keeps beside it: never over where the note is.
+    const pill = within(await treeButton()).getByText("3 on, some overdue").parentElement!;
+    expect(pill).toHaveClass("absolute", "top-0", "right-0");
+    expect(pill.className).not.toMatch(/-right-|-top-/);
+    expect(await treeButton()).toHaveClass("mr-1.5");
     await userEvent.click(await treeButton());
 
     const account = within(drawer()).getByRole("navigation", { name: "Account" });

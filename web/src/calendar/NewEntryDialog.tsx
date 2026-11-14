@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState } from "react";
 import FormDialog from "../board/FormDialog";
-import { inputClass, labelClass } from "../components/form";
+import { narrowInputClass, inputClass, labelClass } from "../components/form";
 import type { NewEntryRequest } from "./api";
 import { dayHeading } from "./dates";
 
@@ -49,18 +49,23 @@ export default function NewEntryDialog({ day, onCancel, onAdd }: { day: string; 
         To do
       </label>
       {task && (
-        <div className="flex flex-wrap items-center gap-2 text-text">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text">
           <span id={`${id}-early`}>Show early:</span>
-          <input
-            type="number"
-            min={1}
-            inputMode="numeric"
-            aria-labelledby={`${id}-early ${id}-before`}
-            value={early}
-            onChange={(e) => setEarly(e.target.value)}
-            className={`${inputClass} w-24`}
-          />
-          <span id={`${id}-before`}>days before</span>
+          {/* The number and its unit stay together on one line, the field only as wide as a few digits. */}
+          <span className="flex flex-none items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              aria-labelledby={`${id}-early ${id}-before`}
+              value={early}
+              onChange={(e) => setEarly(e.target.value)}
+              className={narrowInputClass}
+            />
+            <span id={`${id}-before`} className="whitespace-nowrap">
+              days before
+            </span>
+          </span>
         </div>
       )}
     </FormDialog>

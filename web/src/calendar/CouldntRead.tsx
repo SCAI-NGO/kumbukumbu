@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { noteUrl } from "../api/paths";
+import { boardUrl, noteUrl, vaultOf } from "../api/paths";
 import type { CouldntReadView } from "./api";
 import DateDialog, { readableFields } from "./DateDialog";
 
@@ -22,9 +22,15 @@ function Plain({ text }: { text: string }) {
   );
 }
 
+/** A board's card: a note directly in `/<vault>/Board/`. Its date is the board's, put right there, not in the date dialog. */
+export const onBoard = (path: string) => /^\/[^/]+\/Board\/[^/]+$/.test(path);
+
+const actionClass = "flex min-h-12 flex-none items-center rounded-[10px] px-3 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
+
 /**
  * Dates I couldn't read (spec §7.12): each note with what is wrong in plain words and, for one who may write, Fix…,
- * which opens the date dialog with what could be read. The note's title opens it. What's on links here,
+ * which opens the date dialog with what could be read; a card's, Open the board instead, as its date is the board's. The
+ * note's title opens it. What's on links here,
  * `#couldnt-read`. Left out when every date could be read.
  */
 export default function CouldntRead({ notes, canWrite }: { notes: CouldntReadView[]; canWrite: boolean }) {
@@ -39,21 +45,22 @@ export default function CouldntRead({ notes, canWrite }: { notes: CouldntReadVie
         {notes.map((note) => (
           <li key={note.path} className="flex min-h-12 flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] bg-surface px-3 py-1.5 text-sm text-text-body">
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              <Link to={noteUrl(note.path)} className="font-medium text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent">
+              <Link to={noteUrl(note.path)} className="inline-flex min-h-12 items-center font-medium text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent">
                 {note.title}
               </Link>
               {" — "}
               <Plain text={note.plain} />
             </span>
-            {canWrite && (
-              <button
-                type="button"
-                aria-label={`Fix… ${note.title}`}
-                onClick={() => setFixing(note)}
-                className="flex min-h-12 flex-none items-center rounded-[10px] px-3 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                Fix…
-              </button>
+            {onBoard(note.path) ? (
+              <Link to={boardUrl(vaultOf(note.path))} aria-label={`Open the board: ${note.title}`} className={actionClass}>
+                Open the board
+              </Link>
+            ) : (
+              canWrite && (
+                <button type="button" aria-label={`Fix… ${note.title}`} onClick={() => setFixing(note)} className={actionClass}>
+                  Fix…
+                </button>
+              )
             )}
           </li>
         ))}

@@ -4,13 +4,13 @@ import { useId, useState, type ReactNode } from "react";
 import { errorText } from "../api/error-text";
 import { fileKindOf } from "../api/paths";
 import FormDialog from "../board/FormDialog";
-import { inputClass, labelClass } from "../components/form";
+import { narrowInputClass, inputClass, labelClass } from "../components/form";
 import type { MenuItem } from "../components/Menu";
 import { useEntryAction, useNoteEntry, type CouldntReadView, type SetEntryRequest } from "./api";
 import { weekId, weekOf } from "./dates";
 
 const switchClass = (on: boolean) =>
-  `min-h-11 px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-surface-2 text-text" : "text-muted"}`;
+  `min-h-12 px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-surface-2 text-text" : "text-muted"}`;
 
 /** Whether the browser has its own week input; where it hasn't, a day stands for its week. */
 const weekInput = (() => {
@@ -180,18 +180,23 @@ function DateForm({ path, initial, editing, onClose }: { path: string; initial: 
         </span>
       </div>
       {task && (
-        <div className="flex flex-wrap items-center gap-2 text-text">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text">
           <span id={`${id}-early`}>Show early:</span>
-          <input
-            type="number"
-            min={1}
-            inputMode="numeric"
-            aria-labelledby={`${id}-early ${id}-before`}
-            value={early}
-            onChange={(e) => setEarly(e.target.value)}
-            className={`${inputClass} w-24`}
-          />
-          <span id={`${id}-before`}>days before</span>
+          {/* The number and its unit stay together on one line, the field only as wide as a few digits. */}
+          <span className="flex flex-none items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              aria-labelledby={`${id}-early ${id}-before`}
+              value={early}
+              onChange={(e) => setEarly(e.target.value)}
+              className={narrowInputClass}
+            />
+            <span id={`${id}-before`} className="whitespace-nowrap">
+              days before
+            </span>
+          </span>
         </div>
       )}
     </FormDialog>

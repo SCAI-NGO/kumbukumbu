@@ -35,6 +35,8 @@ export const labelClass = "font-mono text-[11px] uppercase tracking-[0.08em] tex
 // 16 px text so iOS doesn't zoom in; 48 px high for the thumb.
 export const inputClass =
   "h-12 w-full rounded-[10px] border border-line bg-surface px-3 text-base text-text placeholder:text-dim focus:border-accent focus:outline-none";
+/** A field for a few digits ("Show early: 7 days before"): the inputs' look without their full width. */
+export const narrowInputClass = `${inputClass.replace("w-full", "w-24")} flex-none`;
 export const primaryButtonClass =
   "min-h-12 w-full rounded-[12px] bg-accent px-4 font-medium text-on-accent disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 export const secondaryButtonClass =

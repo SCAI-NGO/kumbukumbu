@@ -5,16 +5,17 @@ import { Link } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { errorText } from "../api/error-text";
 import { boardUrl, calendarUrl, vaultOf } from "../api/paths";
+import { onBoard } from "./CouldntRead";
 import { afterEntryWrite, editorSettled, UNSAVED, useEntryAction, useNoteEntry, type EntryView } from "./api";
 import { useClosing, ReasonField } from "./ClosedToast";
 import DateDialog, { readableFields } from "./DateDialog";
 import { dayAndMonth, dayHeading, shortDay, weekId, weekOf } from "./dates";
-import LaterMenu from "./LaterMenu";
+import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
 import { rangeOf } from "./WeekList";
 
 const actionClass =
-  "inline-flex min-h-11 items-center rounded-[8px] px-1 font-medium text-accent-text underline-offset-[3px] hover:underline focus-visible:outline-2 focus-visible:outline-accent";
-const linkClass = "font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent";
+  "inline-flex min-h-12 items-center rounded-[8px] px-1 font-medium text-accent-text underline-offset-[3px] hover:underline focus-visible:outline-2 focus-visible:outline-accent";
+const linkClass = "inline-flex min-h-12 items-center font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent";
 
 const isWeek = (value: string) => /^\d{4}-W\d{2}$/.test(value);
 
@@ -50,19 +51,32 @@ export default function EntryLine({ path, version }: { path: string; version: st
   }, [version, path, queryClient]);
 
   const closing = useClosing();
+  const moving = useMoved();
   const action = useEntryAction();
   const board = useBoardAction(vaultOf(path));
   const [problem, setProblem] = useState<string | null>(null);
   const [reasoning, setReasoning] = useState(false);
   const [fixing, setFixing] = useState(false);
 
+  // The messages stay in the same place in the tree whether the line is shown or not, so a message isn't made anew
+  // (losing its open reason field) when the line comes and goes.
+  const messages = (
+    <>
+      {closing.toast}
+      {moving.toast}
+    </>
+  );
   const view = note.data;
-  if (!view || (!view.entry && !view.couldntRead)) return closing.toast || null;
+  if (!view || (!view.entry && !view.couldntRead)) return <>{null}{messages}{null}</>;
   const canWrite = view.canWrite;
   const shown = problem ?? closing.problem;
   const say = (text: string | null) => {
     closing.setProblem(null);
     setProblem(text);
+  };
+  const onMoved = (moved: Moved) => {
+    closing.dismiss();
+    moving.onMoved(moved);
   };
   const send = (request: Parameters<typeof action.mutate>[0], then?: () => void) => {
     say(null);
@@ -108,15 +122,25 @@ export default function EntryLine({ path, version }: { path: string; version: st
           </Link>,
         );
       }
-      if (canWrite && open) parts.push(<LaterMenu key="later" entry={entry} onProblem={say} className={actionClass} />);
+      if (canWrite && open) parts.push(<LaterMenu key="later" entry={entry} onProblem={say} onMoved={onMoved} className={actionClass} />);
     } else if (entry.task === "open") {
       parts.push(<span key="todo">To do</span>);
       if (canWrite) {
         parts.push(
-          <button key="done" type="button" aria-label={`Done: ${entry.title}`} disabled={action.isPending} onClick={() => closing.close(entry)} className={`${actionClass} min-w-11 justify-center`}>
+          <button
+            key="done"
+            type="button"
+            aria-label={`Done: ${entry.title}`}
+            disabled={action.isPending}
+            onClick={() => {
+              moving.dismiss();
+              closing.close(entry);
+            }}
+            className={`${actionClass} min-w-12 justify-center`}
+          >
             ✓
           </button>,
-          <LaterMenu key="later" entry={entry} onProblem={say} className={actionClass} />,
+          <LaterMenu key="later" entry={entry} onProblem={say} onMoved={onMoved} className={actionClass} />,
         );
       }
     } else if (entry.task === "closed") {
@@ -127,7 +151,8 @@ export default function EntryLine({ path, version }: { path: string; version: st
           <button key="reopen" type="button" disabled={action.isPending} onClick={() => send({ kind: "reopen", path: entry.path })} className={actionClass}>
             Reopen
           </button>,
-          <button key="why" type="button" onClick={() => setReasoning(true)} className={actionClass}>
+          // While "Closed · Undo · Add a reason" is up, its own field opens: one field, in the message.
+          <button key="why" type="button" onClick={() => (closing.showing === entry.path ? closing.askReason() : setReasoning(true))} className={actionClass}>
             {entry.reason ? "Edit reason" : "Add a reason"}
           </button>,
         );
@@ -136,7 +161,14 @@ export default function EntryLine({ path, version }: { path: string; version: st
     if (entry.byName) parts.push(<span key="name">{byNameText(entry)}</span>);
   } else if (view.couldntRead) {
     parts.push(<span key="plain">{view.couldntRead.plain}</span>);
-    if (canWrite)
+    // A card's date is its board's: the board is where it is put right, not the date dialog.
+    if (onBoard(path))
+      parts.push(
+        <Link key="board" to={boardUrl(vaultOf(path))} className={linkClass}>
+          Open the board
+        </Link>,
+      );
+    else if (canWrite)
       parts.push(
         <button key="fix" type="button" onClick={() => setFixing(true)} className={actionClass}>
           Fix…
@@ -147,7 +179,7 @@ export default function EntryLine({ path, version }: { path: string; version: st
   return (
     <>
       <div role="group" aria-label="In the calendar" className="flex flex-none flex-col border-b border-line bg-surface px-4 text-sm text-text">
-        <div className="flex min-h-11 flex-wrap items-center gap-x-1">
+        <div className="flex min-h-12 flex-wrap items-center gap-x-1">
           <span aria-hidden>📅 </span>
           {parts.map((part, i) => (
             <Fragment key={i}>
@@ -159,9 +191,13 @@ export default function EntryLine({ path, version }: { path: string; version: st
         {reasoning && entry && (
           <ReasonField
             initial={entry.reason ?? ""}
+            className="pb-2"
             onCancel={() => setReasoning(false)}
             onSave={(reason) =>
-              send({ kind: "set", path: entry.path, ...(reason ? { reason } : { clearReason: true }) }, () => setReasoning(false))
+              send({ kind: "set", path: entry.path, ...(reason ? { reason } : { clearReason: true }) }, () => {
+                setReasoning(false);
+                closing.dismiss();
+              })
             }
           />
         )}
@@ -171,7 +207,7 @@ export default function EntryLine({ path, version }: { path: string; version: st
           </p>
         )}
       </div>
-      {closing.toast}
+      {messages}
       {fixing && view.couldntRead && <DateDialog path={path} initial={readableFields(view.couldntRead)} onClose={() => setFixing(false)} />}
     </>
   );

@@ -322,4 +322,53 @@ describe("the calendar's week", () => {
     // Something is on: the empty week's line is gone.
     expect(screen.queryByText(EMPTY)).not.toBeInTheDocument();
   });
+
+  it("names the calendar above the week's title, which wraps on a phone instead of being cut", async () => {
+    api(calendar());
+    renderApp("/calendar/Work");
+    const h1 = await title();
+    expect(h1.parentElement).toHaveTextContent(/^WorkWeek 46 · 9–15 November 2026$/);
+    expect(h1).not.toHaveClass("truncate");
+    expect(h1).toHaveClass("break-words");
+  });
+
+  it("gives a title the whole width of its column, with the tick and Later below it where there is no room", async () => {
+    api(calendar({ "2026-11-15": [entry("Report", { kind: "task", task: "open", when: "2026-11-15", state: "upcoming", firstDay: "2026-11-15", lastDay: "2026-11-15" })] }));
+    renderApp("/calendar/Work");
+    await title();
+    const link = screen.getByRole("link", { name: "Report" });
+    // Wrapping by words, never a letter a line; a tap target of 48 px.
+    expect(link).toHaveClass("break-words", "min-h-12", "block");
+    expect(link.className).not.toContain("anywhere");
+    // The title's block takes a line of its own unless the entry is wide enough (a container query).
+    const block = link.closest(".basis-full")!;
+    expect(block).not.toBeNull();
+    expect(block).not.toContainElement(screen.getByRole("button", { name: "Done: Report" }));
+    expect(block).not.toContainElement(screen.getByRole("button", { name: "Later: Report" }));
+    expect(link.closest("li")).toHaveClass("@container");
+  });
+
+  it("keeps the back link and the arrows at 48 px", async () => {
+    api(calendar());
+    renderApp("/calendar/Work");
+    await title();
+    for (const name of ["Back to the notes", "Previous week", "Next week"]) expect(screen.getByRole("link", { name })).toHaveClass("size-12");
+  });
+
+  it("says where Later moved a to-do, with Undo that moves it back", async () => {
+    const moved = { ...certificate, when: "2026-11-14", firstDay: "2026-11-14", lastDay: "2026-11-14" };
+    const fetch = api(calendar({ "2026-11-11": [certificate] }), {
+      "POST /api/vaults/Work/calendar/later": () => json(200, { path: certificate.path, version: "v2", note: { entry: moved, couldntRead: null, canWrite: true } }),
+      "POST /api/vaults/Work/calendar/move": () => json(200, written("/Work/Certificate.md")),
+    });
+    renderApp("/calendar/Work");
+    await title();
+    await userEvent.click(screen.getByRole("button", { name: "Later: Certificate" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "+1 day" }));
+    const toast = await screen.findByRole("status", { name: "Moved" });
+    expect(toast).toHaveTextContent("Moved to Sat 14 Nov · Undo");
+    await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/move")).toEqual([{ path: "/Work/Certificate.md", when: "2026-11-11" }]));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Moved" })).not.toBeInTheDocument());
+  });
 });

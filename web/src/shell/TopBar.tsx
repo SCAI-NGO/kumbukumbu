@@ -48,9 +48,17 @@ export default function TopBar({
         </button>
       ) : (
         // The phone's way to the navigation carries What's on's count, as its description: its name says what it does.
-        <button type="button" aria-label="Open file tree" aria-describedby={badge.count > 0 ? badgeId : undefined} onClick={openTree} className={`relative ${buttonClass}`}>
+        // The badge sits on the button's corner within its box, and the button keeps a little more room beside it, so
+        // the count never covers where the note is.
+        <button
+          type="button"
+          aria-label="Open file tree"
+          aria-describedby={badge.count > 0 ? badgeId : undefined}
+          onClick={openTree}
+          className={`relative ${buttonClass} ${badge.count > 0 ? "mr-1.5" : ""}`}
+        >
           <PanelLeft size={22} strokeWidth={1.8} aria-hidden />
-          <Badge id={badgeId} count={badge.count} overdue={badge.overdue} className="absolute -top-0.5 -right-1" />
+          <Badge id={badgeId} count={badge.count} overdue={badge.overdue} className="pointer-events-none absolute top-0 right-0 translate-x-1" />
         </button>
       )}
       <button

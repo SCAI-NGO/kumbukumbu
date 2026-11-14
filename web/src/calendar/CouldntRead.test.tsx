@@ -55,6 +55,7 @@ describe("dates I couldn't read", () => {
     expect(line).toHaveTextContent("Plan — when: tomorrow – I need a date like 2026-11-20");
     expect(within(line).getByText("when: tomorrow").tagName).toBe("CODE");
     expect(within(line).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/notes/Work/Plan.md");
+    expect(within(line).getByRole("link", { name: "Plan" })).toHaveClass("min-h-12");
     expect(within(line).getByRole("button", { name: "Fix… Plan" })).toHaveTextContent("Fix…");
   });
 
@@ -112,5 +113,18 @@ describe("dates I couldn't read", () => {
     await screen.findByRole("region", { name: "Dates I couldn't read" });
     expect(document.body.textContent).not.toMatch(/problem/i);
     expect(document.body.innerHTML).not.toMatch(/aria-label="[^"]*problem/i);
+  });
+
+  it("a card's date is its board's: Open the board, never the date dialog", async () => {
+    const pump: CouldntReadView = { path: "/Work/Board/Fix pump.md", title: "Fix pump", plain: "This card's date can't be shown until its board can be read again", readable: {} };
+    calendarApp((query) => calendarOf(query.get("month") ? november : week46, {}, { couldntRead: [pump, plan] }));
+    renderApp("/calendar/Work");
+    await weekTitle();
+    const [card, note] = within(screen.getByRole("region", { name: "Dates I couldn't read" })).getAllByRole("listitem");
+    expect(within(card).queryByRole("button", { name: /^Fix/ })).not.toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Open the board: Fix pump" })).toHaveAttribute("href", "/board/Work");
+    expect(within(card).getByRole("link", { name: "Open the board: Fix pump" })).toHaveTextContent("Open the board");
+    // A note elsewhere keeps its Fix….
+    expect(within(note).getByRole("button", { name: "Fix… Plan" })).toBeInTheDocument();
   });
 });

@@ -187,4 +187,14 @@ describe("the calendar's month", () => {
     await waitFor(() => expect(router.state.location.search).toBe("?month=2026-11"));
     await waitFor(async () => expect(await bodiesOf(fetch, "PUT", "/api/vaults/Work/calendar/view")).toEqual([{ view: "month", grid: true }]));
   });
+
+  it("names the calendar above the month and gives a to-do's title its own line", async () => {
+    calendarApp(answer);
+    renderApp("/calendar/Work?month=2026-11");
+    const h1 = await monthTitle();
+    expect(h1.parentElement).toHaveTextContent(/^WorkNovember 2026$/);
+    const link = screen.getByRole("link", { name: "Certificate" });
+    expect(link).toHaveClass("break-words", "min-h-12");
+    expect(link.closest(".basis-full")).not.toContainElement(screen.getByRole("button", { name: "Done: Certificate" }));
+  });
 });

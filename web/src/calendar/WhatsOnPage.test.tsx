@@ -113,7 +113,9 @@ describe("What's on", () => {
     api(whatsOn([dentist], { couldntRead: 2, couldntReadVaults: ["Home", "Work"] }));
     renderApp("/whats-on");
     await page();
-    expect(await screen.findByRole("link", { name: "2 dates I couldn't read" })).toHaveAttribute("href", "/calendar/Home#couldnt-read");
+    const link = await screen.findByRole("link", { name: "2 dates I couldn't read" });
+    expect(link).toHaveAttribute("href", "/calendar/Home#couldnt-read");
+    expect(link).toHaveClass("min-h-12");
     expect(document.body.textContent).not.toMatch(/problem/i);
   });
 
@@ -130,5 +132,41 @@ describe("What's on", () => {
     await page();
     await screen.findByRole("link", { name: "Zahnarzt" });
     expect(screen.queryByText(/couldn't read/)).not.toBeInTheDocument();
+  });
+
+  it("says how Later gave more time, and Undo gives back the old end", async () => {
+    const report = openTask("Report", { when: "2026-11-09", until: "2026-11-13", state: "ongoing", firstDay: "2026-11-09", lastDay: "2026-11-13", spans: true });
+    const fetch = api(whatsOn([report]), {
+      "POST /api/vaults/Work/calendar/later": () => json(200, writtenView(report.path, { ...report, until: "2026-11-20", lastDay: "2026-11-20" })),
+      "POST /api/vaults/Work/calendar/set": () => json(200, writtenView(report.path, report, "v3")),
+    });
+    renderApp("/whats-on");
+    await page();
+    await userEvent.click(await screen.findByRole("button", { name: "Later: Report" }));
+    await userEvent.click(within(screen.getByRole("group", { name: "More time" })).getByRole("menuitem", { name: "+1 week" }));
+    const toast = await screen.findByRole("status", { name: "Moved" });
+    expect(toast).toHaveTextContent("More time until Fri 20 Nov · Undo");
+    await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([{ path: report.path, until: "2026-11-13" }]));
+  });
+
+  it("Undo after a card's Later gives it its old due through Later's own date", async () => {
+    const card = entryView("Release", { path: "/Work/Board/Release.md", kind: "card", column: "In progress", when: "2026-11-12", state: "overdue" });
+    const fetch = api(whatsOn([card]), {
+      "POST /api/vaults/Work/calendar/later": () => json(200, writtenView(card.path, { ...card, when: "2026-11-19", firstDay: "2026-11-19", lastDay: "2026-11-19" })),
+    });
+    renderApp("/whats-on");
+    await page();
+    await userEvent.click(await screen.findByRole("button", { name: "Later: Release" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "+1 week" }));
+    const toast = await screen.findByRole("status", { name: "Moved" });
+    expect(toast).toHaveTextContent("Moved to Thu 19 Nov · Undo");
+    await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(async () =>
+      expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/later")).toEqual([
+        { path: card.path, part: "postpone", step: "week" },
+        { path: card.path, part: "postpone", date: "2026-11-12" },
+      ]),
+    );
   });
 });

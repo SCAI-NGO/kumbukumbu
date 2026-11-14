@@ -11,7 +11,7 @@ import { addDays, formatWeekTitle, monthId, monthTitle, weekId, weekOf } from ".
 import { useClosing } from "./ClosedToast";
 import CouldntRead from "./CouldntRead";
 import type { EntryActions } from "./EntryItem";
-import LaterMenu from "./LaterMenu";
+import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
 import MonthGrid from "./MonthGrid";
 import MonthList, { dayAnchor, weekAnchor } from "./MonthList";
 import NewEntryDialog from "./NewEntryDialog";
@@ -59,10 +59,14 @@ export default function CalendarPage() {
   return (
     <div className="relative flex h-dvh flex-col bg-bg">
       <header className="flex flex-none items-center gap-1 border-b border-line px-2 py-1.5 lg:px-3">
-        <Link to="/" aria-label="Back to the notes" className="flex size-11 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent">
+        <Link to="/" aria-label="Back to the notes" className="flex size-12 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent">
           <ArrowLeft size={20} aria-hidden />
         </Link>
-        <h1 className="min-w-0 flex-1 truncate px-2 text-[20px] font-bold text-text">{title}</h1>
+        {/* Which calendar this is, above its week or month; the title wraps on a phone rather than losing its year. */}
+        <div className="min-w-0 flex-1 px-2">
+          {title !== vault && <p className="text-sm font-medium break-words text-muted">{vault}</p>}
+          <h1 className="text-[20px] leading-tight font-bold break-words text-text">{title}</h1>
+        </div>
       </header>
       {waiting && <p className="p-4 text-sm text-muted">Loading …</p>}
       {calendar.isError && <p className="p-4 text-text">{errorText(calendar.error)}</p>}
@@ -113,17 +117,23 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
   }, [hash, unread]);
 
   const closing = useClosing();
+  const moving = useMoved();
   const say = (text: string | null) => {
     closing.setProblem(null);
     setProblem(text);
+  };
+  const onMoved = (moved: Moved) => {
+    closing.dismiss();
+    moving.onMoved(moved);
   };
   const actions: EntryActions | undefined = view.canWrite
     ? {
         onDone: (entry: EntryView) => {
           setProblem(null);
+          moving.dismiss();
           closing.close(entry);
         },
-        renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} />,
+        renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} onMoved={onMoved} />,
       }
     : undefined;
   const previous = month ? monthUrl(vault, shiftMonth(month, -1)) : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, -7))));
@@ -187,6 +197,7 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
         <CouldntRead notes={view.couldntRead} canWrite={view.canWrite} />
       </main>
       {closing.toast}
+      {moving.toast}
       {adding && (
         <NewEntryDialog
           day={adding}
