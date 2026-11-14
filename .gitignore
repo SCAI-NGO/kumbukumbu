@@ -498,3 +498,8 @@ obsidian/.trash/
 
 # The embedding model a local `dotnet run` downloads (e.g. for pnpm -C web gen:api)
 src/Kumbu.Server/models/
+
+# The end-to-end suite's signed-in state and secrets, its results and report (web/e2e/)
+web/e2e/.auth/
+web/e2e/.results/
+web/playwright-report/

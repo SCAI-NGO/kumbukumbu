@@ -7,9 +7,11 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p e2e && vite build",
     "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
     "preview": "vite preview",
+    "e2e": "e2e/stack/run.sh",
+    "e2e:0.5.0": "e2e/stack/run.sh --grep \"@smoke|@calendar|@flags|@explorer|@recent|@mermaid|@embeds|@aliases|@ailink|@blockrefs|@mentions|@photo\"",
     "gen:api": "openapi-typescript ${KUMBU_OPENAPI_URL:-http://localhost:8083/api/openapi.json} -o src/api/schema.d.ts",
     "icons": "node scripts/icons.mjs"
   },
@@ -34,6 +36,7 @@
     "zustand": "^5.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.3.5",
     "@testing-library/jest-dom": "^7.0.1",

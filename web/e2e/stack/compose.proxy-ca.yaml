@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Only behind a proxy that re-signs TLS (E2E_PROXY_CA set, see up.sh): the build stages' base images are swapped
+# for copies that also trust that proxy's CA, through BuildKit's named contexts, so npm and NuGet can download.
+# The server's final stage (aspnet) keeps its own base; the pdf image's final stage shares its base with the build
+# stage, so it carries the CA too, on its internal network without a route out.
+services:
+  kumbu:
+    build:
+      context: .
+      additional_contexts:
+        "node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39": docker-image://kumbu-e2e-ca-node26slim:local
+        "mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e": docker-image://kumbu-e2e-ca-sdk10:local
+  pdf:
+    build:
+      additional_contexts:
+        "node:26-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68": docker-image://kumbu-e2e-ca-node26bookworm:local
