@@ -7,6 +7,7 @@ using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Skills;
+using Kumbu.Core.Tags;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
@@ -205,6 +206,12 @@ builder.Services.AddScoped(sp =>
     var writer = sp.GetRequiredService<NoteWriter>();
     return new CalendarService(
         sp.GetRequiredService<INoteStore>(), writer, sp.GetRequiredService<BoardService>(), () => writer.Now, sp.GetRequiredService<ICallerZone>());
+});
+// The flag's writes for the REST API; Mark done's day is today as the calendar's is.
+builder.Services.AddScoped(sp =>
+{
+    var writer = sp.GetRequiredService<NoteWriter>();
+    return new FlagService(sp.GetRequiredService<INoteStore>(), writer, () => writer.Now, sp.GetRequiredService<ICallerZone>());
 });
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 

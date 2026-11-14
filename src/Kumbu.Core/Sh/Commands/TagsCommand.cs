@@ -30,6 +30,10 @@ public sealed class TagsCommand(INoteReader notes) : ICommand
 
         To search only the notes with a tag: rg --tag <tag> and semsearch --tag <tag>.
 
+        Flags: a note's flag is one of eight tags, flag/red, flag/green, flag/blue, flag/purple,
+        flag/yellow, flag/white, flag/done and flag/important, one per note; 'tags flag' finds every
+        flagged note, rg --tag flag/red the red ones. Set or change one by editing the frontmatter's tags.
+
           tags /Work
           tags research /Work
           tags project/kumbu | wc -l
