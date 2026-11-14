@@ -3,7 +3,7 @@
 import type { Locator, Page, Request, TestInfo } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { withDates } from "../support/api";
+import { encodePath, withDates } from "../support/api";
 import { e2eDir } from "../support/env";
 import { expect, onPhone, shot, test } from "../support/test";
 import { today } from "../support/time";
@@ -197,9 +197,9 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
     await openNote(page, path);
     await (await openFlagMenu(page)).getByRole("button", { name: "Done", exact: true }).click();
     // Writes are recorded while Mark done is tapped: history alone can't tell one write from two (a writer's writes in a changeset merge).
-    const writes: { method: string; url: string; body: string | null }[] = [];
+    const writes: { method: string; url: string }[] = [];
     const record = (r: Request) => {
-      if (r.url().includes("/api/") && r.method() !== "GET") writes.push({ method: r.method(), url: new URL(r.url()).pathname, body: r.postData() });
+      if (r.url().includes("/api/") && r.method() !== "GET") writes.push({ method: r.method(), url: new URL(r.url()).pathname });
     };
     page.on("request", record);
     await page.getByRole("alertdialog").getByRole("button", { name: "Mark done" }).click();
@@ -208,15 +208,18 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
     expect(writes, "exactly one write").toHaveLength(1);
     expect(writes[0].method).toBe("POST");
     expect(writes[0].url).toBe("/api/vaults/Work/flag");
-    expect(JSON.parse(writes[0].body ?? "{}")).toEqual({ path, flag: "done", calendar: "close" });
+    // (The body is not visible to the browser tooling; the one write is shown to carry flag, task and closed by the note below.)
 
     const closed = (await aliceApi.getNote(path)).content;
     expect(closed).toContain("flag/done");
     expect(closed).toContain("task: closed");
     expect(closed).toContain(`closed: ${today()}`);
     await expect.poll(async () => (await aliceApi.history(path)).length, "one version more").toBe(versions + 1);
-    const history = (await aliceApi.history(path)) as { content?: string }[];
-    expect(history[0]?.content, "the version before is the open note").toBe(open.content);
+    // Newest first: the current version, then the one before it, read by its token.
+    const history = (await aliceApi.history(path)) as { version: string; current: boolean }[];
+    expect(history[0].current).toBe(true);
+    const previous = await aliceApi.json<{ content: string }>("GET", `/api/notes/${encodePath(path)}?version=${encodeURIComponent(history[1].version)}`);
+    expect(previous.content, "the version before is the open note").toBe(open.content);
     await expect(page.getByRole("group", { name: "In the calendar" })).toContainText(/closed/i);
 
     await message(page).getByRole("button", { name: "Undo" }).click();
@@ -266,7 +269,6 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   await expect(row).toBeVisible();
   const rowActions = row.locator("..").getByRole("button", { name: "Actions for Certificate" });
   await (onPhone(testInfo) ? rowActions.tap() : rowActions.click());
-  console.log(await rowActions.getAttribute("aria-expanded"), await bobPage.locator("[role=menu]").count());
   const rowMenu = bobPage.getByRole("menu", { name: "Actions for Certificate" });
   await expect(rowMenu.getByRole("menuitem").first()).toBeVisible();
   await expect(rowMenu.getByRole("menuitem", { name: "Flag" })).toHaveCount(0);

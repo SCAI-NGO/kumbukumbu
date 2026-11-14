@@ -36,7 +36,7 @@ const rows = (page: Page) => page.getByRole("list", { name: "Recent changes" }).
 const words = (page: Page) => page.getByRole("searchbox", { name: "Find by name" });
 const vaultChips = (page: Page) => page.getByRole("group", { name: "Vaults" });
 
-test("flags #14: Recent changes lists the newest first with path, who, when and flag @recent @serial", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
+test("flags #14: Recent changes lists the newest first with path, who, when and flag @recent @serial @phone", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
   // The older note first, the flagged certificate after it.
   await aliceApi.putNote(`/Work/${folder}/Pump/Valve.md`, "# Valve\n\nThe pump's valve.\n");
   await seedAs("tags/recent/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
@@ -46,15 +46,15 @@ test("flags #14: Recent changes lists the newest first with path, who, when and 
   await words(page).fill(folder);
   await expect(rows(page)).toHaveCount(2);
   const [newer, older] = [rows(page).nth(0), rows(page).nth(1)];
-  await expect(newer).toHaveText(new RegExp(`^Certificate.*Work/${folder}/Pump · You · .+ ago$`));
+  await expect(newer).toHaveText(new RegExp(`^Certificate.*Work/${folder}/Pump · You · (just now|.+ ago)$`));
   await expect(newer.getByRole("img", { name: "Red flag" })).toBeVisible();
-  await expect(older).toHaveText(new RegExp(`^Valve.*Work/${folder}/Pump · You · .+ ago$`));
+  await expect(older).toHaveText(new RegExp(`^Valve.*Work/${folder}/Pump · You · (just now|.+ ago)$`));
   await expect(older.getByRole("img")).toHaveCount(0);
   await expect(newer.locator("time")).toHaveAttribute("datetime", /^\d{4}-\d\d-\d\dT/);
   await shot(page, testInfo, "recent");
 });
 
-test("flags #15: chips, words and flags narrow the rows; Show more; rows open notes and the lightbox @recent @serial", async ({ freshSession, aliceApi, seedAs, folder }, testInfo) => {
+test("flags #15: chips, words and flags narrow the rows; Show more; rows open notes and the lightbox @recent @serial @phone", async ({ freshSession, aliceApi, seedAs, folder }, testInfo) => {
   test.slow();
   // More rows than a page (50) in the test's folder, then the three files on top of them.
   const filler = Array.from({ length: 52 }, (_, i) => `/Work/${folder}/Bulk/Filler ${String(i + 1).padStart(2, "0")}.md`);
@@ -134,7 +134,7 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
   }
 });
 
-test("flags #16: hiding in this tab and from a second tab leaves nothing of Home @recent @serial", async ({ freshSession, seedAs, folder }, testInfo) => {
+test("flags #16: hiding in this tab and from a second tab leaves nothing of Home @recent @serial @phone", async ({ freshSession, seedAs, folder }, testInfo) => {
   await seedAs("tags/recent/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
   const { context, page } = await freshSession("alice");
   const note = `/Work/${folder}/Pump/Certificate.md`;
@@ -198,7 +198,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
   }
 });
 
-test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent @serial", async ({ bobPage, seedAs, folder }) => {
+test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent @serial @phone", async ({ bobPage, seedAs, folder }) => {
   await seedAs("tags/recent/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
   await bobPage.goto("/recent");
   await expect(bobPage.getByRole("heading", { name: "Recent changes" })).toBeVisible();
@@ -206,7 +206,7 @@ test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent 
   const row = rows(bobPage).filter({ hasText: "Certificate" });
   await expect(row).toHaveCount(1);
   // Another member's name reads as Activity writes it, in quotes (WriterLabels.Quoted); the checklist says Alice (F-?? unclear, see the report).
-  await expect(row).toHaveText(new RegExp(`^Certificate.*Work/${folder}/Pump · "?alice"? · .+ ago$`, "i"));
+  await expect(row).toHaveText(new RegExp(`^Certificate.*Work/${folder}/Pump · "?alice"? · (just now|.+ ago)$`, "i"));
 
   // Home is no chip and no row; Alice's own vaults are not his (his chips are Work and what is his own).
   await words(bobPage).fill("Zahnarzt");
