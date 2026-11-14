@@ -120,11 +120,19 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
       return files.map((f) => f.path);
     });
   },
+  // `test.fail` takes any failure as the expected one. A finding's own assertion names it in its message
+  // (`expect(x, "F-03: …")`); a finding's test that fails for another reason (a page that never loaded) is reported
+  // as a failure, not as the finding.
   findingShot: [
     async ({ page }, use, testInfo) => {
       await use();
       const finding = testInfo.annotations.find((a) => a.type === "finding")?.description?.match(/^F-\d+/)?.[0];
-      if (finding && testInfo.expectedStatus === "failed" && testInfo.status === "failed" && !page.isClosed()) await shot(page, testInfo, finding);
+      if (!finding || testInfo.expectedStatus !== "failed" || testInfo.status !== "failed") return;
+      if (!testInfo.errors.some((e) => (e.message ?? "").includes(`${finding}:`))) {
+        testInfo.expectedStatus = "passed";
+        return;
+      }
+      if (!page.isClosed()) await shot(page, testInfo, finding);
     },
     { auto: true },
   ],
