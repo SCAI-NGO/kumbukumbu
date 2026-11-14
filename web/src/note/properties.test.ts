@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { parseProperties } from "./properties";
+import { flowMap, parseProperties } from "./properties";
 
 describe("parseProperties", () => {
   it("reads texts, inline lists and block lists, unquoting values", () => {
@@ -35,5 +35,20 @@ describe("parseProperties", () => {
 
   it("keeps a # that is no comment, as in a URL's fragment", () => {
     expect(parseProperties("source: https://example.org/a#part")).toEqual([{ key: "source", value: "https://example.org/a#part" }]);
+  });
+});
+
+describe("flowMap", () => {
+  it("reads a flat flow map, quoted keys too", () => {
+    expect(flowMap('{ Running: 2026-11-14, "In progress": 2026-11-12 }')).toEqual({ Running: "2026-11-14", "In progress": "2026-11-12" });
+    expect(flowMap("{Done: '2026-11-01T09:30:00'}")).toEqual({ Done: "2026-11-01T09:30:00" });
+    expect(flowMap("{}")).toEqual({});
+  });
+
+  it("is null for a nested map or a comma inside quotes", () => {
+    expect(flowMap("{ Running: { at: 2026-11-14 } }")).toBeNull();
+    expect(flowMap('{ "Running, late": 2026-11-14 }')).toBeNull();
+    expect(flowMap("{ Running }")).toBeNull();
+    expect(flowMap("Running: 2026-11-14")).toBeNull();
   });
 });
