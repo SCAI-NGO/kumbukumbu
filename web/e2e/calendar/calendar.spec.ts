@@ -233,7 +233,10 @@ test("calendar #13: at 375 px the week stacks, wraps and doesn't scroll sideways
   test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
   const schemes: string[] = [];
   await phoneWeek(page, aliceApi, folder, async (scheme) => {
-    schemes.push(await page.evaluate(() => `${document.documentElement.dataset.scheme} ${getComputedStyle(document.querySelector("main")!).color}`));
+    // The app follows the system's scheme when it changes; the dark one is taken first, the light one once it differs.
+    const shown = () => page.evaluate(() => `${document.documentElement.dataset.scheme} ${getComputedStyle(document.querySelector("main")!).color}`);
+    if (scheme === "light") await expect.poll(shown, "the scheme followed the system").not.toBe(schemes[0]);
+    schemes.push(await shown());
 
     const boxes = await page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / }).evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y })));
     expect(boxes.length, scheme).toBe(7);
@@ -250,7 +253,6 @@ test("calendar #13: at 375 px the week stacks, wraps and doesn't scroll sideways
 
     expect((await smallControls(page)).filter((c) => !FOUND_SMALL.includes(c.name)), `${scheme}: no other control under 48 px`).toEqual([]);
   });
-  expect(schemes[0], "the scheme followed the system").not.toBe(schemes[1]);
 });
 
 test("calendar #13: every control is at least 48 px high @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
