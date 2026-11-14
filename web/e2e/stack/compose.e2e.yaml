@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The end-to-end suite's stack: layered over compose.yaml and compose.build.yaml by up.sh, always as the
+# Compose project kumbu-e2e. Local image names with pull_policy: build, so a run never pulls a release
+# from the registry in place of this checkout.
+services:
+  mongo:
+    # The VM's hard file limit; MongoDB refuses to start with fewer.
+    ulimits:
+      nofile:
+        soft: 20000
+        hard: 20000
+
+  kumbu:
+    image: kumbu-e2e:local
+    pull_policy: build
+    environment:
+      Kumbu__DevToken: ""
+      Kumbu__PublicUrl: http://localhost:8080
+      Kumbu__Search__Enabled: "false"
+      Kumbu__Skills__Marketplaces__Enabled: "false"
+
+  pdf:
+    image: kumbu-e2e-pdf:local
+    pull_policy: build

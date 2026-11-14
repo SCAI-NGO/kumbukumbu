@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import type { Plugin } from "vite";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const server = "http://localhost:8083";
 
@@ -81,5 +81,6 @@ export default defineConfig({
       },
     },
   },
-  test: { environment: "jsdom", globals: true, setupFiles: ["./src/test-setup.ts"] },
+  // e2e/ holds the Playwright suite, which runs against a stack of its own (e2e/stack/run.sh).
+  test: { environment: "jsdom", globals: true, setupFiles: ["./src/test-setup.ts"], exclude: [...configDefaults.exclude, "e2e/**"] },
 });

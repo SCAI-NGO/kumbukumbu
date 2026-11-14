@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { defineConfig, devices } from "@playwright/test";
+
+// Always localhost, never 127.0.0.1: the server's Origin check compares with KUMBU_PUBLIC_URL, and Chromium keeps
+// the Secure session cookie on http://localhost only.
+const baseURL = "http://localhost:8080";
+
+// Alice's saved session by default; the setup makes it (e2e/global.setup.ts).
+const alice = "e2e/.auth/alice.json";
+const desktop = { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 }, colorScheme: "light" as const, storageState: alice };
+const phone = {
+  ...devices["Desktop Chrome"],
+  viewport: { width: 375, height: 812 },
+  deviceScaleFactor: 1,
+  isMobile: true,
+  hasTouch: true,
+  colorScheme: "dark" as const,
+  storageState: alice,
+};
+
+/**
+ * The suite runs against a stack of its own (e2e/stack/run.sh brings it up and down). `@serial` tests look at lists
+ * across vaults (What's on, Recent changes, the badge) or at discreet vaults: they run after all others, one at a
+ * time, so no other test writes meanwhile.
+ */
+export default defineConfig({
+  testDir: "e2e",
+  testMatch: /.*\.spec\.ts/,
+  outputDir: "e2e/.results",
+  timeout: 60_000,
+  expect: { timeout: 10_000 },
+  workers: 2,
+  retries: 0,
+  forbidOnly: true,
+  // No HTML report: its steps name every address and filled value, the reader links' codes and the passwords too.
+  reporter: [["list"]],
+  use: {
+    baseURL,
+    timezoneId: "Europe/Vienna",
+    locale: "en-GB",
+    trace: "off",
+    screenshot: "only-on-failure",
+  },
+  projects: [
+    // No screenshots of the setup: its screens show the recovery keys.
+    { name: "setup", testMatch: /global\.setup\.ts/, use: { ...desktop, storageState: undefined, screenshot: "off" } },
+    { name: "desktop", dependencies: ["setup"], grepInvert: /@serial/, use: desktop },
+    { name: "phone", dependencies: ["setup"], grep: /@phone/, grepInvert: /@serial/, use: phone },
+    { name: "serial", dependencies: ["desktop", "phone"], grep: /@serial/, workers: 1, use: desktop },
+    { name: "serial-phone", dependencies: ["serial"], grep: /(?=.*@serial)(?=.*@phone)/, workers: 1, use: phone },
+  ],
+});
