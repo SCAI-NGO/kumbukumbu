@@ -127,13 +127,17 @@ test("calendar #5: in discreet Home, Add to calendar… with a time asks nothing
 
 /** The end of a discreet step, whatever happened: Home's note out of the calendar, the key revoked, Home hidden. */
 async function endHidden(page: Page, home: Awaited<ReturnType<typeof makeAgent>> | undefined) {
-  if (home) {
-    await home.mcp.sh("calendar unset /Home/Zahnarzt.md");
-    await home.dispose();
+  try {
+    try {
+      if (home) await home.mcp.sh("calendar unset /Home/Zahnarzt.md");
+    } finally {
+      await home?.dispose();
+    }
+  } finally {
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first()).toBeVisible();
+    if (await page.getByRole("button", { name: "Hide discreet vaults" }).count()) await hideDiscreet(page);
   }
-  await page.goto("/");
-  await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first()).toBeVisible();
-  if (await page.getByRole("button", { name: "Hide discreet vaults" }).count()) await hideDiscreet(page);
 }
 
 const withoutCr = (text: string) => text.replace(/\r\n/g, "\n");

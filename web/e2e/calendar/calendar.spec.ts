@@ -2,6 +2,8 @@
 // The calendar's checklist (docs/superpowers/overnighter/2026-11-13-calendar-report.md) and the flags report's step 23,
 // for the steps that stay inside the test's own folder. Each test narrows the views to a tag of its own where other
 // tests' entries could show beside its own, and trashes its folder's notes at its end.
+import type { Page } from "@playwright/test";
+import type { Api } from "../support/api";
 import { addDays, addMonths, isoWeek, monday, today } from "../support/time";
 import {
   cleanFolder,
@@ -194,26 +196,46 @@ test("calendar #10: a window across weeks stands on top of each week it touches,
   }
 });
 
-test("calendar #13: at 375 px, dark and light, the days stack, nothing scrolls sideways, titles wrap, controls are 48 px @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(onPhone(testInfo), "F-01 Today and This week are 44 px high, under the 48 px of spec §7.11");
-  test.info().annotations.push({ type: "finding", description: "F-01" });
-  test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
-  const t = today();
-  const title = "A to-do with a rather long title that has to wrap on a phone of 375 pixels";
-  // Narrowed to a tag of its own, so other tests' entries in Work add no days, lines or controls of theirs.
-  const tag = tagOf(folder);
-  await aliceApi.putNote(`/Work/${folder}/${title}.md`, note({ when: t, task: "open", tags: `[${tag}]` }, `# ${title}\n`));
-  await page.goto(weekUrl("Work", t, tag));
-  await expect(page.getByRole("link", { name: title })).toBeVisible();
+/** The controls on the page under 48 px high, by name. */
+const smallControls = (page: Page) =>
+  page.locator("button, a[href], input, summary, select").evaluateAll((controls) =>
+    controls
+      .filter((c) => {
+        const r = c.getBoundingClientRect();
+        return r.width > 1 && r.height > 1 && getComputedStyle(c).visibility !== "hidden";
+      })
+      .map((c) => ({ name: c.getAttribute("aria-label") ?? c.textContent?.trim() ?? c.tagName, height: c.getBoundingClientRect().height }))
+      .filter((c) => c.height < 48),
+  );
 
-  const backgrounds: string[] = [];
-  const small: { scheme: string; name: string; height: number }[] = [];
+/**
+ * This week of Work at 375 px with a long-titled to-do, narrowed to a tag of the test's own so that other tests'
+ * entries add no days, lines or controls of theirs; `check` runs in dark, then in light.
+ */
+async function phoneWeek(page: Page, api: Api, folder: string, check: (scheme: "dark" | "light") => Promise<void>) {
+  const t = today();
+  const tag = tagOf(folder);
+  await api.putNote(`/Work/${folder}/${LONG_TITLE}.md`, note({ when: t, task: "open", tags: `[${tag}]` }, `# ${LONG_TITLE}\n`));
+  await page.goto(weekUrl("Work", t, tag));
+  await expect(page.getByRole("link", { name: LONG_TITLE })).toBeVisible();
   for (const scheme of ["dark", "light"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await expect.poll(() => page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(scheme === "dark");
-    backgrounds.push(await page.evaluate(() => `${document.documentElement.dataset.scheme} ${getComputedStyle(document.querySelector("main")!).color}`));
+    await check(scheme);
+  }
+}
 
-    const boxes = await page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / }).evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y, w: r.width })));
+const LONG_TITLE = "A to-do with a rather long title that has to wrap on a phone of 375 pixels";
+/** F-01: these two are 44 px; the second #13 test holds the finding, the first one asserts every other control. */
+const FOUND_SMALL = ["Today", "This week"];
+
+test("calendar #13: at 375 px the week stacks, wraps and doesn't scroll sideways, in light and dark @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
+  test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
+  const schemes: string[] = [];
+  await phoneWeek(page, aliceApi, folder, async (scheme) => {
+    schemes.push(await page.evaluate(() => `${document.documentElement.dataset.scheme} ${getComputedStyle(document.querySelector("main")!).color}`));
+
+    const boxes = await page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / }).evaluateAll((sections) => sections.map((s) => s.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y })));
     expect(boxes.length, scheme).toBe(7);
     for (let i = 1; i < 7; i++) {
       expect(boxes[i].x, `${scheme}: day ${i} under the one before`).toBe(boxes[0].x);
@@ -222,24 +244,23 @@ test("calendar #13: at 375 px, dark and light, the days stack, nothing scrolls s
     const sideways = await page.evaluate(() => [document.documentElement.scrollWidth - innerWidth, ...[...document.querySelectorAll("main")].map((m) => m.scrollWidth - m.clientWidth)]);
     expect(sideways.every((d) => d <= 0), `${scheme}: no sideways scroll (${sideways})`).toBe(true);
 
-    const link = (await page.getByRole("link", { name: title }).boundingBox())!;
+    const link = (await page.getByRole("link", { name: LONG_TITLE }).boundingBox())!;
     expect(link.height, `${scheme}: the long title wraps onto more lines`).toBeGreaterThan(60);
     expect(link.x + link.width, `${scheme}: the long title stays within the screen`).toBeLessThanOrEqual(375);
 
-    const found = await page.locator("button, a[href], input, summary, select").evaluateAll((controls) =>
-      controls
-        .filter((c) => {
-          const r = c.getBoundingClientRect();
-          return r.width > 1 && r.height > 1 && getComputedStyle(c).visibility !== "hidden";
-        })
-        .map((c) => ({ name: c.getAttribute("aria-label") ?? c.textContent?.trim() ?? c.tagName, height: c.getBoundingClientRect().height }))
-        .filter((c) => c.height < 48),
-    );
-    small.push(...found.map((c) => ({ scheme, ...c })));
-  }
-  expect(backgrounds[0], "the scheme followed the system").not.toBe(backgrounds[1]);
-  // The finding below is Today and This week; anything else under 48 px fails on its own.
-  expect(small.filter((c) => c.name !== "Today" && c.name !== "This week"), "no other control under 48 px").toEqual([]);
+    expect((await smallControls(page)).filter((c) => !FOUND_SMALL.includes(c.name)), `${scheme}: no other control under 48 px`).toEqual([]);
+  });
+  expect(schemes[0], "the scheme followed the system").not.toBe(schemes[1]);
+});
+
+test("calendar #13: every control is at least 48 px high @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
+  test.fail(onPhone(testInfo), "F-01 Today and This week are 44 px high, under the 48 px of spec §7.11");
+  test.info().annotations.push({ type: "finding", description: "F-01" });
+  test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
+  const small: { scheme: string; name: string; height: number }[] = [];
+  await phoneWeek(page, aliceApi, folder, async (scheme) => {
+    small.push(...(await smallControls(page)).map((c) => ({ scheme, ...c })));
+  });
   expect(small, "every control at least 48 px high").toEqual([]);
 });
 

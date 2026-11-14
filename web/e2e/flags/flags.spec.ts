@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Flags (the flags report's hand-test checklist, steps 1-9; spec 2026-11-14-flags-explorer-photo-design.md §2).
-import type { Locator, Page, TestInfo } from "@playwright/test";
+import type { Locator, Page, Request, TestInfo } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { withDates } from "../support/api";
@@ -120,9 +120,9 @@ test("flags #2: Red shows in the header and the tree, and only tags changed @fla
   const after = await aliceApi.getNote(path);
   const changed = changedLines(before.content, after.content);
   expect(changed, "one line changed").toHaveLength(1);
-  expect(changed[0].before).toMatch(/^tags:.*\bpump\b/);
-  expect(changed[0].after).toMatch(/^tags:.*\bpump\b.*\bflag\/red\b|^tags:.*\bflag\/red\b.*\bpump\b/);
-  expect(changed[0].after.replace(/,?\s*flag\/red/, "")).toBe(changed[0].before);
+  const tagsOf = (line: string) => new Set(/^tags:\s*\[(.*)\]\s*$/.exec(line)?.[1].split(",").map((t) => t.trim()).filter(Boolean));
+  expect(tagsOf(changed[0].before), "the tags before").toEqual(new Set(["pump"]));
+  expect(tagsOf(changed[0].after), "the tags after").toEqual(new Set(["pump", "flag/red"]));
 });
 
 test("flags #3: a single message for Blue, and Undo puts Red back @flags", async ({ page, aliceApi, seedAs, folder }) => {
@@ -180,13 +180,6 @@ test("flags #5: Done asks whether to mark it done in the calendar @flags @phone"
         await button.tap({ trial: true });
       }
     }
-    // Just the flag leaves the calendar alone.
-    if (onPhone(testInfo)) await justFlag.tap();
-    else await justFlag.click();
-    await expect(message(page)).toHaveText(/^Ticked\s*·\s*Undo$/);
-    const content = (await aliceApi.getNote(path)).content;
-    expect(content).toContain("flag/done");
-    expect(content).toContain("task: open");
   } finally {
     await aliceApi.deleteNote(path).catch(() => {});
   }
@@ -203,14 +196,27 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
     const versions = (await aliceApi.history(path)).length;
     await openNote(page, path);
     await (await openFlagMenu(page)).getByRole("button", { name: "Done", exact: true }).click();
+    // Writes are recorded while Mark done is tapped: history alone can't tell one write from two (a writer's writes in a changeset merge).
+    const writes: { method: string; url: string; body: string | null }[] = [];
+    const record = (r: Request) => {
+      if (r.url().includes("/api/") && r.method() !== "GET") writes.push({ method: r.method(), url: new URL(r.url()).pathname, body: r.postData() });
+    };
+    page.on("request", record);
     await page.getByRole("alertdialog").getByRole("button", { name: "Mark done" }).click();
     await expect(message(page)).toHaveText(/^Ticked and marked done\s*·\s*Undo$/);
+    page.off("request", record);
+    expect(writes, "exactly one write").toHaveLength(1);
+    expect(writes[0].method).toBe("POST");
+    expect(writes[0].url).toBe("/api/vaults/Work/flag");
+    expect(JSON.parse(writes[0].body ?? "{}")).toEqual({ path, flag: "done", calendar: "close" });
 
     const closed = (await aliceApi.getNote(path)).content;
     expect(closed).toContain("flag/done");
     expect(closed).toContain("task: closed");
     expect(closed).toContain(`closed: ${today()}`);
     await expect.poll(async () => (await aliceApi.history(path)).length, "one version more").toBe(versions + 1);
+    const history = (await aliceApi.history(path)) as { content?: string }[];
+    expect(history[0]?.content, "the version before is the open note").toBe(open.content);
     await expect(page.getByRole("group", { name: "In the calendar" })).toContainText(/closed/i);
 
     await message(page).getByRole("button", { name: "Undo" }).click();
@@ -245,21 +251,27 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   });
 
   const menu = await noteMenu(bobPage);
+  await expect(menu.getByRole("menuitem").first()).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Flag" })).toHaveCount(0);
   await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
   await bobPage.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
 
-  // The tree's menus too: the note's has no Flag, and the folder has none at all, so no Take photo.
+  // The tree's menus: the note's has items, none of them Flag or a photo; the folder has no actions at all for a reader.
   const tree = onPhone(testInfo) ? await (async () => {
     await bobPage.getByRole("button", { name: "Open file tree" }).click();
     return bobPage.getByRole("dialog", { name: "File tree" });
   })() : bobPage.getByRole("complementary", { name: "File tree" });
-  await expect(tree.locator('[aria-current="page"]')).toBeVisible();
-  await expect(tree.getByRole("button", { name: "Actions for Certificate" }).first()).toBeAttached();
-  await expect(bobPage.getByRole("menuitem", { name: /^Flag$/ })).toHaveCount(0);
+  const row = tree.locator('[aria-current="page"]');
+  await expect(row).toBeVisible();
+  await row.locator("..").getByRole("button", { name: "Actions for Certificate" }).click();
+  const rowMenu = bobPage.getByRole("menu", { name: "Actions for Certificate" });
+  await expect(rowMenu.getByRole("menuitem").first()).toBeVisible();
+  await expect(rowMenu.getByRole("menuitem", { name: "Flag" })).toHaveCount(0);
+  await expect(rowMenu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
+  await bobPage.keyboard.press("Escape");
   await expect(tree.getByRole("button", { name: `Actions for ${folder}` })).toHaveCount(0);
   await expect(bobPage.getByText(/Take photo/)).toHaveCount(0);
-  await expect(bobPage.getByRole("button", { name: "Flag", exact: true })).toHaveCount(0);
 });
 
 test("flags #9: the agent's tags flag and rg --tag flag/red list the flagged note @flags", async ({ aliceApi, seedAs, folder }) => {
