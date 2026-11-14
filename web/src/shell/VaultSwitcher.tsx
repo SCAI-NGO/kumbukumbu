@@ -3,6 +3,8 @@ import { ChevronsUpDown, Ellipsis, LayoutList, PenLine, Plus } from "lucide-reac
 import { useId, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { groupVaults, useVaults, type VaultView } from "../api/notes";
+import Badge from "../calendar/Badge";
+import { useBadge, type Share } from "../calendar/useBadge";
 import { useDialog } from "../hooks/useDialog";
 import { useTruncated } from "../hooks/useTruncated";
 import { useEditor } from "../state/editor";
@@ -10,7 +12,7 @@ import { useEditor } from "../state/editor";
 const entryClass = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const groupTitle = "truncate px-3 pt-2 pb-1 font-mono text-[11px] tracking-[0.08em] text-dim uppercase";
 
-function VaultEntry({ vault, current, onChoose }: { vault: VaultView; current: boolean; onChoose(): void }) {
+function VaultEntry({ vault, current, share, onChoose }: { vault: VaultView; current: boolean; share?: Share; onChoose(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(vault.name);
   return (
     <li>
@@ -25,6 +27,7 @@ function VaultEntry({ vault, current, onChoose }: { vault: VaultView; current: b
         <span ref={ref} className="min-w-0 flex-1 truncate">
           {vault.name}
         </span>
+        {share && <Badge count={share.count} overdue={share.overdue} />}
       </button>
     </li>
   );
@@ -54,11 +57,13 @@ function Popout({ onClose, onNewVault, onRename, onMoreVaults }: { onClose(): vo
   const active = useEditor((s) => s.activeVault);
   const { own, shared } = groupVaults(vaults.data ?? []);
   const current = vaults.data?.find((v) => v.name === active);
+  // Each vault's share of What's on; a vault the session doesn't show has none in the answer.
+  const shares = useBadge().vaults;
   const then = (action: () => void) => () => {
     onClose();
     action();
   };
-  const entry = (v: VaultView) => <VaultEntry key={v.name} vault={v} current={v.name === active} onChoose={then(() => useEditor.getState().setActiveVault(v.name))} />;
+  const entry = (v: VaultView) => <VaultEntry key={v.name} vault={v} current={v.name === active} share={shares.get(v.name)} onChoose={then(() => useEditor.getState().setActiveVault(v.name))} />;
   return (
     <>
       <div data-testid="vault-popout-scrim" aria-hidden onClick={onClose} className="fixed inset-0 z-30 bg-black/55 md:bg-transparent" />

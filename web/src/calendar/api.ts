@@ -43,6 +43,14 @@ export type CalendarView = { vault: string; today: string; zone: string; weeks: 
 export type NoteEntryView = { entry: EntryView | null; couldntRead: CouldntReadView | null; canWrite: boolean };
 export type WrittenView = { path: string; version: string; note: NoteEntryView };
 export type CalendarViewState = { view: "week" | "month"; grid: boolean };
+/** One vault's share of What's on: its count and whether anything in it is overdue. */
+export type VaultCountView = { vault: string; count: number; overdue: boolean };
+/**
+ * What's on over every vault the session shows (spec §5, §8): `items` overdue first, then ongoing, then upcoming
+ * (empty for the badge); `count` and `overdue` are the badge's; `couldntRead` counts the dates that couldn't be read,
+ * in `couldntReadVaults`.
+ */
+export type WhatsOnView = { items: EntryView[]; count: number; overdue: boolean; vaults: VaultCountView[]; couldntRead: number; couldntReadVaults: string[] };
 
 export type SetEntryRequest = {
   path: string;
@@ -61,7 +69,7 @@ export type LaterRequest = { path: string; part: "postpone" | "moreTime"; step?:
 export type NewEntryRequest = { day: string; title: string; time?: string; task: boolean; upcoming?: string };
 
 type Answer<T> = Promise<{ data?: T; error?: unknown; response: Response }>;
-type Init = { params: { path: { vault: string }; query?: Record<string, string> }; body?: unknown };
+type Init = { params: { path?: { vault: string }; query?: Record<string, string> }; body?: unknown };
 
 /**
  * The app's API client without the generated types the calendar's routes don't have yet: its middleware (a session
@@ -83,6 +91,21 @@ export function useCalendar(vault: string, range: CalendarRange, tag?: string) {
     retry: false,
   });
 }
+
+/** What's on, narrowed to a tag if given. */
+export function useWhatsOn(tag?: string) {
+  return useQuery({
+    queryKey: ["whats-on", "items", tag ?? null],
+    queryFn: () => call(untyped.GET<WhatsOnView>("/api/calendar/whats-on", { params: { query: tag ? { tag } : {} } })),
+    retry: false,
+  });
+}
+
+/** The badge's count alone, without the items; `useBadge` reads it. */
+export const badgeQuery = {
+  queryKey: ["whats-on", "count"],
+  queryFn: () => call(untyped.GET<WhatsOnView>("/api/calendar/whats-on", { params: { query: { count: "true" } } })),
+} as const;
 
 export type CalendarAction =
   | ({ kind: "set" } & SetEntryRequest)

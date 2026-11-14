@@ -139,6 +139,7 @@ export const routes: RouteObject[] = [
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
           { path: "/calendar/:vault", lazy: lazyPage(() => import("./calendar/CalendarPage")) },
+          { path: "/whats-on", lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
           { path: "/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },

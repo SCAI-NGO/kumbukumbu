@@ -32,9 +32,10 @@ const movable = (entry: EntryView) => closable(entry) || (entry.kind === "card" 
 
 /**
  * One entry in a calendar list: its time, its title (which opens the note), its state and a mark for its kind. A to-do
- * and a note given a day are told apart at a glance: only a to-do has ✓ and Later. Without `actions`, read only.
+ * and a note given a day are told apart at a glance: only a to-do has ✓ and Later. Without `actions`, read only;
+ * `vault` names the entry's vault, where a list spans several (What's on).
  */
-export default function EntryItem({ entry, actions, range }: { entry: EntryView; actions?: EntryActions; range?: string }) {
+export default function EntryItem({ entry, actions, range, vault }: { entry: EntryView; actions?: EntryActions; range?: string; vault?: string }) {
   const state = states[entry.state];
   const kind = kinds[entry.kind];
   return (
@@ -65,8 +66,9 @@ export default function EntryItem({ entry, actions, range }: { entry: EntryView;
             <span className="sr-only">{kind.word}</span>
           </span>
         </p>
-        {(range || state) && (
+        {(range || state || vault) && (
           <p className="flex flex-wrap items-center gap-x-2 text-sm">
+            {vault && <span className="text-muted">{vault}</span>}
             {range && <span className="text-text-body">{range}</span>}
             {state && (
               <span className={`flex items-center gap-1 ${state.className}`}>

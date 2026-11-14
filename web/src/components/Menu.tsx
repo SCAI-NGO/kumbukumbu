@@ -9,6 +9,8 @@ export interface MenuItem {
   icon: LucideIcon;
   onSelect(): void;
   disabled?: boolean;
+  /** Shown after the label, at the item's end: a count, say. */
+  after?: ReactNode;
 }
 
 /** Items under a heading of their own, as Later's Postpone and More time. */
@@ -89,7 +91,7 @@ export function Menu(props: {
     }
   };
 
-  const renderItem = ({ label, icon: Icon, onSelect, disabled }: MenuItem, key: string) => (
+  const renderItem = ({ label, icon: Icon, onSelect, disabled, after }: MenuItem, key: string) => (
     <button
       key={key}
       type="button"
@@ -105,6 +107,7 @@ export function Menu(props: {
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="text-muted" />
       {label}
+      {after && <span className="ml-auto flex">{after}</span>}
     </button>
   );
 

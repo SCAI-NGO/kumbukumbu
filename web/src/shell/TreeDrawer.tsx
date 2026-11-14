@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -39,6 +39,8 @@ import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
 import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import Badge from "../calendar/Badge";
+import { useBadge } from "../calendar/useBadge";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -341,6 +343,7 @@ function AccountRow() {
   const close = () => useEditor.getState().setOverlay("none");
   const [asking, setAsking] = useState(false);
   const [failed, setFailed] = useState(false);
+  const badge = useBadge();
 
   /** The open editor saves first; text it can't save (a conflict, a failure) is given up only when the user says so. */
   const signOut = async (anyway = false) => {
@@ -365,6 +368,11 @@ function AccountRow() {
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
+      <Link to="/whats-on" onClick={close} className={link}>
+        <CalendarClock size={16} aria-hidden className="text-muted" />
+        What's on
+        <Badge count={badge.count} overdue={badge.overdue} />
+      </Link>
       <Link to="/skills/installed" onClick={close} className={link}>
         <Sparkles size={16} aria-hidden className="text-muted" />
         Skills
@@ -559,6 +567,8 @@ export default function TreeDrawer(props: {
   // While the discreet vaults are shown, an amber frame around the sidebar (spec §3.7), and the mark in the vault's menu.
   const revealed = useRevealed();
   const markDiscreet = useMarkDiscreet();
+  // The active vault's share of What's on, on its Calendar.
+  const share = useBadge().vaults.get(activeVault ?? "");
   const vaultItems: MenuItem[] = [
     ...(activeVault
       ? [
@@ -566,7 +576,7 @@ export default function TreeDrawer(props: {
           { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
           // Every vault has a calendar, a view of its notes with a time: nothing to make first, nothing to look for.
-          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault) },
+          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault), after: share && <Badge count={share.count} overdue={share.overdue} /> },
           // Made from the template at once, so no ellipsis: that would promise a dialog.
           ...(hasBoard
             ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }]

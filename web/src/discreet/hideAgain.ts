@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useLocation, useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, HttpError } from "../api/client";
 import { inVault, noteUrl, vaultOf } from "../api/paths";
+import { clearAppBadge } from "../calendar/useBadge";
 import { useConsole } from "../console/store";
 import { onDiscreetFrame } from "../hooks/useSyncSocket";
 import { useEditor } from "../state/editor";
@@ -158,7 +159,12 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // Going back to a discreet view's entry now finds /discreet, which goes to the vault list.
     forgetDiscreet();
 
-    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" });
+    // What's on and its count named the discreet vaults' entries: the app's icon is cleared, and both, kept for the
+    // views still showing them (the badge, the What's on page), are emptied at once and asked again; a removed query
+    // would stay on screen with what it had until its view rendered again.
+    clearAppBadge();
+    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" });
+    void queryClient.resetQueries({ queryKey: ["whats-on"] });
     sweep(queryClient, names);
     for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
     void queryClient.refetchQueries({ queryKey: ["session"] });
