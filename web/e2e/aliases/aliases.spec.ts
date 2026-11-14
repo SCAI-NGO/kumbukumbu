@@ -2,45 +2,29 @@
 // Aliases (the aliases report's hand-test checklist, steps 1-8 and 11-13; spec 2026-11-12-aliases-design.md).
 // Aliases resolve vault-wide: two folders with `aliases: [Kumbu, K²]` would make `[[Kumbu]]` ambiguous. So every test is
 // serial and removes its notes at its end, even when it fails; steps 9 (Bob with Write) and 10 (Carol) are left out.
-import { request, type Page } from "@playwright/test";
+import type { Locator, Page, TestInfo } from "@playwright/test";
+import { Mcp, type Api } from "../support/api";
 import { randomBytes } from "node:crypto";
-import { Api, Mcp } from "../support/api";
-import { baseURL } from "../support/env";
-import { expect, shot, test } from "../support/test";
-
-/** An agent of Alice's that may publish in Work too (the shared `mcp` may not: "May publish" is a right of its own). */
-async function publisher() {
-  const owner = await Api.as("alice");
-  const data = { name: `e2e aliases ${randomBytes(3).toString("hex")}`, vaults: { Work: "write" }, expiresInDays: 30, publish: ["Work"] };
-  // The password is confirmed only when the session's window has closed (it counts against a rate limit).
-  let answer = await owner.context.post("/api/keys", { data });
-  if (answer.status() === 401) {
-    await owner.confirmPassword();
-    answer = await owner.context.post("/api/keys", { data });
-  }
-  expect(answer.status(), `POST /api/keys: ${answer.status()}`).toBe(201);
-  const created = (await answer.json()) as { key: string; apiKey: { id: string } };
-  const mcp = new Mcp(await request.newContext({ baseURL }), created.key, { api: owner, id: created.apiKey.id });
-  return {
-    mcp,
-    dispose: async () => {
-      await mcp.dispose();
-      await owner.dispose();
-    },
-  };
-}
+import { expect, onPhone, shot, test } from "../support/test";
 
 const url = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 
 /** Opens a note by its address; on the phone the install hint is answered with Not now, as a person would. */
+const handled = new WeakSet<Page>();
 async function openNote(page: Page, path: string) {
-  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
-  await page.addLocatorHandler(hint, async () => {
-    await hint.getByRole("button", { name: "Not now" }).click();
-  });
+  if (!handled.has(page)) {
+    handled.add(page);
+    const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
+    await page.addLocatorHandler(hint, async () => {
+      await hint.getByRole("button", { name: "Not now" }).click();
+    });
+  }
   await page.goto(url(path));
   await expect(page.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
 }
+
+/** A tap on the phone (touch), a click on the desktop. */
+const press = (testInfo: TestInfo, target: Locator) => (onPhone(testInfo) ? target.tap() : target.click());
 
 /** No sideways scroll: the page is no wider than its window. */
 const fitsWidth = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
@@ -83,17 +67,30 @@ test("aliases #1+#2: links by alias are drawn as links and open Kumbukumbu, at R
     expect(await fitsWidth(page), "no sideways scroll").toBe(true);
     await shot(page, testInfo, "aliases");
 
-    await kumbu.click();
+    await press(testInfo, kumbu);
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Projects/Kumbukumbu\\.md$`));
     await expect(page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 })).toBeVisible();
 
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Diary/2026-11-12\\.md$`));
-    await roadmap.click();
+    await press(testInfo, roadmap);
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Projects/Kumbukumbu\\.md$`));
-    // The app opens the note; it has no jump to a heading for any link, so the Roadmap section is there to read.
+    // That it opens at the Roadmap section is F-03 (below): the app jumps to no heading.
     await expect(page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 })).toBeVisible();
     await expect(page.locator("article").getByRole("heading", { name: "Roadmap", level: 2 })).toBeVisible();
+  });
+});
+
+test("aliases #2: roadmap opens Kumbukumbu at its Roadmap section @aliases @serial @phone", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
+  test.fail(true, "F-03 a link to a heading opens the note at its top, not at the heading (MarkdownView.tsx passes only a block, NoteView.tsx handles block and line)");
+  test.info().annotations.push({ type: "finding", description: "F-03" });
+  await withNotes({ aliceApi, seedAs, folder }, ["Long/Kumbukumbu.md", diary], async (at) => {
+    await openNote(page, at(diary));
+    await press(testInfo, page.locator("article").getByRole("link", { name: "roadmap", exact: true }));
+    await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Long/Kumbukumbu\\.md$`));
+    const roadmap = page.locator("article").getByRole("heading", { name: "Roadmap", level: 2 });
+    await expect(roadmap).toBeInViewport();
+    await expect(page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 })).not.toBeInViewport();
   });
 });
 
@@ -184,33 +181,35 @@ test("aliases #8: mv keeps alias links unchanged and leads them to the new place
 });
 
 test("aliases #11: the published diary reads plain text @aliases @serial @phone", async ({ aliceApi, browser, projectContextOptions, seedAs, folder }) => {
-  let published: string | undefined;
-  const agent = await publisher();
-  const mcp = agent.mcp;
+  const agent = await Mcp.create(aliceApi, `e2e aliases ${randomBytes(3).toString("hex")}`, { Work: "write" }, ["Work"]);
   const context = await browser.newContext(projectContextOptions);
   try {
     await withNotes({ aliceApi, seedAs, folder }, [projects, diary], async (at) => {
-      published = at(diary);
-      const added = await mcp.sh(`publish add ${at(diary)}`);
-      expect(added.isError, "publish add was refused").toBe(false);
-      // The link is shown once; its secret is never printed.
-      const link = /^link \(shown once\): (\S+)$/m.exec(added.text)?.[1];
-      expect(link, "publish add gave a reader link").toMatch(/^https?:\/\/[^\s#]+#\S+$/);
-      expect(added.text, "nothing of the other note").not.toMatch(/Projects|Kumbukumbu/);
+      try {
+        const added = await agent.sh(`publish add ${at(diary)}`);
+        expect(added.isError, "publish add was refused").toBe(false);
+        // The link is shown once; its secret is never printed, so no assertion holds the link as its received value.
+        const link = /^link \(shown once\): (\S+)$/m.exec(added.text)?.[1];
+        expect(/^https?:\/\/[^\s#]+#\S+$/.test(link ?? ""), "publish add gave a reader link").toBe(true);
+        expect(/Projects|Kumbukumbu/.test(added.text), "nothing of the other note").toBe(false);
 
-      const reader = await context.newPage();
-      await reader.goto(link!);
-      const article = reader.locator("article");
-      await expect(article.getByRole("heading", { name: "2026-11-12", level: 1 })).toBeVisible();
-      // One paragraph of two lines, the links as plain words.
-      await expect(article.locator("p.my-3")).toHaveText("Talked with Bob about Kumbu and the roadmap. Kumbu needs a calendar.");
-      await expect(article.getByRole("link")).toHaveCount(0);
-      await expect(reader.getByText(/Kumbukumbu|Projects|Roadmap/)).toHaveCount(0);
-      expect(await fitsWidth(reader), "no sideways scroll").toBe(true);
+        const reader = await context.newPage();
+        await reader.goto(link!);
+        const article = reader.locator("article");
+        await expect(article.getByRole("heading", { name: "2026-11-12", level: 1 })).toBeVisible();
+        // One paragraph of two lines, the links as plain words.
+        await expect(article.getByRole("paragraph").filter({ hasText: "Talked with Bob" })).toHaveText("Talked with Bob about Kumbu and the roadmap.\nKumbu needs a calendar.");
+        await expect(article.getByRole("link")).toHaveCount(0);
+        await expect(reader.getByText(/Kumbukumbu|Projects|Roadmap/)).toHaveCount(0);
+        expect(await fitsWidth(reader), "no sideways scroll").toBe(true);
+      } finally {
+        // Withdrawn while the note is still there, even when the test failed.
+        await agent.sh(`publish rm ${at(diary)}`).catch(() => undefined);
+      }
+      const left = await agent.sh(`publish ls ${at(diary)}`);
+      expect(left.text, "the publication is withdrawn").toMatch(/^no published notes below /);
     });
   } finally {
-    // Withdrawn even when the test failed: a publication outlives the note's removal.
-    if (published) await mcp.sh(`publish rm ${published}`).catch(() => undefined);
     await context.close();
     await agent.dispose();
   }
