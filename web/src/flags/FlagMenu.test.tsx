@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { json, renderApp } from "../test/app";
@@ -13,19 +15,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
+  useDiscreet.setState({ gone: new Set() });
 });
 
 const CERT = "/Work/Certificate.md";
 const flagView = (flag: string | null, extra: Partial<FlagView> = {}): FlagView => ({ flag, inText: null, openTask: false, canWrite: true, ...extra });
 
 /** Work's Certificate open, its flag as `view` says; a POST sets the flag it names (and says so in `view` from then on). */
-function flagged(initial: FlagView, level = "owner", onPost?: () => Response | undefined) {
+function flagged(initial: FlagView, level = "owner", onPost?: () => Response | undefined, onGet?: () => Promise<FlagView | undefined>) {
   let view = initial;
   const fetch = noteWithEntry(
     CERT,
     noteEntry(null, level !== "read"),
     {
-      "GET /api/vaults/Work/flag": () => json(200, view),
+      "GET /api/vaults/Work/flag": async () => json(200, (await onGet?.()) ?? view),
       "POST /api/vaults/Work/flag": async (r) => {
         const answer = onPost?.();
         if (answer) return answer;
@@ -43,12 +47,17 @@ const header = () => screen.findByRole("group", { name: "Flag" });
 const flagSheet = () => screen.findByRole("dialog", { name: "Flag" });
 const posts = (fetch: ReturnType<typeof flagged>) => bodiesOf(fetch, "POST", "/api/vaults/Work/flag");
 
+/** ⋯ → Flag, once the flag is read again (the choices wait for it). */
 async function openFromMenu() {
   await screen.findByRole("heading", { level: 1, name: "Note" });
   await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
   await userEvent.click(await screen.findByRole("menuitem", { name: "Flag" }));
-  return flagSheet();
+  const sheet = await flagSheet();
+  await waitFor(() => expect(within(sheet).getByRole("button", { name: "No flag" })).toBeEnabled());
+  return sheet;
 }
+
+const toastText = async () => (await screen.findByRole("status", { name: "Flag changed" })).textContent;
 
 describe("the flag menu", () => {
   it("⋯ → Flag offers the eight and No flag, by icon and name", async () => {
@@ -132,7 +141,7 @@ describe("the flag menu", () => {
     renderApp(`/notes${CERT}`);
     await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Done" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Just the flag" }));
-    await screen.findByRole("status", { name: "Flag changed" });
+    expect(await toastText()).toBe("Ticked · Undo");
     expect(await posts(fetch)).toEqual([{ path: CERT, flag: "done" }]);
   });
 
@@ -140,7 +149,7 @@ describe("the flag menu", () => {
     const fetch = flagged(flagView(null, { openTask: false }));
     renderApp(`/notes${CERT}`);
     await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Done" }));
-    await screen.findByRole("status", { name: "Flag changed" });
+    expect(await toastText()).toBe("Ticked · Undo");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(await posts(fetch)).toEqual([{ path: CERT, flag: "done" }]);
   });
@@ -151,7 +160,7 @@ describe("the flag menu", () => {
     await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Done" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Mark done" }));
     const toast = await screen.findByRole("status", { name: "Flag changed" });
-    expect(toast).toHaveTextContent("Flagged Done and marked done · Undo");
+    expect(toast).toHaveTextContent("Ticked and marked done · Undo");
     await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
     await waitFor(async () => expect((await posts(fetch)).at(-1)).toEqual({ path: CERT, flag: "red", calendar: "reopen" }));
     await waitFor(() => expect(screen.queryByRole("status", { name: "Flag changed" })).not.toBeInTheDocument());
@@ -165,6 +174,83 @@ describe("the flag menu", () => {
     expect(toast).toHaveTextContent("Flag removed · Undo");
     await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
     await waitFor(async () => expect(await posts(fetch)).toEqual([{ path: CERT, flag: null }, { path: CERT, flag: "purple" }]));
+  });
+
+  it.each([
+    ["Important", "Marked important · Undo"],
+    ["Red", "Flagged Red · Undo"],
+    ["White", "Flagged White · Undo"],
+  ])("choosing %s says %s", async (choice, text) => {
+    flagged(flagView(null));
+    renderApp(`/notes${CERT}`);
+    await userEvent.click(within(await openFromMenu()).getByRole("button", { name: choice }));
+    expect(await toastText()).toBe(text);
+  });
+
+  it("after a write every view that shows tags, history, changes or the calendar is asked again, and the flag is the write's answer", async () => {
+    flagged(flagView(null));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(queryClient, "invalidateQueries");
+    renderApp(`/notes${CERT}`, queryClient);
+    const sheet = await openFromMenu();
+    invalidated.mockClear();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Red" }));
+    await screen.findByRole("status", { name: "Flag changed" });
+    const keys = invalidated.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+    for (const key of [["tags"], ["history", CERT], ["changes"], ["calendar"], ["whats-on"], ["note", CERT], ["tree", "Work"], ["search"], ["recent"]])
+      expect(keys).toContain(JSON.stringify(key));
+    expect(keys).not.toContain(JSON.stringify(["flag", CERT]));
+    expect(queryClient.getQueryData(["flag", CERT])).toMatchObject({ flag: "red" });
+  });
+
+  it("the choices wait while the flag is read again, so Undo puts back the flag the note has now", async () => {
+    let release = () => {};
+    let gated = false;
+    // Changed elsewhere since the header read it: blue then, red now, and the read of that is slow.
+    const fetch = flagged(flagView("blue"), "owner", undefined, async () => {
+      if (!gated) return undefined;
+      await new Promise<void>((go) => (release = go));
+      return flagView("red");
+    });
+    renderApp(`/notes${CERT}`);
+    await within(await header()).findByRole("button", { name: "Blue flag" });
+    gated = true;
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Flag" }));
+    const sheet = await flagSheet();
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "No flag" })).toBeDisabled());
+    gated = false;
+    release();
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "No flag" })).toBeEnabled());
+    await userEvent.click(within(sheet).getByRole("button", { name: "No flag" }));
+    await userEvent.click(within(await screen.findByRole("status", { name: "Flag changed" })).getByRole("button", { name: "Undo" }));
+    await waitFor(async () => expect((await posts(fetch)).at(-1)).toEqual({ path: CERT, flag: "red" }));
+  });
+
+  it("No flag from the header's button gives the focus to the note's ⋯, as the button is gone", async () => {
+    flagged(flagView("green"));
+    renderApp(`/notes${CERT}`);
+    await userEvent.click(within(await header()).getByRole("button", { name: "Green flag" }));
+    const sheet = await flagSheet();
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "No flag" })).toBeEnabled());
+    await userEvent.click(within(sheet).getByRole("button", { name: "No flag" }));
+    await screen.findByRole("status", { name: "Flag changed" });
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Flag" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Note actions" })).toHaveFocus());
+  });
+
+  it("the menu and its message go when the note's vault is hidden again", async () => {
+    flagged(flagView(null));
+    renderApp(`/notes${CERT}`);
+    await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Red" }));
+    await screen.findByRole("status", { name: "Flag changed" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Flag" }));
+    await flagSheet();
+    act(() => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Flag" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Flag changed" })).not.toBeInTheDocument();
   });
 
   it("a refusal is said in the menu, which stays open", async () => {

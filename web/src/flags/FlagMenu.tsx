@@ -2,8 +2,10 @@
 import { FlagOff, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { errorText } from "../api/error-text";
+import { vaultOf } from "../api/paths";
 import { isStructural } from "../api/notes";
 import { fileKindOf } from "../api/paths";
+import { goneVault, useDiscreet } from "../discreet/state";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { Sheet } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
@@ -22,9 +24,9 @@ type Written = { path: string; previous: FlagName | null; flag: FlagName | null;
  * The flag menu with what follows it, for whoever offers it (the note's header, the note's ⋯, the tree's ⋯): `open`
  * shows the eight flags and No flag for a note; ✓ on an open to-do asks whether the calendar's to-do is done too; after
  * a write a short message offers Undo. `element` holds all three and stays where it is rendered, so the message
- * outlives the menu.
+ * outlives the menu. `onWritten` hears of each flag written from the menu (not of Undo).
  */
-export function useFlagging() {
+export function useFlagging(onWritten?: (flag: FlagName | null) => void) {
   const [path, setPath] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -37,21 +39,34 @@ export function useFlagging() {
     setAsking(false);
     setProblem(null);
   };
+  // A menu and a message about a vault hidden again go with it: they name its note's flag.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, before) => {
+        if (s.gone === before.gone && s.names === before.names) return;
+        setPath((p) => (p && goneVault(s, vaultOf(p)) ? null : p));
+        setWritten((w) => (w && goneVault(s, vaultOf(w.path)) ? null : w));
+      }),
+    [],
+  );
   const view = flag.data;
   const previous = view && isFlag(view.flag) ? view.flag : null;
+  // What Undo puts back is the flag as read now: while it is read again (on opening), the cached one may be old.
+  const reading = flag.isFetching;
 
   const write = (request: SetFlagRequest) => {
     setProblem(null);
     set.mutate(request, {
       onSuccess: () => {
         close();
+        onWritten?.(request.flag);
         setWritten((w) => ({ path: request.path, previous, flag: request.flag, closed: request.calendar === "close", n: (w?.n ?? 0) + 1 }));
       },
       onError: (err) => setProblem(errorText(err)),
     });
   };
   const choose = (chosen: FlagName | null) => {
-    if (!path || !view) return;
+    if (!path || !view || reading) return;
     if (chosen === previous) return close();
     // Not for a board card, whose status is its column (spec §2.4): the server says `openTask` only of a calendar to-do.
     if (chosen === "done" && view.openTask) return setAsking(true);
@@ -66,7 +81,7 @@ export function useFlagging() {
             view.inText ? (
               <p className="pb-2 text-text-body">{`This flag is written in the note's text (${view.inText}); change it there.`}</p>
             ) : view.canWrite ? (
-              <FlagChoices current={previous} busy={set.isPending} onChoose={choose} />
+              <FlagChoices current={previous} busy={set.isPending || reading} onChoose={choose} />
             ) : (
               <p className="pb-2 text-text-body">You can only read this note.</p>
             )
@@ -168,8 +183,16 @@ function TickQuestion({ busy, problem, onMarkDone, onJustFlag, onCancel }: { bus
 
 const undoClass = "min-h-12 px-1.5 font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent";
 
+/** What the message says was done, in the menu's words: a colour is flagged, ✓ ticked, ! marked important. */
+function writtenText({ flag, closed }: Written): string {
+  if (flag === null) return "Flag removed";
+  if (flag === "done") return closed ? "Ticked and marked done" : "Ticked";
+  if (flag === "important") return "Marked important";
+  return `Flagged ${flagLabel[flag]}`;
+}
+
 /**
- * "Flagged Red · Undo", "Flag removed · Undo", for 8 seconds or until dismissed, as the calendar's Closed. Undo puts
+ * "Flagged Red · Undo", "Ticked · Undo", "Flag removed · Undo", for 8 seconds or until dismissed, as the calendar's Closed. Undo puts
  * the flag before back in one write, and after Mark done opens the to-do again in the same one.
  */
 function FlagToast({ written, onDone }: { written: Written; onDone(): void }) {
@@ -190,7 +213,7 @@ function FlagToast({ written, onDone }: { written: Written; onDone(): void }) {
       { onSuccess: onDone, onError: (err) => setProblem(errorText(err)) },
     );
   };
-  const text = written.flag === null ? "Flag removed" : written.closed ? `Flagged ${flagLabel[written.flag]} and marked done` : `Flagged ${flagLabel[written.flag]}`;
+  const text = writtenText(written);
 
   return (
     <div

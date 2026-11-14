@@ -24,6 +24,8 @@ const tree = {
 };
 
 const drawer = () => screen.getByRole("dialog", { name: "File tree" });
+// A row's name is its content: the title, then each icon's name. A browser parts them with spaces (flex items are
+// blocks); jsdom, without the styles, doesn't, hence `\s*`.
 
 async function openDrawer(level = "owner", extra: Parameters<typeof fakeApi>[0] = {}) {
   const fetch = fakeApi({
@@ -63,11 +65,17 @@ afterEach(() => {
 describe("flags in the tree", () => {
   it("the tree shows the flag after the name", async () => {
     await openDrawer();
-    const plan = within(drawer()).getByRole("button", { name: "plan, Red flag" });
+    const plan = within(drawer()).getByRole("button", { name: /^plan\s*Red flag$/ });
     const icon = within(plan).getByRole("img", { name: "Red flag" });
     expect(within(plan).getByText("plan").compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(within(drawer()).getByRole("button", { name: "todo, Done" })).getByRole("img", { name: "Done" })).toBeInTheDocument();
+    expect(within(within(drawer()).getByRole("button", { name: /^todo\s*Done$/ })).getByRole("img", { name: "Done" })).toBeInTheDocument();
     expect(within(within(drawer()).getByRole("button", { name: "inbox" })).queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("a flagged row marked unpublishable says both", async () => {
+    await openDrawer("owner", { "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: ["/Work/plan.md"] }) });
+    const plan = await within(drawer()).findByRole("button", { name: /^plan\s*Red flag\s*Unpublishable$/ });
+    expect(within(plan).getByRole("img", { name: "Unpublishable" })).toBeInTheDocument();
   });
 
   it("a note's ⋯ → Flag opens the flag menu, and a choice is written", async () => {
@@ -88,7 +96,7 @@ describe("flags in the tree", () => {
     cleanup();
 
     await openDrawer("read");
-    expect(within(drawer()).getByRole("button", { name: "plan, Red flag" })).toBeInTheDocument();
+    expect(within(drawer()).getByRole("button", { name: /^plan\s*Red flag$/ })).toBeInTheDocument();
     await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
     expect(screen.queryByRole("menuitem", { name: "Flag" })).not.toBeInTheDocument();
   });

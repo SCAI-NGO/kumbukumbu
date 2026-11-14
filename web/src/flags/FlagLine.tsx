@@ -13,7 +13,9 @@ import { useFlagging } from "./FlagMenu";
 export default function FlagLine({ path, version }: { path: string; version: string }) {
   const queryClient = useQueryClient();
   const flag = useFlag(path);
-  const flagging = useFlagging();
+  // No flag from the line's own menu takes its button away, which the menu would give the focus back to.
+  const removed = useRef(false);
+  const flagging = useFlagging((flag) => (removed.current = flag === null));
   const seen = useRef(version);
   useEffect(() => {
     if (seen.current === version) return;
@@ -22,6 +24,14 @@ export default function FlagLine({ path, version }: { path: string; version: str
   }, [version, path, queryClient]);
 
   const view = flag.data;
+  const flagged = !!view && isFlag(view.flag);
+  // Then the focus, left nowhere, goes to the note's ⋯.
+  useEffect(() => {
+    if (flagged || !removed.current) return;
+    removed.current = false;
+    if (!document.activeElement || document.activeElement === document.body)
+      document.querySelector<HTMLElement>('nav[aria-label="Vault actions"] button[aria-label="Note actions"]')?.focus();
+  }, [flagged]);
   // The menu and its message stay in the same place whether the line is shown or not: No flag takes the line away.
   if (!view || !isFlag(view.flag)) return <>{null}{flagging.element}</>;
   // The icon names itself; the name beside it is for the eye.

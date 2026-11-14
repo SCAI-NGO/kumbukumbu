@@ -36,9 +36,11 @@ export function useFlag(path: string | null, enabled = true) {
 }
 
 /**
- * Sets, changes or removes a note's flag, once the editor's text is saved (as the calendar's writes). Afterwards every
- * view of the note is asked again: the note itself (awaited, so Write mode after it starts on the new version), its
- * flag, the tree, the search and Recent changes; with `calendar`, the calendar's views too.
+ * Sets, changes or removes a note's flag, once the editor's text is saved (as the calendar's writes). The flag's view is
+ * the write's own answer; every other view of the note is asked again: the note itself (awaited, so Write mode after it
+ * starts on the new version), the tree, the search, the tags, its history, the changes and Recent changes, and the
+ * calendar and What's on even without `calendar`, as a tag filter may name a flag; with `calendar`, the rest of the
+ * calendar's views too.
  */
 export function useSetFlag() {
   const queryClient = useQueryClient();
@@ -51,7 +53,8 @@ export function useSetFlag() {
     onSuccess: (written, { calendar }) => {
       const vault = vaultOf(written.path);
       queryClient.setQueryData(["flag", written.path], written.note);
-      for (const queryKey of [["flag", written.path], ["tree", vault], ["search"], ["recent"]]) void queryClient.invalidateQueries({ queryKey });
+      const touched = [["tree", vault], ["search"], ["tags"], ["history", written.path], ["changes"], ["recent"], ["calendar"], ["whats-on"]];
+      for (const queryKey of touched) void queryClient.invalidateQueries({ queryKey });
       const note = queryClient.invalidateQueries({ queryKey: ["note", written.path] });
       return calendar ? Promise.all([note, afterEntryWrite(queryClient, vault, written.path)]) : note;
     },
