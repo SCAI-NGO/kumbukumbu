@@ -44,13 +44,19 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
 /** The open note's row menu in the tree → Publish…, the owner's password if asked → the link, then Done. */
 async function publishViaUi(page: Page, testInfo: TestInfo, path: string): Promise<string> {
   await openNote(page, path);
-  // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
-  await expect(async () => {
-    await page.keyboard.press("Escape");
-    const tree = await openTree(page, testInfo);
-    await tree.getByRole("button", { name: "Actions for Ruling", exact: true }).click({ timeout: 2_000 });
-    await page.getByRole("menuitem", { name: "Publish…" }).click({ timeout: 2_000 });
-  }).toPass({ timeout: 15_000 });
+  if (onPhone(testInfo)) {
+    // The phone's Publish… is in the note's own menu.
+    await page.getByRole("button", { name: "Note actions" }).click();
+    await page.getByRole("menuitem", { name: "Publish…" }).click();
+  } else {
+    // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
+    await expect(async () => {
+      await page.keyboard.press("Escape");
+      const tree = await openTree(page, testInfo);
+      await tree.getByRole("button", { name: "Actions for Ruling", exact: true }).click({ timeout: 2_000 });
+      await page.getByRole("menuitem", { name: "Publish…" }).click({ timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
+  }
   const dialog = page.getByRole("dialog", { name: "Publish this note" });
   const submit = dialog.getByRole("button", { name: "Publish", exact: true });
   // The password only when the session's window has closed (it counts against a rate limit).
