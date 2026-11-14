@@ -711,15 +711,13 @@ public class CalendarServiceTests
     }
 
     [Fact]
-    public async Task A_set_on_two_spellings_writes_nothing_and_says_why()
+    public async Task A_set_on_two_spellings_keeps_the_first_and_fixes_the_note()
     {
-        const string note = "---\nwhen: 2026-12-15\nWhen: 2026-12-16\n---\n";
-        var store = new InMemoryNoteStore(("/Work/x.md", note));
+        var store = new InMemoryNoteStore(("/Work/x.md", "---\nwhen: 2026-12-15\ntitle: x\nWhen: 2026-12-16\n---\n"));
 
         var result = await Service(store).SetAsync("/Work/x.md", new CalendarChange(When: "2026-12-18"), Ct);
 
-        Assert.True(result.IsError);
-        Assert.Contains("when is written twice (when, When); keep one", result.Output);
-        Assert.Equal(note, await Content(store, "/Work/x.md"));
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("---\nwhen: 2026-12-18\ntitle: x\n---\n", await Content(store, "/Work/x.md"));
     }
 }

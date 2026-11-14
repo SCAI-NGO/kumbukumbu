@@ -43,7 +43,8 @@ public static partial class EntryReader
                 : (null, null);
         }
 
-        var (values, twice) = CalendarKeys.Fold(read.Values);
+        // On a card, reason is the board's key (BoardReader reads it as written).
+        var (values, twice) = CalendarKeys.Fold(read.Values, cardPlace && HasColumn(read.Values) ? "reason" : null);
         var problems = new Problems(path, title);
         problems.Twice(read.Values, twice);
         if (cardPlace && HasColumn(values))
@@ -54,6 +55,7 @@ public static partial class EntryReader
             return (null, new CalendarProblem(path, title, $"due: {Text(due)} is on a card of a board that can't be read (Board.md); fix the board",
                 "This card's date can't be shown until its board can be read again", new Dictionary<string, string>()));
         }
+
         var whenValue = Given(values, "when");
         var untilValue = Given(values, "until");
         CalendarTime? when = null;

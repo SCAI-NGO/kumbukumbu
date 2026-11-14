@@ -341,6 +341,16 @@ public class EntryReaderTests
     }
 
     [Fact]
+    public void A_cards_reason_is_the_boards_as_written()
+    {
+        // The board reads reason exactly and writes it beside a hand-written Reason: the card stays an entry, with the board's reason.
+        var entry = EntryOf("/Work/Board/Offsite.md", "---\ncolumn: Rejected\ndue: 2026-11-20\nReason: by hand\nreason: too far\n---\n", Board);
+
+        Assert.Equal(("too far", TaskMark.Closed), (entry.Reason, entry.Task));
+        Assert.Null(EntryOf("/Work/Board/Offsite.md", "---\ncolumn: Rejected\ndue: 2026-11-20\nReason: by hand\n---\n", Board).Reason);
+    }
+
+    [Fact]
     public void Due_stays_case_sensitive_on_a_card()
     {
         Assert.Equal((null, null), Read("/Work/Board/Offsite.md", "---\ncolumn: Ideas\nDue: 2026-11-20\n---\n", Board));
