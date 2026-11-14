@@ -76,6 +76,8 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
         var note = await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
         if (note.IsError) return note;
+        // Links resolve by the note's aliases as they are now, also when an earlier version is read.
+        var current = content!;
         if (version is not null) content = await notes.ReadVersionAsync(path, version, ct);
 
         var range = (From: 0, To: int.MaxValue);
@@ -101,7 +103,17 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             described.Add($"{l.Link.Line + 1}: {l.Link.Raw} → {text}");
         }
 
-        return note with { Output = Lines.Join(described) is { Length: > 0 } joined ? joined : "(no links)" };
+        var tooLong = NoteAliases.TooLong(current);
+        return note with
+        {
+            Output = Lines.Join(described) is { Length: > 0 } joined ? joined : "(no links)",
+            Notice = tooLong switch
+            {
+                0 => note.Notice,
+                1 => "an alias of this note is over 200 characters, so no link finds the note by it; shorten it in the note's properties",
+                _ => $"{tooLong} aliases of this note are over 200 characters, so no link finds the note by them; shorten them in the note's properties",
+            },
+        };
     }
 
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)

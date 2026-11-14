@@ -34,6 +34,21 @@ public class VersionCommandsTests
     // --- --version ---
 
     [Fact]
+    public async Task LinksOnAnEarlierVersionSpeaksOfTheAliasesTheNoteHasNow()
+    {
+        var long1 = $"---\naliases: [{new string('p', 201)}]\n---\n# Plan\n";
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", long1, V(V1), CancellationToken.None)).IsError);
+        Assert.NotNull((await Run("links /Demo/plan.md")).Notice);
+        _time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V2, V(long1), CancellationToken.None)).IsError);
+
+        var earlier = await Run($"links --version {V(long1)} /Demo/plan.md");
+        Assert.False(earlier.IsError);
+        Assert.Null(earlier.Notice);
+    }
+
+
+    [Fact]
     public async Task CatReadsAnEarlierVersionWithoutAVersionBlock()
     {
         await WritePlanV2();

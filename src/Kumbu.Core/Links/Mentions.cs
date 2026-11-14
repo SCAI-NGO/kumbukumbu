@@ -24,7 +24,8 @@ public static partial class Mentions
     /// <summary>The lines of <paramref name="content"/> that mention any of <paramref name="terms"/> (a note's title and
     /// aliases), each line once with the marks of all terms; where marks of different terms overlap, the longest term's
     /// stays.</summary>
-    public static IReadOnlyList<(int Line, IReadOnlyList<(int Start, int Length)> Marks)> In(string content, IReadOnlyList<string> terms)
+    public static IReadOnlyList<(int Line, IReadOnlyList<(int Start, int Length)> Marks)> In(
+        string content, IReadOnlyList<string> terms, CancellationToken ct = default)
     {
         // Longest first, so a shorter term's mark inside a longer one's gives way; a term's own marks never do.
         var kept = terms.Select(t => t.Normalize(NormalizationForm.FormC))
@@ -43,6 +44,7 @@ public static partial class Mentions
         var result = new List<(int, IReadOnlyList<(int, int)>)>();
         for (var i = start; i < lines.Count; i++)
         {
+            ct.ThrowIfCancellationRequested();
             if (fenced[i] || indented[i]) continue;
             var line = lines[i];
             if (!forms.Any(term => term.Any(f => line.Contains(f, StringComparison.OrdinalIgnoreCase)))) continue;
@@ -56,8 +58,7 @@ public static partial class Mentions
                 var own = new SortedSet<(int Start, int Length)>();
                 foreach (var form in term)
                 {
-                    for (var at = line.IndexOf(form, StringComparison.OrdinalIgnoreCase); at >= 0;
-                         at = line.IndexOf(form, at + 1, StringComparison.OrdinalIgnoreCase))
+                    for (var at = line.IndexOf(form, StringComparison.OrdinalIgnoreCase); at >= 0; at = Next(line, form, at))
                     {
                         var end = at + form.Length;
                         if (at > 0 && char.IsLetterOrDigit(line[at - 1])) continue;
@@ -75,6 +76,15 @@ public static partial class Mentions
         }
 
         return result;
+    }
+
+    // The next place a mention can start: a start with a letter or digit before it fails the word check, so skip to just after
+    // the first character from 'at' on that is neither.
+    private static int Next(string line, string form, int at)
+    {
+        var k = at;
+        while (k < line.Length && char.IsLetterOrDigit(line[k])) k++;
+        return k + 1 >= line.Length ? -1 : line.IndexOf(form, k + 1, StringComparison.OrdinalIgnoreCase);
     }
 
     // The starts of spans sorted by start, and for each the furthest end of it and those before it.

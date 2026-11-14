@@ -76,7 +76,7 @@ public static class NoteLinks
             ct.ThrowIfCancellationRequested();
             if (source.Path == path || (!shown && ArchiveFolder.Contains(source.Path))) continue;
             var lines = Lines.Split(source.Content);
-            result.AddRange(Mentions.In(source.Content, terms).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
+            result.AddRange(Mentions.In(source.Content, terms, ct).Select(m => new Mention(source.Path, m.Line, lines[m.Line], m.Marks)));
         }
 
         return result;

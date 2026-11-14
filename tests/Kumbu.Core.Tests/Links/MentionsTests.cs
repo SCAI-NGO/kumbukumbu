@@ -98,19 +98,39 @@ public class MentionsTests
     [Fact]
     public void Several_terms_mark_one_line_once()
     {
-        var mention = Assert.Single(Mentions.In("Kumbu, also Kumbukumbu.", ["Kumbukumbu", "Kumbu"]));
+        var mention = Assert.Single(Mentions.In("Kumbu, also Kumbukumbu.", ["Kumbukumbu", "Kumbu"], TestContext.Current.CancellationToken));
         Assert.Equal([(0, 5), (12, 10)], mention.Marks.ToArray());
     }
 
     [Fact]
     public void Overlapping_marks_keep_the_longest() =>
-        Assert.Equal([(0, 9)], Assert.Single(Mentions.In("Kumbu Two here", ["Kumbu", "Kumbu Two"])).Marks.ToArray());
+        Assert.Equal([(0, 9)], Assert.Single(Mentions.In("Kumbu Two here", ["Kumbu", "Kumbu Two"], TestContext.Current.CancellationToken)).Marks.ToArray());
 
     [Fact]
     public void The_minimum_length_counts_per_term() =>
-        Assert.Equal([(0, 5)], Assert.Single(Mentions.In("Kumbu and K² here", ["K²", "Kumbu"])).Marks.ToArray());
+        Assert.Equal([(0, 5)], Assert.Single(Mentions.In("Kumbu and K² here", ["K²", "Kumbu"], TestContext.Current.CancellationToken)).Marks.ToArray());
 
     [Fact]
     public void A_single_title_keeps_its_overlapping_marks() =>
         Assert.Equal([(0, 3), (2, 3)], Assert.Single(Of("a-a-a", "a-a")).Marks);
+
+    [Theory]
+    [InlineData("pumps pump pumppump pump.", new[] { 6, 20 })]
+    [InlineData("xpump-pump", new[] { 6 })]
+    [InlineData("pump", new[] { 0 })]
+    [InlineData("apump bpump", new int[0])]
+    public void Only_whole_words_are_marked(string line, int[] starts) =>
+        Assert.Equal(starts.Select(s => (s, 4)), Of(line, "Pump").SelectMany(m => m.Marks));
+
+    [Fact]
+    public void A_term_with_a_mark_inside_is_found_after_a_longer_word() =>
+        Assert.Equal([(8, 6)], Assert.Single(Mentions.In("AKumbu² Kumbu²", ["Kumbu²"], TestContext.Current.CancellationToken)).Marks.ToArray());
+
+    [Fact]
+    public void Mention_search_stops_when_cancelled()
+    {
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        Assert.Throws<OperationCanceledException>(() => Mentions.In("The pump.\nThe pump again.\n", ["Pump"], cancel.Token));
+    }
 }
