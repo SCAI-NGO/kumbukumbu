@@ -76,6 +76,19 @@ describe("What's on", () => {
     expect(document.body.textContent).not.toMatch(/problem/i);
   });
 
+  it("an appointment before its time reads today and the time", async () => {
+    const call = entryView("Call", { when: "2026-11-13T14:00", until: "2026-11-13T15:00", time: "14:00", state: "ongoing", span: "14:00", beforeTime: true, firstDay: "2026-11-13", lastDay: "2026-11-13" });
+    const meeting = entryView("Meeting", { when: "2026-11-13T09:00", until: "2026-11-13T15:00", time: "09:00", state: "ongoing", span: "until 15:00", firstDay: "2026-11-13", lastDay: "2026-11-13" });
+    api(whatsOn([call, meeting]));
+    renderApp("/whats-on");
+    await page();
+    const [first, second] = await screen.findAllByRole("listitem");
+    expect(within(first).getByText("today · 14:00")).toBeInTheDocument();
+    expect(first).not.toHaveTextContent("ongoing");
+    // Within its window it is ongoing until its end.
+    expect(within(second).getByText("ongoing · until 15:00")).toBeInTheDocument();
+  });
+
   it("closes an open to-do at once and asks again", async () => {
     let closed = false;
     const fetch = api(() => whatsOn(closed ? [dentist] : [certificate, dentist]), {

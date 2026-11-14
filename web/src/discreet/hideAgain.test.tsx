@@ -650,7 +650,10 @@ describe("What's on and the badge, as the discreet vaults are hidden again", () 
     // The phone's tree button carries the count.
     const badge = () => screen.getByRole("button", { name: "Open file tree" });
     await waitFor(() => expect(badge()).toHaveAccessibleDescription("3 on, some overdue"));
-    expect(setAppBadge).toHaveBeenLastCalledWith(3);
+    // The app's icon never counts a discreet vault, shown or not: Work's share only.
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+    expect(setAppBadge).not.toHaveBeenCalledWith(3);
+    setAppBadge.mockClear();
     editorOn(diary.log);
     await userEvent.click(hideButton());
     await doneHiding(diary.router);

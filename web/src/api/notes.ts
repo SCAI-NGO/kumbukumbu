@@ -125,6 +125,9 @@ const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(
 /** The list without discreet vaults, which a server whose clock is a little behind may still send after the end. */
 const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet) ? vaults.filter((v) => !v.discreet) : vaults);
 
+/** The vault list as the server sends it, discreet vaults and all: for a reader that needs to know which they are. */
+export const vaultsQuery = { queryKey: ["vaults"], queryFn: () => call(api.GET("/api/vaults")) };
+
 /**
  * The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. While
  * this tab doesn't show the discreet vaults, none is listed, whatever the answer. `passive` only reads the list the
@@ -133,8 +136,7 @@ const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet)
 export const useVaults = ({ passive = false }: { passive?: boolean } = {}) => {
   const revealed = useDiscreet((s) => s.revealed);
   return useQuery({
-    queryKey: ["vaults"],
-    queryFn: () => call(api.GET("/api/vaults")),
+    ...vaultsQuery,
     select: revealed ? undefined : withoutDiscreet,
     enabled: !passive,
     refetchInterval: (query) => (!passive && query.state.data?.some((v) => v.pending) ? 5000 : false),

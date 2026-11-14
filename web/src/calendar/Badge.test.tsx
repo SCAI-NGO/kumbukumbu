@@ -147,6 +147,61 @@ describe("the badge", () => {
     expect(setAppBadge).not.toHaveBeenCalledWith(0);
   });
 
+  /** Home discreet in the list, the session showing it or not; What's on counting Work 1 and Home `home`. */
+  const discreetHome = (revealed: boolean, home: () => number, vaults: () => Promise<Response> | Response = () => json(200, [vault("Work"), { ...vault("Home"), discreet: true }])) =>
+    shell(() => count(1 + home(), false, [{ vault: "Work", count: 1, overdue: false }, ...(home() > 0 ? [{ vault: "Home", count: home(), overdue: false }] : [])]), {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed, until: null } }),
+      "GET /api/vaults": vaults,
+    });
+
+  it("the app icon leaves discreet vaults out, shown or not", async () => {
+    for (const revealed of [true, false]) {
+      badging();
+      discreetHome(revealed, () => 2);
+      renderApp("/notes/Work/inbox.md");
+      await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+      expect(setAppBadge).not.toHaveBeenCalledWith(3);
+      cleanup();
+      useSession.getState().reset();
+      setAppBadge.mockClear();
+    }
+  });
+
+  it("the app icon is cleared when only discreet vaults have something on", async () => {
+    badging();
+    shell(() => count(2, false, [{ vault: "Home", count: 2, overdue: false }]), {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: true, until: null } }),
+      "GET /api/vaults": () => json(200, [vault("Work"), { ...vault("Home"), discreet: true }]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("2 on"));
+    await waitFor(() => expect(clearAppBadge).toHaveBeenCalled());
+    expect(setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("the in-app badge still counts what the session shows", async () => {
+    badging();
+    discreetHome(true, () => 2);
+    renderApp("/notes/Work/inbox.md");
+    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+  });
+
+  it("badge before the vault list → no setAppBadge with the discreet share", async () => {
+    badging();
+    let listed = (_: Response) => {};
+    const fetch = discreetHome(true, () => 2, () => new Promise<Response>((resolve) => (listed = resolve)));
+    renderApp("/notes/Work/inbox.md");
+    // What's on is in, the vault list isn't: the icon waits for it.
+    await waitFor(() => expect(asked(fetch)).toBeGreaterThan(0));
+    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    expect(setAppBadge).not.toHaveBeenCalled();
+    expect(clearAppBadge).not.toHaveBeenCalled();
+    await act(async () => listed(json(200, [vault("Work"), { ...vault("Home"), discreet: true }])));
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+    expect(setAppBadge).not.toHaveBeenCalledWith(3);
+  });
+
   it("without the Badging API nothing breaks", async () => {
     shell(() => count(3, false));
     renderApp("/notes/Work/inbox.md");

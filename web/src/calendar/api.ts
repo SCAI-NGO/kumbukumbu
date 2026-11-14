@@ -26,8 +26,10 @@ export type EntryView = {
   byName: boolean;
   column: string | null;
   state: EntryState;
-  /** "1 day", "in 7 days", "until Fri": beside the state. */
+  /** "1 day", "in 7 days", "until Fri": beside the state; with `beforeTime` the clock ("14:00"). */
   span: string | null;
+  /** Ongoing on its day before its time: shown as "today · 14:00" rather than ongoing. */
+  beforeTime?: boolean;
   /** "14:00", or "14:00 (Europe/London)" for a time in another zone. */
   time: string | null;
   firstDay: string;
