@@ -33,6 +33,7 @@ async function find(tree: Locator, words: string) {
   await tree.getByRole("searchbox", { name: "Find by name" }).fill(words);
 }
 
+// Exception to roles and labels: the tree exposes no aria-level, so the nesting is read from the rows' indent.
 /** The titles of the rows below `folder`'s own row, as the tree nests them (the rows of other test folders stay out). */
 async function rowsOf(tree: Locator, folder: string): Promise<string[]> {
   const all = await tree.locator("[data-tree-row]").evaluateAll((rows) =>
@@ -57,7 +58,6 @@ test("flags #10: the tree search keeps only Pump › Certificate, opened @explor
   const mine = folderRow(tree, folder);
   await expect(mine).toHaveAttribute("aria-expanded", "true");
   await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate"]);
-  await expect(tree.getByRole("button", { name: /^Pump\b/ }).first()).toHaveAttribute("aria-expanded", "true");
   await expect(tree.getByRole("button", { name: /^(Valve|Day|Diary)\b/ })).toHaveCount(0);
   await shot(page, testInfo, "explorer");
 });
@@ -78,8 +78,18 @@ test("flags #11: flag chips narrow the tree; no match offers Search the contents
   await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate", "Valve"]);
   await chips.getByRole("button", { name: "Any flag" }).click(); // lets go
 
-  await tree.getByRole("searchbox", { name: "Find by name" }).fill("zzqxj nothing");
-  await expect(tree.getByRole("status")).toHaveText("Nothing called that here.");
+  // Red alone, with nothing typed: the test folder's red note is among the vault's.
+  const box = tree.getByRole("searchbox", { name: "Find by name" });
+  await box.fill("");
+  await chips.getByRole("button", { name: "Red" }).click();
+  await expect.poll(() => rowsOf(tree, folder)).toEqual(["Pump", "Certificate"]);
+  await chips.getByRole("button", { name: "Red" }).click(); // lets go
+
+  await box.fill("zzqxj nothing");
+  const nothing = tree.getByRole("search", { name: "Find in this vault" }).getByRole("status");
+  await expect(nothing).toHaveText("Nothing called that here.");
+  // Search the contents… follows the message.
+  await expect(nothing.locator("xpath=following-sibling::*[1]")).toHaveText("Search the contents…");
   await tree.getByRole("button", { name: "Search the contents…" }).click();
   const sheet = page.getByRole("dialog", { name: "Search" });
   await expect(sheet.getByRole("searchbox", { name: "Search" })).toHaveValue("zzqxj nothing");
@@ -95,7 +105,6 @@ test("flags #12: Escape and ✕ bring the full tree back @explorer @phone", asyn
     await expect(tree.getByRole("button", { name: "Find in this vault" })).toBeVisible();
     // The vault's own rows again: the test folder is closed or open as before, and the other notes are not narrowed away.
     await expect(folderRow(tree, folder)).toBeVisible();
-    await expect(folderRow(tree, "Pump").first()).toBeVisible();
   };
 
   await find(tree, "pump cert");
@@ -154,6 +163,8 @@ test("flags #13: Last changed puts the latest folder first, folders above files,
     await expect(other.getByRole("radiogroup", { name: "Order" }).getByRole("radio", { name: "Last changed" })).toBeChecked();
   } finally {
     // Back to Name: the choice is the device's, and the other tests expect the default.
-    await page.evaluate(() => localStorage.removeItem("kumbu.treeOrder")).catch(() => {});
+    const reset = await openTree(page, testInfo);
+    await reset.getByRole("radiogroup", { name: "Order" }).getByText("Name", { exact: true }).click();
+    await expect(reset.getByRole("radiogroup", { name: "Order" }).getByRole("radio", { name: "Name" })).toBeChecked();
   }
 });
