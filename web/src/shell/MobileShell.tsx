@@ -8,6 +8,7 @@ import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, u
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
+import { useZonePreset } from "../calendar/preferences";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -158,6 +159,7 @@ export default function MobileShell() {
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   useSyncSocket();
   useTellOpenNote();
+  useZonePreset();
   const [vaultDialog, setVaultDialog] = useState(false);
   /** The folder a new folder goes into, while its dialog is open. */
   const [folderDialog, setFolderDialog] = useState<string | null>(null);

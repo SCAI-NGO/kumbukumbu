@@ -13,6 +13,7 @@ import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, s
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
 import { usePreferences } from "../attachments/downloadFiles";
+import CalendarSection from "../calendar/CalendarSection";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
 import PublicationsSection from "./PublicationsSection";
@@ -36,6 +37,9 @@ export default function Settings() {
     <AccountScreen title="Settings">
       <SchemeSection />
       <ElsewhereSection />
+      <Section title="Calendar">
+        <CalendarSection />
+      </Section>
       <PasswordSection />
       <DiscreetSection />
       <RecoverySection />

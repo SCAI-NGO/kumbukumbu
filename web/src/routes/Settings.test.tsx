@@ -29,6 +29,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
     "GET /api/vault-events": () => json(200, []),
     "GET /api/account/storage": () => json(200, { used: 4096, limit: null }),
+    "GET /api/account/calendar": () => json(200, { zone: "Europe/Vienna", serverZone: "Europe/Vienna" }),
     ...overrides,
   });
 }
