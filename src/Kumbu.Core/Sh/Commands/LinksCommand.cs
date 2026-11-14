@@ -89,11 +89,15 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             range = (match.Heading.Line, match.Heading.ContentEnd);
         }
 
-        var targets = new Dictionary<VaultPath, IReadOnlyList<string>?>();
+        var ownIds = new Lazy<HashSet<string>>(() => BlockIds(noteLines));
+        var targetIds = new Dictionary<VaultPath, HashSet<string>?>();
+        async Task<IReadOnlyList<string>?> ReadLines(VaultPath target) =>
+            await notes.ReadAsync(target, ct) is { } text ? Lines.Split(text) : null;
         var described = new List<string>();
         foreach (var l in (await NoteLinks.OfAsync(notes, path, content!, ct)).Where(l => l.Link.Line >= range.From && l.Link.Line < range.To))
         {
-            var (text, _) = await DescribeAsync(l.Link, l.Resolution, noteLines, targets, ct);
+            ct.ThrowIfCancellationRequested();
+            var (text, _) = await DescribeAsync(l.Link, l.Resolution, ownIds, targetIds, ReadLines);
             described.Add($"{l.Link.Line + 1}: {l.Link.Raw} → {text}");
         }
 
@@ -108,13 +112,17 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         var prefix = dir.Value + "/";
         var output = new List<string>();
         var targets = all.ToDictionary(n => n.Path, n => (IReadOnlyList<string>?)Lines.Split(n.Content));
+        var targetIds = new Dictionary<VaultPath, HashSet<string>?>();
+        Task<IReadOnlyList<string>?> KnownLines(VaultPath target) => Task.FromResult(targets.GetValueOrDefault(target));
         foreach (var source in all.Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var sourceLines = targets[source.Path]!;
+            var ownIds = new Lazy<HashSet<string>>(() => BlockIds(sourceLines));
             foreach (var link in NoteLink.Parse(source.Content))
             {
+                ct.ThrowIfCancellationRequested();
                 var r = resolver.Resolve(source.Path, link);
-                var (text, broken) = await DescribeAsync(link, r, sourceLines, targets, ct);
+                var (text, broken) = await DescribeAsync(link, r, ownIds, targetIds, KnownLines);
                 if (broken || r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)
                 {
                     output.Add($"{source.Path.Value}:{link.Line + 1}: {link.Raw} → {text}");
@@ -126,29 +134,30 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     }
 
     /// <summary>Where a link leads, marked ' (alias)' when it found its note by an alias; <c>Broken</c> when it names
-    /// a block its note doesn't have. The lines of each target note are read once and kept in <paramref name="targets"/>.</summary>
-    private async Task<(string Text, bool Broken)> DescribeAsync(
-        NoteLink link, LinkResolution r, IReadOnlyList<string> sourceLines,
-        Dictionary<VaultPath, IReadOnlyList<string>?> targets, CancellationToken ct)
+    /// a block its note doesn't have. The block ids of each target note are read once and kept in <paramref name="targetIds"/>
+    /// (null for a note that isn't there).</summary>
+    private static async Task<(string Text, bool Broken)> DescribeAsync(
+        NoteLink link, LinkResolution r, Lazy<HashSet<string>> ownIds,
+        Dictionary<VaultPath, HashSet<string>?> targetIds, Func<VaultPath, Task<IReadOnlyList<string>?>> readLines)
     {
         if (link.Subpath.StartsWith('#') && Blocks.TryId(link.Subpath[1..], out var id))
         {
             if (r.Kind == LinkKind.Self)
             {
-                return Blocks.Find(sourceLines, id) is null ? ($"not found: no block ^{id} in this note", true) : (Describe(r), false);
+                return !ownIds.Value.Contains(id) ? ($"not found: no block ^{id} in this note", true) : (Describe(r), false);
             }
 
             if (r.Kind == LinkKind.Note && r.Target is { } target)
             {
-                if (!targets.TryGetValue(target, out var lines))
+                if (!targetIds.TryGetValue(target, out var ids))
                 {
-                    lines = await notes.ReadAsync(target, ct) is { } text ? Lines.Split(text) : null;
-                    targets[target] = lines;
+                    ids = await readLines(target) is { } lines ? BlockIds(lines) : null;
+                    targetIds[target] = ids;
                 }
 
-                if (lines is not null)
+                if (ids is not null)
                 {
-                    return Blocks.Find(lines, id) is null
+                    return !ids.Contains(id)
                         ? ($"not found: no block ^{id} in {target.Value}", true)
                         : ($"{target.Value}#^{id}{AliasMark(r)}", false);
                 }
@@ -157,6 +166,10 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
         return (Describe(r) + AliasMark(r), false);
     }
+
+    // The ids of a note's blocks, ignoring case as Blocks.Find does.
+    private static HashSet<string> BlockIds(IReadOnlyList<string> lines) =>
+        new(Blocks.Parse(lines).Select(b => b.Id), StringComparer.OrdinalIgnoreCase);
 
     private static string AliasMark(LinkResolution r) => r is { ViaAlias: true, Kind: LinkKind.Note, Target: not null } ? " (alias)" : "";
 

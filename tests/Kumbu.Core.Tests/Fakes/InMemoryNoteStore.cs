@@ -93,8 +93,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<string?> ReadVersionAsync(VaultPath path, string version, CancellationToken ct) =>
         Task.FromResult(_notes.TryGetValue(path, out var n) ? Versions.Find(n, version) : null);
 
-    public Task<string?> ReadAsync(VaultPath path, CancellationToken ct) =>
-        Task.FromResult(_notes.TryGetValue(path, out var note) ? note.Content : null);
+    /// <summary>Called with the path of every <see cref="ReadAsync"/>, before it answers.</summary>
+    public Action<VaultPath>? OnRead { get; set; }
+
+    public Task<string?> ReadAsync(VaultPath path, CancellationToken ct)
+    {
+        OnRead?.Invoke(path);
+        return Task.FromResult(_notes.TryGetValue(path, out var note) ? note.Content : null);
+    }
 
     public Task<IReadOnlyList<VaultPath>> ListNotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
