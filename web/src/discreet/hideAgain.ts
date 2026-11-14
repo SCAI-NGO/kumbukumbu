@@ -159,12 +159,13 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // Going back to a discreet view's entry now finds /discreet, which goes to the vault list.
     forgetDiscreet();
 
-    // What's on and its count named the discreet vaults' entries: the app's icon is cleared, and both, kept for the
-    // views still showing them (the badge, the What's on page), are emptied at once and asked again; a removed query
-    // would stay on screen with what it had until its view rendered again.
+    // What's on and its count named the discreet vaults' entries, as Recent changes did: the app's icon is cleared, and
+    // each, kept for the views still showing them (the badge, the What's on page, Recent changes), is emptied at once
+    // and asked again; a removed query would stay on screen with what it had until its view rendered again.
     clearAppBadge();
-    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" });
+    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" && q.queryKey[0] !== "recent" });
     void queryClient.resetQueries({ queryKey: ["whats-on"] });
+    void queryClient.resetQueries({ queryKey: ["recent"] });
     sweep(queryClient, names);
     for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
     void queryClient.refetchQueries({ queryKey: ["session"] });

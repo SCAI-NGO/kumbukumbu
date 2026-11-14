@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Search, TextSearch, X } from "lucide-react";
+import { History, Search, TextSearch, X } from "lucide-react";
 import { useEffect, useId, useRef, type KeyboardEvent } from "react";
-import { FLAGS } from "../flags/api";
-import FlagIcon, { flagLabel } from "../flags/FlagIcon";
+import { Link } from "react-router-dom";
+import FlagChips from "../flags/FlagChips";
 import { useEditor } from "../state/editor";
 import type { FlagFilter } from "./treeFilter";
 import type { TreeOrder } from "./treeOrder";
@@ -18,8 +18,8 @@ const orders: { id: TreeOrder; label: string }[] = [
 const target = "flex min-h-12 items-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
- * The tree's toolbar, under the vault's heading (spec §3.1, §3.2): a search by name and flag over the vault the tree
- * shows, and the order. Closing the search (✕ or Escape) clears it and gives the full tree back; Search the contents…
+ * The tree's toolbar, under the vault's heading (spec §3.1, §3.2, §4): a search by name and flag over the vault the tree
+ * shows, the order, and Recent changes across the vaults. Closing the search (✕ or Escape) clears it and gives the full tree back; Search the contents…
  * hands the words to the search sheet, for a search by words and meaning.
  */
 export default function TreeTools({
@@ -60,8 +60,12 @@ export default function TreeTools({
     useEditor.getState().setSearchQuery(search?.words.trim() ?? "");
     useEditor.getState().setOverlay("search");
   };
-  const chip = (pressed: boolean) =>
-    `flex h-9 items-center gap-1.5 rounded-full border px-3 text-[13px] ${pressed ? "border-accent font-semibold text-text ring-1 ring-accent" : "border-line text-text-body"}`;
+  // A page of its own, as the calendar: the drawer around the tree closes.
+  const recent = (
+    <Link to="/recent" aria-label="Recent changes" title="Recent changes" onClick={() => useEditor.getState().setOverlay("none")} className={`${target} size-12 flex-none justify-center text-muted`}>
+      <History size={20} aria-hidden />
+    </Link>
+  );
 
   const orderSwitch = (
     <div role="radiogroup" aria-label="Order" className="flex min-w-0 flex-1 rounded-[9px] border border-line bg-bg p-0.5">
@@ -86,6 +90,7 @@ export default function TreeTools({
           <Search size={20} aria-hidden />
         </button>
         {orderSwitch}
+        {recent}
       </div>
     );
   }
@@ -110,20 +115,7 @@ export default function TreeTools({
           <X size={20} aria-hidden />
         </button>
       </div>
-      {/* One at a time: pressed again, a chip lets go. Each says its name: the flags' colours alone don't tell them apart. */}
-      <div role="group" aria-label="Flag" className="flex flex-wrap gap-x-1">
-        <button type="button" aria-pressed={search.flag === "any"} onClick={() => onSearch({ ...search, flag: search.flag === "any" ? null : "any" })} className={`${target} min-w-12`}>
-          <span className={chip(search.flag === "any")}>Any flag</span>
-        </button>
-        {FLAGS.map((f) => (
-          <button key={f} type="button" aria-pressed={search.flag === f} onClick={() => onSearch({ ...search, flag: search.flag === f ? null : f })} className={`${target} min-w-12`}>
-            <span className={chip(search.flag === f)}>
-              <FlagIcon flag={f} size={14} decorative />
-              {flagLabel[f]}
-            </span>
-          </button>
-        ))}
-      </div>
+      <FlagChips flag={search.flag} onFlag={(flag) => onSearch({ ...search, flag })} />
       {nothing && (
         <p role="status" className="px-2.5 pt-1 text-sm text-muted">
           Nothing called that here.
@@ -133,7 +125,10 @@ export default function TreeTools({
         <TextSearch size={18} aria-hidden className="flex-none" />
         Search the contents…
       </button>
-      <div className="flex">{orderSwitch}</div>
+      <div className="flex items-center gap-2">
+        {orderSwitch}
+        {recent}
+      </div>
     </div>
   );
 }

@@ -685,4 +685,28 @@ describe("What's on and the badge, as the discreet vaults are hidden again", () 
     expect(screen.queryByRole("link", { name: "Brief" })).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/whats-on");
   });
+
+  it("hiding again empties Recent changes on screen", async () => {
+    let hidden = false;
+    const row = (vault: string, title: string) => ({ path: `/${vault}/${title}.md`, vault, title, folder: vault, kind: "note", flag: null, writer: "alice", writerKind: "self", writtenAt: new Date().toISOString() });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+      "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+      "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+      "GET /api/recent": () =>
+        json(200, hidden ? { items: [row("Work", "Report")], more: false, vaults: ["Work"] } : { items: [row("Tagebuch", "Brief"), row("Work", "Report")], more: false, vaults: ["Tagebuch", "Work"] }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/recent", queryClient);
+    expect(await screen.findByRole("link", { name: /Brief/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tagebuch" })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    hidden = true;
+    await act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname: "/recent" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Brief/ })).not.toBeInTheDocument());
+    expect(await screen.findByRole("link", { name: /Report/ })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Tagebuch");
+    expect(router.state.location.pathname).toBe("/recent");
+  });
+
 });

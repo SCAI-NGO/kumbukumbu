@@ -52,14 +52,16 @@ function signedIn() {
     "GET /api/changes": () => json(200, []),
     "GET /api/search": () => json(200, { results: [], notIndexed: 0, notice: null }),
     "GET /api/version/*": () => json(404, { error: "No such file" }),
+    "GET /api/recent": () => json(200, { items: [], more: false, vaults: ["Notes"] }),
   });
 }
 
 async function openDrawer() {
   signedIn();
-  renderApp("/notes/Notes/inbox.md");
+  const router = renderApp("/notes/Notes/inbox.md");
   await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
   await within(drawer()).findByText("later");
+  return router;
 }
 
 async function find(words: string) {
@@ -177,6 +179,24 @@ describe("the tree's order", () => {
     await openDrawer();
     await find("e");
     expect(shown()).toEqual(["Garden", "beds", "Pump", "Certificate", "later"]);
+  });
+});
+
+describe("Recent changes", () => {
+  it("is an item at the top of the tree, beside search and order, and opens its page", async () => {
+    const router = await openDrawer();
+    const item = within(drawer()).getByRole("link", { name: "Recent changes" });
+    expect(item).toHaveAttribute("href", "/recent");
+    await userEvent.click(item);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/recent"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Recent changes" })).toBeInTheDocument();
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+
+  it("stays beside the order while the search is open", async () => {
+    await openDrawer();
+    await find("pump");
+    expect(within(drawer()).getByRole("link", { name: "Recent changes" })).toBeInTheDocument();
   });
 });
 

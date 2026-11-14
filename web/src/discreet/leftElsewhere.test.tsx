@@ -234,6 +234,21 @@ describe("a vault marked discreet in another session", () => {
     expect(queryClient.getQueryData(["search", "inbox", "hybrid", null, false])).toEqual(found("/Work/inbox.md"));
   });
 
+  it("drops the Recent changes that named it", async () => {
+    const { at } = server(["Work", "Tagebuch"]);
+    const { queryClient } = await tabOn("/notes/Work/inbox.md", at);
+    const recent = (vault: string) => ({ items: [{ path: `/${vault}/a.md`, vault, title: "a", folder: vault, kind: "note", flag: null, writer: "alice", writerKind: "self", writtenAt: "2026-11-14T09:00:00Z" }], more: false, vaults: [vault] });
+    queryClient.setQueryData(["recent", "", null, [], 50], recent("Tagebuch"));
+    queryClient.setQueryData(["recent", "a", null, [], 50], recent("Work"));
+
+    await markedElsewhere(queryClient, at, ["Work"]);
+    await waitFor(() => expect(queryClient.getQueryData(["recent", "", null, [], 50])).toBeUndefined());
+    await settle();
+
+    expect(queryClient.getQueryData(["recent", "", null, [], 50])).toBeUndefined();
+    expect(queryClient.getQueryData(["recent", "a", null, [], 50])).toEqual(recent("Work"));
+  });
+
   it("leaves this tab's view when it was marked while the connection was down", async () => {
     const { at } = server(["Work", "Tagebuch"]);
     const { router } = await tabOn("/notes/Tagebuch/geheim.md", at);
