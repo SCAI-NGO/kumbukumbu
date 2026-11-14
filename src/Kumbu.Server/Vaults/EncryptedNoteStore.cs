@@ -199,8 +199,10 @@ public sealed class EncryptedNoteStore(
         }
 
         VaultPath? conflict = null;
+        IReadOnlyList<ObjectId> withdrawn = [];
         var written = await WriteAsync(vault, paths, async session =>
         {
+            withdrawn = [];
             var apply = new List<Action>();
             foreach (var (current, next) in batch.Replaces)
             {
@@ -321,9 +323,11 @@ public sealed class EncryptedNoteStore(
             }
 
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
-            await FollowAsync(session, access, batch, by, byRef, at, ct);
+            withdrawn = await FollowAsync(session, access, batch, by, byRef, at, ct);
             return () => apply.ForEach(a => a());
         }, ct, adding: batch.AddsData ? Incoming(batch) : null);
+
+        if (written) await DeleteAiLinksAsync(withdrawn);
 
         // After the commit, which stands: a PDF whose job isn't queued now is queued at the vault's next unlock.
         if (written && pdf is not null)
@@ -526,30 +530,42 @@ public sealed class EncryptedNoteStore(
         if (await VaultAsync(current.Path, ct) is not { } a) return false;
         var vault = a.Vault;
         current = Stored(a, current);
-        return await WriteAsync(vault, [current.Path], async session =>
+        IReadOnlyList<ObjectId> withdrawn = [];
+        var written = await WriteAsync(vault, [current.Path], async session =>
         {
+            withdrawn = [];
             if (await TrashInAsync(session, vault, current, deletedBy, deletedByRef, deletedAt, null, ct) is not { } trashed) return null;
-            await FollowAsync(session, a, new NoteBatch { Trashes = { current } }, deletedBy, deletedByRef, deletedAt, ct);
+            withdrawn = await FollowAsync(session, a, new NoteBatch { Trashes = { current } }, deletedBy, deletedByRef, deletedAt, ct);
             return trashed;
         }, ct);
+        if (written) await DeleteAiLinksAsync(withdrawn);
+        return written;
     }
 
     /// <summary>The vault's publications and marks after a batch, in its transaction; a refusal aborts the batch. A store
     /// without <see cref="Publishing.Publications"/> fails closed: it trashes and moves nothing in a vault that has a
-    /// publishing record.</summary>
-    private async Task FollowAsync(IClientSessionHandle session, VaultAccess access, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
+    /// publishing record. Returns the publications withdrawn, for <see cref="DeleteAiLinksAsync"/>.</summary>
+    private async Task<IReadOnlyList<ObjectId>> FollowAsync(
+        IClientSessionHandle session, VaultAccess access, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (_publications is not null)
         {
-            await _publications.FollowAsync(
+            return await _publications.FollowAsync(
                 session, access, credential is ApiKeyCredential { Device: true }, credential is UserCredential, batch, by, byRef, at, ct);
         }
-        else if ((batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentMoves.Count > 0)
+
+        if ((batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentMoves.Count > 0)
             && await catalog.Publishing.Find(session, F.Eq(d => d.Vault, access.Id)).AnyAsync(ct))
         {
             throw new InvalidOperationException("A note store without publications can't trash or move in a vault that publishes; nothing was written.");
         }
+
+        return [];
     }
+
+    /// <summary>The AI links of the publications a committed batch withdrew, outside its transaction.</summary>
+    private Task DeleteAiLinksAsync(IReadOnlyList<ObjectId> withdrawn) =>
+        withdrawn.Count > 0 && _publications is not null ? _publications.DeleteAiLinksAsync(withdrawn) : Task.CompletedTask;
 
     /// <summary>The bound the index chunks with, for search-time chunking.</summary>
     public Kumbu.Core.Search.ChunkBound Bound => index?.Bound ?? Kumbu.Core.Search.ChunkBound.Fallback;

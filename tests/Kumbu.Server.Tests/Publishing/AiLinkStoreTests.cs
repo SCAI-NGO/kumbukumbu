@@ -163,6 +163,13 @@ public sealed class AiLinkStoreTests(KumbuAppFactory app)
 
         await AssertGoneAsync(noteDeleted, "note deleted");
 
+        var noteTrashed = await ShownAsync();
+        var trasher = noteTrashed.Published.Alice;
+        var trashing = new EncryptedNoteStore(
+            Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(trasher.User.Id, trasher.UserKey), null, null, null, publications);
+        Assert.True(await trashing.TryTrashAsync((await trashing.GetAsync(P(Plan), Ct))!, trasher.Username, BySession, DateTime.UtcNow, Ct));
+        await AssertGoneAsync(noteTrashed, "note trashed");
+
         var vaultDeleted = await ShownAsync();
         var alice = vaultDeleted.Published.Alice;
         Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(alice.User, alice.UserKey, "Work", RestClient.Password, "Work", null, Ct));
@@ -203,6 +210,32 @@ public sealed class AiLinkStoreTests(KumbuAppFactory app)
 
         Assert.Equal(10, await AiLinks.CountDocumentsAsync(new BsonDocument("vault", vaultId), cancellationToken: Ct));
         Assert.Equal(before, await admin.BytesByVaultAsync([vaultId], Ct));
+    }
+
+    [Fact]
+    public async Task A_publication_keeps_at_most_2000_live_ai_links_and_the_oldest_gives_way()
+    {
+        var linked = await LinkedAsync();
+        var vaultId = await linked.Published.Alice.VaultIdAsync();
+        // Links made earlier, as documents: making 2,000 through the store would only take longer.
+        var now = DateTime.UtcNow;
+        await AiLinks.InsertManyAsync(Enumerable.Range(0, AiLinkToken.LivePerPublication - 2).Select(_ => new BsonDocument
+        {
+            ["_id"] = ObjectId.GenerateNewId(), ["vault"] = vaultId, ["publication"] = linked.Opened.Id,
+            ["lookup"] = new BsonBinaryData(RandomNumberGenerator.GetBytes(32)), ["slot"] = new BsonBinaryData(Array.Empty<byte>()),
+            ["expiresAt"] = now + AiLinkToken.Lifetime, ["count"] = 0,
+        }), cancellationToken: Ct);
+
+        var last = (await Store.CreateAiLinkAsync(linked.Opened, Ct))!.Value;
+        Assert.Equal(AiLinkToken.LivePerPublication, await LinksOfAsync(linked.Opened.Id));
+        Assert.NotNull(await Store.OpenAiLinkAsync(linked.Token, Ct));
+
+        var beyond = (await Store.CreateAiLinkAsync(linked.Opened, Ct))!.Value;
+
+        Assert.Equal(AiLinkToken.LivePerPublication, await LinksOfAsync(linked.Opened.Id));
+        Assert.Null(await Store.OpenAiLinkAsync(linked.Token, Ct));
+        Assert.NotNull(await Store.OpenAiLinkAsync(last.Token, Ct));
+        Assert.NotNull(await Store.OpenAiLinkAsync(beyond.Token, Ct));
     }
 
     [Fact]
