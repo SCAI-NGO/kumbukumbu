@@ -84,6 +84,11 @@ export const commandTable: Record<string, CommandEntry> = {
   },
   history: { values: ["--since"], find: (o) => ({ paths: first(o), missing: "cwd" }) },
   board: { values: ["--column", "--tag"], find: (o) => ({ paths: first(o), missing: "vault" }) },
+  // The console runs only the reading forms: a vault's week or month, or what's on (with an optional vault).
+  calendar: {
+    values: ["--week", "--month", "--tag"],
+    find: (o) => (o[0] === "notifications" ? { paths: o.length > 1 ? [1] : [] } : { paths: first(o), missing: "vault" }),
+  },
   pdf: {
     values: ["--size", "--crop"],
     find: (o) => (o[0] === "info" ? { paths: o.length > 1 ? [1] : [] } : { paths: first(o) }),
