@@ -323,6 +323,7 @@ app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();
 app.MapFlagApi();
+app.MapRecentApi();
 app.MapTagApi();
 app.MapConsoleApi();
 app.MapUploadApi();
