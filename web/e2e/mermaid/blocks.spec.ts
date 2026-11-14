@@ -179,7 +179,7 @@ test("mermaid #17: cat of a block prints it with its marker; a wrong id is an er
   const { plan } = await seedExample(seedAs, folder);
   const block = await aliceApi.console(`cat "${plan}#^controller"`);
   expect(block.isError, block.text).toBe(false);
-  expect(block.text.trimEnd()).toBe("The pump needs a new controller. ^controller\nBREAK");
+  expect(block.text.trimEnd()).toBe("The pump needs a new controller. ^controller");
 
   const wrong = await aliceApi.console(`cat "${plan}#^contoller"`);
   expect(wrong.isError).toBe(true);
@@ -226,8 +226,9 @@ test("mermaid #20: mv keeps the block link @blockrefs", async ({ aliceApi, mcp, 
     const away = await mcp.sh(`mv ${plan} ${moved}`);
     expect(away.isError, away.text).toBe(false);
     const after = (await aliceApi.getNote(tasks)).content;
-    // The path form is rewritten (Plan isn't beside Tasks any more), the block id stays.
-    expect(after).toMatch(/\[\[[^\]]*Old\/Plan#\^controller\]\]/);
+    // The block id stays; the path form changes where mv rewrites (a bare [[Plan]] still leads to the moved note when
+    // it is the vault's only Plan, else the link gets the path part that names it).
+    expect(after).toMatch(/^- see \[\[(?:[^\]]*\/)?Plan#\^controller\]\]\n$/);
     const shown = await aliceApi.console(`cat ${tasks}`);
     expect(shown.text).toContain("#^controller]]");
     const resolved = await aliceApi.console(`links ${tasks}`);
