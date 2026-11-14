@@ -5,7 +5,8 @@
 # then serial and serial-phone on the same setup. Exits with Playwright's worse exit code.
 set -uo pipefail
 STACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-trap '"$STACK_DIR/down.sh"' EXIT
+# The stack and its volumes go, and with them the run's random passwords, PIN and sessions in e2e/.auth/.
+trap '"$STACK_DIR/down.sh"; rm -rf "$STACK_DIR/../.auth"' EXIT
 "$STACK_DIR/up.sh" || exit 1
 cd "$STACK_DIR/../.."
 pnpm exec playwright test --project=setup --project=desktop --project=phone --pass-with-no-tests "$@"

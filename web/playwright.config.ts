@@ -32,7 +32,8 @@ export default defineConfig({
   workers: 2,
   retries: 0,
   forbidOnly: true,
-  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  // No HTML report: its steps name every address and filled value, the reader links' codes and the passwords too.
+  reporter: [["list"]],
   use: {
     baseURL,
     timezoneId: "Europe/Vienna",
