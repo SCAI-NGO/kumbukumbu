@@ -319,8 +319,13 @@ describe("More vaults… in the shell", () => {
     await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
     expect(useDiscreet.getState()).toMatchObject({ revealed: true, until });
     expect(fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/api/session").length).toBeGreaterThan(1);
-    // Of all of it, only the time-out choice reaches browser storage: no PIN, no vault name.
-    expect(local.mock.calls.map(([key]) => key)).toEqual(local.mock.calls.map(() => storageKey));
+    // Of all of it, only the time-out choice reaches browser storage: no PIN, no vault name. A last note kept is
+    // never one of a discreet vault.
+    const keys = local.mock.calls.map(([key]) => key).filter((key) => !key.startsWith("kumbu.lastNote."));
+    expect(keys).toEqual(keys.map(() => storageKey));
+    expect(keys).not.toEqual([]);
+    const lastNotes = local.mock.calls.filter(([key]) => key.startsWith("kumbu.lastNote."));
+    expect(lastNotes.map(([key, value]) => `${key}=${value}`).join("\n")).not.toContain("Tagebuch");
     expect(local.mock.contexts.every((c) => c === localStorage)).toBe(true);
     expect(sessionStorage.length).toBe(0);
     const stored = Array.from({ length: localStorage.length }, (_, i) => `${localStorage.key(i)}=${localStorage.getItem(localStorage.key(i)!)}`);

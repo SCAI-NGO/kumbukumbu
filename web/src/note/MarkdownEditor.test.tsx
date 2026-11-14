@@ -515,7 +515,13 @@ describe("A session that ends mid-edit", () => {
   });
 
   it("drops the text, the note and the recent notes when someone else signs in", async () => {
-    const puts = editorApi([sessionGone, ok], undefined, signInAs({ ...user, id: "u2", username: "liz", display: "Liz" }));
+    // From the sign-in on, the session is hers.
+    let who = user;
+    const liz = { ...user, id: "u2", username: "liz", display: "Liz" };
+    const puts = editorApi([sessionGone, ok], undefined, {
+      "GET /api/session": () => json(200, { user: who, previousSignInAt: null }),
+      "POST /api/session": () => ((who = liz), json(200, { user: liz, previousSignInAt: null })),
+    });
     const { u, router } = await openInWrite();
     await u.type(editorBox(), " mine");
     await wait(800);

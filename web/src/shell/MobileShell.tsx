@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
 import { Flag, FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
@@ -24,8 +24,10 @@ import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
+import { useSession } from "../state/session";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
+import { forgetLastNote, keepLastNote, lastNote, ordinary, settleStart, startSettled, treeHas } from "./lastNote";
 import { copyItems, noteNames } from "./copyItems";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
@@ -157,6 +159,42 @@ export default function MobileShell() {
   const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
+  const userId = useSession((s) => s.user?.id ?? null);
+  const discreetNames = useDiscreet((s) => s.names);
+  // The last note of an ordinary vault is kept for the next start, once it has loaded; a discreet one never is, and
+  // while one is open the kept path stays the last ordinary note.
+  const loaded = useNoteLoaded(path);
+  useEffect(() => {
+    if (userId && path && loaded && ordinary(vaults.data, discreetNames, vaultOf(path))) keepLastNote(userId, path);
+  }, [userId, path, loaded, vaults.data, discreetNames]);
+  // It goes once its vault is no longer an ordinary one: marked discreet (here, or in another session: the list then
+  // marks it or, hidden, leaves it out), removed, or no longer shared.
+  useEffect(() => {
+    if (!userId || !vaults.data) return;
+    const kept = lastNote(userId);
+    if (kept && !ordinary(vaults.data, discreetNames, vaultOf(kept))) forgetLastNote(userId);
+  }, [userId, vaults.data, discreetNames]);
+  // On start only, with no note in the address, and not when a vault was chosen before the shell was shown (Share's
+  // "Open"). Read once per page load: once a note was shown or the start was decided, `/` is the vaults.
+  const [chosen] = useState(() => useEditor.getState().activeVault !== null);
+  const kept = userId && !startSettled(userId) && !chosen && !path && !overview && !recentPaths.length && vaults.data ? lastNote(userId) : null;
+  const keptVault = kept !== null && ordinary(vaults.data, discreetNames, vaultOf(kept)) ? vaultOf(kept) : null;
+  const keptTree = useTree(keptVault);
+  const keptThere = !!keptVault && !!keptTree.data && treeHas(keptTree.data.root, kept!);
+  // Settled with a note shown, or with the vault list in and nothing to open.
+  useEffect(() => {
+    if (path || (vaults.data && !keptVault)) settleStart(userId);
+  }, [path, vaults.data, keptVault, userId]);
+  // A note that is gone opens its vault's root and is forgotten; with its tree unreadable for now, that vault's root
+  // opens too, and the note stays kept for the next start.
+  useEffect(() => {
+    if (!keptVault || !(keptTree.data || keptTree.isError) || keptThere) return;
+    if (keptTree.data) forgetLastNote(userId);
+    settleStart(userId);
+    setActiveVault(keptVault);
+  }, [keptVault, keptTree.data, keptTree.isError, keptThere, userId, setActiveVault]);
+  // Until the tree says, the vaults aren't shown: they would flash before the note opens.
+  const keptPending = !!keptVault && !keptThere && keptTree.isPending;
   useSyncSocket();
   useTellOpenNote();
   const [vaultDialog, setVaultDialog] = useState(false);
@@ -263,8 +301,8 @@ export default function MobileShell() {
 
   // Skills sorts before Welcome, where a new user should start: the Skills vault only when there is no other.
   useEffect(() => {
-    if (!activeVault && vaults.data?.length) setActiveVault((vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
-  }, [activeVault, vaults.data, setActiveVault]);
+    if (!activeVault && vaults.data?.length) setActiveVault(keptVault ?? (vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
+  }, [activeVault, vaults.data, setActiveVault, keptVault]);
 
   // A note the caller can't change (any more: her role was lowered) is only read. Not before the vaults are in, whose
   // levels say so: Write would be off for a moment on every note, and a note opened in Write mode would drop out of it.
@@ -306,6 +344,7 @@ export default function MobileShell() {
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
+  if (keptThere) return <Navigate to={noteUrl(kept!)} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
   const newNote = (folder: string) =>
@@ -350,7 +389,13 @@ export default function MobileShell() {
             {gone ? (
               // Empty while the hide goes on; reached again later (a bookmark, say), said as a discreet note's 404 is.
               <div className="flex-1 px-[22px] pt-[22px]">{!hiding && <p className="text-text-body">{NO_SUCH_NOTE}</p>}</div>
-            ) : path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}
+            ) : path ? (
+              <NoteView key={path} path={path} />
+            ) : keptPending ? (
+              <div className="flex-1" />
+            ) : (
+              <VaultOverview onNewVault={() => setVaultDialog(true)} />
+            )}
           </main>
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">

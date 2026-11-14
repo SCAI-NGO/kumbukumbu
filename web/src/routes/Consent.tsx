@@ -6,6 +6,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AuthScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useSession } from "../state/session";
+import { forgetLastNote } from "../shell/lastNote";
 import { ActsAs } from "./rights";
 
 type View = components["schemas"]["ConsentView"];
@@ -78,6 +79,7 @@ export default function Consent() {
       if (!response.ok && response.status !== 401) throw new Error("sign-out failed");
     },
     onSuccess: () => {
+      forgetLastNote(useSession.getState().user?.id);
       useSession.getState().signOut();
       navigate(`/signin?next=${encodeURIComponent(`/consent?request=${id}`)}`, { replace: true });
       queryClient.clear();

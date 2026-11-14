@@ -49,6 +49,7 @@ import { useBadge } from "../calendar/useBadge";
 import { flaggable } from "../flags/FlagMenu";
 import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
+import { forgetLastNote } from "./lastNote";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
 
@@ -374,6 +375,7 @@ function AccountRow() {
       return setFailed(true);
     }
     useEditor.getState().reset();
+    forgetLastNote(useSession.getState().user?.id);
     useSession.getState().signOut();
     // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.
     navigate("/signin", { replace: true });

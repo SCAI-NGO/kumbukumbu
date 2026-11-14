@@ -95,6 +95,21 @@ describe("Discreet in the vault's menu", () => {
     expect(await put.json()).toEqual({ discreet: true });
   });
 
+  it("forgets the last note of a vault as it is marked discreet, before the list says so", async () => {
+    let kept: string | null = "";
+    api(true, own, {
+      "PUT /api/account/discreet/vaults/Work": () => {
+        kept = localStorage.getItem("kumbu.lastNote.u1");
+        return noContent();
+      },
+    });
+    await openMenu(true);
+    expect(localStorage.getItem("kumbu.lastNote.u1")).toBe("/Work/inbox.md");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Discreet" }));
+    await waitFor(() => expect(drawer().querySelector("[aria-live='polite']")).toHaveTextContent("Marked as discreet"));
+    expect(kept).toBeNull();
+  });
+
   it("offers Not discreet for a marked vault, and confirms the unmarking", async () => {
     const fetch = api(true, { ...own, discreet: true }, { "PUT /api/account/discreet/vaults/Work": () => noContent() });
     const items = await openMenu(true);

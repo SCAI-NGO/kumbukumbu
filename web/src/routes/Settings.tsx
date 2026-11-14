@@ -28,6 +28,7 @@ import { useSession } from "../state/session";
 import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
 import { applyScheme, storedScheme } from "../theme/apply";
 import { schemes, type Scheme, type Tokens } from "../theme/schemes";
+import { forgetLastNote } from "../shell/lastNote";
 import { isStandalone } from "../update/InstallHint";
 import { useUpdate } from "../update/store";
 import { appVersion, parseVersion } from "../update/version";
@@ -683,6 +684,7 @@ function DeleteAccountSection() {
       setPassword("");
       queryClient.clear();
       useEditor.getState().reset();
+      forgetLastNote(me?.id);
       useSession.getState().end("Your account is deleted, with all your vaults and notes.");
     },
   });

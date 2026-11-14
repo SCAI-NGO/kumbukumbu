@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "../api/client";
+import { vaultOf } from "../api/paths";
+import { forgetLastNote, lastNote } from "../shell/lastNote";
+import { useSession } from "../state/session";
 import { useDiscreet } from "./state";
 
 /** The session, the vault list, What's on and Recent changes are asked again: what the session shows changed. */
@@ -55,6 +58,12 @@ export function useMarkDiscreet() {
   return useMutation({
     mutationFn: ({ vault, discreet }: { vault: string; discreet: boolean }) =>
       call(api.PUT("/api/account/discreet/vaults/{vault}", { params: { path: { vault } }, body: { discreet } })),
+    // The kept last note goes at once, not only when the list read after it marks the vault.
+    onMutate: ({ vault, discreet }) => {
+      const userId = useSession.getState().user?.id;
+      const kept = userId ? lastNote(userId) : null;
+      if (discreet && kept && vaultOf(kept) === vault) forgetLastNote(userId);
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["vaults"] }),
   });
 }

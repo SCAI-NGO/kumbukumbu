@@ -517,6 +517,7 @@ describe("Settings", () => {
   });
 
   it("deletes the account with the password and the username typed, and goes to sign-in", async () => {
+    localStorage.setItem("kumbu.lastNote.u1", "/Work/inbox.md");
     const bodies: unknown[] = [];
     api({ "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()) });
     const router = renderApp("/settings");
@@ -529,6 +530,8 @@ describe("Settings", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
     expect(bodies).toEqual([{ password: "my password, long", confirm: "ada" }]);
+    // Nothing of the account stays on the device: its last note goes with it.
+    expect(localStorage.getItem("kumbu.lastNote.u1")).toBeNull();
     expect(await screen.findByRole("status")).toHaveTextContent("Your account is deleted");
   });
 
