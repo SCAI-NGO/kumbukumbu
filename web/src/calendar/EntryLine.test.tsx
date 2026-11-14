@@ -111,6 +111,19 @@ describe("the note's header line", () => {
     expect(within(header).getByRole("textbox", { name: "Reason" })).toHaveValue("renewed until 2027");
   });
 
+  it("a reason too long to show in full is edited in the note, not in a field that would save it shortened", async () => {
+    const fetch = noteWithEntry(CERT, noteEntry(closedTask("a".repeat(2000))));
+    renderApp(`/notes${CERT}`);
+    const header = await line();
+    expect(within(header).queryByRole("button", { name: "Edit reason" })).not.toBeInTheDocument();
+    const inNote = within(header).getByRole("button", { name: "Edit reason in the note" });
+    expect(inNote).toHaveClass("min-h-12");
+    await userEvent.click(inNote);
+    expect(within(header).queryByRole("textbox", { name: "Reason" })).not.toBeInTheDocument();
+    expect(useEditor.getState().mode).toBe("write");
+    expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([]);
+  });
+
   it("a day note by name says so and has no Remove", async () => {
     const day = "/Work/Diary/2026-11-12.md";
     noteWithEntry(day, noteEntry(entryView("2026-11-12", { path: day, byName: true })));

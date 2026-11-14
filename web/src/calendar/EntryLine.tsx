@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { errorText } from "../api/error-text";
 import { boardUrl, calendarUrl, vaultOf } from "../api/paths";
+import { useEditor } from "../state/editor";
 import { onBoard } from "./CouldntRead";
 import { afterEntryWrite, editorSettled, UNSAVED, useEntryAction, useNoteEntry, type EntryView } from "./api";
 import { useClosing, ReasonField } from "./ClosedToast";
@@ -17,6 +18,8 @@ import { rangeOf } from "./WeekList";
 const actionClass =
   "inline-flex min-h-12 items-center rounded-[8px] px-1 font-medium text-accent-text underline-offset-[3px] hover:underline focus-visible:outline-2 focus-visible:outline-accent";
 const linkClass = "inline-flex min-h-12 items-center font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent";
+
+const LONGEST_SHOWN = 2000;
 
 const isWeek = (value: string) => /^\d{4}-W\d{2}$/.test(value);
 
@@ -152,10 +155,18 @@ export default function EntryLine({ path, version }: { path: string; version: st
             {reason && <span aria-hidden>{" · "}</span>}
             {reason}
           </span>,
-          // While "Closed · Undo · Add a reason" is up, its own field opens: one field, in the message.
-          <button key="why" type="button" onClick={() => (closing.showing === entry.path ? closing.askReason() : setReasoning(true))} className={actionClass}>
-            {entry.reason ? "Edit reason" : "Add a reason"}
-          </button>,
+          // The server cuts a reason at 2,000 characters (1,999 when it would split a pair): a field filled with the
+          // cut text would save it shortened, so such a reason is edited in the note itself.
+          (entry.reason?.length ?? 0) >= LONGEST_SHOWN - 1 ? (
+            <button key="why" type="button" onClick={() => useEditor.getState().setMode("write")} className={actionClass}>
+              Edit reason in the note
+            </button>
+          ) : (
+            // While "Closed · Undo · Add a reason" is up, its own field opens: one field, in the message.
+            <button key="why" type="button" onClick={() => (closing.showing === entry.path ? closing.askReason() : setReasoning(true))} className={actionClass}>
+              {entry.reason ? "Edit reason" : "Add a reason"}
+            </button>
+          ),
         );
       } else {
         texts.push(<span key="closed">{closed}</span>);
