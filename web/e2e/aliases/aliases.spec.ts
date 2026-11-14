@@ -88,7 +88,7 @@ test("aliases #2: roadmap opens Kumbukumbu at its Roadmap section @aliases @seri
     await openNote(page, at(diary));
     await press(testInfo, page.locator("article").getByRole("link", { name: "roadmap", exact: true }));
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Long/Kumbukumbu\\.md$`));
-    const roadmap = page.locator("article").getByRole("heading", { name: "Roadmap", level: 2 });
+    const roadmap = page.locator("article").getByRole("heading", { name: "Roadmapp", level: 2 });
     const top = page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 });
     // The note rendered: both headings are in the page (not necessarily in view).
     await expect(top).toHaveCount(1);

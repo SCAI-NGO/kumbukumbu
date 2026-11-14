@@ -91,7 +91,7 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
   }
 
   const listing = await aliceApi.console(`ls /Work/${folder}/Meetings`);
-  const photos = listing.text.split(/\s+/).filter((name) => name.endsWith(".jpg")).sort();
+  const photos = listing.text.split("\n").map((name) => name.trim()).filter((name) => name.endsWith(".jpg")).sort();
   expect(photos).toHaveLength(3);
   for (const name of photos) expect(name).toMatch(new RegExp(`^Photo ${day} \\d{6}( [23])?\\.jpg$`));
   const stem = photos[0].replace(/\.jpg$/, "");
