@@ -265,7 +265,7 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   const row = tree.locator('[aria-current="page"]');
   await expect(row).toBeVisible();
   const rowActions = row.locator("..").getByRole("button", { name: "Actions for Certificate" });
-  await rowActions.click();
+  await (onPhone(testInfo) ? rowActions.tap() : rowActions.click());
   console.log(await rowActions.getAttribute("aria-expanded"), await bobPage.locator("[role=menu]").count());
   const rowMenu = bobPage.getByRole("menu", { name: "Actions for Certificate" });
   await expect(rowMenu.getByRole("menuitem").first()).toBeVisible();
