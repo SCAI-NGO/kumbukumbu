@@ -25,6 +25,13 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
   return drawer;
 }
 
+/** The phone's drawer closed again (the pill sits under it); on the desktop the tree is docked. */
+async function closeDrawer(page: Page) {
+  const drawer = page.getByRole("dialog", { name: "File tree" });
+  if (await drawer.isVisible()) await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+}
+
 /** From the tree's top row to the page, as a person does it (the page stays loaded: no reload). */
 async function toRecent(page: Page, testInfo: TestInfo) {
   await (await openTree(page, testInfo)).getByRole("link", { name: "Recent changes" }).click();
@@ -129,7 +136,7 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
     await expect(page.locator("article").getByRole("heading", { name: "Certificate", level: 1 })).toBeVisible();
   } finally {
     await page.goto("/");
-    if (onPhone(testInfo) && (await page.getByRole("button", { name: "Open file tree" }).isVisible())) await page.getByRole("button", { name: "Open file tree" }).click();
+    await closeDrawer(page);
     if (await page.getByRole("button", { name: "Hide discreet vaults" }).first().isVisible()) await hideDiscreet(page);
   }
 });
@@ -156,7 +163,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await expect(rows(page).filter({ hasText: "Zahnarzt" })).toHaveCount(1);
     await expect(vaultChips(page).getByRole("button", { name: "Home" })).toBeVisible();
     await page.getByRole("link", { name: "Back to the notes" }).click();
-    if (onPhone(testInfo)) await openTree(page, testInfo);
+    await closeDrawer(page);
     await hideDiscreet(page);
     // The tree and the vault menu, then Recent changes again: nothing of Home.
     const tree = await openTree(page, testInfo);
@@ -182,7 +189,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
 
     await other.reload();
     await expect(other.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
-    if (onPhone(testInfo)) await openTree(other, testInfo);
+    await closeDrawer(other);
     await expect(pill(other).first()).toBeVisible();
     await hideDiscreet(other);
 
@@ -192,7 +199,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
   } finally {
     for (const p of [other, page]) {
       await p.goto("/");
-      if (onPhone(testInfo) && (await p.getByRole("button", { name: "Open file tree" }).isVisible())) await p.getByRole("button", { name: "Open file tree" }).click();
+      await closeDrawer(p);
       if (await p.getByRole("button", { name: "Hide discreet vaults" }).first().isVisible()) await hideDiscreet(p);
     }
   }
