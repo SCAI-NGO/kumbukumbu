@@ -12,6 +12,8 @@ namespace Kumbu.Core.Tags;
 /// </summary>
 public static partial class FlagTags
 {
+    internal const int MaxTagsLine = 64 * 1024;
+
     /// <summary>
     /// The content with every flag tag removed from the frontmatter's <c>tags</c> and <paramref name="flag"/>'s tag in the
     /// place of the first one (appended if there was none); null when <c>tags</c> has a form this can't edit (a map, a
@@ -20,8 +22,12 @@ public static partial class FlagTags
     /// starts with a byte order mark. A <c>tags</c> left empty is removed, and a frontmatter left empty with it, so setting a flag and
     /// removing it gives the note back.
     /// </summary>
-    public static string? Set(string content, string? flag)
+    public static string? Set(string content, string? flag) => Edit(content, flag, CancellationToken.None);
+
+    /// <summary><see cref="Set"/>, stopping when <paramref name="ct"/> is cancelled.</summary>
+    internal static string? Edit(string content, string? flag, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var tag = flag is null ? null : Flags.Tag(flag);
         // Neither TagReader nor Frontmatter.Read sees frontmatter behind a byte order mark, so neither the tags this would
         // edit nor the result could be read back.
@@ -58,6 +64,8 @@ public static partial class FlagTags
         }
 
         var text = lines[key].Text;
+        // A tags line this long is no list a person keeps.
+        if (text.Length > MaxTagsLine) return null;
         var colon = keyMatch.Length;
         var value = colon;
         while (value < text.Length && text[value] is ' ' or '\t') value++;
@@ -67,12 +75,12 @@ public static partial class FlagTags
         if (stop > key + 1)
         {
             if (!bare) return null;
-            if (Block(lines, key + 1, stop, tag) is not { } left) return null;
+            if (Block(lines, key + 1, stop, tag, ct) is not { } left) return null;
             emptied = left;
         }
         else
         {
-            var changed = bare ? Empty(text, colon, text[value..], tag) : text[value] == '[' ? Flow(text, value, tag) : Scalar(text, colon, value, tag);
+            var changed = bare ? Empty(text, colon, text[value..], tag) : text[value] == '[' ? Flow(text, value, tag, ct) : Scalar(text, colon, value, tag);
             if (changed is null) return null;
             emptied = changed.Length == 0;
             if (!emptied) lines[key] = (changed, lines[key].End);
@@ -104,12 +112,13 @@ public static partial class FlagTags
         tag is null ? text : $"{text[..colon]} [{tag}]" + (comment.Length > 0 ? " " + comment : "");
 
     /// <summary>A flow list on the key's line, <c>tags: [a, "b"] # c</c>: the new line, "" when no item is left, null when refused.</summary>
-    private static string? Flow(string text, int open, string? tag)
+    private static string? Flow(string text, int open, string? tag, CancellationToken ct)
     {
         var pieces = new List<string>();
         var start = open + 1;
         var close = -1;
         char? quote = null;
+        var blank = true; // only white space since the item's start
         for (var i = open + 1; i < text.Length && close < 0; i++)
         {
             var c = text[i];
@@ -127,9 +136,11 @@ public static partial class FlagTags
                 continue;
             }
 
+            var onlyBlank = blank;
+            if (!char.IsWhiteSpace(c)) blank = false;
             switch (c)
             {
-                case '"' or '\'' when text[start..i].Trim().Length == 0:
+                case '"' or '\'' when onlyBlank:
                     quote = c;
                     break;
                 case '[' or '{':
@@ -137,8 +148,10 @@ public static partial class FlagTags
                 case '#' when text[i - 1] is ' ' or '\t':
                     return null;
                 case ',':
+                    ct.ThrowIfCancellationRequested();
                     pieces.Add(text[start..i]);
                     start = i + 1;
+                    blank = true;
                     break;
                 case ']':
                     pieces.Add(text[start..i]);
@@ -168,13 +181,12 @@ public static partial class FlagTags
             pieces[replace] = pieces[replace][..s] + tag + pieces[replace][e..];
         }
 
+        var removed = remove.ToHashSet();
+        var kept = pieces.Where((_, k) => !removed.Contains(k)).ToList();
         // An item goes with the comma before it, the first with the one after; the spacing at the list's ends stays.
-        foreach (var j in remove.OrderDescending())
-        {
-            if (j == 0 && pieces.Count > 1) pieces[1] = Leading(pieces[0]) + pieces[1].TrimStart(' ', '\t');
-            else if (j > 0 && j == pieces.Count - 1) pieces[j - 1] = pieces[j - 1].TrimEnd(' ', '\t') + Trailing(pieces[j]);
-            pieces.RemoveAt(j);
-        }
+        if (kept.Count > 0 && removed.Contains(pieces.Count - 1)) kept[^1] = kept[^1].TrimEnd(' ', '\t') + Trailing(pieces[^1]);
+        if (kept.Count > 0 && removed.Contains(0)) kept[0] = Leading(pieces[0]) + kept[0].TrimStart(' ', '\t');
+        pieces = kept;
 
         if (tag is not null && replace < 0)
         {
@@ -208,11 +220,18 @@ public static partial class FlagTags
         if (tokens.Count == 0) return Empty(text, colon, comment, tag);
         if (Plan(tokens, tag) is not var (replace, remove)) return text;
         if (replace >= 0) tokens[replace] = tag!;
-        foreach (var j in remove.OrderDescending())
+        var removed = remove.ToHashSet();
+        var keptTokens = new List<string>();
+        var keptSeparators = new List<string>();
+        for (var k = 0; k < tokens.Count; k++)
         {
-            if (separators.Count > 0) separators.RemoveAt(j > 0 ? j - 1 : 0);
-            tokens.RemoveAt(j);
+            if (removed.Contains(k)) continue;
+            if (k > 0) keptSeparators.Add(separators[k - 1]);
+            keptTokens.Add(tokens[k]);
         }
+
+        if (removed.Contains(0) && keptSeparators.Count > 0) keptSeparators.RemoveAt(0);
+        (tokens, separators) = (keptTokens, keptSeparators);
 
         if (tag is not null && replace < 0)
         {
@@ -227,13 +246,14 @@ public static partial class FlagTags
 
     /// <summary>A block list, <c>tags:</c> then <c>  - a</c> lines: edits the item lines in place; true when no item is left
     /// (the caller removes the key), null when refused.</summary>
-    private static bool? Block(List<(string Text, string End)> lines, int from, int stop, string? tag)
+    private static bool? Block(List<(string Text, string End)> lines, int from, int stop, string? tag, CancellationToken ct)
     {
         var items = new List<(int Line, int Start, int End)>();
         string? indent = null;
         string? marker = null;
         for (var i = from; i < stop; i++)
         {
+            ct.ThrowIfCancellationRequested();
             var text = lines[i].Text;
             if (text.Trim().Length == 0) continue;
             var m = BlockItemRegex().Match(text);
@@ -265,7 +285,14 @@ public static partial class FlagTags
             lines.Insert(at + 1, ((marker ?? "  - ") + tag, lines[at].End));
         }
 
-        foreach (var j in remove.OrderDescending()) lines.RemoveAt(items[j].Line);
+        var drop = remove.Select(j => items[j].Line).ToHashSet();
+        if (drop.Count > 0)
+        {
+            var kept = lines.Where((_, k) => !drop.Contains(k)).ToList();
+            lines.Clear();
+            lines.AddRange(kept);
+        }
+
         return false;
     }
 

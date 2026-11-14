@@ -54,7 +54,7 @@ public sealed class FlagService(INoteStore store, NoteWriter writer, Func<DateTi
             if (Flags.Of(note.Content) is { InText: true } inText)
                 return Error($"This flag is written in the note's text (#{inText.Written}); change it there.");
 
-            if (FlagTags.Set(note.Content, flag) is not { } content) return Error(CantEdit);
+            if (FlagTags.Edit(note.Content, flag, ct) is not { } content) return Error(CantEdit);
             var (changes, taskError) = TaskChanges(path, read.Values, task, today);
             if (taskError is not null) return taskError;
             if (changes.Count > 0)

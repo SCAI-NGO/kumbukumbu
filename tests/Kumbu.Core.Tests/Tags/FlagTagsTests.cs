@@ -57,6 +57,25 @@ public class FlagTagsTests
     }
 
     [Fact]
+    public void Quotes_inside_a_flow_item_are_part_of_it()
+    {
+        Assert.Equal("---\ntags: [it's, rock'n'roll, flag/red]\n---\n", FlagTags.Set("---\ntags: [it's, rock'n'roll]\n---\n", "red"));
+        Assert.Equal("---\ntags: [a, \"b, c\", flag/red]\n---\n", FlagTags.Set("---\ntags: [a, \"b, c\"]\n---\n", "red"));
+        Assert.Equal("---\ntags: [ 'a, b', c, flag/red]\n---\n", FlagTags.Set("---\ntags: [ 'a, b', c]\n---\n", "red"));
+    }
+
+    [Fact]
+    public void A_tags_line_over_64_KiB_is_refused()
+    {
+        // Under the frontmatter's 10,000-value budget, over 64 KiB on the line.
+        var many = string.Join(", ", Enumerable.Range(0, 5_000).Select(i => $"project-{i:D5}"));
+        var few = string.Join(", ", Enumerable.Range(0, 3_000).Select(i => $"project-{i:D5}"));
+
+        Assert.Null(FlagTags.Set($"---\ntags: [{many}]\n---\n", "red"));
+        Assert.EndsWith(", flag/red]\n---\n", FlagTags.Set($"---\ntags: [{few}]\n---\n", "red"));
+    }
+
+    [Fact]
     public void A_comment_after_the_list_stays()
     {
         Assert.Equal("---\ntags: [a, flag/red] # mine\n---\n", FlagTags.Set("---\ntags: [a, flag/blue] # mine\n---\n", "red"));
@@ -105,6 +124,12 @@ public class FlagTagsTests
     [InlineData("---\ntags: flag/red, a, flag/blue\n---\n", "---\ntags: a\n---\n")]
     [InlineData("---\ntags: [a, b]\n---\n#flag/red\n", "---\ntags: [a, b]\n---\n#flag/red\n")]
     [InlineData("Text\n", "Text\n")]
+    [InlineData("---\ntags: [ a , flag/red , flag/blue ]\n---\n", "---\ntags: [ a ]\n---\n")]
+    [InlineData("---\ntags: [flag/red, a, flag/blue, b, flag/green]\n---\n", "---\ntags: [a, b]\n---\n")]
+    [InlineData("---\ntags: [a, \"b, flag/red\", flag/blue]\n---\n", "---\ntags: [a, \"b, flag/red\"]\n---\n")]
+    [InlineData("---\ntags: flag/red flag/blue a b\n---\n", "---\ntags: a b\n---\n")]
+    [InlineData("---\ntags: a, flag/red b,flag/blue\n---\n", "---\ntags: a b\n---\n")]
+    [InlineData("---\ntags:\n  - flag/red\n  - a\n  - flag/blue\n  - b\n  - flag/green\ntitle: x\n---\nText\n", "---\ntags:\n  - a\n  - b\ntitle: x\n---\nText\n")]
     public void No_flag_removes_every_known_flag_and_nothing_else(string note, string expected) => Assert.Equal(expected, FlagTags.Set(note, null));
 
     [Fact]

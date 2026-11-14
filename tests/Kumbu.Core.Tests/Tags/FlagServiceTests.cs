@@ -343,6 +343,31 @@ public class FlagServiceTests
     }
 
     [Fact]
+    public async Task A_flag_on_a_note_with_a_tags_line_over_64_KiB_is_refused_and_the_note_stays()
+    {
+        var before = $"---\ntags: [{string.Join(", ", Enumerable.Range(0, 5_000).Select(i => $"project-{i:D5}"))}]\n---\nText\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", before));
+
+        var result = await Service(store).SetAsync("/Work/x.md", "red", FlagTask.None, Ct);
+
+        Assert.True(result.IsError);
+        Assert.Contains("I can't change this note's tags; edit them in the note", result.Output, StringComparison.Ordinal);
+        Assert.Equal(before, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task A_cancelled_flag_write_leaves_the_note_as_it_was()
+    {
+        const string before = "---\ntags: [a]\n---\nText\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", before));
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service(store).SetAsync("/Work/x.md", "red", FlagTask.None, cancel.Token));
+        Assert.Equal(before, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
     public async Task A_missing_note_is_not_found()
     {
         var result = await Service(new InMemoryNoteStore(("/Work/x.md", ""))).SetAsync("/Work/nope.md", "red", FlagTask.None, Ct);
