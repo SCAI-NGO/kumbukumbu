@@ -491,8 +491,10 @@ public static class NoteApi
         var archived = Archived(notes, attachments).ToList();
         var files = archived.Count(f => !FolderMarker.Is(f.Path));
         var summary = files == 0 ? null : new ArchiveSummary(files, archived.Sum(f => f.Bytes));
-        var written = stored.Select(n => (n.Path, n.LastWriteAt)).Concat(attachments.Select(a => (a.Path, a.LastWriteAt)))
-            .ToDictionary(w => w.Path, w => w.LastWriteAt);
+        // TryAdd, not ToDictionary: a note and an attachment at one path (which the stores keep from happening) mustn't fail the tree.
+        var written = new Dictionary<VaultPath, DateTime>();
+        foreach (var (path, at) in stored.Select(n => (n.Path, n.LastWriteAt)).Concat(attachments.Select(a => (a.Path, a.LastWriteAt))))
+            written.TryAdd(path, at);
         var tree = TreeOf(
             root, notes.Where(n => !ArchiveFolder.Contains(n.Path)), attachments.Where(a => !ArchiveFolder.Contains(a.Path)),
             p => written.TryGetValue(p, out var at) ? at : null);

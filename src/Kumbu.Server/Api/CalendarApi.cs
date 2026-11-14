@@ -209,13 +209,14 @@ public static partial class CalendarApi
     private static async Task<NoteEntryView> NoteEntryAsync(
         VaultPath notePath, INoteStore store, RequestCaller caller, ICallerZone callerZone, TimeProvider time, CancellationToken ct)
     {
-        var (entry, problem, board) = await ReadEntryAsync(notePath, store, ct);
+        var (_, entry, problem, board) = await ReadEntryAsync(notePath, store, ct);
         var zone = await callerZone.ZoneAsync(ct);
         var view = entry is null ? null : View(entry, EntryStates.Of(entry, time.GetUtcNow().UtcDateTime, zone), zone, board);
         return new NoteEntryView(view, problem is null ? null : CouldntRead(problem), caller.CanWrite(notePath.Segments[0]));
     }
 
-    internal static async Task<(Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
+    /// <summary>The note at <paramref name="notePath"/> as read, with its entry in the calendar read from that same state.</summary>
+    internal static async Task<(StoredNote Note, Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
         VaultPath notePath, INoteStore store, CancellationToken ct)
     {
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
@@ -223,7 +224,7 @@ public static partial class CalendarApi
         var definition = await store.GetAsync(BoardPaths.Definition(notePath.Segments[0]), ct);
         var board = definition is null ? null : BoardDefinition.Parse(definition.Content).Definition;
         var (entry, problem) = EntryReader.Read(new Note(notePath, note.Content), board);
-        return (entry, problem, board);
+        return (note, entry, problem, board);
     }
 
     private static async Task<Ok<WrittenView>> SetAsync(
@@ -301,7 +302,7 @@ public static partial class CalendarApi
         };
         // The caller's rights first, as every other write: a read-only member hears 403 before anything about the entry.
         if (((ICaller)caller).Refuse("calendar", path) is { } refused) BoardApi.Check(refused with { Kind = ShellErrorKind.Refused }, "calendar");
-        var (entry, _, _) = await ReadEntryAsync(path, store, ct);
+        var (_, entry, _, _) = await ReadEntryAsync(path, store, ct);
         if (entry is not { Task: TaskMark.Open }) throw ApiErrors.BadRequest("Later is for something still to do.");
         return TypedResults.Ok(await WrittenAsync(await calendar.LaterAsync(path.Value, part, step, body.Date, ct), store, caller, zone, time, ct));
     }

@@ -42,7 +42,7 @@ public static class FlagApi
     private static async Task<Ok<FlagView>> FlagAsync(string vault, string path, INoteStore store, RequestCaller caller, CancellationToken ct)
     {
         var notePath = await CalendarApi.NoteInAsync(vault, path, store, ct);
-        return TypedResults.Ok(await ViewAsync(notePath, store, caller, ct));
+        return TypedResults.Ok((await ViewAsync(notePath, store, caller, ct)).View);
     }
 
     private static async Task<Ok<FlagWrittenView>> SetAsync(
@@ -58,19 +58,21 @@ public static class FlagApi
         };
         var result = await flags.SetAsync(path.Value, body.Flag, task, ct);
         BoardApi.Check(result, Tool);
-        var version = result.Version ?? throw new InvalidOperationException("A flag's write answered without the note's version.");
-        return TypedResults.Ok(new FlagWrittenView(path.Value, version.Token, await ViewAsync(path, store, caller, ct)));
+        if (result.Version is null) throw new InvalidOperationException("A flag's write answered without the note's version.");
+        // The version of the state the view was read from: a write in between must not pair an older version with a newer view.
+        var (version, view) = await ViewAsync(path, store, caller, ct);
+        return TypedResults.Ok(new FlagWrittenView(path.Value, version, view));
     }
 
-    private static async Task<FlagView> ViewAsync(VaultPath path, INoteStore store, RequestCaller caller, CancellationToken ct)
+    private static async Task<(string Version, FlagView View)> ViewAsync(
+        VaultPath path, INoteStore store, RequestCaller caller, CancellationToken ct)
     {
-        var (entry, _, _) = await CalendarApi.ReadEntryAsync(path, store, ct);
-        var note = await store.GetAsync(path, ct) ?? throw await NoteApi.MissingAsync(store, path, ct);
+        var (note, entry, _, _) = await CalendarApi.ReadEntryAsync(path, store, ct);
         var flag = Flags.Of(note.Content);
-        return new FlagView(
+        return (note.Version, new FlagView(
             flag?.Name, flag is { InText: true } ? "#" + flag.Written : null,
             entry is { Kind: not EntryKind.Card, Task: TaskMark.Open },
             // Exactly the service's own check, so the menu is offered only where the write would pass.
-            ((ICaller)caller).Refuse(Tool, path) is null);
+            ((ICaller)caller).Refuse(Tool, path) is null));
     }
 }
