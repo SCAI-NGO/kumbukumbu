@@ -264,8 +264,9 @@ test("flags #8: Bob sees the flag but can't set one @flags @phone", async ({ bob
   })() : bobPage.getByRole("complementary", { name: "File tree" });
   const row = tree.locator('[aria-current="page"]');
   await expect(row).toBeVisible();
-  await row.locator("..").getByRole("button", { name: "Actions for Certificate" }).click();
-  await bobPage.screenshot({ path: "/tmp/claude-0/dbg8.png" });
+  const rowActions = row.locator("..").getByRole("button", { name: "Actions for Certificate" });
+  await rowActions.click();
+  console.log(await rowActions.getAttribute("aria-expanded"), await bobPage.locator("[role=menu]").count());
   const rowMenu = bobPage.getByRole("menu", { name: "Actions for Certificate" });
   await expect(rowMenu.getByRole("menuitem").first()).toBeVisible();
   await expect(rowMenu.getByRole("menuitem", { name: "Flag" })).toHaveCount(0);
