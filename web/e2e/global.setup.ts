@@ -7,13 +7,17 @@ import { randomBytes, randomInt } from "node:crypto";
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Api, seed } from "./support/api";
+import { nowTime } from "./support/time";
 import { authDir, fixturesDir, stackDir, storageState, usernames, writeSecrets, type Secrets, type User } from "./support/env";
 
 const password = () => randomBytes(18).toString("base64url");
 
 /** Follows a /join link: chooses the username and password, then passes the recovery key screen without keeping the key. */
 async function joinWith(page: Page, link: string, user: User, secrets: Secrets) {
-  await page.goto(link);
+  // The link's code must not reach an error's call log.
+  await page.goto(link).catch(() => {
+    throw new Error("the join link did not open");
+  });
   await page.getByLabel("Username").fill(usernames[user]);
   await page.getByLabel("Password", { exact: true }).fill(secrets.passwords[user]);
   await page.getByRole("button", { name: "Create account" }).click();
@@ -22,7 +26,7 @@ async function joinWith(page: Page, link: string, user: User, secrets: Secrets) 
   await page.getByRole("button", { name: "Copy" }).click();
   await page.getByLabel(/I have stored my recovery key/).check();
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect.poll(() => new URL(page.url()).pathname, { message: "the join ends on the vault list" }).toBe("/");
 }
 
 // browser.newContext() doesn't take the config's `use`: the zone matters, as the app presets the calendar's zone
@@ -63,6 +67,9 @@ function fixtureFiles(vault: string) {
 
 setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, baseURL }) => {
   setup.setTimeout(180_000);
+  // Tests compute "today" in Vienna; a run across midnight would compare two different days.
+  const [hour, minute] = nowTime().split(":").map(Number);
+  expect(hour * 60 + minute < 23 * 60 + 30, "not within half an hour of midnight in Vienna: start the run after 00:00").toBe(true);
   rmSync(authDir, { recursive: true, force: true });
   mkdirSync(authDir, { recursive: true });
 
@@ -113,7 +120,9 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   });
   const bob = await newPage(browser, baseURL!);
   await joinWith(bob.page, invitation.link, "bob", secrets);
-  await bob.page.goto(share.link);
+  await bob.page.goto(share.link).catch(() => {
+    throw new Error("the share link did not open");
+  });
   await bob.page.getByRole("button", { name: "Accept" }).click();
   await expect(bob.page.getByRole("heading", { name: "Work is shared with you" })).toBeVisible();
   await zonePreset(bob.page);

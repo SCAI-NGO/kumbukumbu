@@ -3,11 +3,21 @@ import { expect, request, type APIRequestContext, type APIResponse } from "@play
 import { readFileSync } from "node:fs";
 import { baseURL, secrets, storageState, type User } from "./env";
 import { addDays, today } from "./time";
+import { reservePassword } from "./session";
 
 /** `/Work/Pump/Plan.md` → `Work/Pump/Plan.md` with each segment encoded, as the web app's client sends it. */
 export const encodePath = (path: string) => path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
 const vaultOf = (path: string) => path.replace(/^\//, "").split("/")[0];
 const inVault = (path: string) => path.replace(/^\//, "").split("/").slice(1).join("/");
+
+/** Runs a request; one that doesn't complete fails with `what` only, never with its call log (headers, cookies, keys). */
+export async function guarded<T>(request: () => Promise<T>, what: string): Promise<T> {
+  try {
+    return await request();
+  } catch {
+    throw new Error(`${what}: the request didn't complete`);
+  }
+}
 
 async function ok(response: APIResponse, what: string) {
   if (!response.ok()) throw new Error(`${what}: ${response.status()} ${await response.text()}`);
@@ -42,8 +52,16 @@ export class Api {
     await this.context.dispose();
   }
 
+  /**
+   * A request through this context. A request that doesn't complete (a timeout, a reset) would print its call log,
+   * headers and all: the session cookie. It fails with the method and path only.
+   */
+  async send(method: string, url: string, options: { data?: unknown; headers?: Record<string, string> } = {}): Promise<APIResponse> {
+    return guarded(() => this.context.fetch(url, { method, ...options }), `${method} ${url.split("?")[0]}`);
+  }
+
   async json<T>(method: "GET" | "POST" | "PUT" | "DELETE", url: string, data?: unknown): Promise<T> {
-    const response = await ok(await this.context.fetch(url, { method, data }), `${method} ${url}`);
+    const response = await ok(await this.send(method, url, { data }), `${method} ${url}`);
     const text = await response.text();
     return (text ? JSON.parse(text) : undefined) as T;
   }
@@ -54,14 +72,14 @@ export class Api {
 
   /** Writes a note, creating it, or replacing it at its current version. */
   async putNote(path: string, content: string): Promise<Note> {
-    const current = await this.context.get(`/api/notes/${encodePath(path)}`);
+    const current = await this.send("GET", `/api/notes/${encodePath(path)}`);
     const version = current.ok() ? ((await current.json()) as Note).version : undefined;
     return this.json("PUT", `/api/notes/${encodePath(path)}`, { content, ...(version ? { version } : {}) });
   }
 
   /** Uploads an image's or PDF's bytes, as the web app's upload does (PUT /api/files). */
   async putFile(path: string, bytes: Buffer) {
-    const response = await this.context.put(`/api/files/${encodePath(path)}`, {
+    const response = await this.send("PUT", `/api/files/${encodePath(path)}`, {
       data: bytes,
       headers: { "Content-Type": "application/octet-stream" },
     });
@@ -69,7 +87,7 @@ export class Api {
   }
 
   async deleteNote(path: string) {
-    await ok(await this.context.delete(`/api/notes/${encodePath(path)}`), `DELETE ${path}`);
+    await ok(await this.send("DELETE", `/api/notes/${encodePath(path)}`), `DELETE ${path}`);
   }
 
   async history(path: string): Promise<unknown[]> {
@@ -85,6 +103,7 @@ export class Api {
   /** Confirms the password, opening the window guarded actions need. */
   async confirmPassword() {
     if (this.user === "anonymous") throw new Error("No password for anonymous.");
+    await reservePassword(this.user);
     await this.json("POST", "/api/session/confirm", { password: secrets().passwords[this.user] });
   }
 
@@ -127,10 +146,10 @@ export class Mcp {
     // May publish is a right of its own, by vault (`publish add` needs it).
     const body = { name, vaults, expiresInDays: 30, ...(publish.length ? { publish } : {}) };
     // Confirming the password counts against a rate limit: only when the session's password window has closed.
-    let response = await api.context.post("/api/keys", { data: body });
+    let response = await api.send("POST", "/api/keys", { data: body });
     if (response.status() === 401) {
       await api.confirmPassword();
-      response = await api.context.post("/api/keys", { data: body });
+      response = await api.send("POST", "/api/keys", { data: body });
     }
     await ok(response, "POST /api/keys");
     const created = (await response.json()) as { key: string; apiKey: { id: string } };
@@ -138,10 +157,15 @@ export class Mcp {
   }
 
   async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
-    const response = await this.context.post("/mcp", {
-      headers: { Authorization: `Bearer ${this.key}`, Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
-      data: { jsonrpc: "2.0", id: ++this.id, method: "tools/call", params: { name: tool, arguments: args } },
-    });
+    // Guarded: the call log of a request that doesn't complete would show the key.
+    const response = await guarded(
+      () =>
+        this.context.post("/mcp", {
+          headers: { Authorization: `Bearer ${this.key}`, Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
+          data: { jsonrpc: "2.0", id: ++this.id, method: "tools/call", params: { name: tool, arguments: args } },
+        }),
+      `MCP ${tool}`,
+    );
     expect(response.status(), `MCP ${tool}`).toBe(200);
     const body = await response.text();
     // Either a JSON answer or one server-sent event carrying it.

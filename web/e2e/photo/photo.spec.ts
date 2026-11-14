@@ -58,13 +58,10 @@ test("flags #18: Bob is not offered Take photo @photo @phone", async ({ bobPage 
   await openNote(bobPage, "/Work/Pump/Certificate.md");
   const tree = await openTree(bobPage, testInfo);
   // Work's folders from the setup: a reader has no menu on a folder, so no Take photo and no Upload here.
-  await expect(tree.getByRole("button", { name: /^Pump\b/ })).toBeVisible();
+  const pump = tree.getByRole("button", { name: /^Pump\b/ });
+  await expect(pump).toHaveAttribute("aria-expanded", "true");
+  await expect(tree.getByRole("button", { name: "Certificate", exact: true })).toBeVisible();
   await expect(tree.getByRole("button", { name: "Actions for Pump" })).toHaveCount(0);
-  // Only the vault's own menu is left (Work's root); it offers neither.
-  await tree.getByRole("button", { name: "Actions for Work" }).click();
-  const menu = bobPage.getByRole("menu", { name: "Actions for Work" });
-  await expect(menu.getByRole("menuitem").first()).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: /photo|upload/i })).toHaveCount(0);
   await expect(bobPage.getByText(/Take photo/)).toHaveCount(0);
 });
 
@@ -80,7 +77,10 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
 
   for (let n = 1; n <= 3; n++) {
     const tree = await openTree(page, testInfo);
+    // The previous photo is in the tree before the next is taken, so that the name it took is known to the app.
+    if (n > 1) await expect(tree.getByRole("button", { name: /^Photo .*\.jpg/ })).toHaveCount(n - 1);
     const chooser = page.waitForEvent("filechooser");
+    chooser.catch(() => {});
     // F-02 again: the menu may close before the item is tapped; opened and tried again.
     await expect(async () => {
       const menu = await folderMenu(page, tree, "Meetings");

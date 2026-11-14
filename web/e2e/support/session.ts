@@ -51,6 +51,15 @@ async function reserve(ledgerName: string, limit = 5) {
   }
 }
 
+/** Before each password check (a confirmation, a dialog asking for it): 5 a minute per username, apart from sign-ins. */
+export const reservePassword = (user: User) => reserve(`password-${user}`);
+
+/**
+ * Before each read of a published note by a reader (opening the reader page, making or fetching a link for AIs):
+ * the server allows 60 a minute per address, and every test reads from localhost.
+ */
+export const reserveReaderRead = () => reserve("reader", 55);
+
 /** Signs in through the sign-in page, as a person does. */
 export async function signIn(page: Page, user: User) {
   await reserve(`sign-in-${user}`);
