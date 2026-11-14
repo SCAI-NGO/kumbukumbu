@@ -63,7 +63,8 @@ export async function signIn(page: Page, user: User) {
 
 /** A browser context with a session of its own: for discreet steps, which belong to a session. */
 export async function newSession(browser: Browser, user: User, options: BrowserContextOptions): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext(options);
+  // Never with a saved session: signing in over Alice's shared one would end it for every other test.
+  const context = await browser.newContext({ ...options, storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
   await signIn(page, user);
   return { context, page };

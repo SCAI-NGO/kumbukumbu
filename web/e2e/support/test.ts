@@ -85,7 +85,8 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
     await api.dispose();
   },
   projectContextOptions: async ({ contextOptions, viewport, isMobile, hasTouch, colorScheme, locale, timezoneId, baseURL }, use) => {
-    await use({ ...contextOptions, viewport, isMobile, hasTouch, colorScheme, locale, timezoneId, baseURL });
+    // No session: the project's default is Alice's saved one, and signing in over it would end it for every test.
+    await use({ ...contextOptions, viewport, isMobile, hasTouch, colorScheme, locale, timezoneId, baseURL, storageState: { cookies: [], origins: [] } });
   },
   bobPage: async ({ browser, projectContextOptions }, use) => {
     const context = await browser.newContext({ ...projectContextOptions, storageState: storageState("bob") });
@@ -130,7 +131,7 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
   mcp: [
     async ({}, use, workerInfo) => {
       const api = await Api.as("alice");
-      const mcp = await Mcp.create(api, `e2e worker ${workerInfo.workerIndex}`, { Work: "write" });
+      const mcp = await Mcp.create(api, `e2e worker ${workerInfo.workerIndex} ${randomBytes(3).toString("hex")}`, { Work: "write" });
       await use(mcp);
       await mcp.dispose();
       await api.dispose();

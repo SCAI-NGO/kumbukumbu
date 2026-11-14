@@ -11,6 +11,6 @@ cd "$STACK_DIR/../.."
 pnpm exec playwright test --project=setup --project=desktop --project=phone --pass-with-no-tests "$@"
 parallel=$?
 [ -s e2e/.auth/secrets.json ] || exit "$parallel"
-pnpm exec playwright test --no-deps --project=serial --project=serial-phone --pass-with-no-tests "$@"
+pnpm exec playwright test --no-deps --workers=1 --project=serial --project=serial-phone --pass-with-no-tests "$@"
 serial=$?
 exit $(( parallel > serial ? parallel : serial ))

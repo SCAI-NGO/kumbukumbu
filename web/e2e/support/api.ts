@@ -119,12 +119,14 @@ export class Mcp {
   constructor(
     private readonly context: APIRequestContext,
     private readonly key: string,
+    private readonly owner?: { api: Api; id: string },
   ) {}
 
+  /** A key of the API's user, revoked again by `dispose`. */
   static async create(api: Api, name: string, vaults: Record<string, "read" | "write" | "maintain">) {
     await api.confirmPassword();
-    const created = await api.json<{ key: string }>("POST", "/api/keys", { name, vaults, expiresInDays: 30 });
-    return new Mcp(await request.newContext({ baseURL }), created.key);
+    const created = await api.json<{ key: string; apiKey: { id: string } }>("POST", "/api/keys", { name, vaults, expiresInDays: 30 });
+    return new Mcp(await request.newContext({ baseURL }), created.key, { api, id: created.apiKey.id });
   }
 
   async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
@@ -147,5 +149,6 @@ export class Mcp {
 
   async dispose() {
     await this.context.dispose();
+    if (this.owner) await this.owner.api.json("DELETE", `/api/keys/${encodeURIComponent(this.owner.id)}`);
   }
 }
