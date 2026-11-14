@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { FlagOff, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { create } from "zustand";
 import { errorText } from "../api/error-text";
 import { vaultOf } from "../api/paths";
 import { isStructural } from "../api/notes";
@@ -21,16 +22,28 @@ export const flaggable = (path: string) => fileKindOf(path) === "note" && path.t
 type Written = { path: string; previous: FlagName | null; flag: FlagName | null; closed: boolean; n: number };
 
 /**
+ * The one message after a write, wherever the menu was offered: a newer write replaces it, so its Undo always takes back
+ * the latest. `owner` is the place that wrote it and shows it; `asking` the place whose tick question is open, which
+ * the message, fixed at the bottom as the question is on a phone, would cover.
+ */
+const useFlagMessage = create<{ written: (Written & { owner: string }) | null; asking: string | null }>()(() => ({ written: null, asking: null }));
+
+let writes = 0;
+const dismiss = (n: number) => useFlagMessage.setState((s) => (s.written?.n === n ? { written: null } : s));
+
+/**
  * The flag menu with what follows it, for whoever offers it (the note's header, the note's ⋯, the tree's ⋯): `open`
  * shows the eight flags and No flag for a note; ✓ on an open to-do asks whether the calendar's to-do is done too; after
  * a write a short message offers Undo. `element` holds all three and stays where it is rendered, so the message
- * outlives the menu. `onWritten` hears of each flag written from the menu (not of Undo).
+ * outlives the menu; there is one message for all the places, the newest. `onWritten` hears of each flag written from
+ * the menu (not of Undo).
  */
 export function useFlagging(onWritten?: (flag: FlagName | null) => void) {
   const [path, setPath] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [written, setWritten] = useState<Written | null>(null);
+  const owner = useId();
+  const written = useFlagMessage((s) => (s.written?.owner === owner && s.asking === null ? s.written : null));
   const flag = useFlag(path);
   const set = useSetFlag();
 
@@ -45,10 +58,18 @@ export function useFlagging(onWritten?: (flag: FlagName | null) => void) {
       useDiscreet.subscribe((s, before) => {
         if (s.gone === before.gone && s.names === before.names) return;
         setPath((p) => (p && goneVault(s, vaultOf(p)) ? null : p));
-        setWritten((w) => (w && goneVault(s, vaultOf(w.path)) ? null : w));
+        useFlagMessage.setState((m) => (m.written && goneVault(s, vaultOf(m.written.path)) ? { written: null } : m));
       }),
     [],
   );
+  // Its place gone (the note's header, say), the message goes too.
+  useEffect(() => () => useFlagMessage.setState((m) => (m.written?.owner === owner ? { written: null } : m)), [owner]);
+  const questioned = path !== null && asking;
+  useEffect(() => {
+    if (!questioned) return;
+    useFlagMessage.setState({ asking: owner });
+    return () => useFlagMessage.setState((m) => (m.asking === owner ? { asking: null } : m));
+  }, [questioned, owner]);
   const view = flag.data;
   const previous = view && isFlag(view.flag) ? view.flag : null;
   // What Undo puts back is the flag as read now: while it is read again (on opening), the cached one may be old.
@@ -60,7 +81,9 @@ export function useFlagging(onWritten?: (flag: FlagName | null) => void) {
       onSuccess: () => {
         close();
         onWritten?.(request.flag);
-        setWritten((w) => ({ path: request.path, previous, flag: request.flag, closed: request.calendar === "close", n: (w?.n ?? 0) + 1 }));
+        useFlagMessage.setState({
+          written: { owner, path: request.path, previous, flag: request.flag, closed: request.calendar === "close", n: ++writes },
+        });
       },
       onError: (err) => setProblem(errorText(err)),
     });
@@ -107,7 +130,7 @@ export function useFlagging(onWritten?: (flag: FlagName | null) => void) {
           }}
         />
       )}
-      {written && <FlagToast key={written.n} written={written} onDone={() => setWritten(null)} />}
+      {written && <FlagToast key={written.n} written={written} onDone={() => dismiss(written.n)} />}
     </>
   );
   return {

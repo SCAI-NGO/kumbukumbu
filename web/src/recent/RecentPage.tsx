@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, X } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { writerText } from "../api/activity";
 import { errorText } from "../api/error-text";
@@ -25,11 +26,13 @@ const TYPING_MS = 250;
  * never in the address or the device's storage: a discreet vault's name must reach neither.
  */
 export default function RecentPage() {
+  const queryClient = useQueryClient();
   const [typed, setTyped] = useState("");
   const [words, setWords] = useState("");
   const [flag, setFlag] = useState<FlagFilter | null>(null);
   const [skip, setSkip] = useState<string[]>([]);
   const [limit, setLimit] = useState(PAGE);
+  const field = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (typed === words) return;
     const timer = setTimeout(() => {
@@ -39,7 +42,8 @@ export default function RecentPage() {
     return () => clearTimeout(timer);
   }, [typed, words]);
   // Hiding or showing the discreet vaults starts the filters again: the words or a vault switched off may name one hidden
-  // now, and the page stays mounted.
+  // now, and the page stays mounted. What was answered before goes too: the rows kept for the filters as they were
+  // before would be shown again, for as long as the page asks.
   useEffect(
     () =>
       useDiscreet.subscribe((s, previous) => {
@@ -49,8 +53,9 @@ export default function RecentPage() {
         setFlag(null);
         setSkip([]);
         setLimit(PAGE);
+        void queryClient.resetQueries({ queryKey: ["recent"] });
       }),
-    [],
+    [queryClient],
   );
   const recent = useRecent({ words, flag, skip, limit });
   const view = recent.data;
@@ -76,19 +81,36 @@ export default function RecentPage() {
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
         <div className="mx-auto flex max-w-2xl flex-col gap-3">
           <div role="search" aria-label="Find in recent changes" className="flex flex-col gap-1">
-            <input
-              type="search"
-              aria-label="Find by name"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              placeholder="Find by name"
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              enterKeyHint="search"
-              className="h-11 min-w-0 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent"
-            />
+            <div className="flex items-center gap-1">
+              <input
+                ref={field}
+                type="search"
+                aria-label="Find by name"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                placeholder="Find by name"
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="search"
+                className="h-12 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden"
+              />
+              {/* The browser's own ✕ is too small a target: this one instead, while there is something to clear. */}
+              {typed !== "" && (
+                <button
+                  type="button"
+                  aria-label="Clear"
+                  onClick={() => {
+                    setTyped("");
+                    field.current?.focus();
+                  }}
+                  className="flex size-12 flex-none items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <X size={20} aria-hidden />
+                </button>
+              )}
+            </div>
             {view && view.vaults.length > 0 && (
               <div role="group" aria-label="Vaults" className="flex flex-wrap gap-x-1">
                 {view.vaults.map((vault) => (

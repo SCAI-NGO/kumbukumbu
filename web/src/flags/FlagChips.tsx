@@ -21,11 +21,12 @@ export function Chip({ pressed, onClick, children }: { pressed: boolean; onClick
 
 /**
  * Any flag and the eight flags (spec §3.1), one at a time: pressed again, a chip lets go. Each says its name: the
- * flags' colours alone don't tell them apart.
+ * flags' colours alone don't tell them apart. One row that scrolls sideways, as nine chips would wrap to three rows on
+ * a phone; named apart from the note's own flag in its header.
  */
 export default function FlagChips({ flag, onFlag }: { flag: FlagFilter | null; onFlag(flag: FlagFilter | null): void }) {
   return (
-    <div role="group" aria-label="Flag" className="flex flex-wrap gap-x-1">
+    <div role="group" aria-label="Find by flag" className="flex min-w-0 flex-nowrap gap-x-1 overflow-x-auto p-0.5 [&>button]:flex-none">
       <Chip pressed={flag === "any"} onClick={() => onFlag(flag === "any" ? null : "any")}>
         Any flag
       </Chip>

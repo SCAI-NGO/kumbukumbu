@@ -142,7 +142,7 @@ describe("Recent changes", () => {
     await waitFor(() => expect(last().get("words")).toBe("work pump"));
     await waitFor(() => expect(rows()).toHaveLength(2));
 
-    const flags = screen.getByRole("group", { name: "Flag" });
+    const flags = screen.getByRole("group", { name: "Find by flag" });
     await userEvent.click(within(flags).getByRole("button", { name: "Red" }));
     expect(within(flags).getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(last().get("flag")).toBe("red"));
@@ -157,6 +157,23 @@ describe("Recent changes", () => {
     await userEvent.clear(screen.getByRole("searchbox", { name: "Find by name" }));
     await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "nothing");
     expect(await screen.findByText("Nothing matches that.")).toBeInTheDocument();
+  });
+
+  it("the field is a 48 px target, its browser ✕ hidden, and Clear empties it", async () => {
+    const { last } = api(() => view([certificate, sketch, garden]));
+    renderApp("/recent");
+    await page();
+    const field = screen.getByRole("searchbox", { name: "Find by name" });
+    expect(field).toHaveClass("h-12", "[&::-webkit-search-cancel-button]:hidden");
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    await userEvent.type(field, "pump");
+    await waitFor(() => expect(last().get("words")).toBe("pump"));
+    const clear = screen.getByRole("button", { name: "Clear" });
+    expect(clear).toHaveClass("size-12");
+    await userEvent.click(clear);
+    expect(field).toHaveValue("");
+    expect(field).toHaveFocus();
+    await waitFor(() => expect(last().get("words")).toBeNull());
   });
 
   it("Show more", async () => {
@@ -226,16 +243,34 @@ describe("Recent changes", () => {
       await waitFor(() => expect(rows()).toHaveLength(3));
       await userEvent.click(chip("Home"));
       await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Home");
-      await userEvent.click(within(screen.getByRole("group", { name: "Flag" })).getByRole("button", { name: "Red" }));
+      await userEvent.click(within(screen.getByRole("group", { name: "Find by flag" })).getByRole("button", { name: "Red" }));
       await waitFor(() => expect(last().get("words")).toBe("Home"));
 
       act(change);
       expect(screen.getByRole("searchbox", { name: "Find by name" })).toHaveValue("");
-      expect(chip("Home")).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect(chip("Home")).toHaveAttribute("aria-pressed", "true"));
       await waitFor(() => expect([last().getAll("skip"), last().get("words"), last().get("flag")]).toEqual([[], null, null]));
       cleanup();
       useDiscreet.getState().reset();
     }
+  });
+
+  it("hiding the discreet vaults shows nothing kept from before, not for a moment, under any filter", async () => {
+    let hidden = false;
+    const diary = item("/Tagebuch/Brief.md");
+    api(() => (hidden ? view([certificate], { vaults: ["Work"] }) : view([diary, certificate], { vaults: ["Tagebuch", "Work"] })), ["Tagebuch", "Work"]);
+    act(() => useDiscreet.setState({ revealed: true, names: new Set(["Tagebuch"]) }));
+    renderApp("/recent");
+    await page();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await userEvent.click(chip("Work"));
+    await waitFor(() => expect(chip("Work")).toHaveAttribute("aria-pressed", "false"));
+    hidden = true;
+    // The filters start again, and the rows the page had without them are not shown again while it asks.
+    act(() => useDiscreet.setState({ revealed: false, names: new Set() }));
+    expect(document.body).not.toHaveTextContent("Tagebuch");
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(document.body).not.toHaveTextContent("Tagebuch");
   });
 
   it("Nothing changed here yet.", async () => {
@@ -253,7 +288,7 @@ describe("Recent changes", () => {
     await waitFor(() => expect(rows()).toHaveLength(3));
     await userEvent.click(chip("Home"));
     await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Work");
-    await userEvent.click(within(screen.getByRole("group", { name: "Flag" })).getByRole("button", { name: "Red" }));
+    await userEvent.click(within(screen.getByRole("group", { name: "Find by flag" })).getByRole("button", { name: "Red" }));
     const { pathname, search, hash, state } = router.state.location;
     expect(pathname + search + hash).toBe("/recent");
     expect(JSON.stringify([state, { ...localStorage }, { ...sessionStorage }])).not.toMatch(/Home|Work|Pump/);

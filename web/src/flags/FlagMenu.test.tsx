@@ -253,6 +253,39 @@ describe("the flag menu", () => {
     expect(screen.queryByRole("status", { name: "Flag changed" })).not.toBeInTheDocument();
   });
 
+  it("one message for every place that offers the menu: the newest replaces the old, and its Undo takes back the latest write", async () => {
+    const fetch = flagged(flagView(null));
+    renderApp(`/notes${CERT}`);
+    await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Red" }));
+    expect(await toastText()).toBe("Flagged Red · Undo");
+    // Within the message's time, from the header's flag this time.
+    await userEvent.click(within(await header()).getByRole("button", { name: "Red flag" }));
+    const sheet = await flagSheet();
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "Blue" })).toBeEnabled());
+    await userEvent.click(within(sheet).getByRole("button", { name: "Blue" }));
+    await waitFor(() => expect(screen.getAllByRole("status", { name: "Flag changed" })).toHaveLength(1));
+    const toast = screen.getByRole("status", { name: "Flag changed" });
+    expect(toast).toHaveTextContent("Flagged Blue · Undo");
+    await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(async () => expect((await posts(fetch)).at(-1)).toEqual({ path: CERT, flag: "red" }));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Flag changed" })).not.toBeInTheDocument());
+  });
+
+  it("the message keeps out of the way while Also mark it done in the calendar? is asked", async () => {
+    flagged(flagView(null, { openTask: true }));
+    renderApp(`/notes${CERT}`);
+    await userEvent.click(within(await openFromMenu()).getByRole("button", { name: "Red" }));
+    expect(await toastText()).toBe("Flagged Red · Undo");
+    await userEvent.click(within(await header()).getByRole("button", { name: "Red flag" }));
+    const sheet = await flagSheet();
+    await waitFor(() => expect(within(sheet).getByRole("button", { name: "Done" })).toBeEnabled());
+    await userEvent.click(within(sheet).getByRole("button", { name: "Done" }));
+    const question = await screen.findByRole("alertdialog", { name: "Also mark it done in the calendar?" });
+    expect(screen.queryByRole("status", { name: "Flag changed" })).not.toBeInTheDocument();
+    await userEvent.click(within(question).getByRole("button", { name: "Mark done" }));
+    expect(await toastText()).toBe("Ticked and marked done · Undo");
+  });
+
   it("a refusal is said in the menu, which stays open", async () => {
     flagged(flagView(null), "owner", () => json(400, { error: "I can't change this note's tags; edit them in the note" }));
     renderApp(`/notes${CERT}`);

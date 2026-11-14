@@ -134,10 +134,25 @@ describe("finding in the tree", () => {
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
   });
 
+  it("the chips are one row that scrolls sideways, named apart from the note's flag", async () => {
+    await openDrawer();
+    await find("");
+    const flags = within(drawer()).getByRole("group", { name: "Find by flag" });
+    // Each chip as wide as its words, which then stay on one line.
+    expect(flags).toHaveClass("flex-nowrap", "overflow-x-auto", "[&>button]:flex-none");
+    expect(flags).not.toHaveClass("flex-wrap");
+    expect(within(drawer()).queryByRole("group", { name: "Flag" })).not.toBeInTheDocument();
+  });
+
+  it("the field is a 48 px target", async () => {
+    await openDrawer();
+    expect(await find("")).toHaveClass("h-12");
+  });
+
   it("a flag chip, one at a time, with the words or alone", async () => {
     await openDrawer();
     await find("");
-    const flags = within(drawer()).getByRole("group", { name: "Flag" });
+    const flags = within(drawer()).getByRole("group", { name: "Find by flag" });
     expect(within(flags).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Red", "Green", "Blue", "Purple", "Yellow", "White", "Done", "Important"]);
     await userEvent.click(within(flags).getByRole("button", { name: "Any flag" }));
     expect(shown()).toEqual(["Garden", "beds", "later"]);
@@ -193,7 +208,16 @@ describe("Recent changes", () => {
     expect(useEditor.getState().overlay).toBe("none");
   });
 
-  it("stays beside the order while the search is open", async () => {
+  it("says its words beside its icon, a 48 px target", async () => {
+    await openDrawer();
+    const item = within(drawer()).getByRole("link", { name: "Recent changes" });
+    expect(item).toHaveTextContent("Recent changes");
+    expect(item).not.toHaveAttribute("aria-label");
+    expect(item.querySelector("svg")).not.toBeNull();
+    expect(item).toHaveClass("min-h-12");
+  });
+
+  it("stays under the order while the search is open", async () => {
     await openDrawer();
     await find("pump");
     expect(within(drawer()).getByRole("link", { name: "Recent changes" })).toBeInTheDocument();

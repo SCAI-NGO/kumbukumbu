@@ -62,8 +62,9 @@ export default function TreeTools({
   };
   // A page of its own, as the calendar: the drawer around the tree closes.
   const recent = (
-    <Link to="/recent" aria-label="Recent changes" title="Recent changes" onClick={() => useEditor.getState().setOverlay("none")} className={`${target} size-12 flex-none justify-center text-muted`}>
-      <History size={20} aria-hidden />
+    <Link to="/recent" onClick={() => useEditor.getState().setOverlay("none")} className={`${target} gap-2 self-start px-2.5 text-[15px] text-text-body`}>
+      <History size={18} aria-hidden className="flex-none text-muted" />
+      Recent changes
     </Link>
   );
 
@@ -85,11 +86,13 @@ export default function TreeTools({
 
   if (!search) {
     return (
-      <div className="flex flex-none items-center gap-2 px-3 pb-2">
-        <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={() => onSearch({ words: "", flag: null })} className={`${target} size-12 flex-none justify-center text-muted`}>
-          <Search size={20} aria-hidden />
-        </button>
-        {orderSwitch}
+      <div className="flex flex-none flex-col px-3 pb-2">
+        <div className="flex items-center gap-2">
+          <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={() => onSearch({ words: "", flag: null })} className={`${target} size-12 flex-none justify-center text-muted`}>
+            <Search size={20} aria-hidden />
+          </button>
+          {orderSwitch}
+        </div>
         {recent}
       </div>
     );
@@ -109,7 +112,7 @@ export default function TreeTools({
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="search"
-          className="h-11 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden"
+          className="h-12 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden"
         />
         <button type="button" aria-label="Close the search" onClick={close} className={`${target} size-12 flex-none justify-center text-muted`}>
           <X size={20} aria-hidden />
@@ -125,10 +128,8 @@ export default function TreeTools({
         <TextSearch size={18} aria-hidden className="flex-none" />
         Search the contents…
       </button>
-      <div className="flex items-center gap-2">
-        {orderSwitch}
-        {recent}
-      </div>
+      {orderSwitch}
+      {recent}
     </div>
   );
 }
