@@ -5,7 +5,9 @@ import { defineConfig, devices } from "@playwright/test";
 // the Secure session cookie on http://localhost only.
 const baseURL = "http://localhost:8080";
 
-const desktop = { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 }, colorScheme: "light" as const };
+// Alice's saved session by default; the setup makes it (e2e/global.setup.ts).
+const alice = "e2e/.auth/alice.json";
+const desktop = { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 }, colorScheme: "light" as const, storageState: alice };
 const phone = {
   ...devices["Desktop Chrome"],
   viewport: { width: 375, height: 812 },
@@ -13,6 +15,7 @@ const phone = {
   isMobile: true,
   hasTouch: true,
   colorScheme: "dark" as const,
+  storageState: alice,
 };
 
 /**
@@ -39,7 +42,7 @@ export default defineConfig({
   },
   projects: [
     // No screenshots of the setup: its screens show the recovery keys.
-    { name: "setup", testMatch: /global\.setup\.ts/, use: { ...desktop, screenshot: "off" } },
+    { name: "setup", testMatch: /global\.setup\.ts/, use: { ...desktop, storageState: undefined, screenshot: "off" } },
     { name: "desktop", dependencies: ["setup"], grepInvert: /@serial/, use: desktop },
     { name: "phone", dependencies: ["setup"], grep: /@phone/, grepInvert: /@serial/, use: phone },
     { name: "serial", dependencies: ["desktop", "phone"], grep: /@serial/, workers: 1, use: desktop },

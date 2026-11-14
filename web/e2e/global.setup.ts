@@ -25,12 +25,15 @@ async function joinWith(page: Page, link: string, user: User, secrets: Secrets) 
   await expect(page).toHaveURL(/\/$/);
 }
 
-async function newPage(browser: Browser) {
-  const context = await browser.newContext();
+// browser.newContext() doesn't take the config's `use`: the zone matters, as the app presets the calendar's zone
+// from the browser's on the first visit.
+async function newPage(browser: Browser, baseURL: string) {
+  const context = await browser.newContext({ baseURL, timezoneId: "Europe/Vienna", locale: "en-GB", viewport: { width: 1280, height: 800 } });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   return { context, page: await context.newPage() };
 }
 
+/** The vaults' own notes (fixtures/Home, fixtures/Work); each tag's fixtures (fixtures/tags/) are seeded by its tests. */
 function fixtureFiles(vault: string) {
   const root = join(fixturesDir, vault);
   const files: { source: string; path: string }[] = [];
@@ -62,7 +65,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   // Alice, the first admin.
   const link = execFileSync(join(stackDir, "bootstrap-admin.sh"), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()!;
   expect(link.startsWith(`${baseURL}/join#`), "bootstrap-admin printed a join link").toBe(true);
-  const alice = await newPage(browser);
+  const alice = await newPage(browser, baseURL!);
   await joinWith(alice.page, link, "alice", secrets);
   await alice.context.storageState({ path: storageState("alice") });
 
@@ -94,7 +97,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
     expiresInDays: 1,
     confirm: false,
   });
-  const bob = await newPage(browser);
+  const bob = await newPage(browser, baseURL!);
   await joinWith(bob.page, invitation.link, "bob", secrets);
   await bob.page.goto(share.link);
   await bob.page.getByRole("button", { name: "Accept" }).click();

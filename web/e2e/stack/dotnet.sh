@@ -18,7 +18,7 @@ case "${1:-}" in
   up)
     "$0" down
     mkdir -p "$WORK/recovery" "$WORK/deletions" "$WORK/models" "$E2E_VAULTS"
-    docker run -d --name "$MONGO" --ulimit nofile=20000:20000 -p 127.0.0.1:27019:27017 mongo:8 --replSet rs0 --bind_ip_all >/dev/null
+    docker run -d --name "$MONGO" --ulimit nofile=20000:20000 -p 127.0.0.1:27019:27017 mongo:7.0 --replSet rs0 --bind_ip_all >/dev/null
     until docker exec "$MONGO" mongosh --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] }) }; quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1; do sleep 1; done
     pnpm -C "$REPO_DIR/web" build >/dev/null
     cp -r "$REPO_DIR/web/dist" "$WORK/wwwroot"

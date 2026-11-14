@@ -2,6 +2,7 @@
 import { expect, request, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { baseURL, secrets, storageState, type User } from "./env";
+import { addDays, today } from "./time";
 
 /** `/Work/Pump/Plan.md` → `Work/Pump/Plan.md` with each segment encoded, as the web app's client sends it. */
 export const encodePath = (path: string) => path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
@@ -91,11 +92,20 @@ export class Api {
   static inVault = inVault;
 }
 
-/** Writes each fixture file below `to`: Markdown as notes, the rest (images, PDFs) as files. */
+/**
+ * Dates relative to today in Vienna, in fixture notes: `{{today}}`, `{{today+30}}`, `{{today-400}}` (days) become
+ * YYYY-MM-DD when the note is written.
+ */
+export const withDates = (text: string) =>
+  text.replace(/\{\{today(?:([+-])(\d+))?\}\}/g, (_, sign: string | undefined, days: string | undefined) =>
+    addDays(today(), sign ? (sign === "-" ? -1 : 1) * Number(days) : 0),
+  );
+
+/** Writes each fixture file below `to`: Markdown as notes (with `withDates`), the rest (images, PDFs) as files. */
 export async function seed(api: Api, files: { source: string; path: string }[]) {
   for (const { source, path } of files) {
     const bytes = readFileSync(source);
-    if (path.endsWith(".md")) await api.putNote(path, bytes.toString("utf8"));
+    if (path.endsWith(".md")) await api.putNote(path, withDates(bytes.toString("utf8")));
     else await api.putFile(path, bytes);
   }
 }
