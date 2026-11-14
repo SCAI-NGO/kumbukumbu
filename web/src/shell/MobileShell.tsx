@@ -408,7 +408,7 @@ export default function MobileShell() {
       {overlay === "upload" && upload && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
-            <UploadSheet folder={upload.folder} dropped={upload.dropped} />
+            <UploadSheet folder={upload.folder} dropped={upload.dropped} start={upload.start} />
           </Suspense>
         </LoadBoundary>
       )}

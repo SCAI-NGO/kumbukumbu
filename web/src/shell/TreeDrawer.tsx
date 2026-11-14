@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarClock, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -25,6 +25,8 @@ import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPi
 import PinDialog from "../discreet/PinDialog";
 import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
+import { isPhone } from "../update/InstallHint";
+import { extOf, photoName } from "../upload/photoName";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import { useMarking } from "./ConfirmMark";
@@ -45,8 +47,7 @@ import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
 import { flaggable } from "../flags/FlagMenu";
-import { isFlag } from "../flags/api";
-import FlagIcon, { flagName } from "../flags/FlagIcon";
+import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -109,6 +110,8 @@ type FolderActions = {
   onNewFolder(parent: string): void;
   onMove(subject: MoveSubject): void;
   onRemove(folder: string): void;
+  /** Take photo: the camera, its photo into `folder`. */
+  onPhoto(folder: string): void;
   removing: boolean;
   /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
   level: Level;
@@ -120,7 +123,7 @@ type FolderActions = {
  * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
  * keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
@@ -130,6 +133,8 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
           { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
           { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+          // Only where the browser opens a camera: on a desktop it would open the file chooser, as Upload here does.
+          ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path) }] : []),
         ]
       : []),
     ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
@@ -273,8 +278,6 @@ function NoteButton({ path, fileKind, flag, current, unpublishable, onOpen }: { 
       aria-current={current ? "page" : undefined}
       onClick={onOpen}
       data-file-kind={fileKind}
-      // Read as "plan, Red flag": the name and the icon after it.
-      aria-label={isFlag(flag) ? `${titleOf(path)}, ${flagName(flag)}` : undefined}
       {...truncated}
       className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
     >
@@ -556,11 +559,27 @@ export default function TreeDrawer(props: {
       }
     : null;
   const marks = ownVault ? publications.data?.unpublishable : undefined;
+  // Take photo (spec §5): the camera's photo goes through the upload sheet at once, named after the moment it came back.
+  const camera = useRef<HTMLInputElement>(null);
+  const photoFolder = useRef<string | null>(null);
+  const tookPhoto = (file: File | undefined) => {
+    const folder = photoFolder.current;
+    if (!file || !folder) return;
+    const ext = extOf(file.type);
+    const taken = new Set((tree.data && findFolder(tree.data.root, folder))?.notes.map((n) => n.name));
+    // Another format (HEIC) keeps the camera's name, and the upload refuses it with its own sentence.
+    const name = ext ? photoName(new Date(), ext, taken) : file.name;
+    useEditor.getState().openUpload(folder, [{ path: name, file }], true);
+  };
   const folderActions: FolderActions = {
     onNewNote,
     onNewFolder,
     onMove,
     onRemove: (folder) => removeFolder.mutate(folder),
+    onPhoto: (folder) => {
+      photoFolder.current = folder;
+      camera.current?.click();
+    },
     removing: removeFolder.isPending,
     level,
     publishing: publishingActions,
@@ -740,6 +759,18 @@ export default function TreeDrawer(props: {
   // Outside the sidebar's box, which would otherwise hold them: they cover the whole shell, docked or not.
   const dialogs = (
     <>
+      <input
+        ref={camera}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={(e) => {
+          tookPhoto(e.target.files?.[0]);
+          // Cleared, so that the next photo is a change even when the camera gives the same file name again.
+          e.target.value = "";
+        }}
+      />
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
       {askingPin && (
