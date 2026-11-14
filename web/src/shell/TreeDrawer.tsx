@@ -36,6 +36,9 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
+import { filterTree } from "./treeFilter";
+import { orderTree, useTreeOrder } from "./treeOrder";
+import TreeTools, { type TreeSearch } from "./TreeTools";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
 import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
@@ -59,7 +62,7 @@ export type Row =
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
-/** The visible rows, in the server's order (as `ls`: folders first, then notes and attachments, each in text order). */
+/** The visible rows in the order of `folder` (the server's, or `orderTree`'s): as `ls`, a level's folders first, then its notes and attachments. */
 export function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0): Row[] {
   return [
     ...folder.folders.flatMap((f): Row[] => {
@@ -507,6 +510,18 @@ export default function TreeDrawer(props: {
   const removeDate = useRemoveFromCalendar(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
+  // The tree's search and order (spec §3): the rows of what the search finds, in the order chosen. While it finds,
+  // every folder on the way is open; one closed by hand stays closed until the words or the flag change.
+  const [search, setSearch] = useState<TreeSearch | null>(null);
+  const [order, setOrder] = useTreeOrder();
+  const finding = !!search && (search.words.trim() !== "" || search.flag !== null);
+  const found = useMemo(() => (tree.data && finding ? filterTree(tree.data.root, search.words, search.flag) : null), [tree.data, finding, search?.words, search?.flag]);
+  const shownRoot = useMemo(() => tree.data && orderTree(found?.root ?? tree.data.root, order), [tree.data, found, order]);
+  const [shut, setShut] = useState<Record<string, boolean>>({});
+  useEffect(() => setShut({}), [found]);
+  const expanded = found ? Object.fromEntries([...found.open].filter((f) => !shut[f]).map((f) => [f, true])) : expandedFolders;
+  const toggle = (folder: string) => (found ? setShut((s) => ({ ...s, [folder]: !s[folder] })) : toggleFolder(folder));
+  const nothing = !!found && found.root.folders.length + found.root.notes.length === 0;
   const [publishing, setPublishing] = useState<string | null>(null);
   // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
   useEffect(
@@ -662,12 +677,13 @@ export default function TreeDrawer(props: {
         </div>
       )}
       {copied.status}
+      {tree.data && <TreeTools search={search} onSearch={setSearch} order={order} onOrder={setOrder} nothing={nothing} />}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
-        {tree.data && (
+        {shownRoot && (
           <ul>
-            {rows(tree.data.root, expandedFolders).map((row) => (
+            {rows(shownRoot, expanded).map((row) => (
               <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
                 {row.kind === "folder" ? (
                   <>
@@ -677,7 +693,7 @@ export default function TreeDrawer(props: {
                       open={row.open}
                       selected={row.folder.path === selectedFolder}
                       unpublishable={!!marks?.includes(row.folder.path)}
-                      onToggle={() => toggleFolder(row.folder.path)}
+                      onToggle={() => toggle(row.folder.path)}
                     />
                     <FolderMenu folder={row.folder} {...folderActions} />
                   </>
@@ -698,7 +714,7 @@ export default function TreeDrawer(props: {
             ))}
           </ul>
         )}
-        {tree.data && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
+        {tree.data && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
           <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
         )}
         {!!tree.data?.damaged && (
@@ -706,7 +722,7 @@ export default function TreeDrawer(props: {
             {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
           </p>
         )}
-        {tree.data?.archive && activeVault && (
+        {tree.data?.archive && activeVault && !found && (
           <ArchiveEntry files={Number(tree.data.archive.files)} bytes={Number(tree.data.archive.bytes)} onOpen={() => onVaultSheet({ kind: "archive", vault: activeVault })} />
         )}
       </div>
