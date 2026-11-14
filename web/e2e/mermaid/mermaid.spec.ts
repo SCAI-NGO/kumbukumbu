@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Mermaid diagrams (the mermaid report's hand-test checklist 1-6, 11, 13, 14; spec 2026-11-12-mermaid-and-parity-design.md §2).
+import type { BrowserContext, Page } from "@playwright/test";
 import { Api } from "../support/api";
 import { onPhone, shot } from "../support/test";
 import {
@@ -25,6 +26,14 @@ import {
 test.afterEach(async ({ aliceApi, folder }) => {
   await cleanFolder(aliceApi, folder);
 });
+
+/** Opens the reader page at the publish link; wrapped, as a failed navigation's error names the URL and its secret. */
+async function openReader(reader: Page, link: string) {
+  await reader.goto(link).catch(() => {
+    throw new Error("the reader page did not open");
+  });
+  await expect(reader.getByRole("heading", { name: "Plan", level: 1 })).toBeVisible();
+}
 
 /** Plan's Mermaid source, as stored. */
 const planSource = "```mermaid\nflowchart LR\n  Sensor --> Controller --> Pump\n```";
@@ -89,14 +98,14 @@ test("mermaid #4: a scheme switch redraws the diagram @mermaid", async ({ page, 
   // A marker on the page itself: it is gone if the page is ever reloaded.
   await page.evaluate(() => ((window as unknown as { __mark: number }).__mark = 1));
 
-  // Settings, a dark scheme, and back to the note, all within the app.
-  await page.getByRole("complementary", { name: "File tree" }).getByRole("link", { name: "Settings" }).click();
-  await page.getByRole("radiogroup", { name: "Colour scheme" }).getByLabel("Catppuccin Mocha").check();
-  await expect(page.locator("html")).toHaveAttribute("data-scheme", "catppuccin-mocha");
-  await page.goBack();
+  // The system turns dark with the note open: the saved session chose no scheme, so the app follows it (the
+  // light default, Catppuccin Latte, becomes Kumbu's dark one) and the mounted diagram is drawn again.
+  await expect(page.locator("html")).toHaveAttribute("data-scheme", "catppuccin-latte");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-scheme", "kumbu");
 
-  await expectLoaded(image);
   await expect(image).not.toHaveAttribute("src", before!);
+  await expectLoaded(image);
   const svg = await svgOf(image);
   expect(svg, "drawn again with Mermaid's dark theme").not.toMatch(lightFill);
   expect(svg).toContain("Controller");
@@ -134,7 +143,7 @@ test("mermaid #6: images in diagrams aren't loaded @mermaid", async ({ page, ali
   const stored = (await aliceApi.getNote(plan)).content;
   await aliceApi.putNote(plan, `${stored}\n\`\`\`mermaid\nstateDiagram-v2\n  [*] --> S\n  style S fill:url(/x)\n\`\`\`\n`);
   const asked: string[] = [];
-  page.on("request", (r) => {
+  page.context().on("request", (r) => {
     if (new URL(r.url()).pathname === "/x") asked.push(r.url());
   });
   await openNote(page, plan);
@@ -158,7 +167,9 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
   const width = await article(page).evaluate((a) => a.clientWidth);
   expect((await image.boundingBox())!.width, "the diagram fits the column").toBeLessThanOrEqual(width);
   expect(await pageScrollsSideways(page), "no sideways scroll").toBe(false);
+  expect(await svgOf(image), "the phone's dark scheme draws a dark diagram").not.toMatch(lightFill);
   await expect(controllerLine(page)).toBeVisible();
+  await expect(article(page).getByText("^controller")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Embedded: Ruling › Decision" })).toBeVisible();
   await shot(page, testInfo, "mermaid");
 
@@ -166,12 +177,15 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
   await openNote(page, tasks);
   await article(page).getByRole("link", { name: "Plan › ^controller" }).tap();
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Pump/Plan\\.md$`));
+  expect(new URL(page.url()).hash, "no hash in the address").toBe("");
   await expect(controllerLine(page)).toHaveClass(lit);
   await expect(controllerLine(page)).toBeInViewport();
 
   // 9: the mentions button, tall enough and reachable by keyboard; opened, the diary's line.
   const { section, button } = mentions(page);
   await expect(button).toHaveAttribute("aria-expanded", "false");
+  await expect(button).toHaveText("Unlinked mentions");
+  await expect(section.getByRole("listitem")).toHaveCount(0);
   expect((await button.boundingBox())!.height, "the mentions button is at least 48 px high").toBeGreaterThanOrEqual(48);
   await button.focus();
   await expect(button).toBeFocused();
@@ -179,6 +193,8 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
   await expect(button).toHaveAttribute("aria-expanded", "true");
   const row = diaryRow(section, folder);
   await expect(row).toContainText("Talked about the plan with Bob.");
+  await expect(row.locator("mark")).toHaveText(["plan"]);
+  await expect(row).toContainText(`Work / ${folder} / Diary`);
   expect(await pageScrollsSideways(page), "no sideways scroll").toBe(false);
   await row.tap();
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Diary/2026-11-12\\.md$`));
@@ -205,11 +221,12 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
 
 test("mermaid #13: the reader page shows the diagram as code, no block id, no CSP violation @mermaid @serial", async ({ page, browser, aliceApi, seedAs, folder, projectContextOptions }) => {
   const { plan } = await seedExample(seedAs, folder);
+  let context: BrowserContext | undefined;
   try {
     await openNote(page, plan);
     const link = await publish(page);
 
-    const context = await browser.newContext(projectContextOptions);
+    context = await browser.newContext(projectContextOptions);
     const reader = await context.newPage();
     const messages: string[] = [];
     reader.on("console", (m) => messages.push(m.text()));
@@ -219,8 +236,7 @@ test("mermaid #13: the reader page shows the diagram as code, no block id, no CS
       w.__violations = [];
       document.addEventListener("securitypolicyviolation", (e) => w.__violations.push(`${e.violatedDirective} ${e.blockedURI}`));
     });
-    await reader.goto(link);
-    await expect(reader.getByRole("heading", { name: "Plan", level: 1 })).toBeVisible();
+    await openReader(reader, link);
 
     // As code (spec §2.3, the report's deviations): the source in a code block, no picture.
     const code = reader.locator("pre").filter({ hasText: "Sensor --> Controller --> Pump" });
@@ -232,22 +248,23 @@ test("mermaid #13: the reader page shows the diagram as code, no block id, no CS
 
     expect(messages.filter((m) => m.includes("Content Security Policy")), "no CSP violation in the console").toEqual([]);
     expect(await reader.evaluate(() => (window as unknown as { __violations: string[] }).__violations), "no CSP violation").toEqual([]);
-    await context.close();
   } finally {
+    await context?.close();
     await withdraw(aliceApi, plan);
   }
 });
 
 test("mermaid #14: Copy as Markdown and the AI link keep the source and the block id @mermaid @serial", async ({ page, browser, aliceApi, seedAs, folder, projectContextOptions }) => {
   const { plan } = await seedExample(seedAs, folder);
+  let context: BrowserContext | undefined;
+  const anonymous = await Api.anonymous();
   try {
     await openNote(page, plan);
     const link = await publish(page);
 
-    const context = await browser.newContext({ ...projectContextOptions, permissions: ["clipboard-read", "clipboard-write"] });
+    context = await browser.newContext({ ...projectContextOptions, permissions: ["clipboard-read", "clipboard-write"] });
     const reader = await context.newPage();
-    await reader.goto(link);
-    await expect(reader.getByRole("heading", { name: "Plan", level: 1 })).toBeVisible();
+    await openReader(reader, link);
 
     await reader.getByRole("button", { name: "Copy as Markdown" }).click();
     await expect(reader.getByText("Copied", { exact: true })).toBeVisible();
@@ -260,15 +277,17 @@ test("mermaid #14: Copy as Markdown and the AI link keep the source and the bloc
     await expect(field).toHaveValue(/\S/);
     const aiLink = await field.inputValue();
     expect(/^http:\/\/localhost:8080\/s\/t\/[A-Za-z0-9_-]+$/.test(aiLink), "the AI link's shape").toBe(true);
-    const anonymous = await Api.anonymous();
-    const answer = await anonymous.context.get(aiLink);
+    // Wrapped: a failed request's error names the URL, its token with it.
+    const answer = await anonymous.context.get(aiLink).catch(() => {
+      throw new Error("the AI link could not be fetched");
+    });
     expect(answer.status(), "the AI link answers").toBe(200);
     const body = await answer.text();
-    await anonymous.dispose();
     expect(body.includes(planSource), "the AI link holds the Mermaid source as written").toBe(true);
     expect(body.includes("The pump needs a new controller. ^controller"), "the AI link keeps ^controller").toBe(true);
-    await context.close();
   } finally {
+    await context?.close();
+    await anonymous.dispose();
     await withdraw(aliceApi, plan);
   }
 });

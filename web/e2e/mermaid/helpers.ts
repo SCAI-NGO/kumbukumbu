@@ -30,11 +30,7 @@ export const noteUrl = (path: string) => `/notes/${path.replace(/^\//, "").split
 
 /** Opens a note by its address; on the phone the install hint is answered with Not now, as a person would, whenever it shows. */
 export async function openNote(page: Page, path: string) {
-  await keepDiagramBlobs(page);
-  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
-  await page.addLocatorHandler(hint, async () => {
-    await hint.getByRole("button", { name: "Not now" }).click();
-  });
+  await preparePage(page);
   await page.goto(noteUrl(path));
   await expect(page.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
 }
@@ -57,12 +53,17 @@ export async function expectLoaded(image: Locator) {
 const watched = new WeakSet<Page>();
 
 /**
- * Keeps each Blob the page makes an object URL of, by its URL: the app's CSP doesn't let a page fetch a `blob:` URL,
- * so the SVG behind a diagram's image is read from its Blob (`svgOf`). Once per page, before the note is opened.
+ * Once per page, before a note is opened: the install hint's handler, and a record of each Blob the page makes an
+ * object URL of, by its URL (the app's CSP doesn't let a page fetch a `blob:` URL, so the SVG behind a diagram's
+ * image is read from its Blob: `svgOf`).
  */
-async function keepDiagramBlobs(page: Page) {
+async function preparePage(page: Page) {
   if (watched.has(page)) return;
   watched.add(page);
+  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
+  await page.addLocatorHandler(hint, async () => {
+    await hint.getByRole("button", { name: "Not now" }).click();
+  });
   await page.addInitScript(() => {
     const w = window as unknown as { __blobs: Map<string, Blob> };
     w.__blobs = new Map();
@@ -140,3 +141,6 @@ export async function withdraw(api: Api, path: string) {
   const answer = await api.context.delete(`/api/publications/${encodePath(path)}`);
   expect([200, 204, 404], `withdrawing: ${answer.status()}`).toContain(answer.status());
 }
+
+/** Paragraphs enough to push what follows them out of the first screen: a jump has to scroll to it. */
+export const filler = Array.from({ length: 60 }, (_, i) => `Filler paragraph ${i + 1} about nothing in particular.`).join("\n\n");
