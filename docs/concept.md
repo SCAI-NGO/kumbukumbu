@@ -226,6 +226,7 @@ Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidia
 - **v3 (0.3.0):** sharing vaults and collaboration ("think together"; concept in `concepts/collab-concept.md`). It extends the crypto model (asymmetric keys, slots for other users, revocation), gets its own section in `docs/security-architecture.md` and an independent review before it is built.
 - **v3.5 (0.3.5):** a small release, not named on the site: what clients asked for from attachments (`docs/attachments-client-research.md` §6.2): turning a picture (`--rotate`), one frame of a GIF (`--frame`), and where a match lies in a PDF (`rg --regions`), ready for `--crop`.
 - **v4 (0.4.0):** skills, the plugin package for the user's agent above. Under discussion: Kumbu² as a skills repository.
+- **0.5.0:** the calendar, its flagship (decided by Chris, Nov 12, 2026): every note with a time in its frontmatter, or named as a day or week, is an entry; a week and a month view per vault, What's on and a badge over every vault, and `sh calendar` for agents (`docs/superpowers/specs/2026-11-12-calendar-design.md`).
 
 Why the swap (Chris, Oct 28, 2026): sharing is the lower-hanging fruit with the larger effect at this stage, and the sign-in options get more feedback from real use first.
 Why the reshaping (Chris, Nov 2, 2026): with sharing out there is no hurry; the Time Machine and the sign-in options take the time they need, and release together.
