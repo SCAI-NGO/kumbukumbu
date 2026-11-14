@@ -124,7 +124,7 @@ export type CalendarAction =
 export const UNSAVED = "Your typing isn't saved yet; try again in a moment.";
 
 /** A refusal of the app's own, before anything is sent: `errorText` gives its sentence as it gives the server's. */
-class UnsavedError extends HttpError {
+export class UnsavedError extends HttpError {
   constructor() {
     super(409, UNSAVED, "unsaved");
   }

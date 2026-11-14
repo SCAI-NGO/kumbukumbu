@@ -813,7 +813,7 @@ describe("vaults shared with the user", () => {
     await openDrawer();
     await within(drawer()).findByRole("button", { name: "Board" });
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
-    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Add to calendar…"]);
+    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
     expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
     expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);

@@ -41,6 +41,9 @@ import { useNoteEntry } from "../calendar/api";
 import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
+import { flaggable } from "../flags/FlagMenu";
+import { isFlag } from "../flags/api";
+import FlagIcon, { flagName } from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -50,7 +53,7 @@ export const sidebarId = "file-tree";
 
 export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
-  | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
+  | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null; flag?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
 
@@ -63,7 +66,7 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
       const open = !!expanded[f.path];
       return [{ kind: "folder", folder: f, depth, count: count(f), open }, ...(open ? rows(f, expanded, depth + 1) : [])];
     }),
-    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n), version: n.version })),
+    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n), version: n.version, flag: n.flag })),
   ];
 }
 
@@ -216,6 +219,7 @@ function FileMenu({
   onDelete,
   onDate,
   onRemoveDate,
+  onFlag,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -226,6 +230,7 @@ function FileMenu({
   onDelete(subject: DeleteSubject): void;
   onDate?: (path: string) => void;
   onRemoveDate(path: string): void;
+  onFlag?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
@@ -245,6 +250,7 @@ function FileMenu({
       : note
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
+    ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path) }] : []),
     ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
   ];
   return (
@@ -254,7 +260,7 @@ function FileMenu({
   );
 }
 
-function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; current: boolean; unpublishable: boolean; onOpen(): void }) {
+function NoteButton({ path, fileKind, flag, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; flag?: string | null; current: boolean; unpublishable: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
   const Icon = fileKindIcon[fileKind];
   return (
@@ -264,11 +270,14 @@ function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: 
       aria-current={current ? "page" : undefined}
       onClick={onOpen}
       data-file-kind={fileKind}
+      // Read as "plan, Red flag": the name and the icon after it.
+      aria-label={isFlag(flag) ? `${titleOf(path)}, ${flagName(flag)}` : undefined}
       {...truncated}
       className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
+      <FlagIcon flag={flag} size={14} />
       {unpublishable && <UnpublishableMark />}
     </button>
   );
@@ -452,8 +461,10 @@ export default function TreeDrawer(props: {
   onVaultSheet(sheet: VaultSheet): void;
   /** Add to calendar… and Edit date… of a note's menu. */
   onDate?: (path: string) => void;
+  /** A note menu's Flag. */
+  onFlag?: (path: string) => void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate, onFlag } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -675,11 +686,12 @@ export default function TreeDrawer(props: {
                     <NoteButton
                       path={row.path}
                       fileKind={row.fileKind}
+                      flag={row.flag}
                       current={row.path === currentPath}
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onFlag={onFlag} />
                   </>
                 )}
               </li>

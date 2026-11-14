@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { onlineManager } from "@tanstack/react-query";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -717,5 +717,46 @@ describe("the board's own note", () => {
     renderApp(`/notes${elsewhere}`);
     await screen.findByRole("article");
     expect(screen.queryByRole("link", { name: "Open the board" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the note's flag in its header", () => {
+  const flag = (flag: string | null, canWrite = true) => ({ "GET /api/vaults/Work/flag": () => json(200, { flag, inText: null, openTask: false, canWrite }) });
+
+  it("shows the note's flag, which opens the flag menu", async () => {
+    noteApi(flag("red"));
+    renderApp(planUrl);
+    const line = await screen.findByRole("group", { name: "Flag" });
+    const button = within(line).getByRole("button", { name: "Red flag" });
+    expect(within(button).getByRole("img", { hidden: true, name: "Red flag" })).toBeInTheDocument();
+    // A target a thumb hits.
+    expect(button).toHaveClass("min-h-12");
+    await userEvent.click(button);
+    expect(await screen.findByRole("dialog", { name: "Flag" })).toBeInTheDocument();
+  });
+
+  it("shows nothing for a note without a flag", async () => {
+    const fetch = noteApi(flag(null));
+    renderApp(planUrl);
+    await screen.findByRole("article");
+    await waitFor(() => expect(fetch.mock.calls.some(([r]) => new URL((r as Request).url).pathname === "/api/vaults/Work/flag")).toBe(true));
+    expect(screen.queryByRole("group", { name: "Flag" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /flag/i })).not.toBeInTheDocument();
+  });
+
+  it("asks the flag again with each new version of the note", async () => {
+    let version = "v1";
+    let shown: string | null = null;
+    noteApi({
+      ...{ "GET /api/vaults/Work/flag": () => json(200, { flag: shown, inText: null, openTask: false, canWrite: true }) },
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, source, version)),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp(planUrl, queryClient);
+    await screen.findByRole("article");
+    shown = "green";
+    version = "v2";
+    await act(() => queryClient.invalidateQueries({ queryKey: ["note", PLAN] }));
+    expect(await screen.findByRole("button", { name: "Green flag" })).toBeInTheDocument();
   });
 });

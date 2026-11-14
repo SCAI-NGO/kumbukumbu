@@ -34,6 +34,7 @@ import { taskToggle } from "./taskToggle";
 import { createdPath } from "./wikiLinks";
 import { registerScrollTop, takeRestore } from "../update/apply";
 import EntryLine from "../calendar/EntryLine";
+import FlagLine from "../flags/FlagLine";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -349,6 +350,7 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <>
           {/* Keyed, so ✓ in Write mode (which ends it) keeps the same line, and its toast, in Read mode. */}
+          <FlagLine key="flag-line" path={path} version={note.data.version} />
           <EntryLine key="entry-line" path={path} version={note.data.version} />
           <PresenceLine path={path} />
           <LoadBoundary fallback={<EditorLoadFailed />}>
@@ -404,6 +406,7 @@ export default function NoteView({ path }: { path: string }) {
           </Link>
         </nav>
       )}
+      {note.data && <FlagLine key="flag-line" path={path} version={note.data.version} />}
       {note.data && <EntryLine key="entry-line" path={path} version={note.data.version} />}
       {/* Once the vault list says whose vault it is: the owner's bar and a member's differ. */}
       {vault && <PublicationBar path={path} owner={vault.owner == null} />}

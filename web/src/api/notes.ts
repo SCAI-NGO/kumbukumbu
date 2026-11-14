@@ -7,10 +7,16 @@ import { addToFirstColumn } from "./board";
 import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
+import type { FlagName } from "../flags/api";
 import type { components } from "./schema";
 
-export type TreeFolder = components["schemas"]["TreeFolder"];
-export type TreeView = components["schemas"]["TreeView"];
+type Gen = components["schemas"];
+// The tree's flag and folder times, by hand until the generated schema has them.
+/** A note or attachment of the tree; a note carries its flag. */
+export type TreeNote = Gen["TreeNote"] & { flag?: FlagName | null };
+/** A folder of the tree; `writtenAt` is the newest write anywhere below it. */
+export type TreeFolder = Omit<Gen["TreeFolder"], "folders" | "notes"> & { writtenAt?: string | null; folders: TreeFolder[]; notes: TreeNote[] };
+export type TreeView = Omit<Gen["TreeView"], "root"> & { root: TreeFolder };
 export type NoteView = components["schemas"]["NoteView"];
 export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
 
@@ -153,7 +159,7 @@ const whileBusy = (query: { state: { error: unknown } }) => (isVaultBusy(query.s
 export const useTree = (vault: string | null) =>
   useQuery({
     queryKey: ["tree", vault],
-    queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
+    queryFn: (): Promise<TreeView> => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
     enabled: vault !== null,
     refetchInterval: whileBusy,
   });
@@ -310,6 +316,8 @@ export function useSaveNote(path: string) {
       if ("saved" in result) {
         void queryClient.invalidateQueries({ queryKey: ["changes"] });
         void queryClient.invalidateQueries({ queryKey: ["history", path] });
+        // The tree carries each note's last change and its flag, which any edit may change.
+        void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(path)] });
       }
     },
   });
