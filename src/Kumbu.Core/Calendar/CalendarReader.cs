@@ -30,6 +30,7 @@ public static class CalendarReader
         var problems = new List<CalendarProblem>();
         foreach (var note in all.OrderBy(n => n.Path.Value, StringComparer.Ordinal))
         {
+            ct.ThrowIfCancellationRequested();
             if (tag is not null && !TagFilter.Carries(note, tag)) continue;
             var (entry, problem) = EntryReader.Read(note, board);
             if (entry is not null) entries.Add(entry);

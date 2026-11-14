@@ -290,6 +290,17 @@ public class CalendarServiceTests
     }
 
     [Fact]
+    public async Task Unset_takes_a_note_whose_properties_are_too_large_to_read_out_of_the_calendar()
+    {
+        var summary = $"summary: {new string('x', 70_000)}\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", $"---\ntitle: x\nwhen: 2026-12-15\n{summary}---\nBody\n"));
+
+        Ok(await Service(store).UnsetAsync("/Work/x.md", Ct));
+
+        Assert.Equal($"---\ntitle: x\n{summary}---\nBody\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
     public async Task Unset_refuses_a_day_note_by_name()
     {
         var store = new InMemoryNoteStore(("/Work/Diary/2026-11-12.md", "---\ntask: open\n---\n"), ("/Work/2026-W46.md", "x\n"));

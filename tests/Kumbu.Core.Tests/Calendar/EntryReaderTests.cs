@@ -264,6 +264,22 @@ public class EntryReaderTests
     }
 
     [Fact]
+    public void A_date_is_read_from_frontmatter_up_to_64_KiB()
+    {
+        var entry = EntryOf("/Work/Pump.md", $"---\nwhen: 2026-11-20\nsummary: {new string('x', 60_000)}\n---\nBody\n");
+        Assert.Equal("2026-11-20", entry.When.Write());
+
+        var (none, problem) = Read("/Work/Pump.md", $"---\nwhen: 2026-11-20\nsummary: {new string('x', 70_000)}\n---\nBody\n");
+        Assert.Null(none);
+        Assert.Equal("the frontmatter does not parse: The frontmatter is too large or nested too deeply.", problem?.What);
+        Assert.Equal("I can't read this note's properties; fix them in the note", problem?.Plain);
+    }
+
+    [Fact]
+    public void Frontmatter_over_64_KiB_without_a_calendar_key_is_no_entry_and_no_problem() =>
+        Assert.Equal((null, null), Read("/Work/Notes.md", $"---\nsummary: {new string('x', 70_000)}\n---\nBody\n"));
+
+    [Fact]
     public void Archived_notes_are_left_out()
     {
         Assert.Equal((null, null), Read("/Work/_archive/x.md", "---\nwhen: 2026-11-20\n---\n"));
