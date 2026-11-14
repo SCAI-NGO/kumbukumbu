@@ -27,6 +27,19 @@ async function joinWith(page: Page, link: string, user: User, secrets: Secrets) 
 
 // browser.newContext() doesn't take the config's `use`: the zone matters, as the app presets the calendar's zone
 // from the browser's on the first visit.
+/**
+ * The app presets the calendar's zone from the browser's on a signed-in user's first visit (useZonePreset); waits
+ * until it has, so no test depends on whether that user's first page was already the shell.
+ */
+async function zonePreset(page: Page) {
+  await page.goto("/");
+  await expect
+    .poll(async () => ((await (await page.request.get("/api/account/calendar")).json()) as { zone: string | null }).zone, {
+      message: "the calendar's zone is preset from the browser",
+    })
+    .toBe("Europe/Vienna");
+}
+
 async function newPage(browser: Browser, baseURL: string) {
   const context = await browser.newContext({ baseURL, timezoneId: "Europe/Vienna", locale: "en-GB", viewport: { width: 1280, height: 800 } });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -67,6 +80,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   expect(link.startsWith(`${baseURL}/join#`), "bootstrap-admin printed a join link").toBe(true);
   const alice = await newPage(browser, baseURL!);
   await joinWith(alice.page, link, "alice", secrets);
+  await zonePreset(alice.page);
   await alice.context.storageState({ path: storageState("alice") });
 
   const api = await Api.from(alice.context.request, "alice");
@@ -102,6 +116,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   await bob.page.goto(share.link);
   await bob.page.getByRole("button", { name: "Accept" }).click();
   await expect(bob.page.getByRole("heading", { name: "Work is shared with you" })).toBeVisible();
+  await zonePreset(bob.page);
   await bob.context.storageState({ path: storageState("bob") });
 
   await alice.context.storageState({ path: storageState("alice") });
