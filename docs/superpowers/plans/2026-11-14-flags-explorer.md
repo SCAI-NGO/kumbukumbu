@@ -22,6 +22,72 @@
 
 ## Task 0: baseline
 
+Setup (`/tmp/run/setup.sh`, then `/tmp/run/env.sh` sourced by every step; the second MongoDB: `docker run -d --name kumbu-test-mongo-2 --ulimit nofile=20000:20000 -p 27018:27017 mongo:7.0 --replSet rs0 --bind_ip_all` and `rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})`, used with `KUMBU_TEST_MONGO=mongodb://127.0.0.1:27018/?replicaSet=rs0&directConnection=true`):
+
+```sh
+# /tmp/run/setup.sh
+set -x
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+if [ ! -x /opt/node26/bin/node ]; then
+  cd /tmp/run
+  V=$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print([r["version"] for r in json.load(sys.stdin) if r["version"].startswith("v26.")][0])')
+  curl -fsSL -o node.tar.xz https://nodejs.org/dist/$V/node-$V-linux-x64.tar.xz
+  mkdir -p /opt/node26 && tar -xJf node.tar.xz -C /opt/node26 --strip-components=1
+fi
+export PATH=/opt/node26/bin:$PATH
+node --version
+npm install -g pnpm@10.32.1
+pnpm --version
+pgrep dockerd || (nohup dockerd > /tmp/run/dockerd.log 2>&1 &)
+sleep 8
+docker info | head -5
+mkdir -p "$HOME/.cache/kumbu"
+[ -f "$HOME/.cache/kumbu/tokenizer.json" ] || curl -fsSL --retry 3 --retry-all-errors -o "$HOME/.cache/kumbu/tokenizer.json" https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0/resolve/95c2741480856aa9666782eb4afe11959938017f/tokenizer.json
+echo "f1cc44ad7faaeec47241864835473fd5403f2da94673f3f764a77ebcb0a803ec  $HOME/.cache/kumbu/tokenizer.json" | sha256sum -c -
+docker rm -fv kumbu-test-mongo 2>/dev/null
+docker run -d --name kumbu-test-mongo --ulimit nofile=20000:20000 -p 27017:27017 mongo:7.0 --replSet rs0 --bind_ip_all
+sleep 8 && docker exec kumbu-test-mongo mongosh --quiet --eval 'rs.initiate()'
+cd /home/user/kumbukumbu && pnpm -C web install --frozen-lockfile
+echo SETUP DONE
+```
+
+```sh
+# /tmp/run/env.sh
+export PATH=/opt/node26/bin:$PATH
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+export TESTCONTAINERS_RYUK_DISABLED=true
+export KUMBU_TOKENIZER="$HOME/.cache/kumbu/tokenizer.json"
+export KUMBU_TEST_MONGO="mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true"
+```
+
+```sh
+# /tmp/run/gate.sh <name>: the brief's gate, line by line, a fresh MongoDB per server group, a summary per line in /tmp/run/<name>/summary
+# usage: gate.sh <name>  — full CI gate, logs to /tmp/run/<name>/
+source /tmp/run/env.sh
+N=$1; D=/tmp/run/$N; mkdir -p $D; cd /home/user/kumbukumbu
+fresh() { docker rm -fv kumbu-test-mongo >/dev/null 2>&1; docker run -d --name kumbu-test-mongo --ulimit nofile=20000:20000 -p 27017:27017 mongo:7.0 --replSet rs0 --bind_ip_all >/dev/null; sleep 6; docker exec kumbu-test-mongo mongosh --quiet --eval 'rs.initiate()' >/dev/null; }
+S=Kumbu.Server.Tests
+date > $D/start
+dotnet restore --locked-mode > $D/restore.log 2>&1; echo "restore $?" >> $D/summary
+dotnet build --configuration Release --no-restore > $D/build.log 2>&1; echo "build $?" >> $D/summary
+dotnet test --project tests/Kumbu.Core.Tests --configuration Release --no-build > $D/core.log 2>&1; echo "core $? $(grep -E 'total:|Test run summary' -A5 $D/core.log | grep -E 'total|failed|skipped|succeeded' | tr '\n' ' ')" >> $D/summary
+run() { local name=$1; shift; fresh; dotnet test --project tests/$S --configuration Release --no-build -- "$@" > $D/$name.log 2>&1; echo "$name $? $(grep -E '^\s*(total|failed|succeeded|skipped):' $D/$name.log | tr -s ' ' | tr '\n' ' ')" >> $D/summary; }
+run api --filter-namespace $S.Api --filter-namespace $S.Mcp --filter-namespace $S.Auth --filter-namespace $S.Net
+run accounts --filter-namespace $S.Accounts
+run sharing --filter-namespace $S.Sharing
+run welcome --filter-namespace $S.Welcome
+run vaults --filter-namespace $S.Vaults --filter-namespace $S.Skills --filter-namespace $S.Search --filter-namespace $S.Metrics
+run rest --filter-not-namespace $S.Api --filter-not-namespace $S.Mcp --filter-not-namespace $S.Auth --filter-not-namespace $S.Net --filter-not-namespace $S.Accounts --filter-not-namespace $S.Sharing --filter-not-namespace $S.Welcome --filter-not-namespace $S.Vaults --filter-not-namespace $S.Skills --filter-not-namespace $S.Search --filter-not-namespace $S.Metrics
+if [ -z "$SKIPWEB" ]; then
+pnpm -C web install --frozen-lockfile > $D/webinstall.log 2>&1
+pnpm -C web test --run > $D/web.log 2>&1; echo "web $? $(grep -E 'Test Files|Tests ' $D/web.log | tr '\n' ' ')" >> $D/summary
+pnpm -C web build > $D/webbuild.log 2>&1; echo "webbuild $? $(grep -E 'built in|error' $D/webbuild.log | head -3 | tr '\n' ' ')" >> $D/summary
+fi
+date > $D/end
+```
+
+Check after Task 6 that the last line runs the new `Kumbu.Server.Tests.Flags` namespace (its total grows by the new tests).
+
 Run the full gate (`/tmp/run/gate.sh gate0`, the brief's commands in order, a fresh `kumbu-test-mongo` before each server group) on `feature/flags-explorer` at `63d7d72` before any change. Record total, failed and skipped per line and every failure; a known flaky failure is rerun alone three times.
 
 Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20 + 780 (6 skipped) + about 1,199 (2 skipped); web about 152 files, 2,604 tests; build green with the chunk-size warning.
@@ -70,8 +136,8 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 
 **Files:**
 - Create: `src/Kumbu.Core/Calendar/CalendarKeys.cs` — `internal static class CalendarKeys` with `Names` (`when`, `until`, `task`, `upcoming`, `tz`, `closed`, `reason`), `Fold(IReadOnlyDictionary<string, object?> values) -> (IReadOnlyDictionary<string, object?> Values, IReadOnlyList<string> Twice)` (calendar keys under their lower-case name; every other key as written; `Twice` lists each calendar key written in two spellings), and `Spelled(IReadOnlyDictionary<string, object?> values, IReadOnlyList<(string Key, string? Yaml)> changes)` (a set uses the spelling in the note, else the canonical one; a removal removes every spelling).
-- Modify: `src/Kumbu.Core/Calendar/EntryReader.cs` (`Read`, line 30: fold the values first; two spellings → problem "`when` and `When` are both there – I need just one" / for agents "when is written twice (when, When); keep one"; `ReadCard` likewise for its calendar keys; `due` and `column` stay exact; `CalendarKeyLine` regex line 300 → `(?<key>(?i:when|until|task)|due)`).
-- Modify: `src/Kumbu.Core/Calendar/CalendarService.cs` (`WriteAsync`, line 382: `Current.Values` folded; `TaskOf`, `Zones.Find(c.Values["tz"])`, `closed` read from folded values; changes passed through `CalendarKeys.Spelled` before `FrontmatterWrites.TryOwnedKeys`).
+- Modify: `src/Kumbu.Core/Calendar/EntryReader.cs` (`Read`, line 30: fold the values first; two spellings → problem "`when` and `When` are both there – I need just one" / for agents "when is written twice (when, When); keep one"; `ReadCard` likewise for its calendar keys; `due` and `column` stay exact; `CalendarKeyLine` regex line 304 → `(?<key>(?i:when|until|task)|due)`).
+- Modify: `src/Kumbu.Core/Calendar/CalendarService.cs` (`WriteAsync`, line 408: `Current.Values` folded; `TaskOf`, `Zones.Find(c.Values["tz"])`, `closed` read from folded values; changes passed through `CalendarKeys.Spelled` before `FrontmatterWrites.TryOwnedKeys`).
 - Test: `tests/Kumbu.Core.Tests/Calendar/EntryReaderTests.cs`, `tests/Kumbu.Core.Tests/Calendar/CalendarServiceTests.cs`
 
 **Steps:**
@@ -143,8 +209,8 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 **Files:**
 - Create: `src/Kumbu.Server/Api/FlagApi.cs` — `GET /api/vaults/{vault}/flag?path=` (Background) → `FlagView(string? Flag, string? InText, bool OpenTask, bool CanWrite)` (`InText`: the tag as written, `#flag/red`, when the flag is the text's; `OpenTask`: the note is an open task and no card, from `EntryReader` with the board's definition as `CalendarApi.ReadEntryAsync`); `POST /api/vaults/{vault}/flag` with `SetFlagRequest(string Path, string? Flag, string? Calendar = null)` (`calendar`: `close` or `reopen`) → `FlagWrittenView(string Path, string Version, FlagView Note)`. The vault checked first (`NoteApi.RequireVaultAsync`, as `CalendarApi.NoteInAsync`: a hidden discreet vault is the 404 of an unknown one), the path in that vault and a note (400), the role in the service (403), `BoardApi.Check(result, "flag")` (409 on a conflict). Errors: GET `400, 401, 404, 503`; POST `400, 401, 403, 404, 409, 503, 507`.
 - Modify: `src/Kumbu.Server/Program.cs` (`app.MapFlagApi()` beside `MapCalendarApi`).
-- Modify: `src/Kumbu.Server/Api/NoteApi.cs`: `TreeNote` (line 126) gains `[JsonIgnore(WhenWritingNull)] string? Flag = null`; notes get `WrittenAt` (their last write, as attachments have it) and `Flag` (`Flags.Of(content)?.Name`); `TreeFolder` (line 119) gains `[JsonIgnore(WhenWritingNull)] DateTime? WrittenAt = null`: the newest write anywhere below it, folder markers included. `TreeAsync` (line 468) reads `StoredNote`s (`ListNotesUnderAsync` then `GetAsync`, in memory in `EncryptedNoteStore`); `TreeOf` keeps its signature for checkpoints (no times there) and gains an overload taking the times (a `Func<VaultPath, DateTime?>`). The checkpoint tree is unchanged. Doc comments updated.
-- Test: `tests/Kumbu.Server.Tests/Flags/FlagApiTests.cs` (new namespace `Kumbu.Server.Tests.Flags`, run by the gate's last line), `tests/Kumbu.Server.Tests/Api/TreeApiTests.cs` (or the class that tests `/tree` today: `grep -rln "/tree\"" tests/Kumbu.Server.Tests`)
+- Modify: `src/Kumbu.Server/Api/NoteApi.cs`: `TreeNote` (line 123) gains `[JsonIgnore(WhenWritingNull)] string? Flag = null`; notes get `WrittenAt` (their last write, as attachments have it) and `Flag` (`Flags.Of(content)?.Name`); `TreeFolder` (line 119) gains `[JsonIgnore(WhenWritingNull)] DateTime? WrittenAt = null`: the newest write anywhere below it, folder markers included. `TreeAsync` (line 468) reads `StoredNote`s (`ListNotesUnderAsync` then `GetAsync`, in memory in `EncryptedNoteStore`); `TreeOf` keeps its signature for checkpoints (no times there) and gains an overload taking the times (a `Func<VaultPath, DateTime?>`). The checkpoint tree is unchanged. Doc comments updated.
+- Test: `tests/Kumbu.Server.Tests/Flags/FlagApiTests.cs` (new namespace `Kumbu.Server.Tests.Flags`, run by the gate's last line), `tests/Kumbu.Server.Tests/Api/NoteApiTests.cs` (where the tree is tested today)
 
 **Steps:**
 1. Red (FlagApiTests, `[Collection("app")]`, FakeTimeProvider 2037-11-14 10:00Z): `Sets_and_reads_a_flag`, `Removing_gives_the_note_back` (byte for byte, through `/api/notes`), `A_read_only_member_sees_the_flag_and_can_not_set_it` (Bob Read on Alice's Work: GET 200 with `canWrite` false, POST 403, note unchanged), `A_hidden_discreet_vault_answers_as_an_unknown_one` (`HiddenWorld`: GET and POST on `Tagebuch` answer as `Nowhere`, `AsNowhereAsync`), `A_conflict_is_409` (a write with a note that keeps changing: a store double, or the text flag case for 400), `Mark_done_closes_the_task` (`calendar: "close"` → `task: closed`, `closed: 2037-11-14`, `/calendar/entry` says closed), `A_path_outside_the_vault_is_400`, `The_flag_in_the_text_is_named`. Tree: `The_tree_carries_each_notes_time_and_flag`, `A_folder_is_as_new_as_its_newest_file_at_any_depth`, `An_empty_folder_counts_by_its_marker`, `The_checkpoint_tree_is_unchanged`. Run `dotnet test --project tests/Kumbu.Server.Tests -- --filter-class "*FlagApiTests"` and the tree class. Expected: 404s / missing JSON properties.
@@ -191,7 +257,7 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 ### Task 9: order by name or by last change
 
 **Files:**
-- Create: `web/src/shell/treeOrder.ts` — `orderTree(root, "name" | "changed")`: "changed" orders folders by `writtenAt` (newest first, without one last) and files by `writtenAt`, folders above files; ties by name. `useTreeOrder()` remembered in `localStorage` (`kumbu.treeOrder`, wrapped in try/catch), for every vault, as the calendar's grid (`web/src/calendar/preferences.ts`).
+- Create: `web/src/shell/treeOrder.ts` — `orderTree(root, "name" | "changed")`: "changed" orders folders by `writtenAt` (newest first, without one last) and files by `writtenAt`, folders above files; ties by name. `useTreeOrder()` remembered in `localStorage` (`kumbu.treeOrder`, wrapped in try/catch), for every vault, as the gallery's order (`web/src/attachments/GalleryPage.tsx:33`, `kumbu.galleryOrder`); the spec's "as the calendar's grid is" doesn't match the code (the grid is kept per user on the server), logged in the report.
 - Modify: `web/src/shell/TreeTools.tsx` (a two-way switch **Name** / **Last changed**, 48 px targets), `web/src/shell/TreeDrawer.tsx` (rows from `orderTree`, after the filter).
 - Test: `web/src/shell/treeOrder.test.ts`, `web/src/shell/TreeTools.test.tsx`
 
@@ -215,6 +281,8 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 **Steps:**
 1. Red: photoName "names by local time", "a name taken gets 2, then 3"; TreeDrawerPhoto "Take photo on a touch device for a writer", "not on a desktop", "not for a read-only member", "the photo lands in that folder through the upload sheet as Photo … .jpg". 2. Implement. 3. Green: `pnpm -C web test --run src/shell src/upload`, build. 4. Mutations: offered without coarse pointer → fails; offered read-only → fails; no ` 2` → fails.
 
+**Phase gate 4a:** the full gate.
+
 ### Task 11: Recent changes
 
 **Server files:**
@@ -232,6 +300,8 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 
 ---
 
+**Phase gate 4b:** the full gate.
+
 ## Phase 5: documentation, checks and the end
 
 ### Task 12: documentation
@@ -248,3 +318,25 @@ Expected (brief): core about 2,700 total, 4 skipped; server 847 + 413 + 353 + 20
 3. The final gate (`/tmp/run/gate.sh gatefinal`), every line 0 failed (known flakies rerun alone three times).
 4. Push; open the pull request as a **draft** "Flag notes, search and sort the explorer, list recent changes, take photos"; write the report `docs/superpowers/overnighter/2026-11-14-flags-explorer-report.md` and the `docs/superpowers/open-items.md` rows; commit, push, mark the pull request ready; `PushNotification`.
 5. **Do not merge**, tag, deploy or change the version.
+
+---
+
+## Amendments from the plan review (binding on the tasks named)
+
+A fresh reviewer read the brief, the spec and this plan against the code. Its findings, folded in:
+
+1. **Task 11, discreet:** a `/recent` page left open must not keep a hidden vault's rows. `web/src/discreet/hideAgain.ts` (line 166–167) resets `["recent"]` beside `whats-on`; `web/src/discreet/leftElsewhere.ts` (line 44–47) resets `"recent"` too; `web/src/discreet/api.ts` `shownChanged` invalidates `["recent"]` on reveal. Filters, chips and `skip` live in component state only (never the URL or localStorage). Tests: "hiding again empties Recent changes on screen", "the address bar never carries a vault name".
+2. **Pinned server tests:** Task 11 adds `["GET /api/recent"] = Reading` to `DeliberatelyOpen` in `tests/Kumbu.Server.Tests/Api/PasswordWindowTests.cs:130` and runs `*PasswordWindowTests`; Task 6 adds `/api/vaults/{vault}/flag` to the list in `HistoryApiTests.Polling_the_version_the_board_and_the_calendar_does_not_count_as_the_sessions_activity` (`HistoryApiTests.cs:382-393`) and runs `*HistoryApiTests`.
+3. **Task 7:** every flag write invalidates `["note", path]` (awaited, as `afterEntryWrite`), `["search"]`, `["flag", path]`, `["tree", vault]`, `["recent"]`; with `calendar`, `afterEntryWrite`.
+4. **Tasks 6/9:** a successful save (`useSaveNote`, `web/src/api/notes.ts:288-312`) invalidates `["tree", vault]`, so Last changed and the tree's flag follow ordinary edits; a test pins it.
+5. **Task 4/5, exact Undo:** `FlagTags.Set` replaces the first existing flag item in place (same quoting, same place) and removes the others; it appends only when there is none. Test `Undo_after_replacing_a_mid_list_flag_gives_the_note_back_byte_for_byte`; `Undo_takes_both_back` asserts byte-for-byte equality with the original.
+6. **Task 4:** `FlagTags.Set` recognises what `Flags.Of` does: items normalised with `TagMatch.Normalise` (a leading `#`, a trailing `/`) and compared ignoring case; test `Set_removes_flag_RED_and_hash_flag_red`. A flow list over several lines (`tags: [a,\n  b]`) is refused (null), with a test.
+7. **Task 3, badge race:** the OS badge is set only once the vault list is loaded; it subtracts the shares of the vaults whose list entry has `discreet: true` (`useVaults` raw data, shown or not); the effect depends on the count and those names. Test "badge before the vault list → no setAppBadge with the discreet share".
+8. **Phase gates** after Task 10 (4a) and Task 11 (4b); Task 13's final gate covers Task 12.
+9. **Task 0** now holds its setup and scripts (above).
+10. **Anchors and signatures:** Task 7's tree icon: add `flag` to the note `Row` in `rows()` (TreeDrawer.tsx line 60–68), a `flag` prop on `NoteButton` (line 257), passed at the list (line 676). The web tree types, by hand in `web/src/api/notes.ts`: `type TreeNote = Gen["TreeNote"] & { flag?: FlagName | null }; type TreeFolder = Omit<Gen["TreeFolder"], "folders" | "notes"> & { writtenAt?: string | null; folders: TreeFolder[]; notes: TreeNote[] }`. `CalendarApi.ReadEntryAsync` (line 217) becomes `internal` for FlagApi. `FlagView.CanWrite` is `((ICaller)caller).Refuse("flag", path) is null`, so a button is offered only where the write would pass. `ago` is `web/src/note/AgentBanner.tsx:23`, `writerText` `web/src/api/activity.ts:74`.
+11. **Task 10:** the coarse-pointer test uses `isPhone()` (`web/src/update/InstallHint.tsx:22`, guarded for jsdom); `extOf` maps only `image/jpeg`→`jpg`, `image/png`→`png`, `image/gif`→`gif`, `image/webp`→`webp`, anything else keeps its own name and meets the upload's honest refusal (test "a HEIC photo is refused with the upload's sentence"); `UploadSheet` gains a definite `start` for dropped files (line 342 calls `pick(dropped)` without it); `taken` is the names of the tree folder's `notes`.
+12. **Task 11, server:** modelled on `NoteApi.ChangesAsync` (NoteApi.cs:961): `labels.RenderAsync(vault, Writers.Identity(note.LastWriter), note.Ref, ct)`. Decision (logged): no `HistoryScan` rate limit, since it reads the in-memory working set as What's on does, not history; no 429. Rows of kind `text` open as the tree opens them (`fileKindOfEntry`).
+13. **Task 6:** `A_conflict_is_409` is a note whose frontmatter doesn't parse → Conflict → 409; the retry stays in Core. `FlagService` checks the 1 MiB limit after `FlagTags.Set`.
+14. **Task 13:** the `open-items.md` rows: the pull request; personal bookmarks; semantic search in the explorer; the calendar report's unfixed points (the raw properties box naming our fields, day notes titled by their file name, the grid marking only a window's first day, dark-scheme amber against orange-red, the lesser security points), each only if not there yet. The report's sections as the brief lists them, the hand-test checklist among them (375 px, light and dark, a read-only member, a discreet vault hidden and shown, `tags flag`, `rg --tag flag/red`, "today" rather than dates). The pull request's description has **Decisions made without Chris** and ends with the Claude Code line. Never force-push; revert instead.
+15. **Smaller:** Task 1 also runs `*CalendarLayoutTests`; Task 11's explicit test also measures the tree for 5000 notes (a `GetAsync` per note now); Task 2's problem wording goes to the UX check.
