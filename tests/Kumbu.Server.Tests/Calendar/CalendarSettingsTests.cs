@@ -17,7 +17,7 @@ using static Kumbu.Server.Tests.Api.RestClient;
 
 namespace Kumbu.Server.Tests.Calendar;
 
-/// <summary>The person's time zone (<c>/api/account/calendar</c>) and her last view per calendar
+/// <summary>The person's time zone and her week (<c>/api/account/calendar</c>), her last view per calendar
 /// (<c>/api/vaults/{vault}/calendar/view</c>), and the zone her agents' <c>sh calendar</c> uses.</summary>
 [Collection("app")]
 public sealed class CalendarSettingsTests(KumbuAppFactory app) : IAsyncDisposable
@@ -70,6 +70,31 @@ public sealed class CalendarSettingsTests(KumbuAppFactory app) : IAsyncDisposabl
 
     private static async Task<HttpResponseMessage> SetZoneAsync(RestClient user, string? zone, string? bearer = null) =>
         await user.SendAsync(HttpMethod.Put, "/api/account/calendar", new { zone }, bearer: bearer);
+
+    private const string DaysSentence = "'days' is seven levels, Monday to Sunday, each workday, lighter or off; or null.";
+
+    private static readonly string[] FourDays = ["off", "workday", "workday", "workday", "lighter", "off", "off"];
+
+    private static async Task<HttpResponseMessage> SetDaysAsync(RestClient user, string[]? days, string? bearer = null) =>
+        await user.SendAsync(HttpMethod.Put, "/api/account/calendar", new { days }, bearer: bearer);
+
+    private static Task<HttpResponseMessage> PutRawAsync(RestClient user, string json) =>
+        user.SendContentAsync(HttpMethod.Put, "/api/account/calendar", new StringContent(json, Encoding.UTF8, "application/json"));
+
+    private static string[]? DaysOf(JsonNode view) => view["days"]?.AsArray().Select(d => d!.GetValue<string>()).ToArray();
+
+    private static void AssertSettings(string? zone, string[]? days, (string? Zone, string[]? Days) actual)
+    {
+        Assert.Equal(zone, actual.Zone);
+        Assert.Equal(days, actual.Days);
+    }
+
+    private static async Task<(string? Zone, string[]? Days)> PreferencesAsync(RestClient user)
+    {
+        using var response = await user.GetAsync("/api/account/calendar");
+        var view = await OkAsync(response);
+        return (view["zone"]?.GetValue<string>(), DaysOf(view));
+    }
 
     [Fact]
     public async Task The_zone_starts_empty_and_is_kept()
@@ -234,5 +259,144 @@ public sealed class CalendarSettingsTests(KumbuAppFactory app) : IAsyncDisposabl
         var (viennaError, vienna) = await alice.ShAsync("calendar notifications", key);
         Assert.False(viennaError, vienna);
         Assert.Contains("overdue · 1 day  Certificate  /Work/Certificate.md", vienna, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Days_start_unchosen_and_are_kept()
+    {
+        var alice = await NewAsync(Api);
+
+        using var first = await alice.GetAsync("/api/account/calendar");
+        var before = await OkAsync(first);
+        using var set = await SetDaysAsync(alice, FourDays);
+        var answer = await OkAsync(set);
+
+        Assert.Null(before["days"]);
+        Assert.Equal(FourDays, DaysOf(answer));
+        Assert.Equal(TimeZoneInfo.Utc.Id, answer["serverZone"]!.GetValue<string>());
+        Assert.Equal(FourDays, (await PreferencesAsync(alice)).Days);
+        Assert.Equal(FourDays, await Users.Find(u => u.Id == alice.User.Id).Project(u => u.CalendarDays).FirstOrDefaultAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Saving_the_zone_keeps_the_days_and_saving_the_days_keeps_the_zone()
+    {
+        var alice = await NewAsync(Api);
+        using (var both = await alice.SendAsync(HttpMethod.Put, "/api/account/calendar", new { zone = "Europe/Vienna", days = FourDays }))
+        {
+            var answer = await OkAsync(both);
+            AssertSettings("Europe/Vienna", FourDays, (answer["zone"]?.GetValue<string>(), DaysOf(answer)));
+        }
+
+        using (var zone = await SetZoneAsync(alice, "Asia/Tokyo"))
+        {
+            var answer = await OkAsync(zone);
+            AssertSettings("Asia/Tokyo", FourDays, (answer["zone"]?.GetValue<string>(), DaysOf(answer)));
+        }
+
+        string[] week = ["workday", "workday", "workday", "workday", "off", "off", "workday"];
+        using (var days = await SetDaysAsync(alice, week))
+        {
+            var answer = await OkAsync(days);
+            AssertSettings("Asia/Tokyo", week, (answer["zone"]?.GetValue<string>(), DaysOf(answer)));
+        }
+
+        AssertSettings("Asia/Tokyo", week, await PreferencesAsync(alice));
+    }
+
+    [Fact]
+    public async Task An_empty_change_leaves_both()
+    {
+        var alice = await NewAsync(Api);
+        using (var both = await alice.SendAsync(HttpMethod.Put, "/api/account/calendar", new { zone = "Europe/Vienna", days = FourDays }))
+            Assert.Equal(HttpStatusCode.OK, both.StatusCode);
+
+        using var empty = await PutRawAsync(alice, "{}");
+        var answer = await OkAsync(empty);
+
+        AssertSettings("Europe/Vienna", FourDays, (answer["zone"]?.GetValue<string>(), DaysOf(answer)));
+        AssertSettings("Europe/Vienna", FourDays, await PreferencesAsync(alice));
+    }
+
+    [Fact]
+    public async Task Null_days_return_to_not_chosen()
+    {
+        var alice = await NewAsync(Api);
+        using (var both = await alice.SendAsync(HttpMethod.Put, "/api/account/calendar", new { zone = "Europe/Vienna", days = FourDays }))
+            Assert.Equal(HttpStatusCode.OK, both.StatusCode);
+
+        using var cleared = await SetDaysAsync(alice, null);
+        var answer = await OkAsync(cleared);
+
+        Assert.Null(answer["days"]);
+        AssertSettings("Europe/Vienna", (string[]?)null, await PreferencesAsync(alice));
+        var f = Builders<UserDocument>.Filter;
+        Assert.Equal(0, await Users.CountDocumentsAsync(f.Eq(u => u.Id, alice.User.Id) & f.Exists("calendarDays"), cancellationToken: Ct));
+    }
+
+    [Theory]
+    [InlineData("""{"days":["workday","workday","workday","workday","workday","off"]}""")]
+    [InlineData("""{"days":["workday","workday","workday","workday","workday","off","off","off"]}""")]
+    [InlineData("""{"days":["workday","workday","workday","workday","holiday","off","off"]}""")]
+    [InlineData("""{"days":["workday","workday","workday","workday",5,"off","off"]}""")]
+    [InlineData("""{"days":["workday","workday","workday","workday",null,"off","off"]}""")]
+    [InlineData("""{"days":"off"}""")]
+    [InlineData("""{"days":{}}""")]
+    [InlineData("""{"zone":"Asia/Tokyo","days":["x"]}""")]
+    public async Task Days_other_than_seven_known_levels_are_400(string json)
+    {
+        var alice = await NewAsync(Api);
+        using (var both = await alice.SendAsync(HttpMethod.Put, "/api/account/calendar", new { zone = "Europe/Vienna", days = FourDays }))
+            Assert.Equal(HttpStatusCode.OK, both.StatusCode);
+
+        using var response = await PutRawAsync(alice, json);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(DaysSentence, await ErrorAsync(response));
+        AssertSettings("Europe/Vienna", FourDays, await PreferencesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_zone_that_is_not_text_is_400()
+    {
+        var alice = await NewAsync(Api);
+        using (var set = await SetZoneAsync(alice, "Europe/Vienna")) Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+
+        using var response = await PutRawAsync(alice, """{"zone":5}""");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        AssertSettings("Europe/Vienna", (string[]?)null, await PreferencesAsync(alice));
+    }
+
+    [Fact]
+    public async Task An_api_key_cannot_change_the_days()
+    {
+        var alice = await NewAsync(Api);
+        var key = await alice.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+
+        using var set = await SetDaysAsync(alice, FourDays, bearer: key);
+
+        Assert.Equal(HttpStatusCode.Forbidden, set.StatusCode);
+        Assert.Null(await Users.Find(u => u.Id == alice.User.Id).Project(u => u.CalendarDays).FirstOrDefaultAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Sh_calendar_says_nothing_of_days_off()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Certificate.md", "---\nwhen: 2037-11-14\ntask: open\n---\n");
+        var key = await alice.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Read);
+        var (beforeError, before) = await alice.ShAsync("calendar /Work", key);
+        Assert.False(beforeError, before);
+
+        using (var set = await SetDaysAsync(alice, ["workday", "workday", "workday", "workday", "lighter", "off", "off"]))
+            Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+        var (error, week) = await alice.ShAsync("calendar /Work", key);
+
+        Assert.False(error, week);
+        Assert.Equal(before, week);
+        Assert.Contains("Certificate", week, StringComparison.Ordinal);
+        foreach (var word in new[] { "off", "lighter", "workday", "day off" })
+            Assert.DoesNotContain(word, week, StringComparison.OrdinalIgnoreCase);
     }
 }

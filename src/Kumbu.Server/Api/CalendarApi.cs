@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
 using Kumbu.Core.Calendar;
@@ -14,11 +15,20 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace Kumbu.Server.Api;
 
 /// <summary>The person's calendar settings: <c>zone</c>, the IANA zone she chose (null: none, so the server's applies);
-/// <c>serverZone</c>, the server's.</summary>
-public sealed record CalendarPreferencesView(string? Zone, string ServerZone);
+/// <c>serverZone</c>, the server's; <c>days</c>, her week, seven levels from Monday to Sunday, each <c>workday</c>,
+/// <c>lighter</c> or <c>off</c> (null: not chosen).</summary>
+public sealed record CalendarPreferencesView(string? Zone, string ServerZone, IReadOnlyList<string>? Days);
 
-/// <summary>A change of the zone: an IANA id such as <c>Europe/Vienna</c>, or null to clear it.</summary>
-public sealed record CalendarZoneRequest(string? Zone);
+/// <summary>A change of the calendar's settings; a field left out stays as it is. <c>zone</c>: an IANA id such as
+/// <c>Europe/Vienna</c>, or null to clear it. <c>days</c>: seven levels, Monday to Sunday, each <c>workday</c>,
+/// <c>lighter</c> or <c>off</c>, or null to return to not chosen. Raw, so that a field left out (undefined) reads apart from
+/// null; properties, not parameters with a default, which the OpenAPI document can't write.</summary>
+public sealed record CalendarPreferencesRequest
+{
+    public JsonElement Zone { get; init; }
+
+    public JsonElement Days { get; init; }
+}
 
 /// <summary><c>view</c>: <c>week</c> or <c>month</c>; <c>grid</c>: the month grid shown.</summary>
 public sealed record CalendarViewRequest(string View, bool Grid);
@@ -96,7 +106,7 @@ public static partial class CalendarApi
         // As /account/preferences: a person's setting, for her session only.
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/account/calendar", PreferencesAsync).Errors(401, 403);
-        account.MapPut("/account/calendar", SetZoneAsync).Errors(400, 401, 403);
+        account.MapPut("/account/calendar", SetPreferencesAsync).Errors(400, 401, 403);
 
         var vault = app.MapGroup("/api/vaults/{vault}/calendar").AddEndpointFilter(ApiErrors.Filter);
         // Polled while the page is open, as the board is: they don't count as the session's use.
@@ -433,21 +443,40 @@ public static partial class CalendarApi
     private static string Sentence(string text) => char.ToUpperInvariant(text[0]) + text[1..] + ".";
 
     private static async Task<Ok<CalendarPreferencesView>> PreferencesAsync(
-        RequestCaller caller, CalendarSettings settings, ServerZone server, CancellationToken ct) =>
-        TypedResults.Ok(new CalendarPreferencesView(await settings.ZoneAsync(caller.User!.Id, ct), (await server.ZoneAsync(ct)).Id));
-
-    private static async Task<Ok<CalendarPreferencesView>> SetZoneAsync(
-        CalendarZoneRequest body, RequestCaller caller, CalendarSettings settings, ServerZone server, CancellationToken ct)
+        RequestCaller caller, CalendarSettings settings, ServerZone server, CancellationToken ct)
     {
-        string? zone = null;
-        if (body.Zone is not null)
-        {
-            zone = (Zones.Find(body.Zone) ?? throw ApiErrors.BadRequest(
-                $"{body.Zone} is not a time zone; choose one from the list (an IANA name such as Europe/Vienna).")).Id;
-        }
+        var (zone, days) = await settings.PreferencesAsync(caller.User!.Id, ct);
+        return TypedResults.Ok(new CalendarPreferencesView(zone, (await server.ZoneAsync(ct)).Id, days));
+    }
 
-        await settings.SetZoneAsync(caller.User!.Id, zone, ct);
-        return TypedResults.Ok(new CalendarPreferencesView(zone, (await server.ZoneAsync(ct)).Id));
+    private static async Task<Ok<CalendarPreferencesView>> SetPreferencesAsync(
+        CalendarPreferencesRequest body, RequestCaller caller, CalendarSettings settings, ServerZone server, CancellationToken ct)
+    {
+        // Both read before anything is written: a field that doesn't read refuses the whole request.
+        Optional<string?> zone = body.Zone.ValueKind switch
+        {
+            JsonValueKind.Undefined => default,
+            JsonValueKind.Null => new Optional<string?>(null),
+            JsonValueKind.String => (Zones.Find(body.Zone.GetString()!) ?? throw ApiErrors.BadRequest(
+                $"{body.Zone.GetString()} is not a time zone; choose one from the list (an IANA name such as Europe/Vienna).")).Id,
+            _ => throw ApiErrors.BadRequest("'zone' is the name of a time zone, such as Europe/Vienna, or null."),
+        };
+        Optional<string[]?> days = body.Days.ValueKind switch
+        {
+            JsonValueKind.Undefined => default,
+            JsonValueKind.Null => new Optional<string[]?>(null),
+            JsonValueKind.Array when Levels(body.Days) is { } week => week,
+            _ => throw ApiErrors.BadRequest("'days' is seven levels, Monday to Sunday, each workday, lighter or off; or null."),
+        };
+        var (stored, storedDays) = await settings.SetAsync(caller.User!.Id, zone, days, ct);
+        return TypedResults.Ok(new CalendarPreferencesView(stored, (await server.ZoneAsync(ct)).Id, storedDays));
+    }
+
+    /// <summary>The week in <paramref name="days"/>, an array; null unless it is seven known levels.</summary>
+    private static string[]? Levels(JsonElement days)
+    {
+        var read = days.EnumerateArray().Select(d => d.ValueKind == JsonValueKind.String ? d.GetString() : null).ToArray();
+        return DayLevels.IsWeek(read) ? [.. read.Select(d => d!)] : null;
     }
 
     /// <summary>Asked when the calendar opens; a credential without a person's user key (a key, a connection) reads the
