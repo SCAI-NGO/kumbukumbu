@@ -5,13 +5,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserContext, Page, TestInfo } from "@playwright/test";
-import { Api } from "../support/api";
+import { Api, guarded } from "../support/api";
 import { baseURL, fixturesDir } from "../support/env";
-import { hideDiscreet, revealDiscreet } from "../support/session";
+import { endHidden as hideThroughApi, hideDiscreet, revealDiscreet } from "../support/session";
 import { addDays, addMonths, addYears, isoWeek, monday, nowTime, today } from "../support/time";
 import {
   cleanFolder,
   dayAndMonth,
+  dayHeading,
   dismissInstallHint,
   entryLine,
   expect,
@@ -67,7 +68,7 @@ async function whatsOnLink(page: Page, testInfo: TestInfo) {
 test("calendar #3: Today makes the day note in /Work/Calendar/ with its heading, the caret below it and its header line @calendar @serial", async ({ page, aliceApi }) => {
   const t = today();
   const path = `/Work/Calendar/${t}.md`;
-  expect((await aliceApi.context.get(`/api/notes/Work/Calendar/${t}.md`)).status(), "no day note of today yet").toBe(404);
+  expect((await aliceApi.send("GET", `/api/notes/Work/Calendar/${t}.md`)).status(), "no day note of today yet").toBe(404);
   try {
     await page.goto(weekUrl("Work", t));
     await page.getByRole("button", { name: "Today", exact: true }).click();
@@ -113,16 +114,16 @@ test("calendar #5: in discreet Home, Add to calendar… with a time asks nothing
     await expect(dialog).toBeHidden();
 
     await expect(entryLine(page)).toHaveText(`📅 ${shortDay(day, true)} · 14:00`);
-    const written = await context.request.get("/api/notes/Home/Zahnarzt.md");
+    const written = await guarded(() => context.request.get("/api/notes/Home/Zahnarzt.md"), "GET Home's note");
     expect(written.status(), "the note stays at /Home/Zahnarzt.md").toBe(200);
     expect(((await written.json()) as { content: string }).content).toBe(original.replace("tags: [health]\n", `tags: [health]\nwhen: ${day}T14:00\n`));
-    const tree = JSON.stringify(await (await context.request.get("/api/vaults/Home/tree")).json());
+    const tree = JSON.stringify(await (await guarded(() => context.request.get("/api/vaults/Home/tree"), "GET Home's tree")).json());
     expect(tree, "no Calendar folder was made").not.toContain("/Home/Calendar");
 
     await (await noteActions(page)).getByRole("menuitem", { name: "Remove from calendar" }).click();
     await expect(page.getByText("Removed from the calendar.")).toBeVisible();
     await expect(entryLine(page)).toHaveCount(0);
-    expect(((await (await context.request.get("/api/notes/Home/Zahnarzt.md")).json()) as { content: string }).content).toBe(original);
+    expect(((await (await guarded(() => context.request.get("/api/notes/Home/Zahnarzt.md"), "GET Home's note")).json()) as { content: string }).content).toBe(original);
   } finally {
     await endHidden(page, home);
   }
@@ -137,9 +138,14 @@ async function endHidden(page: Page, home: Awaited<ReturnType<typeof makeAgent>>
       await home?.dispose();
     }
   } finally {
-    await page.goto("/");
-    await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first()).toBeVisible();
-    if (await page.getByRole("button", { name: "Hide discreet vaults" }).count()) await hideDiscreet(page);
+    try {
+      await page.goto("/");
+      await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first()).toBeVisible();
+      if (await page.getByRole("button", { name: "Hide discreet vaults" }).count()) await hideDiscreet(page);
+    } finally {
+      // Hidden even when the page didn't render: the call ✕ makes.
+      await hideThroughApi(page);
+    }
   }
 }
 
@@ -154,16 +160,22 @@ test("calendar #7: What's on lists the open tasks with vault, icon and a calm sp
   expect(others, "nothing else overdue in the vaults the session shows").toEqual([]);
   const work = before.vaults.find((v) => v.vault === "Work")!;
 
+  // Midnight in Vienna may pass after the seeding: the spans count from the day the page is read on.
+  const shown = today();
+  const daysFrom = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+  const ahead = daysFrom(shown, addDays(t, 7));
+  const behind = daysFrom(addDays(t, -1), shown);
+  const overdueSpan = `overdue · ${behind} day${behind === 1 ? "" : "s"}`;
   await page.goto("/whats-on");
   const renew = itemOf(page, "Renew certificate");
   const pay = itemOf(page, "Pay invoice");
   await expect(renew).toContainText("Work");
-  await expect(renew).toContainText("upcoming · in 7 days");
+  await expect(renew).toContainText(`upcoming · in ${ahead} days`);
   await expect(pay).toContainText("Work");
-  await expect(pay).toContainText("overdue · 1 day");
+  await expect(pay).toContainText(overdueSpan);
   for (const item of [renew, pay]) await expect(item.locator("svg").first()).toBeVisible();
   // The warning colour on the words, calmly: no red box around the entry.
-  const overdueWords = pay.getByText("overdue · 1 day");
+  const overdueWords = pay.getByText(overdueSpan);
   expect(await overdueWords.evaluate((e) => getComputedStyle(e).color)).toBe(await warningColour(page));
   const box = (l: typeof pay) => l.evaluate((e) => { const s = getComputedStyle(e); return [s.backgroundColor, s.borderTopColor, s.borderTopWidth].join(" "); });
   expect(await box(pay), "the overdue entry's box is the same as any other's").toBe(await box(renew));
@@ -334,7 +346,7 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     await revealDiscreet(page);
     home = await makeAgent({ Home: "write" }, "home", context);
     // Home gets an overdue to-do through this session, which shows it.
-    const set = await context.request.post("/api/vaults/Home/calendar/set", { data: { path: "/Home/Zahnarzt.md", when: addDays(t, -1), task: true }, headers });
+    const set = await guarded(() => context.request.post("/api/vaults/Home/calendar/set", { data: { path: "/Home/Zahnarzt.md", when: addDays(t, -1), task: true }, headers }), "POST calendar set");
     expect(set.status()).toBe(200);
 
     // Shown: its calendar's address is /discreet, and What's on has its entry.
@@ -376,7 +388,7 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     const answer = async (vault: string) => {
       await page.goto(`/calendar/${vault}`);
       const text = (await page.getByRole("main").or(page.locator("p").filter({ hasText: "There is no vault" })).first().textContent())!;
-      const api = await context.request.get(`/api/vaults/${vault}/calendar`);
+      const api = await guarded(() => context.request.get(`/api/vaults/${vault}/calendar`), "GET a vault's calendar");
       return { text: text.replaceAll(vault, "<vault>"), status: api.status(), body: (await api.text()).replaceAll(vault, "<vault>") };
     };
     expect(await answer("Home")).toEqual(await answer("Nowhere"));
@@ -387,7 +399,7 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     panel = await treePanel(page, testInfo);
     await panel.getByRole("navigation", { name: "Account" }).getByRole("link", { name: /^What's on/ }).click();
     await expect(itemOf(page, "Zahnarzt")).toContainText("Home");
-    const unset = await context.request.post("/api/vaults/Home/calendar/unset", { data: { path: "/Home/Zahnarzt.md" }, headers });
+    const unset = await guarded(() => context.request.post("/api/vaults/Home/calendar/unset", { data: { path: "/Home/Zahnarzt.md" }, headers }), "POST calendar unset");
     expect(unset.status()).toBe(200);
     await page.getByRole("link", { name: "Back to the notes" }).click();
     await hideDiscreet(page);
@@ -403,10 +415,17 @@ test("calendar #16: a board card shows its column, Move to Done only with one ar
   const t = today();
   const due = addDays(t, 6);
   const card = "/Work/Board/Pump check.md";
-  expect((await aliceApi.context.get("/api/notes/Work/Board/Board.md")).status(), "Work has no board yet").toBe(404);
+  expect((await aliceApi.send("GET", "/api/notes/Work/Board/Board.md")).status(), "Work has no board yet").toBe(404);
   await seedAs("tags/calendar/Board", "/Work/Board");
   try {
     const before = (await aliceApi.getNote(card)).content;
+    // In the calendar: the week of its due date, in that day's column, as a card.
+    await page.goto(weekUrl("Work", due));
+    const dueColumn = page.getByRole("region", { name: new RegExp(`^${dayHeading(due)},`) });
+    const entry = dueColumn.getByRole("listitem").filter({ has: page.getByRole("link", { name: "Pump check", exact: true }) });
+    await expect(entry).toBeVisible();
+    await expect(entry).toContainText("Card");
+
     await page.goto(notePage(card));
     const line = entryLine(page);
     await expect(line).toHaveText(`📅 ${shortDay(due, true)} · In progress · Move to Done · Later`);
@@ -437,7 +456,7 @@ test("calendar #16: a board card shows its column, Move to Done only with one ar
 test("flags #20: Today's day note isn't counted by What's on and the badge until it is a to-do @calendar @serial", async ({ page, aliceApi }, testInfo) => {
   const t = today();
   const path = `/Work/Calendar/${t}.md`;
-  expect((await aliceApi.context.get(`/api/notes/Work/Calendar/${t}.md`)).status(), "no day note of today yet").toBe(404);
+  expect((await aliceApi.send("GET", `/api/notes/Work/Calendar/${t}.md`)).status(), "no day note of today yet").toBe(404);
   const before = await whatsOn(aliceApi);
   try {
     await page.goto(weekUrl("Work", t));

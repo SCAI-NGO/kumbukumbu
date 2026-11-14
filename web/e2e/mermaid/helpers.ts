@@ -4,6 +4,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { encodePath, type Api } from "../support/api";
 import { secrets } from "../support/env";
+import { reservePassword } from "../support/session";
 import { test as base, expect } from "../support/test";
 
 export const test = base;
@@ -108,8 +109,12 @@ export const pageScrollsSideways = (page: Page) => page.evaluate(() => document.
  */
 export async function cleanFolder(api: Api, folder: string) {
   const listed = await api.console(`rg --files "/Work/${folder}"`);
-  if (listed.isError) return;
-  for (const path of listed.text.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/Work/"))) {
+  // A test that skipped or failed before seeding has no folder: nothing to clean. Any other failure throws, as a
+  // silent return would leave notes the serial phase's vault-wide checks then see.
+  if (listed.isError && /No such file or directory/.test(listed.text)) return;
+  const paths = listed.text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (listed.isError || paths.some((p) => !p.startsWith("/Work/"))) throw new Error(`Cleaning /Work/${folder} up: the listing failed`);
+  for (const path of paths) {
     await api.deleteNote(path).catch(() => {});
   }
 }
@@ -126,7 +131,10 @@ export async function publish(page: Page) {
   const linkField = dialog.getByRole("textbox", { name: "Link" });
   // Once the session says whether the window is open: the password field, or Publish enabled without it.
   await expect(password.or(dialog.getByRole("button", { name: "Publish", exact: true, disabled: false })).first()).toBeVisible();
-  if (await password.isVisible()) await password.fill(secrets().passwords.alice);
+  if (await password.isVisible()) {
+    await reservePassword("alice");
+    await password.fill(secrets().passwords.alice);
+  }
   await dialog.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(linkField).toHaveValue(/\S/);
   const link = await linkField.inputValue();
@@ -138,7 +146,7 @@ export async function publish(page: Page) {
 
 /** Withdraws the note's publication, if there is one. */
 export async function withdraw(api: Api, path: string) {
-  const answer = await api.context.delete(`/api/publications/${encodePath(path)}`);
+  const answer = await api.send("DELETE", `/api/publications/${encodePath(path)}`);
   expect([200, 204, 404], `withdrawing: ${answer.status()}`).toContain(answer.status());
 }
 

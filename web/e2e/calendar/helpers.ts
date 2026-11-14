@@ -21,10 +21,10 @@ export async function makeAgent(vaults: Record<string, "read" | "write" | "maint
   // The password is checked at most 5 times a minute per account, across every tag's tests: it is confirmed only when
   // the session's password window isn't open already (a fresh sign-in opens it).
   const data = { name: `e2e calendar ${label} ${randomBytes(3).toString("hex")}`, vaults, expiresInDays: 30 };
-  let answer = await maker.context.post("/api/keys", { data });
+  let answer = await maker.send("POST", "/api/keys", { data });
   if (answer.status() === 401) {
     await maker.confirmPassword();
-    answer = await maker.context.post("/api/keys", { data });
+    answer = await maker.send("POST", "/api/keys", { data });
   }
   expect(answer.status(), `POST /api/keys: ${answer.status()}`).toBe(201);
   const created = (await answer.json()) as { key: string; apiKey: { id: string } };
@@ -158,8 +158,12 @@ export const entryLine = (page: Page) => page.getByRole("group", { name: "In the
 /** Every note below `/Work/<folder>/` goes to the trash: nothing of the test stays in What's on or the badge. */
 export async function cleanFolder(api: Api, folder: string) {
   const listed = await api.console(`rg --files "/Work/${folder}"`);
-  if (listed.isError) return;
-  for (const path of listed.text.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/Work/"))) {
+  // A test that skipped or failed before seeding has no folder: nothing to clean. Any other failure throws, as a
+  // silent return would leave notes the serial phase's vault-wide checks then see.
+  if (listed.isError && /No such file or directory/.test(listed.text)) return;
+  const paths = listed.text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (listed.isError || paths.some((p) => !p.startsWith("/Work/"))) throw new Error(`Cleaning /Work/${folder} up: the listing failed`);
+  for (const path of paths) {
     await api.deleteNote(path).catch(() => {});
   }
 }

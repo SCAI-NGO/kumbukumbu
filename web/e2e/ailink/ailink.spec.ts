@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Api, encodePath } from "../support/api";
 import { baseURL, fixturesDir, secrets, stackDir } from "../support/env";
+import { reservePassword, reserveReaderRead } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
 import { nowTime } from "../support/time";
 
@@ -62,7 +63,10 @@ async function publishViaUi(page: Page, testInfo: TestInfo, path: string): Promi
   // The password only when the session's window has closed (it counts against a rate limit).
   const password = dialog.getByLabel("Your password", { exact: true });
   await expect(async () => {
-    if (await password.isVisible()) await password.fill(secrets().passwords.alice);
+    if (await password.isVisible()) {
+      await reservePassword("alice");
+      await password.fill(secrets().passwords.alice);
+    }
     await expect(submit).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   await submit.click();
@@ -85,6 +89,7 @@ async function unpublishViaUi(page: Page) {
 /** Bob's page: a context without a session, with the clipboard allowed, on the reader link. */
 async function readAs(context: BrowserContext, link: string) {
   const reader = await context.newPage();
+  await reserveReaderRead();
   // A failed goto would print the address: said without it.
   await reader.goto(link).catch(() => {
     throw new Error("the reader page did not open");
@@ -98,6 +103,7 @@ const aiField = (reader: Page) => reader.getByRole("textbox", { name: "Link for 
 
 /** Presses Link for your AI and returns the link it shows. */
 async function makeAiLink(reader: Page, previous?: string) {
+  await reserveReaderRead();
   await aiButton(reader).click();
   const field = aiField(reader);
   await expect(reader.getByText(/^Valid until \d\d:\d\d\./)).toBeVisible();
@@ -110,6 +116,7 @@ async function makeAiLink(reader: Page, previous?: string) {
 /** An anonymous caller whose failures say nothing of the address (a call log would print the token). */
 function anonymous(context: APIRequestContext) {
   const call = (method: "get" | "post" | "head") => async (url: string) => {
+    await reserveReaderRead();
     try {
       return await context[method](url);
     } catch {
@@ -143,7 +150,7 @@ async function withPublished(
     await run({ link, context, anon });
   } finally {
     // Withdrawn even when the test failed (a withdrawal that was made already answers 404: no matter).
-    await aliceApi.context.delete(`/api/publications/${encodePath(note(folder))}`).catch(() => undefined);
+    await aliceApi.send("DELETE", `/api/publications/${encodePath(note(folder))}`).catch(() => undefined);
     await anon.dispose();
     await context.close();
     for (const name of files) await aliceApi.deleteNote(`/Work/${folder}/${name}`).catch(() => undefined);
@@ -167,7 +174,7 @@ test("ailink #1: the publish dialog shows a /s# link and nothing about AI links 
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog).toHaveCount(0);
   } finally {
-    await aliceApi.context.delete(`/api/publications/${encodePath(note(folder))}`).catch(() => undefined);
+    await aliceApi.send("DELETE", `/api/publications/${encodePath(note(folder))}`).catch(() => undefined);
     for (const name of files) await aliceApi.deleteNote(`/Work/${folder}/${name}`).catch(() => undefined);
   }
 });
@@ -331,9 +338,11 @@ test("ailink #10: after withdrawing, the link and its files give the 404; the re
       expect(await text(answer), "says after withdrawing").toBe(gone);
     }
     // Bob's page answers as for a withdrawn note: a new link can't be made, and a fresh visit of the link is refused.
+    await reserveReaderRead();
     await aiButton(reader).click();
     await expect(reader.getByText("The link couldn't be made: open the note's link again.")).toBeVisible();
     const again = await context.newPage();
+    await reserveReaderRead();
     await again.goto(link).catch(() => {
       throw new Error("the reader page did not open");
     });

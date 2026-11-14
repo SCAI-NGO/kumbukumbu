@@ -4,7 +4,7 @@
 // tests' entries could show beside its own, and trashes its folder's notes at its end.
 import type { Page } from "@playwright/test";
 import type { Api } from "../support/api";
-import { addDays, addMonths, isoWeek, monday, today } from "../support/time";
+import { addDays, addMonths, isoWeek, monday, nowTime, today } from "../support/time";
 import {
   cleanFolder,
   dayAndMonth,
@@ -28,6 +28,9 @@ import {
   weekUrl,
 } from "./helpers";
 import { shot } from "../support/test";
+
+/** A calendar list's entry, by its title. */
+const itemOf = (page: Page, title: string) => page.getByRole("listitem").filter({ has: page.getByRole("link", { name: title, exact: true }) });
 
 const EMPTY_WEEK = 'Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: "put this on Friday".';
 
@@ -115,6 +118,8 @@ test("calendar #6: ✓ closes at once, Undo reopens, and the reason is kept with
   await expect(line).toHaveText(`📅 ${shortDay(when, true)} · To do · ✓ · Later`);
   expect((await aliceApi.getNote(path)).content).toMatch(/^task: open$/m);
 
+  // The day it is closed on, read once: midnight in Vienna may pass while the test runs.
+  const closedOn = today();
   await line.getByRole("button", { name: "Done: Certificate" }).click();
   await expect(toast).toHaveText("Closed · Undo · Add a reason");
   await toast.getByRole("button", { name: "Add a reason" }).click();
@@ -125,10 +130,10 @@ test("calendar #6: ✓ closes at once, Undo reopens, and the reason is kept with
   await toast.getByRole("button", { name: "Save" }).click();
   await expect(toast).toBeHidden();
 
-  await expect(line).toHaveText(`📅 ${shortDay(when, true)} · Closed ${dayAndMonth(today())} · renewed until 2027 · Reopen · Edit reason`);
+  await expect(line).toHaveText(`📅 ${shortDay(when, true)} · Closed ${dayAndMonth(closedOn)} · renewed until 2027 · Reopen · Edit reason`);
   const content = (await aliceApi.getNote(path)).content;
   expect(content).toMatch(/^task: closed$/m);
-  expect(content).toMatch(new RegExp(`^closed: ${today()}$`, "m"));
+  expect(content).toMatch(new RegExp(`^closed: ${closedOn}$`, "m"));
   expect(content).toMatch(/^reason: renewed until 2027$/m);
 });
 
@@ -272,47 +277,68 @@ test("calendar #13: every control is at least 48 px high @calendar @phone", asyn
   expect(small, "F-01: every control is at least 48 px high").toEqual([]);
 });
 
-test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, Today, This week, Fix… or the note's calendar items @calendar @phone", async ({ bobPage, bobApi, aliceApi, folder }) => {
+// Serial: Bob's zone is his account's, and the other project's #14 would set and restore it meanwhile.
+test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, Today, This week, Fix… or the note's calendar items @calendar @serial @phone", async ({ bobPage, bobApi, aliceApi, folder }) => {
   const t = today();
-  const tag = tagOf(folder);
-  const task = `/Work/${folder}/Bob task.md`;
-  await aliceApi.putNote(task, note({ when: t, task: "open", tags: `[${tag}]` }, "# Bob task\n"));
-  await aliceApi.putNote(`/Work/${folder}/Call London.md`, note({ when: `${addDays(t, 1)}T14:00`, tz: "Europe/London", tags: `[${tag}]` }, "# Call London\n"));
-  await aliceApi.putNote(`/Work/${folder}/Someday.md`, note({ when: "someday", tags: `[${tag}]` }, "# Someday\n"));
-  await dismissInstallHint(bobPage);
+  // His zone other than Alice's for the test (preset from his browser, Europe/Vienna, as hers), back at its end.
+  const his = "Europe/London";
+  expect((await bobApi.json<{ zone: string | null }>("GET", "/api/account/calendar")).zone, "Bob's zone is preset").toBe("Europe/Vienna");
+  await bobApi.json("PUT", "/api/account/calendar", { zone: his });
+  try {
+    const tag = tagOf(folder);
+    const task = `/Work/${folder}/Bob task.md`;
+    await aliceApi.putNote(task, note({ when: t, task: "open", tags: `[${tag}]` }, "# Bob task\n"));
+    await aliceApi.putNote(`/Work/${folder}/Call London.md`, note({ when: `${addDays(t, 1)}T14:00`, tz: "Europe/London", tags: `[${tag}]` }, "# Call London\n"));
+    await aliceApi.putNote(`/Work/${folder}/Call Vienna.md`, note({ when: `${addDays(t, 1)}T09:00`, tz: "Europe/Vienna", tags: `[${tag}]` }, "# Call Vienna\n"));
+    await aliceApi.putNote(`/Work/${folder}/Someday.md`, note({ when: "someday", tags: `[${tag}]` }, "# Someday\n"));
+    await dismissInstallHint(bobPage);
 
-  // His zone: the calendar's today and zone are his (preset from his browser, Europe/Vienna, as Alice's).
-  const view = await bobApi.json<{ today: string; zone: string; canWrite: boolean }>("GET", "/api/vaults/Work/calendar");
-  expect([view.zone, view.today, view.canWrite]).toEqual(["Europe/Vienna", t, false]);
+    // His zone: the calendar's today and zone are his.
+    const view = await bobApi.json<{ today: string; zone: string; canWrite: boolean }>("GET", "/api/vaults/Work/calendar");
+    const hisToday = new Intl.DateTimeFormat("en-CA", { timeZone: his }).format(new Date());
+    expect([view.zone, view.today, view.canWrite]).toEqual([his, hisToday, false]);
 
-  await bobPage.goto(weekUrl("Work", t, tag));
-  await expect(bobPage.getByRole("link", { name: "Bob task" })).toBeVisible();
-  await expect(bobPage.getByRole("link", { name: "Call London" })).toBeVisible();
-  // A time pinned to another zone than his shows that zone.
-  await expect(bobPage.getByText("14:00 (Europe/London)")).toBeVisible();
-  await expect(bobPage.getByRole("heading", { name: "Dates I couldn't read" })).toBeVisible();
-  for (const name of [/^Done:/, /^Later/, /^Add something on/, /^Today$/, /^This week$/, /^Fix…/]) await expect(bobPage.getByRole("button", { name }), String(name)).toHaveCount(0);
+    await bobPage.goto(weekUrl("Work", t, tag));
+    await expect(bobPage.getByRole("link", { name: "Bob task" })).toBeVisible();
+    await expect(bobPage.getByRole("link", { name: "Call London" })).toBeVisible();
+    // His week speaks in his zone: a time pinned to it is a plain clock, one pinned to another zone (Alice's) names it.
+    await expect(itemOf(bobPage, "Call London")).toContainText("14:00");
+    await expect(itemOf(bobPage, "Call London")).not.toContainText("(Europe/London)");
+    await expect(itemOf(bobPage, "Call Vienna")).toContainText("09:00 (Europe/Vienna)");
+    await expect(bobPage.getByRole("heading", { name: "Dates I couldn't read" })).toBeVisible();
+    for (const name of [/^Done:/, /^Later/, /^Add something on/, /^Today$/, /^This week$/, /^Fix…/]) await expect(bobPage.getByRole("button", { name }), String(name)).toHaveCount(0);
 
-  await bobPage.goto(notePage(task));
-  await expect(entryLine(bobPage)).toHaveText(`📅 ${shortDay(t, true)} · To do`);
-  const menu = await noteActions(bobPage);
-  await expect(menu.getByRole("menuitem").first()).toBeVisible();
-  for (const name of ["Add to calendar…", "Edit date…", "Remove from calendar"]) await expect(menu.getByRole("menuitem", { name }), name).toHaveCount(0);
+    await bobPage.goto(notePage(task));
+    await expect(entryLine(bobPage)).toHaveText(`📅 ${shortDay(t, true)} · To do`);
+    const menu = await noteActions(bobPage);
+    await expect(menu.getByRole("menuitem").first()).toBeVisible();
+    for (const name of ["Add to calendar…", "Edit date…", "Remove from calendar"]) await expect(menu.getByRole("menuitem", { name }), name).toHaveCount(0);
 
-  const refused = await bobApi.context.post("/api/vaults/Work/calendar/close", { data: { path: task } });
-  expect(refused.status()).toBe(403);
-  expect((await aliceApi.getNote(task)).content).toMatch(/^task: open$/m);
+    const refused = await bobApi.send("POST", "/api/vaults/Work/calendar/close", { data: { path: task } });
+    expect(refused.status()).toBe(403);
+    expect((await aliceApi.getNote(task)).content).toMatch(/^task: open$/m);
+  } finally {
+    await bobApi.json("PUT", "/api/account/calendar", { zone: "Europe/Vienna" });
+  }
 });
 
 test("calendar #17: an agent reads and writes the calendar through sh, and the console only reads @calendar", async ({ aliceApi, mcp, folder, seedAs }) => {
+  // Two to-dos at a time later today, an hour from now: not across midnight in Vienna.
+  const [hours, minutes] = nowTime().split(":").map(Number);
+  const later = hours * 60 + minutes + 60;
+  test.skip(later >= 24 * 60 - 5, "an hour from now is tomorrow in Vienna");
+  const clock = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const t = today();
   const plan = `/Work/${folder}/Plan.md`;
   const dayNote = `/Work/${folder}/Calendar/${t}.md`;
   await seedAs("tags/calendar/Plan.md", plan);
-  await seedAs("tags/calendar/Tags/Kumbu.md", `/Work/${folder}/Kumbu.md`);
+  // Not named Kumbu: the aliases tests give that name to a note of theirs, vault-wide.
+  await seedAs("tags/calendar/Tags/Kumbu.md", `/Work/${folder}/Weekly report.md`);
   await aliceApi.putNote(`/Work/${folder}/Due.md`, note({ when: addDays(t, -2), task: "open" }, "# Due\n"));
   await aliceApi.putNote(dayNote, `# ${t}\n`);
   await aliceApi.putNote(`/Work/${folder}/Someday.md`, note({ when: "someday" }, "# Someday\n"));
+  await aliceApi.putNote(`/Work/${folder}/Call Vienna.md`, note({ when: `${t}T${clock(later)}`, tz: "Europe/Vienna", task: "open" }, "# Call Vienna\n"));
+  await aliceApi.putNote(`/Work/${folder}/Call London.md`, note({ when: `${t}T${clock(later - 60)}`, tz: "Europe/London", task: "open" }, "# Call London\n"));
   const version = /version of .+: [0-9a-f]+/;
 
   const notifications = await mcp.sh("calendar notifications");
@@ -320,6 +346,10 @@ test("calendar #17: an agent reads and writes the calendar through sh, and the c
   const due = notifications.text.split("\n").filter((l) => l.includes(`/Work/${folder}/Due.md`));
   expect(due, "one line for Due.md").toHaveLength(1);
   expect(due[0]).toContain("overdue · 2 days");
+  // In Alice's zone, Europe/Vienna: a time pinned to it is a plain clock; one pinned to London names its zone.
+  const line = (name: string) => notifications.text.split("\n").find((l) => l.includes(`/Work/${folder}/${name}.md`)) ?? "";
+  expect(line("Call Vienna"), "Call Vienna's line").toMatch(new RegExp(`^\\s*today · ${clock(later)}  Call Vienna  `));
+  expect(line("Call London"), "Call London's line").toMatch(new RegExp(`^\\s*today · ${clock(later - 60)} \\(Europe/London\\)  Call London  `));
   // At least this folder's Someday.md; other tests' dates may be counted too.
   expect(notifications.text).toMatch(/^Problems: (1 date|\d+ dates) can't be read \((\/\S+ \d+, )*\/Work \d+(, \/\S+ \d+)*\); calendar \/\S+ lists (it|them)$/m);
 
@@ -330,7 +360,7 @@ test("calendar #17: an agent reads and writes the calendar through sh, and the c
 
   const tagged = await mcp.sh(`calendar /Work --week ${isoWeek(t).week} --tag kumbu`);
   expect(tagged.isError).toBe(false);
-  expect(tagged.text).toContain(`/Work/${folder}/Kumbu.md`);
+  expect(tagged.text).toContain(`/Work/${folder}/Weekly report.md`);
   expect(tagged.text).not.toContain(`/Work/${folder}/Due.md`);
 
   const month = t.slice(0, 7);

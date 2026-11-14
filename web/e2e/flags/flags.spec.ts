@@ -202,6 +202,8 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
       if (r.url().includes("/api/") && r.method() !== "GET") writes.push({ method: r.method(), url: new URL(r.url()).pathname });
     };
     page.on("request", record);
+    // The day it is closed on, read once before the tap: midnight in Vienna may pass while the test runs.
+    const closedOn = today();
     await page.getByRole("alertdialog").getByRole("button", { name: "Mark done" }).click();
     await expect(message(page)).toHaveText(/^Ticked and marked done\s*·\s*Undo$/);
     page.off("request", record);
@@ -213,7 +215,7 @@ test("flags #6: Mark done writes flag, task and closed in one version, Undo give
     const closed = (await aliceApi.getNote(path)).content;
     expect(closed).toContain("flag/done");
     expect(closed).toContain("task: closed");
-    expect(closed).toContain(`closed: ${today()}`);
+    expect(closed).toContain(`closed: ${closedOn}`);
     await expect.poll(async () => (await aliceApi.history(path)).length, "one version more").toBe(versions + 1);
     // Newest first: the current version, then the one before it, read by its token.
     const history = (await aliceApi.history(path)) as { version: string; current: boolean }[];

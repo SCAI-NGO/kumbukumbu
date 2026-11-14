@@ -198,7 +198,13 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await expect(other.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
     await closeDrawer(other);
     await expect(pill(other).first()).toBeVisible();
+    // The first tab's read of Recent changes after the hide, without Home (its rows and its vault chips both come from
+    // it; the vault list isn't read again).
+    const read = page.waitForResponse(async (r) => new URL(r.url()).pathname === "/api/recent" && r.ok() && !/\/Home\b|"Home"|Zahnarzt/.test(await r.text()), {
+      timeout: 15_000,
+    });
     await hideDiscreet(other);
+    await read;
 
     // The filters start again on a hide (RecentPage): the words are empty once the page has learnt of it.
     await expect(words(page)).toHaveValue("");
@@ -220,7 +226,7 @@ test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent 
   await words(bobPage).fill(folder);
   const row = rows(bobPage).filter({ hasText: "Certificate" });
   await expect(row).toHaveCount(1);
-  // Another member's name reads as Activity writes it, in quotes (WriterLabels.Quoted); the checklist says Alice (F-?? unclear, see the report).
+  // Another member's name reads as Activity writes it, in quotes (WriterLabels.Quoted); the checklist says Alice (F-04 unclear, see the report).
   await expect(row).toHaveText(new RegExp(`^Certificate.*Work/${folder}/Pump · "?alice"? · (just now|.+ ago)$`, "i"));
 
   // Home is no chip and no row; Alice's own vaults are not his (his chips are Work and what is his own).

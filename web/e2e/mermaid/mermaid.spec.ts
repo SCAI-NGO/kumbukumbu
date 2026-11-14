@@ -2,6 +2,7 @@
 // Mermaid diagrams (the mermaid report's hand-test checklist 1-6, 11, 13, 14; spec 2026-11-12-mermaid-and-parity-design.md §2).
 import type { BrowserContext, Page } from "@playwright/test";
 import { Api } from "../support/api";
+import { reserveReaderRead } from "../support/session";
 import { onPhone, shot } from "../support/test";
 import {
   article,
@@ -11,6 +12,7 @@ import {
   diaryRow,
   expect,
   expectLoaded,
+  filler,
   lightFill,
   lit,
   mentions,
@@ -23,12 +25,17 @@ import {
   withdraw,
 } from "./helpers";
 
+// No failure screenshots in this file: #14's reader page shows the AI link and its token (a describe of its own
+// can't turn them off).
+test.use({ screenshot: "off" });
+
 test.afterEach(async ({ aliceApi, folder }) => {
   await cleanFolder(aliceApi, folder);
 });
 
 /** Opens the reader page at the publish link; wrapped, as a failed navigation's error names the URL and its secret. */
 async function openReader(reader: Page, link: string) {
+  await reserveReaderRead();
   await reader.goto(link).catch(() => {
     throw new Error("the reader page did not open");
   });
@@ -156,7 +163,7 @@ test("mermaid #6: images in diagrams aren't loaded @mermaid", async ({ page, ali
   expect(asked, "no request to /x").toEqual([]);
 });
 
-test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagram scrolls in its frame @mermaid @phone", async ({ page, seedAs, folder }, testInfo) => {
+test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagram scrolls in its frame @mermaid @phone", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
   test.skip(!onPhone(testInfo), "The phone's step (375 px); the desktop has its own steps 1, 7 and 9.");
   const { plan, tasks, wide } = await seedExample(seedAs, folder);
 
@@ -173,13 +180,16 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
   await expect(page.getByRole("region", { name: "Embedded: Ruling › Decision" })).toBeVisible();
   await shot(page, testInfo, "mermaid");
 
-  // 7: the block link from Tasks.
+  // 7: the block link from Tasks, to the block below filler paragraphs: the jump has to scroll to it.
+  const stored = (await aliceApi.getNote(plan)).content;
+  await aliceApi.putNote(plan, stored.replace("# Plan\n\n", `# Plan\n\n${filler}\n\n`));
   await openNote(page, tasks);
   await article(page).getByRole("link", { name: "Plan › ^controller" }).tap();
   await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Pump/Plan\\.md$`));
   expect(new URL(page.url()).hash, "no hash in the address").toBe("");
   await expect(controllerLine(page)).toHaveClass(lit);
   await expect(controllerLine(page)).toBeInViewport();
+  await expect(article(page).getByText("Filler paragraph 1 about", { exact: false }), "the jump scrolled").not.toBeInViewport();
 
   // 9: the mentions button, tall enough and reachable by keyboard; opened, the diary's line.
   const { section, button } = mentions(page);
@@ -187,7 +197,14 @@ test("mermaid #11: at 375 px the diagram fits, mentions ≥ 48 px, a wide diagra
   await expect(button).toHaveText("Unlinked mentions");
   await expect(section.getByRole("listitem")).toHaveCount(0);
   expect((await button.boundingBox())!.height, "the mentions button is at least 48 px high").toBeGreaterThanOrEqual(48);
-  await button.focus();
+  // Reachable by keyboard: Tab from the button before it (Linked from's Tasks) gets there.
+  await page.getByRole("region", { name: "Linked from" }).getByRole("button").last().focus();
+  let reached = false;
+  for (let i = 0; i < 5 && !reached; i++) {
+    await page.keyboard.press("Tab");
+    reached = await button.evaluate((b) => b === document.activeElement);
+  }
+  expect(reached, "Tab reaches the mentions button").toBe(true);
   await expect(button).toBeFocused();
   await button.tap();
   await expect(button).toHaveAttribute("aria-expanded", "true");
@@ -272,13 +289,15 @@ test("mermaid #14: Copy as Markdown and the AI link keep the source and the bloc
     expect(copied.includes(planSource), "Copy as Markdown holds the Mermaid source as written").toBe(true);
     expect(copied.includes("The pump needs a new controller. ^controller"), "Copy as Markdown keeps ^controller").toBe(true);
 
+    await reserveReaderRead();
     await reader.getByRole("button", { name: "Link for your AI" }).click();
     const field = reader.getByRole("textbox", { name: "Link for your AI" });
     await expect(field).toHaveValue(/\S/);
     const aiLink = await field.inputValue();
     expect(/^http:\/\/localhost:8080\/s\/t\/[A-Za-z0-9_-]+$/.test(aiLink), "the AI link's shape").toBe(true);
     // Wrapped: a failed request's error names the URL, its token with it.
-    const answer = await anonymous.context.get(aiLink).catch(() => {
+    await reserveReaderRead();
+    const answer = await anonymous.send("GET", aiLink).catch(() => {
       throw new Error("the AI link could not be fetched");
     });
     expect(answer.status(), "the AI link answers").toBe(200);

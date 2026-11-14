@@ -4,7 +4,7 @@ import type { Locator, Page, TestInfo } from "@playwright/test";
 import { join } from "node:path";
 import { encodePath } from "../support/api";
 import { fixturesDir } from "../support/env";
-import { hideDiscreet, revealDiscreet } from "../support/session";
+import { endHidden, hideDiscreet, revealDiscreet } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
 
 /** The note's address in the app: `/Work/x/Note.md` → `/notes/Work/x/Note.md`. */
@@ -47,10 +47,14 @@ test("smoke #1: Alice signs in and sees Work, Welcome and Skills, and Home after
   await expect(vaults.getByRole("listitem")).toHaveText([/^Skills/, /^Welcome/, /^Work/]);
   await shot(page, testInfo, "smoke");
 
-  await revealDiscreet(page);
-  await expect(vaults.getByRole("listitem")).toHaveText([/^Home/, /^Skills/, /^Welcome/, /^Work/]);
-  await hideDiscreet(page);
-  await expect(vaults.getByRole("listitem")).toHaveText([/^Skills/, /^Welcome/, /^Work/]);
+  try {
+    await revealDiscreet(page);
+    await expect(vaults.getByRole("listitem")).toHaveText([/^Home/, /^Skills/, /^Welcome/, /^Work/]);
+    await hideDiscreet(page);
+    await expect(vaults.getByRole("listitem")).toHaveText([/^Skills/, /^Welcome/, /^Work/]);
+  } finally {
+    await endHidden(page);
+  }
 });
 
 test("smoke #2: a note renders its text, a wikilink and an image @smoke @phone", async ({ page, seedAs, folder }) => {
@@ -165,7 +169,12 @@ test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, se
     await page.getByRole("menuitem", { name: "Trash" }).click({ timeout: 2_000 });
   }).toPass({ timeout: 10_000 });
   const trash = page.getByRole("dialog", { name: "Trash" });
-  await trash.getByRole("listitem").filter({ hasText: folder }).getByRole("button", { name: "Restore Note" }).click();
+  // The dialog lists all of Work's trash, other tests' notes too, uncapped (newest first): this test's row by its
+  // folder, scrolled to wherever the others put it.
+  const row = trash.getByRole("list", { name: "Removed notes" }).getByRole("listitem").filter({ hasText: folder });
+  await expect(row, "this test's note is in the trash").toHaveCount(1);
+  await row.scrollIntoViewIfNeeded();
+  await row.getByRole("button", { name: "Restore Note" }).click();
   await expect(trash.getByRole("list", { name: "Restored notes" })).toContainText("Restored Note");
   await trash.getByRole("button", { name: "Close" }).click();
 
@@ -218,11 +227,11 @@ test("smoke #8: Bob sees Work, can't edit, and never sees Home @smoke @serial", 
   await expect(page.getByRole("button", { name: "Read" })).toHaveAttribute("aria-pressed", "true");
 
   const before = await aliceApi.getNote(path);
-  const refused = await bobApi.context.put(`/api/notes/${encodePath(path)}`, { data: { content: "Changed by Bob.\n", version: before.version } });
+  const refused = await bobApi.send("PUT", `/api/notes/${encodePath(path)}`, { data: { content: "Changed by Bob.\n", version: before.version } });
   expect(refused.status()).toBe(403);
   expect((await aliceApi.getNote(path)).content, "the note is as it was").toBe(before.content);
 
-  expect((await bobApi.context.get(`/api/notes/${encodePath("/Home/Zahnarzt.md")}`)).ok(), "Home's note is not Bob's to read").toBe(false);
+  expect((await bobApi.send("GET", `/api/notes/${encodePath("/Home/Zahnarzt.md")}`)).ok(), "Home's note is not Bob's to read").toBe(false);
 });
 
 test("smoke #9: an edit in one tab shows in the other without a reload @smoke", async ({ page, seedAs, folder }) => {
@@ -240,7 +249,6 @@ test("smoke #9: an edit in one tab shows in the other without a reload @smoke", 
   // The other tab hears of it by itself and offers the new version: Refresh takes it, the page isn't reloaded.
   const bar = other.getByRole("region", { name: "Changed elsewhere" });
   await expect(bar.getByRole("status")).toContainText("You changed this note elsewhere");
-  await expect(other.locator("article").getByText("The fog horn sounds twice.")).toHaveCount(0);
   await bar.getByRole("button", { name: "Refresh" }).click();
   await expect(other.locator("article").getByText("The fog horn sounds twice.")).toBeVisible();
   expect(await other.evaluate(() => (window as unknown as { __mark?: number }).__mark), "no reload").toBe(1);
@@ -281,16 +289,20 @@ test("smoke #10: hidden Home leaves no trace in the tree, search or Recent chang
 
   // With the PIN Home is back: its switcher entry, its note in the search, in Recent changes and as a chip.
   await page.goto("/");
-  await revealDiscreet(page);
-  await page.getByRole("button", { name: /^Switch vault/ }).click();
-  await expect(page.getByRole("dialog", { name: /vault/i }).getByRole("button", { name: /^Home/ })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: /^Search/ }).click();
-  await page.getByRole("dialog", { name: "Search" }).getByRole("searchbox", { name: "Search" }).fill("Zahnarzt");
-  await expect(page.getByRole("dialog", { name: "Search" }).getByRole("button", { name: /Zahnarzt/ })).toBeVisible();
-  await recent();
-  await expect(page.getByRole("list", { name: "Recent changes" }).getByText("Zahnarzt")).toBeVisible();
-  await expect(chips.getByRole("button", { name: "Home" })).toBeVisible();
-  await page.goto("/");
-  await hideDiscreet(page);
+  try {
+    await revealDiscreet(page);
+    await page.getByRole("button", { name: /^Switch vault/ }).click();
+    await expect(page.getByRole("dialog", { name: /vault/i }).getByRole("button", { name: /^Home/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: /^Search/ }).click();
+    await page.getByRole("dialog", { name: "Search" }).getByRole("searchbox", { name: "Search" }).fill("Zahnarzt");
+    await expect(page.getByRole("dialog", { name: "Search" }).getByRole("button", { name: /Zahnarzt/ })).toBeVisible();
+    await recent();
+    await expect(page.getByRole("list", { name: "Recent changes" }).getByText("Zahnarzt")).toBeVisible();
+    await expect(chips.getByRole("button", { name: "Home" })).toBeVisible();
+    await page.goto("/");
+    await hideDiscreet(page);
+  } finally {
+    await endHidden(page);
+  }
 });

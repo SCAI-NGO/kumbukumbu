@@ -5,7 +5,11 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { Mcp, type Api } from "../support/api";
 import { randomBytes } from "node:crypto";
+import { reserveReaderRead } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
+
+// No failure screenshots in this file: #11 opens a secret reader link (a describe of its own can't turn them off).
+test.use({ screenshot: "off" });
 
 const url = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 
@@ -198,7 +202,11 @@ test("aliases #11: the published diary reads plain text @aliases @serial @phone"
         expect(/Projects|Kumbukumbu/.test(added.text), "nothing of the other note").toBe(false);
 
         const reader = await context.newPage();
-        await reader.goto(link!);
+        await reserveReaderRead();
+        // A navigation that fails names its address: the link with its secret.
+        await reader.goto(link!).catch(() => {
+          throw new Error("The reader page didn't open");
+        });
         const article = reader.locator("article");
         await expect(article.getByRole("heading", { name: "2026-11-12", level: 1 })).toBeVisible();
         // One paragraph of two lines, the links as plain words.
@@ -249,7 +257,7 @@ test("aliases #13: odd YAML saves and opens; other links keep working; the serve
     await expect(page.getByRole("region", { name: "Linked from" }).getByRole("heading", { name: "Linked from · 2" })).toBeVisible();
 
     // The server is up and answers.
-    const health = await aliceApi.context.get("/healthz");
+    const health = await aliceApi.send("GET", "/healthz");
     expect(health.ok()).toBe(true);
     expect(await health.text()).toBe("ok");
   });
