@@ -191,9 +191,26 @@ export function useNoteEntry(path: string | null, enabled = true) {
   });
 }
 
-/** Keeps the person's view of this vault's calendar (week or month, the grid shown or not) for next time. */
+const viewKey = (vault: string) => ["calendar-view", vault];
+
+/** The person's last view of this vault's calendar (week or month, the grid shown or not); the server's default is the week. */
+export function useCalendarViewState(vault: string) {
+  return useQuery({
+    queryKey: viewKey(vault),
+    queryFn: () => call(untyped.GET<CalendarViewState>("/api/vaults/{vault}/calendar/view", { params: { path: { vault } } })),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/**
+ * Keeps the person's view of this vault's calendar for next time. The page follows the choice at once; keeping it is
+ * a convenience, so a failure says nothing.
+ */
 export function useSetCalendarView(vault: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (view: CalendarViewState) => call(untyped.PUT<CalendarViewState>("/api/vaults/{vault}/calendar/view", { params: { path: { vault } }, body: view })),
+    onMutate: (view) => queryClient.setQueryData(viewKey(vault), view),
   });
 }

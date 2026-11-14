@@ -53,6 +53,18 @@ export function formatWeekTitle(week: { week: number; monday: string }): string 
   return `Week ${week.week} · ${range}`;
 }
 
+/** "Week 46 · 9–15 Nov", as a month's weeks are headed; across months "Week 44 · 26 Oct – 1 Nov". */
+export function shortWeekTitle(week: { week: number; monday: string }): string {
+  const first = partsOf(week.monday);
+  const last = partsOf(addDays(week.monday, 6));
+  const short = (month: number) => MONTHS[month - 1].slice(0, 3);
+  const range = first.month === last.month ? `${first.day}–${last.day} ${short(last.month)}` : `${first.day} ${short(first.month)} – ${last.day} ${short(last.month)}`;
+  return `Week ${week.week} · ${range}`;
+}
+
+/** True for Saturday and Sunday. */
+export const weekend = (day: string) => weekdayOf(day) % 6 === 0;
+
 /** "November 2026". */
 export function monthTitle(day: string): string {
   const { year, month } = partsOf(day);

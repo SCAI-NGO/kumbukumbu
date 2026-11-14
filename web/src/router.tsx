@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
+import { useZonePreset } from "./calendar/preferences";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
 import PasswordPrompt from "./components/PasswordPrompt";
@@ -66,6 +67,8 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const pathname = useLatestPathname();
   useDiscreetMode();
+  // Here, not in the shell: a deep link to the calendar presets the zone too.
+  useZonePreset();
 
   useEffect(() => followVaults(queryClient), [queryClient]);
 

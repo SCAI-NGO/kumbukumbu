@@ -282,6 +282,33 @@ describe("the calendar's week", () => {
     expect(screen.queryByRole("button", { name: /^Add something on/ })).not.toBeInTheDocument();
   });
 
+  it("Also ongoing is collapsed and counted", async () => {
+    const holiday = entry("Urlaub", { when: "2026-11-03", until: "2026-11-14", firstDay: "2026-11-03", lastDay: "2026-11-14", spans: true });
+    const trip = entry("Trip", { when: "2026-11-11", until: "2026-11-13", firstDay: "2026-11-11", lastDay: "2026-11-13", spans: true });
+    const view = calendar({ "2026-11-12": [dentist] });
+    view.weeks[0].spanning = [holiday, trip];
+    view.weeks[0].days[3].alsoOngoing = [holiday, trip];
+    view.weeks[0].days[5].alsoOngoing = [holiday];
+    api(view);
+    renderApp("/calendar/Work");
+    await title();
+    const thursday = screen.getByRole("heading", { level: 2, name: /^Thursday, 12 November/ }).closest("section")!;
+    // The day's own count leaves out what is also ongoing; that has its own.
+    expect(within(thursday).getByRole("heading", { level: 2 })).toHaveAccessibleName("Thursday, 12 November, 1 entry");
+    const summary = within(thursday).getByText("Also ongoing (2)");
+    const details = summary.closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    await userEvent.click(summary);
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getAllByRole("listitem").map((i) => within(i).getByRole("link").textContent)).toEqual(["Urlaub", "Trip"]);
+    expect(within(details).getAllByRole("listitem")[0]).toHaveTextContent("Tue 3 – Sat 14");
+    const saturday = screen.getByRole("heading", { level: 2, name: /^Saturday, 14 November/ }).closest("section")!;
+    expect(within(saturday).getByText("Also ongoing (1)")).toBeInTheDocument();
+    // Left out on a day with none.
+    const monday = screen.getByRole("heading", { level: 2, name: /^Monday, 9 November/ }).closest("section")!;
+    expect(within(monday).queryByText(/Also ongoing/)).not.toBeInTheDocument();
+  });
+
   it("shows entries over more than a day above the days, with their span", async () => {
     const holiday = entry("Urlaub", { when: "2026-11-03", until: "2026-11-14", firstDay: "2026-11-03", lastDay: "2026-11-14", spans: true });
     const view = calendar();

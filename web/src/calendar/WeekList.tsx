@@ -13,6 +13,26 @@ export function rangeOf(entry: EntryView): string {
   return `${shortDay(entry.firstDay, months)} – ${shortDay(entry.lastDay, months)}`;
 }
 
+/**
+ * The entries over several days that touch a day, so a day shows everything on it (spec §7.2): collapsed, with their
+ * own count, left out when there are none.
+ */
+export function AlsoOngoing({ entries, actions }: { entries: EntryView[]; actions?: EntryActions }) {
+  if (entries.length === 0) return null;
+  return (
+    <details>
+      <summary className="flex min-h-12 cursor-pointer items-center rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent">
+        Also ongoing ({entries.length})
+      </summary>
+      <ul className="flex flex-col gap-1">
+        {entries.map((e) => (
+          <EntryItem key={e.path} entry={e} actions={actions} range={rangeOf(e)} />
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 /** Whether a week has nothing on: no entry over the week, none on any day. */
 export const emptyWeek = (week: WeekView) => week.spanning.length === 0 && week.days.every((d) => d.entries.length === 0);
 
@@ -64,6 +84,7 @@ export default function WeekList(props: { week: WeekView; today: string; actions
                   <EntryItem key={e.path} entry={e} actions={actions} />
                 ))}
               </ul>
+              <AlsoOngoing entries={d.alsoOngoing} actions={actions} />
               {/* A tap on the day's empty space makes an entry too; keyboards and screen readers have the + for it. */}
               {onAdd && <button type="button" tabIndex={-1} aria-hidden="true" onClick={() => onAdd(d.day)} className="min-h-12 w-full flex-1 cursor-pointer" />}
             </section>

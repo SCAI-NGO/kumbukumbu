@@ -75,6 +75,13 @@ describe("the calendar's time zone", () => {
     await waitFor(async () => expect(await bodiesOf(fetch, "PUT", "/api/account/calendar")).toEqual([{ zone: "Europe/Vienna" }]));
   });
 
+  it("presets the zone on a deep link to the calendar too", async () => {
+    browserIn("Europe/Vienna");
+    const fetch = api(null, { "GET /api/vaults/Work/calendar/view": () => json(200, { view: "week", grid: false }) });
+    renderApp("/calendar/Work");
+    await waitFor(async () => expect(await bodiesOf(fetch, "PUT", "/api/account/calendar")).toEqual([{ zone: "Europe/Vienna" }]));
+  });
+
   it("presets once per session", async () => {
     browserIn("Europe/Vienna");
     const fetch = api(null, { "PUT /api/account/calendar": () => json(500, { error: "Down." }) });

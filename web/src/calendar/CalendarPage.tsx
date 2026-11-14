@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
-import { useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { calendarUrl, noteUrl } from "../api/paths";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { useEditor } from "../state/editor";
-import { useCalendar, useCalendarAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
+import { useCalendar, useCalendarAction, useCalendarViewState, useSetCalendarView, type CalendarView, type EntryView } from "./api";
 import { addDays, formatWeekTitle, monthId, monthTitle, weekId, weekOf } from "./dates";
 import { useClosing } from "./ClosedToast";
+import CouldntRead from "./CouldntRead";
 import type { EntryActions } from "./EntryItem";
 import LaterMenu from "./LaterMenu";
+import MonthGrid from "./MonthGrid";
+import MonthList, { dayAnchor, weekAnchor } from "./MonthList";
 import NewEntryDialog from "./NewEntryDialog";
+import TagFilter, { useTag, withTag } from "./TagFilter";
 import WeekList, { emptyWeek } from "./WeekList";
 
 const EMPTY_WEEK = 'Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: "put this on Friday".';
@@ -28,18 +32,29 @@ function shiftMonth(month: string, by: number) {
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}`;
 }
 
+const monthUrl = (vault: string, month: string) => `${calendarUrl(vault)}?month=${month}`;
+
 /**
- * `/calendar/<Vault>`: the vault's calendar, a view of every note in it with a time. `?week=2026-W46` (the default:
- * this week) or `?month=2026-11`.
+ * `/calendar/<Vault>`: the vault's calendar, a view of every note in it with a time. `?week=2026-W46` or
+ * `?month=2026-11`; neither: the view the person left this calendar in (spec §7.3), the week by default, at today.
+ * `?tag=` narrows it to a tag.
  */
 export default function CalendarPage() {
   const { vault = "" } = useParams();
   const [params] = useSearchParams();
+  const { hash } = useLocation();
   const week = params.get("week") ?? undefined;
   const month = week ? undefined : (params.get("month") ?? undefined);
-  const calendar = useCalendar(vault, { week, month });
+  const tag = useTag();
+  const remembered = useCalendarViewState(vault);
+  // Asked at once, the month too: this week is also what gives today, and the month's address needs it.
+  const calendar = useCalendar(vault, { week, month }, tag);
   const view = calendar.data;
-  const title = view ? (month ? monthTitle(`${month}-01`) : view.weeks[0] ? formatWeekTitle(view.weeks[0]) : vault) : vault;
+  const unnamed = !week && !month;
+
+  if (unnamed && remembered.data?.view === "month" && view) return <Navigate replace to={withTag(monthUrl(vault, monthId(view.today)), tag) + hash} />;
+  const waiting = calendar.isPending || (unnamed && remembered.isPending);
+  const title = view && !waiting ? (month ? monthTitle(`${month}-01`) : view.weeks[0] ? formatWeekTitle(view.weeks[0]) : vault) : vault;
 
   return (
     <div className="relative flex h-dvh flex-col bg-bg">
@@ -49,15 +64,16 @@ export default function CalendarPage() {
         </Link>
         <h1 className="min-w-0 flex-1 truncate px-2 text-[20px] font-bold text-text">{title}</h1>
       </header>
-      {calendar.isPending && <p className="p-4 text-sm text-muted">Loading …</p>}
+      {waiting && <p className="p-4 text-sm text-muted">Loading …</p>}
       {calendar.isError && <p className="p-4 text-text">{errorText(calendar.error)}</p>}
-      {view && <Calendar vault={vault} view={view} month={month} />}
+      {view && !waiting && <Calendar vault={vault} view={view} month={month} tag={tag} grid={remembered.data?.grid ?? false} />}
     </div>
   );
 }
 
-function Calendar({ vault, view, month }: { vault: string; view: CalendarView; month?: string }) {
+function Calendar({ vault, view, month, tag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; grid: boolean }) {
   const navigate = useNavigate();
+  const { hash } = useLocation();
   const action = useCalendarAction(vault);
   const setView = useSetCalendarView(vault);
   const [adding, setAdding] = useState<string | null>(null);
@@ -75,11 +91,26 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
     action.mutate({ kind }, { onSuccess: (written) => open(written.path), onError: (err) => setProblem(errorText(err)) });
   };
   const choose = (next: "week" | "month") => {
-    setView.mutate({ view: next, grid: false });
-    if (next === "month") return navigate(`${calendarUrl(vault)}?month=${shownMonth}`);
+    setView.mutate({ view: next, grid });
+    if (next === "month") return navigate(withTag(monthUrl(vault, shownMonth), tag));
     const inMonth = monthId(view.today) === shownMonth;
-    navigate(calendarUrl(vault, weekId(inMonth || !shown ? weekOf(view.today) : weekOf(shown.monday))));
+    navigate(withTag(calendarUrl(vault, weekId(inMonth || !shown ? weekOf(view.today) : weekOf(shown.monday))), tag));
   };
+  const toggleGrid = () => setView.mutate({ view: month ? "month" : "week", grid: !grid });
+
+  /** The month grid's day: in the month, the list jumps to it (or to its week, when nothing is on it); in the week, its week opens. */
+  const jump = (day: string) => {
+    if (!month) return navigate(withTag(calendarUrl(vault, weekId(weekOf(day))), tag));
+    const target = document.getElementById(dayAnchor(day)) ?? document.getElementById(weekAnchor(weekOf(day)));
+    target?.scrollIntoView?.({ block: "start" });
+    target?.querySelector<HTMLElement>("h2, h3")?.focus({ preventScroll: true });
+  };
+
+  // What's on links to the dates it couldn't read, `#couldnt-read`: the router doesn't scroll to an anchor.
+  const unread = view.couldntRead.length > 0;
+  useEffect(() => {
+    if (hash.length > 1) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView?.({ block: "start" });
+  }, [hash, unread]);
 
   const closing = useClosing();
   const say = (text: string | null) => {
@@ -95,19 +126,19 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
         renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} />,
       }
     : undefined;
-  const previous = month ? `${calendarUrl(vault)}?month=${shiftMonth(month, -1)}` : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, -7))));
-  const next = month ? `${calendarUrl(vault)}?month=${shiftMonth(month, 1)}` : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, 7))));
+  const previous = month ? monthUrl(vault, shiftMonth(month, -1)) : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, -7))));
+  const next = month ? monthUrl(vault, shiftMonth(month, 1)) : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, 7))));
 
   return (
     <>
       <nav aria-label="Calendar" className="flex flex-none flex-wrap items-center gap-1 border-b border-line px-2 py-1.5 lg:px-3">
         {previous && (
-          <Link to={previous} aria-label={month ? "Previous month" : "Previous week"} className={navClass}>
+          <Link to={withTag(previous, tag)} aria-label={month ? "Previous month" : "Previous week"} className={navClass}>
             <ChevronLeft size={20} aria-hidden />
           </Link>
         )}
         {next && (
-          <Link to={next} aria-label={month ? "Next month" : "Next week"} className={navClass}>
+          <Link to={withTag(next, tag)} aria-label={month ? "Next month" : "Next week"} className={navClass}>
             <ChevronRight size={20} aria-hidden />
           </Link>
         )}
@@ -121,23 +152,39 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
             </button>
           </>
         )}
-        <div role="group" aria-label="View" className="ml-auto flex overflow-hidden rounded-[10px] border border-line">
-          <button type="button" aria-pressed={!month} onClick={() => month && choose("week")} className={switchClass(!month)}>
-            Week
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          <div role="group" aria-label="View" className="flex overflow-hidden rounded-[10px] border border-line">
+            <button type="button" aria-pressed={!month} onClick={() => month && choose("week")} className={switchClass(!month)}>
+              Week
+            </button>
+            <button type="button" aria-pressed={!!month} onClick={() => !month && choose("month")} className={switchClass(!!month)}>
+              Month
+            </button>
+          </div>
+          <button type="button" aria-pressed={grid} onClick={toggleGrid} className={`min-h-12 rounded-[10px] border border-line px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${grid ? "bg-surface-2 text-text" : "text-muted"}`}>
+            Show grid
           </button>
-          <button type="button" aria-pressed={!!month} onClick={() => !month && choose("month")} className={switchClass(!!month)}>
-            Month
-          </button>
+          <TagFilter />
         </div>
       </nav>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
         {(problem ?? closing.problem) && <FormError>{problem ?? closing.problem}</FormError>}
-        <div className="flex flex-col gap-6">
-          {view.weeks.map((w) => (
-            <WeekList key={w.monday} week={w} today={view.today} actions={actions} onAdd={view.canWrite ? setAdding : undefined} />
-          ))}
-        </div>
+        {grid && (
+          <div className="mb-4">
+            {month ? <MonthGrid month={month} weeks={view.weeks} today={view.today} onDay={jump} /> : <WeekGrid vault={vault} month={shownMonth} tag={tag} onDay={jump} />}
+          </div>
+        )}
+        {month ? (
+          <MonthList vault={vault} weeks={view.weeks} actions={actions} tag={tag} />
+        ) : (
+          <div className="flex flex-col gap-6">
+            {view.weeks.map((w) => (
+              <WeekList key={w.monday} week={w} today={view.today} actions={actions} onAdd={view.canWrite ? setAdding : undefined} />
+            ))}
+          </div>
+        )}
         {!month && view.weeks.every(emptyWeek) && <p className="mt-4 max-w-prose text-text-body">{view.canWrite ? EMPTY_WEEK : "Nothing this week yet."}</p>}
+        <CouldntRead notes={view.couldntRead} canWrite={view.canWrite} />
       </main>
       {closing.toast}
       {adding && (
@@ -153,4 +200,11 @@ function Calendar({ vault, view, month }: { vault: string; view: CalendarView; m
       )}
     </>
   );
+}
+
+/** The grid in the week view: the shown week's month, asked for on its own; a day opens its week. */
+function WeekGrid({ vault, month, tag, onDay }: { vault: string; month: string; tag?: string; onDay(day: string): void }) {
+  const calendar = useCalendar(vault, { month }, tag);
+  if (!calendar.data) return null;
+  return <MonthGrid month={month} weeks={calendar.data.weeks} today={calendar.data.today} onDay={onDay} />;
 }

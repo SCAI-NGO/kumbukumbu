@@ -10,13 +10,15 @@ import { useWhatsOn, type EntryView, type WhatsOnView } from "./api";
 import { useClosing } from "./ClosedToast";
 import EntryItem, { type EntryActions } from "./EntryItem";
 import LaterMenu from "./LaterMenu";
+import TagFilter, { useTag } from "./TagFilter";
 
 /**
  * `/whats-on`: what is on over every vault the session shows (spec §7.6), overdue first, then ongoing, then upcoming;
- * each with its vault, and ✓ and Later on an open to-do. At the bottom, the dates that couldn't be read, if any.
+ * each with its vault, and ✓ and Later on an open to-do. At the bottom, the dates that couldn't be read, if any. `?tag=`
+ * narrows it to a tag.
  */
 export default function WhatsOnPage() {
-  const whatsOn = useWhatsOn();
+  const whatsOn = useWhatsOn(useTag());
   return (
     <div className="relative flex h-dvh flex-col bg-bg">
       <header className="flex flex-none items-center gap-1 border-b border-line px-2 py-1.5 lg:px-3">
@@ -24,6 +26,7 @@ export default function WhatsOnPage() {
           <ArrowLeft size={20} aria-hidden />
         </Link>
         <h1 className="min-w-0 flex-1 truncate px-2 text-[20px] font-bold text-text">What's on</h1>
+        <TagFilter />
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
         {whatsOn.isPending && <p className="text-sm text-muted">Loading …</p>}

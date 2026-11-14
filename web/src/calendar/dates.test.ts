@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { addDays, dayHeading, dayLabel, formatWeekTitle, weekId, weekOf } from "./dates";
+import { addDays, dayHeading, dayLabel, formatWeekTitle, shortWeekTitle, weekend, weekId, weekOf } from "./dates";
 
 describe("calendar dates", () => {
   it("titles a week within one month", () => {
     expect(formatWeekTitle({ week: 46, monday: "2026-11-09" })).toBe("Week 46 · 9–15 November 2026");
+  });
+
+  it("heads a month's weeks short", () => {
+    expect(shortWeekTitle({ week: 46, monday: "2026-11-09" })).toBe("Week 46 · 9–15 Nov");
+    expect(shortWeekTitle({ week: 44, monday: "2026-10-26" })).toBe("Week 44 · 26 Oct – 1 Nov");
+    expect(shortWeekTitle({ week: 1, monday: "2025-12-29" })).toBe("Week 1 · 29 Dec – 4 Jan");
+  });
+
+  it("knows the weekend", () => {
+    expect(["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16"].map(weekend)).toEqual([false, true, true, false]);
   });
 
   it("titles a week across two months", () => {
