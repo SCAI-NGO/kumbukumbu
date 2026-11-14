@@ -6,7 +6,7 @@ Kumbu² is a Markdown second brain served over MCP: a C# (.NET 10) server in `sr
 
 - Code, comments, docs, commit messages, PR descriptions: **British English** (colour, behaviour, initialise, licence as the noun).
 - Match the surrounding code: its comment density, naming and idiom. Comments only where the reasoning isn't obvious. Source files start with `// SPDX-License-Identifier: AGPL-3.0-or-later` where their siblings do.
-- The repository names no organisation, customer or employer: not in code, docs, specs, test data or examples (use neutral words such as "Work"). Deployment-specific settings go into `.env` or a `compose.override.yaml`, never into the repository.
+- The repository names no customer or employer: not in code, docs, specs, test data or examples (use neutral words such as "Work"). The one organisation it may name, where needed, is its owner: Second Circuit – Association for digital freedom of thought. Deployment-specific settings go into `.env` or a `compose.override.yaml`, never into the repository.
 
 ## Build and test
 
@@ -24,6 +24,10 @@ The search tests that need the real embedding model run with `KUMBU_MODEL_DIR` p
 - A branch per change, a pull request, squash merge. Commit messages imperative and free-form ("Let the admin choose the default embedding provider"), no Conventional Commits prefix.
 - CI (`.github/workflows/ci.yml`) and the image build (`docker.yml`) run on every pull request. A push to `master` publishes `:master` and `:sha-…` images; only a version tag publishes `:latest`, which deployments follow.
 - Specs go to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, plans to `docs/superpowers/plans/`.
+
+## Overnighters
+
+Cloud runs (routines on Anthropic's servers) use the current Opus model (now `claude-opus-5-5`). Security audits are the one exception: they use the current Mythos model (now `claude-mythos-5-2`), our specialist for defensive security work, and stay blue team: reviewing and testing our own code, never exploits or live systems. As newer versions come out, the runs move to them, and the split stays the same.
 
 ## Releasing
 
