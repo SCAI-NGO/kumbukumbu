@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -198,6 +199,32 @@ describe("the badge", () => {
     expect(setAppBadge).not.toHaveBeenCalled();
     expect(clearAppBadge).not.toHaveBeenCalled();
     await act(async () => listed(json(200, [vault("Work"), { ...vault("Home"), discreet: true }])));
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+    expect(setAppBadge).not.toHaveBeenCalledWith(3);
+  });
+
+  it("reveal → the badge answering before the vault list → no setAppBadge with the discreet share", async () => {
+    badging();
+    let revealed = false;
+    let listed = (_: Response) => {};
+    shell(() => (revealed ? count(3, false, [{ vault: "Work", count: 1, overdue: false }, { vault: "Home", count: 2, overdue: false }]) : count(1, false, [{ vault: "Work", count: 1, overdue: false }])), {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed, until: null } }),
+      // Hidden, the list leaves Home out; shown, it says Home is discreet, but only once it is let through.
+      "GET /api/vaults": () => (revealed ? new Promise<Response>((resolve) => (listed = resolve)) : json(200, [vault("Work")])),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Work/inbox.md", queryClient);
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+
+    // What showing them refreshes (discreet/api.ts), all at once.
+    revealed = true;
+    await act(async () => {
+      for (const queryKey of [["session"], ["vaults"], ["whats-on"]]) void queryClient.invalidateQueries({ queryKey });
+    });
+    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    expect(setAppBadge).not.toHaveBeenCalledWith(3);
+    await act(async () => listed(json(200, [vault("Work"), { ...vault("Home"), discreet: true }])));
+    await waitFor(() => expect(queryClient.getQueryState(["vaults"])?.fetchStatus).toBe("idle"));
     await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
     expect(setAppBadge).not.toHaveBeenCalledWith(3);
   });

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TreeFolder } from "../api/notes";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { NOT_SUPPORTED } from "../upload/planUpload";
@@ -52,8 +53,8 @@ async function menuOf(name: string) {
   return screen.getAllByRole("menuitem").map((i) => i.textContent);
 }
 
-/** Take photo in the Drafts folder's menu, and the camera giving back `file`. */
-async function takePhoto(file: File) {
+/** Take photo in the Drafts folder's menu, and the camera giving back `file` after `meanwhile`. */
+async function takePhoto(file: File, meanwhile: () => void = () => {}) {
   await menuOf("Drafts");
   const camera = document.querySelector<HTMLInputElement>("input[type=file][capture]")!;
   const click = vi.spyOn(camera, "click");
@@ -61,6 +62,7 @@ async function takePhoto(file: File) {
   expect(click).toHaveBeenCalled();
   expect(camera).toHaveAttribute("accept", "image/*");
   expect(camera).toHaveAttribute("capture", "environment");
+  act(meanwhile);
   await userEvent.upload(camera, file);
 }
 
@@ -76,6 +78,8 @@ afterEach(() => {
   vi.useRealTimers();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
+  useDiscreet.setState({ gone: new Set() });
 });
 
 describe("Take photo", () => {
@@ -125,6 +129,26 @@ describe("Take photo", () => {
     const upload = await screen.findByRole("dialog", { name: "Upload" });
     expect(await within(upload).findByText("IMG_0002.HEIC")).toBeInTheDocument();
     expect(within(upload).getByText(NOT_SUPPORTED)).toBeInTheDocument();
+    expect(puts).toEqual([]);
+  });
+  // The camera can take its time: the vault may be hidden, or another one chosen, before the photo comes back.
+  it("a photo that comes back after its vault was hidden is dropped", async () => {
+    pointer(true);
+    const { puts } = api();
+    await takePhoto(new File(["jpg"], "IMG_0003.jpg", { type: "image/jpeg" }), () => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("dialog", { name: "Upload" })).not.toBeInTheDocument();
+    expect(useEditor.getState().upload).toBeNull();
+    expect(puts).toEqual([]);
+  });
+
+  it("a photo that comes back after another vault was chosen is dropped", async () => {
+    pointer(true);
+    const { puts } = api();
+    await takePhoto(new File(["jpg"], "IMG_0004.jpg", { type: "image/jpeg" }), () => useEditor.setState({ activeVault: "Home" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("dialog", { name: "Upload" })).not.toBeInTheDocument();
+    expect(useEditor.getState().upload).toBeNull();
     expect(puts).toEqual([]);
   });
 });

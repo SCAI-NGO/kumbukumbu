@@ -8,6 +8,7 @@ import { fileKindOfEntry } from "../api/notes";
 import { noteUrl, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import FlagChips, { Chip } from "../flags/FlagChips";
+import { useDiscreet } from "../discreet/state";
 import FlagIcon from "../flags/FlagIcon";
 import { ago } from "../note/AgentBanner";
 import type { FlagFilter } from "../shell/treeFilter";
@@ -37,6 +38,20 @@ export default function RecentPage() {
     }, TYPING_MS);
     return () => clearTimeout(timer);
   }, [typed, words]);
+  // Hiding or showing the discreet vaults starts the filters again: the words or a vault switched off may name one hidden
+  // now, and the page stays mounted.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.names === previous.names && s.revealed === previous.revealed) return;
+        setTyped("");
+        setWords("");
+        setFlag(null);
+        setSkip([]);
+        setLimit(PAGE);
+      }),
+    [],
+  );
   const recent = useRecent({ words, flag, skip, limit });
   const view = recent.data;
 

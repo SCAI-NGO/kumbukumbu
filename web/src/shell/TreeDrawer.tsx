@@ -561,9 +561,14 @@ export default function TreeDrawer(props: {
   // Take photo (spec §5): the camera's photo goes through the upload sheet at once, named after the moment it came back.
   const camera = useRef<HTMLInputElement>(null);
   const photoFolder = useRef<string | null>(null);
+  // The camera can take its time: a photo that comes back after another vault was chosen, or its own hidden, is dropped.
+  useEffect(() => {
+    photoFolder.current = null;
+  }, [activeVault]);
   const tookPhoto = (file: File | undefined) => {
     const folder = photoFolder.current;
-    if (!file || !folder) return;
+    photoFolder.current = null;
+    if (!file || !folder || goneVault(useDiscreet.getState(), vaultOf(folder))) return;
     const ext = extOf(file.type);
     const taken = new Set((tree.data && findFolder(tree.data.root, folder))?.notes.map((n) => n.name));
     // Another format (HEIC) keeps the camera's name, and the upload refuses it with its own sentence.

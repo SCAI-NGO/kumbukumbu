@@ -47,7 +47,8 @@ public static class RecentApi
         var off = new HashSet<string>(skip ?? [], StringComparer.Ordinal);
 
         var vaults = await store.ListVaultsAsync(ct);
-        var files = new List<(VaultPath Path, string Kind, string? Flag, string Writer, WriterRef? Ref, DateTime At)>();
+        // A note's content stays with its row only without a flag chip, so that its flag is read for the rows answered alone.
+        var files = new List<(VaultPath Path, string Kind, string? Flag, string? Content, string Writer, WriterRef? Ref, DateTime At)>();
         foreach (var vault in vaults.Where(v => !off.Contains(v)))
         {
             var root = VaultPath.Root.Child(vault);
@@ -56,9 +57,15 @@ public static class RecentApi
                 if (ArchiveFolder.Contains(path) || !Matches(path, terms)) continue;
                 // One gone in between is left out.
                 if (await store.GetAsync(path, ct) is not { } note) continue;
+                if (flag is null)
+                {
+                    files.Add((path, "note", null, note.Content, note.LastWriter, note.Ref, note.LastWriteAt));
+                    continue;
+                }
+
                 var noteFlag = Flags.Of(note.Content)?.Name;
-                if (flag is not null && (noteFlag is null || (flag != "any" && noteFlag != flag))) continue;
-                files.Add((path, "note", noteFlag, note.LastWriter, note.Ref, note.LastWriteAt));
+                if (noteFlag is null || (flag != "any" && noteFlag != flag)) continue;
+                files.Add((path, "note", noteFlag, null, note.LastWriter, note.Ref, note.LastWriteAt));
             }
 
             // An attachment has no flag.
@@ -66,7 +73,7 @@ public static class RecentApi
             foreach (var file in await StoreAttachments.UnderAsync(store, root, ct))
             {
                 if (ArchiveFolder.Contains(file.Path) || FolderMarker.Is(file.Path) || !Matches(file.Path, terms)) continue;
-                files.Add((file.Path, AttachmentFormat.KindOf(file.Path.Value), null, file.LastWriter, file.Ref, file.LastWriteAt));
+                files.Add((file.Path, AttachmentFormat.KindOf(file.Path.Value), null, null, file.LastWriter, file.Ref, file.LastWriteAt));
             }
         }
 
@@ -80,7 +87,7 @@ public static class RecentApi
             var name = f.Path.Name;
             items.Add(new RecentItemView(
                 f.Path.Value, vault, f.Kind == "note" && name.EndsWith(".md", StringComparison.Ordinal) ? name[..^3] : name,
-                string.Join('/', f.Path.Segments.SkipLast(1)), f.Kind, f.Flag, writer, kind, f.At));
+                string.Join('/', f.Path.Segments.SkipLast(1)), f.Kind, f.Content is { } content ? Flags.Of(content)?.Name : f.Flag, writer, kind, f.At));
         }
 
         return TypedResults.Ok(new RecentView(items, rows.Count > max, vaults));

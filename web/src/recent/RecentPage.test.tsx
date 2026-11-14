@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -19,6 +20,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
   localStorage.clear();
   sessionStorage.clear();
 });
@@ -214,6 +216,26 @@ describe("Recent changes", () => {
     await waitFor(() => expect(rows()).toHaveLength(2));
     expect(within(screen.getByRole("group", { name: "Vaults" })).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Skills", "Work"]);
     expect(document.body).not.toHaveTextContent("Tagebuch");
+  });
+
+  it("hiding or showing the discreet vaults clears the filters, which may name one", async () => {
+    for (const change of [() => useDiscreet.setState({ revealed: true }), () => useDiscreet.setState({ names: new Set(["Home"]) })]) {
+      const { last } = api(() => view([certificate, sketch, garden]));
+      renderApp("/recent");
+      await page();
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      await userEvent.click(chip("Home"));
+      await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Home");
+      await userEvent.click(within(screen.getByRole("group", { name: "Flag" })).getByRole("button", { name: "Red" }));
+      await waitFor(() => expect(last().get("words")).toBe("Home"));
+
+      act(change);
+      expect(screen.getByRole("searchbox", { name: "Find by name" })).toHaveValue("");
+      expect(chip("Home")).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect([last().getAll("skip"), last().get("words"), last().get("flag")]).toEqual([[], null, null]));
+      cleanup();
+      useDiscreet.getState().reset();
+    }
   });
 
   it("Nothing changed here yet.", async () => {

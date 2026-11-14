@@ -41,15 +41,16 @@ internal static class FrontmatterWrites
         if (bytes <= NoteWriter.MaxBytes) return true;
         error = Error(tool, $"{path.Value} would be {bytes} bytes; the limit is {NoteWriter.MaxBytes} (1 MiB)", ShellErrorKind.Invalid);
         return false;
-
-        static bool Same(object? a, object? b) => (a, b) switch
-        {
-            (IReadOnlyList<object?> x, IReadOnlyList<object?> y) => x.Count == y.Count && x.Zip(y).All(p => Same(p.First, p.Second)),
-            (IReadOnlyDictionary<string, object?> x, IReadOnlyDictionary<string, object?> y) =>
-                x.Count == y.Count && x.All(p => y.TryGetValue(p.Key, out var v) && Same(p.Value, v)),
-            _ => Equals(a, b),
-        };
     }
+
+    /// <summary>Whether two values <see cref="Frontmatter.Read"/> gave are the same, lists and maps compared item by item.</summary>
+    public static bool Same(object? a, object? b) => (a, b) switch
+    {
+        (IReadOnlyList<object?> x, IReadOnlyList<object?> y) => x.Count == y.Count && x.Zip(y).All(p => Same(p.First, p.Second)),
+        (IReadOnlyDictionary<string, object?> x, IReadOnlyDictionary<string, object?> y) =>
+            x.Count == y.Count && x.All(p => y.TryGetValue(p.Key, out var v) && Same(p.Value, v)),
+        _ => Equals(a, b),
+    };
 
     private static readonly HashSet<string> YamlWords =
         new(["null", "~", "true", "false", "yes", "no", "on", "off", "y", "n"], StringComparer.OrdinalIgnoreCase);

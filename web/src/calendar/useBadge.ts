@@ -39,16 +39,18 @@ const discreetNames = (vaults: { name: string; discreet?: boolean }[]) =>
  * anything is overdue. Asked when the app opens, again whenever it comes back to the foreground (TanStack's
  * `visibilitychange`) and after a change to an entry (`["whats-on"]` is invalidated). The app's icon follows it without
  * the shares of discreet vaults, shown or not (§7.7, amended 2026-11-14): it outlives the session. Until the vault list
- * is in, which says which vaults are discreet, the icon is left as it is.
+ * is in, which says which vaults are discreet, the icon is left as it is; so it is while the list is being asked again:
+ * showing the discreet vaults asks for both at once, and a count that comes first would otherwise be taken apart with the
+ * list from before, which left them out.
  */
 export function useBadge(): BadgeCount {
   const { data } = useQuery({ ...badgeQuery, staleTime: 30_000, refetchOnWindowFocus: "always" });
-  const { data: discreet } = useQuery({ ...vaultsQuery, select: discreetNames });
+  const { data: discreet, isFetching: listing } = useQuery({ ...vaultsQuery, select: discreetNames });
   const icon = useMemo(() => {
-    if (!data || discreet === undefined) return undefined;
+    if (!data || discreet === undefined || listing) return undefined;
     const names = new Set(discreet ? discreet.split("\n") : []);
     return data.vaults.reduce((left, v) => (names.has(v.vault) ? left - v.count : left), data.count);
-  }, [data, discreet]);
+  }, [data, discreet, listing]);
   useEffect(() => {
     if (icon === undefined) return;
     if (icon > 0) setAppBadge(icon);

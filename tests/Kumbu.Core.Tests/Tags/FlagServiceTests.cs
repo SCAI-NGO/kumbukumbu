@@ -305,6 +305,18 @@ public class FlagServiceTests
     }
 
     [Fact]
+    public async Task A_tags_line_inside_another_value_is_refused()
+    {
+        const string note = "---\ntitle: 'a\ntags: flag/red\nz'\nstatus: ok\n---\nbody\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", note));
+
+        var result = await Service(store).SetAsync("/Work/x.md", null, FlagTask.None, Ct);
+
+        Assert.Equal(ShellResult.Error("flag: I can't change this note's tags; edit them in the note") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(note, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
     public async Task No_flag_that_would_leave_one_is_refused()
     {
         // YAML reads the item after the comment as one of the list; the line editor stops at the comment.

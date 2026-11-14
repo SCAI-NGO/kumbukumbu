@@ -15,8 +15,9 @@ public static partial class FlagTags
     /// <summary>
     /// The content with every flag tag removed from the frontmatter's <c>tags</c> and <paramref name="flag"/>'s tag in the
     /// place of the first one (appended if there was none); null when <c>tags</c> has a form this can't edit (a map, a
-    /// nested list, a value over several lines), the frontmatter doesn't parse before or after, or the note starts with a
-    /// byte order mark. A <c>tags</c> left empty is removed, and a frontmatter left empty with it, so setting a flag and
+    /// nested list, a value over several lines), the frontmatter doesn't parse before or after, a key other than <c>tags</c>
+    /// would read differently after (a line that only looks like <c>tags:</c>, inside another key's quoted value), or the note
+    /// starts with a byte order mark. A <c>tags</c> left empty is removed, and a frontmatter left empty with it, so setting a flag and
     /// removing it gives the note back.
     /// </summary>
     public static string? Set(string content, string? flag)
@@ -44,7 +45,7 @@ public static partial class FlagTags
         {
             if (tag is null) return content;
             lines.Insert(close, ($"tags: [{tag}]", lines[0].End));
-            return Parsed(Join(lines));
+            return Parsed(content, Join(lines));
         }
 
         // The key's extent is its line, the lines indented under it or starting with '-', and the blank lines between: as
@@ -84,11 +85,19 @@ public static partial class FlagTags
             if (close == 1) lines.RemoveRange(0, 2);
         }
 
-        return Parsed(Join(lines));
+        return Parsed(content, Join(lines));
     }
 
-    /// <summary>The result, or null when its frontmatter no longer parses (a line added beside an indented map).</summary>
-    private static string? Parsed(string result) => Frontmatter.Read(result).Problem is null ? result : null;
+    /// <summary>The result, or null when its frontmatter no longer parses (a line added beside an indented map) or a key other
+    /// than <c>tags</c> no longer reads as it did (the line edited was inside another key's value).</summary>
+    private static string? Parsed(string content, string result)
+    {
+        var after = Frontmatter.Read(result);
+        if (after.Problem is not null) return null;
+        var before = Frontmatter.Read(content).Values;
+        var others = before.Keys.Union(after.Values.Keys).Where(k => k != "tags");
+        return others.All(k => before.TryGetValue(k, out var a) && after.Values.TryGetValue(k, out var b) && FrontmatterWrites.Same(a, b)) ? result : null;
+    }
 
     /// <summary><c>tags:</c> with no value (or null, or ""): the flag as a flow list before any comment, or nothing to remove.</summary>
     private static string Empty(string text, int colon, string comment, string? tag) =>

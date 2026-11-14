@@ -166,6 +166,16 @@ public class FlagTagsTests
     [Fact]
     public void A_result_that_would_not_parse_is_refused() => Assert.Null(FlagTags.Set("---\n tags: [a]\n---\n", "red"));
 
+    // A line that reads "tags:" inside another key's value over several lines is not the key: editing it would change that
+    // value.
+    [Theory]
+    [InlineData("---\ntitle: 'a\ntags: flag/red\nz'\nstatus: ok\n---\nbody\n", null)]
+    [InlineData("---\ntitle: 'a\ntags: flag/red\nz'\nstatus: ok\n---\nbody\n", "blue")]
+    [InlineData("---\ntitle: 'a\ntags: [flag/red, keep]\nz'\n---\nbody\n", null)]
+    [InlineData("---\ntitle: 'a\ntags: [flag/red, keep]\nz'\n---\nbody\n", "blue")]
+    [InlineData("---\ntitle: 'a\ntags: [keep]\nz'\ntags: [b]\n---\nbody\n", "red")]
+    public void A_tags_line_inside_another_value_is_refused(string note, string? flag) => Assert.Null(FlagTags.Set(note, flag));
+
     [Fact]
     public void A_comment_after_an_empty_tags_stays() =>
         Assert.Equal("---\ntags: [flag/red] # mine\n---\n", FlagTags.Set("---\ntags: # mine\n---\n", "red"));
