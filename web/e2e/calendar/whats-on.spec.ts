@@ -20,6 +20,7 @@ import {
   monthTitle,
   note,
   noteActions,
+  noteEntryAnswered,
   notePage,
   onPhone,
   shortDay,
@@ -96,8 +97,10 @@ test("calendar #5: in discreet Home, Add to calendar… with a time asks nothing
     home = await makeAgent({ Home: "write" }, "home", context);
     const panel = await treePanel(page, testInfo);
     await switchVault(page, panel, "Home");
+    const answered = noteEntryAnswered(page);
     await panel.getByRole("button", { name: "Zahnarzt", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Zahnarzt" })).toBeVisible();
+    await answered;
 
     await (await noteActions(page)).getByRole("menuitem", { name: "Add to calendar…" }).click();
     const dialog = page.getByRole("dialog", { name: "Add to calendar" });

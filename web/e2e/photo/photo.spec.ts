@@ -43,12 +43,12 @@ test("flags #18: Take photo sits beside Upload here on the phone @photo @phone",
 
   const menu = await folderMenu(page, await openTree(page, testInfo), "Meetings");
   await expect(menu.getByRole("menuitem", { name: "Upload here" })).toBeVisible();
+  await shot(page, testInfo, "photo");
   if (onPhone(testInfo)) {
     await expect(menu.getByRole("menuitem", { name: "Take photo" })).toBeVisible();
     // Beside Upload here: the next item.
     const items = (await menu.getByRole("menuitem").allInnerTexts()).map((t) => t.trim());
     expect(items.indexOf("Take photo")).toBe(items.indexOf("Upload here") + 1);
-    await shot(page, testInfo, "photo");
   } else {
     await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
   }
@@ -95,9 +95,9 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
   }
 
   const listing = await aliceApi.console(`ls /Work/${folder}/Meetings`);
-  const photos = listing.text.split("\n").map((name) => name.trim()).filter((name) => name.endsWith(".jpg")).sort();
+  const photos = [...listing.text.matchAll(/^(.+\.jpg) {2}image/gm)].map((m) => m[1]);
   expect(photos, listing.text).toHaveLength(3);
   for (const name of photos) expect(name).toMatch(new RegExp(`^Photo ${day} \\d{6}( [23])?\\.jpg$`));
-  const stem = photos[0].replace(/\.jpg$/, "");
-  expect(photos).toEqual([`${stem}.jpg`, `${stem} 2.jpg`, `${stem} 3.jpg`]);
+  const stem = photos[0].replace(/( [23])?\.jpg$/, "");
+  expect([...photos].sort()).toEqual([`${stem}.jpg`, `${stem} 2.jpg`, `${stem} 3.jpg`].sort());
 });

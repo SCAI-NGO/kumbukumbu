@@ -15,6 +15,7 @@ import {
   makeAgent,
   note,
   noteActions,
+  noteEntryAnswered,
   notePage,
   onPhone,
   rangeText,
@@ -80,8 +81,10 @@ test("calendar #4: Add to calendar… writes when, task and upcoming unquoted, e
   const before = (await aliceApi.getNote(path)).content;
   const when = addMonths(today(), 1);
 
+  const answered = noteEntryAnswered(page);
   await page.goto(notePage(path));
   await expect(page.getByRole("heading", { level: 1, name: "Certificate" })).toBeVisible();
+  await answered;
   await (await noteActions(page)).getByRole("menuitem", { name: "Add to calendar…" }).click();
   const dialog = page.getByRole("dialog", { name: "Add to calendar" });
   await dialog.getByRole("group", { name: "When" }).getByLabel("Day").fill(when);

@@ -138,6 +138,12 @@ export async function switchVault(page: Page, panel: Locator, vault: string) {
   await expect(panel.getByRole("heading", { level: 2, name: vault })).toBeVisible();
 }
 
+/**
+ * Waits for the note's place in the calendar to be answered: the ⋯ menu offers Add to calendar… disabled until then
+ * (it shares the header line's query). Start it before the note opens, await it after.
+ */
+export const noteEntryAnswered = (page: Page) => page.waitForResponse((r) => r.url().includes("/calendar/entry?") && r.ok());
+
 /** Opens the note's ⋯ (Note actions) and returns its menu. */
 export async function noteActions(page: Page) {
   await page.getByRole("button", { name: "Note actions" }).click();

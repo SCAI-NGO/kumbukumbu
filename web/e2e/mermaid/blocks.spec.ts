@@ -9,7 +9,6 @@ import {
   cleanFolder,
   controllerLine,
   diaryRow,
-  example,
   expect,
   filler,
   lit,
@@ -245,21 +244,26 @@ test("mermaid #19: backlinks --unlinked lists the diary line, backlinks as befor
 test("mermaid #20: mv keeps the block link @blockrefs", async ({ aliceApi, mcp, seedAs, folder }) => {
   const { plan, tasks } = await seedExample(seedAs, folder);
   const moved = `/Work/${folder}/Old/Plan.md`;
+  // A second Plan in the folder: once Plan has left Tasks' folder a bare [[Plan]] would be ambiguous, so mv rewrites
+  // the link's path form whatever else the vault holds.
+  await aliceApi.putNote(`/Work/${folder}/Other/Plan.md`, "# Another\n");
+  const escaped = (path: string) => path.replace(/[.^]/g, "\\$&");
+  let after = "";
+  let resolved = "";
+  const away = await mcp.sh(`mv ${plan} ${moved}`);
   try {
-    const away = await mcp.sh(`mv ${plan} ${moved}`);
     expect(away.isError, away.text).toBe(false);
-    const after = (await aliceApi.getNote(tasks)).content;
-    // The block id stays; the path form changes where mv rewrites (a bare [[Plan]] still leads to the moved note when
-    // it is the vault's only Plan, else the link gets the path part that names it).
-    expect(after).toMatch(/^- see \[\[(?:[^\]]*\/)?Plan#\^controller\]\]\n$/);
-    const shown = await aliceApi.console(`cat ${tasks}`);
-    expect(shown.text).toContain("#^controller]]");
-    const resolved = await aliceApi.console(`links ${tasks}`);
-    expect(lines(resolved.text)).toEqual([expect.stringMatching(new RegExp(`^1: \\[\\[[^\\]]*#\\^controller\\]\\] → ${moved.replace(/[.^]/g, "\\$&")}#\\^controller$`))]);
+    after = (await aliceApi.getNote(tasks)).content;
+    resolved = (await aliceApi.console(`links ${tasks}`)).text;
   } finally {
-    const back = await mcp.sh(`mv ${moved} ${plan}`);
-    expect(back.isError, back.text).toBe(false);
+    // Back again before anything is asserted, and without an assertion here that would hide the first error.
+    if (!away.isError) await mcp.sh(`mv ${moved} ${plan}`);
   }
+  // The path form updated, the block id kept, and the link leads to the moved note's block.
+  expect(after).toMatch(/^- see \[\[(?:[^\]]*\/)?Old\/Plan#\^controller\]\]\n$/);
+  expect(lines(resolved)).toEqual([expect.stringMatching(new RegExp(`^1: \\[\\[[^\\]]*#\\^controller\\]\\] → ${escaped(moved)}#\\^controller$`))]);
+
+  expect((await aliceApi.getNote(plan)).content, "moved back").toContain("^controller");
   const home = await aliceApi.console(`links ${tasks}`);
-  expect(lines(home.text), "back in Pump, the link still leads to the block").toEqual([expect.stringMatching(new RegExp(`#\\^controller\\]\\] → ${plan.replace(/[.^]/g, "\\$&")}#\\^controller$`))]);
+  expect(lines(home.text), "back in Pump, the link still leads to the block").toEqual([expect.stringMatching(new RegExp(`#\\^controller\\]\\] → ${escaped(plan)}#\\^controller$`))]);
 });
