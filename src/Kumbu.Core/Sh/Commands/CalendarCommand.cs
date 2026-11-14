@@ -86,7 +86,8 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
     public bool ReadsInput => false;
 
     /// <summary>The write verb <paramref name="args"/> start with (options aside), or null for a read form.</summary>
-    internal static string? WriteVerb(IReadOnlyList<string> args) => FirstWord(args) is { } word && WriteVerbs.Contains(word) ? word : null;
+    /// <summary>The write form a line names (set, move, close, reopen, unset), read past options as the command reads it; null for a read.</summary>
+    public static string? WriteVerb(IReadOnlyList<string> args) => FirstWord(args) is { } word && WriteVerbs.Contains(word) ? word : null;
 
     // The first operand, past the options and their values: the vault, or the form's verb.
     private static string? FirstWord(IReadOnlyList<string> args)

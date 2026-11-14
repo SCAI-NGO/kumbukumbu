@@ -4,6 +4,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Vaults;
@@ -44,8 +45,6 @@ public static class ConsoleApi
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>
     internal static readonly FrozenSet<string> Refused = FrozenSet.Create(StringComparer.Ordinal, "pdfimages", "restore", "mv", "archive", "mkdir", "rm", "mkcp", "rmcp");
-
-    private static readonly FrozenSet<string> CalendarWrites = FrozenSet.Create(StringComparer.Ordinal, "set", "move", "close", "reopen", "unset");
 
     public static void MapConsoleApi(this IEndpointRouteBuilder app)
     {
@@ -88,9 +87,10 @@ public static class ConsoleApi
             }
 
             // Of calendar, the vault's view and notifications read; set, move, close, reopen and unset write.
-            if (stages.FirstOrDefault(s => s[0] == "calendar" && s.Count > 1 && CalendarWrites.Contains(s[1])) is { } calendar)
+            // Asked as the command asks it, so that options before the verb ("calendar -- close …") can't hide it.
+            if (stages.Where(s => s[0] == "calendar").Select(s => CalendarCommand.WriteVerb([.. s.Skip(1)])).FirstOrDefault(v => v is not null) is { } verb)
             {
-                return ShellResult.Error($"calendar {calendar[1]}: not in this console, which only reads");
+                return ShellResult.Error($"calendar {verb}: not in this console, which only reads");
             }
 
             // Of skills, copy writes; ls, find, cat and check read.

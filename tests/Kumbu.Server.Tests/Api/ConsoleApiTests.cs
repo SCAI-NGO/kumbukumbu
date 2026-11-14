@@ -270,6 +270,10 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     [InlineData("calendar close /Work/plan.md", "calendar close")]
     [InlineData("calendar set /Work/plan.md --when 2026-11-20", "calendar set")]
     [InlineData("ls /Work | calendar unset /Work/plan.md", "calendar unset")]
+    [InlineData("calendar -- close /Work/plan.md", "calendar close")]
+    [InlineData("calendar --task set /Work/plan.md", "calendar set")]
+    [InlineData("calendar --when=2026-12-01 set /Work/plan.md", "calendar set")]
+    [InlineData("calendar --reason=x close /Work/plan.md", "calendar close")]
     public async Task The_console_reads_the_calendar_but_refuses_its_writes(string line, string refused)
     {
         var user = await WorkAsync();
