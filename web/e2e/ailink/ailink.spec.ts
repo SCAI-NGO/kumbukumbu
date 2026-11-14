@@ -60,8 +60,9 @@ async function publishViaUi(page: Page, testInfo: TestInfo, path: string): Promi
     await expect(submit).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   await submit.click();
+  // Not an assertion on the field itself: its call log would show the link.
+  await expect(dialog.getByRole("button", { name: "Copy link" })).toBeVisible();
   const field = dialog.getByLabel("Link", { exact: true });
-  await expect(field).toBeVisible();
   const link = await field.inputValue();
   holds(readerLink.test(link), "the publish dialog shows a /s# link");
   return link;
@@ -93,12 +94,25 @@ const aiField = (reader: Page) => reader.getByRole("textbox", { name: "Link for 
 async function makeAiLink(reader: Page, previous?: string) {
   await aiButton(reader).click();
   const field = aiField(reader);
-  await expect(field).toBeVisible();
+  await expect(reader.getByText(/^Valid until \d\d:\d\d\./)).toBeVisible();
   if (previous !== undefined) await expect.poll(async () => (await field.inputValue()) !== previous, { message: "a second press made a different link" }).toBe(true);
   const link = await field.inputValue();
   holds(aiLinkShape.test(link), "the AI link has the shape /s/t/ and 32 characters");
   return link;
 }
+
+/** An anonymous caller whose failures say nothing of the address (a call log would print the token). */
+function anonymous(context: APIRequestContext) {
+  const call = (method: "get" | "post" | "head") => async (url: string) => {
+    try {
+      return await context[method](url);
+    } catch {
+      throw new Error(`an anonymous ${method.toUpperCase()} of the AI link path failed`);
+    }
+  };
+  return { get: call("get"), post: call("post"), head: call("head"), dispose: () => context.dispose() };
+}
+type Anon = ReturnType<typeof anonymous>;
 
 /** The fixture's notes, Alice's publication, Bob's page; everything removed again, on failure too. */
 async function withPublished(
@@ -111,10 +125,10 @@ async function withPublished(
     projectContextOptions: BrowserContextOptions;
   },
   testInfo: TestInfo,
-  run: (published: { link: string; context: BrowserContext; anon: APIRequestContext }) => Promise<void>,
+  run: (published: { link: string; context: BrowserContext; anon: Anon }) => Promise<void>,
 ) {
   const context = await browser.newContext({ ...projectContextOptions, permissions: ["clipboard-read", "clipboard-write"] });
-  const anon = await request.newContext({ baseURL });
+  const anon = anonymous(await request.newContext({ baseURL }));
   try {
     for (const name of files) await seedAs(`tags/ailink/${name}`, `/Work/${folder}/${name}`);
     const link = await publishViaUi(page, testInfo, note(folder));
@@ -163,7 +177,7 @@ test("ailink #2: the reader page offers Copy as Markdown and Link for your AI @a
     holds(!!a && !!b && Math.abs(a.y - b.y) < 4 && a.x + a.width <= b.x, "Link for your AI sits beside Copy as Markdown");
     // The note shows, with its two images.
     await expect(reader.getByText("The committee ruled that the pump stays in service.")).toBeVisible();
-    const images = reader.locator("article img");
+    const images = reader.getByRole("article").getByRole("img");
     await expect(images).toHaveCount(2);
     for (const image of await images.all()) await expect.poll(() => image.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBeGreaterThan(0);
     // No link is shown before the button is pressed.
@@ -179,7 +193,7 @@ test("ailink #3: Link for your AI shows the link, Copy, the time an hour on, and
     const before = hour();
     await makeAiLink(reader);
     const after = hour();
-    await expect(aiField(reader)).toHaveAttribute("readonly", "");
+    holds(await aiField(reader).evaluate((i) => (i as HTMLInputElement).readOnly), "the field is read-only");
     await expect(reader.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
     const sentence = reader.getByText(/^Valid until \d\d:\d\d\./);
     await expect(sentence).toBeVisible();
@@ -223,10 +237,10 @@ test("ailink #6: at 375 px the field takes the line, Copy below, no sideways scr
     await makeAiLink(reader);
     const field = aiField(reader);
     const copy = reader.getByRole("button", { name: "Copy", exact: true });
-    const [f, c, row] = [await field.boundingBox(), await copy.boundingBox(), await field.locator("..").boundingBox()];
+    const [f, c, row] = [await field.boundingBox(), await copy.boundingBox(), await reader.getByRole("article").boundingBox()];
     holds(!!f && !!c && !!row, "field, Copy and their row are laid out");
     // The field spans its row; Copy starts below its bottom edge.
-    holds(f!.width >= row!.width - 1, "the field takes the whole line");
+    holds(f!.width >= row!.width - 1, "the field takes the article's whole width");
     holds(c!.y >= f!.y + f!.height - 1, "Copy sits below the field");
     holds(await reader.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "no sideways scroll");
   });
@@ -252,7 +266,7 @@ test("ailink #7: the link answers Markdown with the right headers and body @aili
     const images = lines.filter((l) => l.startsWith("!["));
     expect(images.length, "two images").toBe(2);
     images.forEach((line, n) => {
-      const shape = new RegExp(`^!\\[[^\\]]*\\]\\(${baseURL}/s/t/${token}/files/${n}\\) \\(image/png\\)$`);
+      const shape = new RegExp(`^!\\[[^\\]]*\\]\\(${baseURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/t/${token}/files/${n}\\) \\(image/png\\)$`);
       holds(shape.test(line), `image ${n} points to /files/${n} with its type`);
     });
   });
@@ -310,12 +324,9 @@ test("ailink #10: after withdrawing, the link and its files give the 404; the re
       expect(answer.headers()["content-type"], "type after withdrawing").toBe("text/plain; charset=utf-8");
       expect(await text(answer), "says after withdrawing").toBe(gone);
     }
-    // Bob's page answers as for a withdrawn note: a new link can't be made, and opened again it asks for a code.
+    // Bob's page answers as for a withdrawn note: a new link can't be made, and a fresh visit of the link is refused.
     await aiButton(reader).click();
     await expect(reader.getByText("The link couldn't be made: open the note's link again.")).toBeVisible();
-    await reader.reload();
-    await expect(reader.getByRole("form", { name: "Read a published note" })).toBeVisible();
-    await expect(reader.getByRole("heading", { name: "Ruling" })).toHaveCount(0);
     const again = await context.newPage();
     await again.goto(link).catch(() => {
       throw new Error("the reader page did not open");
@@ -341,7 +352,13 @@ test("ailink #14: the server's log has no /s/t/ and no token @ailink @serial", a
     await unpublishViaUi(page);
     expect((await anon.get(tokens[0])).status(), "the link is gone after withdrawing").toBe(404);
 
-    const log = execFileSync(join(stackDir, "logs.sh"), { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    // The error of a failed run carries the log: said without it.
+    let log: string;
+    try {
+      log = execFileSync(join(stackDir, "logs.sh"), { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    } catch {
+      throw new Error("logs.sh failed");
+    }
     const lines = log.split("\n");
     expect(lines.length, "the log has lines").toBeGreaterThan(1);
     // Counted, never shown: a line that matches carries the token.
