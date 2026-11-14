@@ -268,6 +268,20 @@ public class CalendarCommandTests
     }
 
     [Fact]
+    public async Task Notifications_say_today_and_the_time_before_it()
+    {
+        var (shell, _, _) = Make(
+            ("/Work/Zahnarzt.md", "---\nwhen: 2026-11-12T14:00\n---\n"),
+            ("/Work/Standup.md", "---\nwhen: 2026-11-12T09:30\nuntil: 2026-11-12T11:00\n---\n"));
+
+        Assert.Equal(ShellResult.Ok("""
+            What's on (2)
+              ongoing · until 11:00  Standup  /Work/Standup.md
+              today · 14:00  Zahnarzt  /Work/Zahnarzt.md
+            """), await Run(shell, "calendar notifications"));
+    }
+
+    [Fact]
     public async Task Notifications_say_nothing_on()
     {
         var (shell, _, _) = Make(("/Work/Later.md", "---\nwhen: 2026-12-19\n---\n"), ("/Work/Note.md", "text\n"));
