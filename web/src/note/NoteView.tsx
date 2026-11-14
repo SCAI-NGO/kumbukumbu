@@ -27,7 +27,7 @@ import BacklinksList from "./BacklinksList";
 import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
-import { atxHeading, outline } from "./outline";
+import { atxHeading, headingLine, outline } from "./outline";
 import { maskedBody } from "./comments";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
@@ -73,8 +73,8 @@ export const startsWithH1 = (body: string) => {
   return (atx?.level === 1 && !!atx.text && !/^#+$/.test(atx.text)) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
 
-/** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block the note lacks. */
-type Notice = { kind: "conflict" } | { kind: "error"; text: string } | { kind: "block"; id: string };
+/** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block or heading the note lacks. */
+type Notice = { kind: "conflict" } | { kind: "error"; text: string } | { kind: "block"; id: string } | { kind: "heading"; address: string };
 
 // Headings only: the note's other blocks carry `data-line` too.
 const headingLines = "h1[data-line], h2[data-line], h3[data-line], h4[data-line], h5[data-line], h6[data-line]";
@@ -248,7 +248,7 @@ export default function NoteView({ path }: { path: string }) {
     useEditor.getState().setScrollTarget(null);
   }, [scrollTarget, path, mode, note.data]);
 
-  // Opened at a block (a `[[Plan#^id]]` link) or a line (an unlinked mention): the block holding it comes into view
+  // Opened at a block (a `[[Plan#^id]]` link), a heading (`[[Plan#Goals]]`) or a line (an unlinked mention): the block holding it comes into view
   // and lights up briefly. Once per navigation, when the note is shown.
   const flash = useRef<{ target: HTMLElement; timer: ReturnType<typeof setTimeout>; stop: () => void } | null>(null);
   const unflash = useCallback(() => {
@@ -262,9 +262,9 @@ export default function NoteView({ path }: { path: string }) {
   useEffect(() => {
     if (mode !== "read" || !note.data || !article.current || opened.current === location.key) return;
     opened.current = location.key;
-    setNotice((n) => (n?.kind === "block" ? null : n));
+    setNotice((n) => (n?.kind === "block" || n?.kind === "heading" ? null : n));
     // A `NoteAt`; any other state (or none) opens the note as usual.
-    const at = location.state as { block?: unknown; line?: unknown } | null;
+    const at = location.state as { block?: unknown; heading?: unknown; line?: unknown } | null;
     let line = typeof at?.line === "number" ? at.line : undefined;
     if (typeof at?.block === "string") {
       // On the stored text, as the Core finds it: a block a comment hides leads to the one shown above it.
@@ -274,6 +274,15 @@ export default function NoteView({ path }: { path: string }) {
         return;
       }
       line = found.start;
+    }
+    if (typeof at?.heading === "string") {
+      // The section address as cat reads it, but where cat calls two matches ambiguous, the first opens.
+      const found = headingLine(parts.body, at.heading);
+      if (found === null) {
+        setNotice({ kind: "heading", address: at.heading });
+        return;
+      }
+      line = found;
     }
     if (line === undefined) return;
     // The greatest line, not the last in the page: footnotes render at the end but keep their lines. On equal lines
@@ -289,7 +298,7 @@ export default function NoteView({ path }: { path: string }) {
     unflash();
     target.classList.add("k-flash");
     flash.current = { target, timer: setTimeout(unflash, FLASH_MS), stop: keepCentred(article.current, target) };
-  }, [mode, note.data, location.key, location.state, unflash]);
+  }, [mode, note.data, parts.body, location.key, location.state, unflash]);
 
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {
@@ -444,7 +453,13 @@ export default function NoteView({ path }: { path: string }) {
             role={notice.kind === "error" ? "alert" : "status"}
             className="mt-3 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text"
           >
-            {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.kind === "block" ? `There is no block ^${notice.id} in this note.` : notice.text}
+            {notice.kind === "conflict"
+              ? CONFLICT_NOTICE
+              : notice.kind === "block"
+                ? `There is no block ^${notice.id} in this note.`
+                : notice.kind === "heading"
+                  ? `There is no heading ${notice.address} in this note.`
+                  : notice.text}
           </p>
         )}
         {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}

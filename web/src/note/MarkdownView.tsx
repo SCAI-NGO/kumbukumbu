@@ -23,7 +23,7 @@ import { remarkHighlights } from "./highlights";
 import { section } from "./outline";
 import { prepareMath, remarkRestoreDollars } from "./prepareMath";
 import { splitFrontmatter } from "./properties";
-import { embedHeading, isExternalUrl, remarkWikiLinks, subpathBlock, type LinkView } from "./wikiLinks";
+import { embedHeading, isExternalUrl, remarkWikiLinks, subpathBlock, subpathHeading, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -216,6 +216,14 @@ function AttachmentChip({ path }: { path: string }) {
   );
 }
 
+/** Where a link to another note opens it: at the block or the heading its subpath names, else as usual. */
+function noteAt(raw: string): NoteAt | undefined {
+  const block = subpathBlock(raw);
+  if (block) return { block };
+  const heading = subpathHeading(raw);
+  return heading ? { heading } : undefined;
+}
+
 function WikiLink({ index, embed, children }: { index: number; embed: unknown; children: ReactNode }) {
   const { links, onCreateMissing, path, checkpointLink } = useContext(NoteContext);
   const link = links?.[index];
@@ -231,11 +239,10 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
     case undefined:
       return <span>{children}</span>;
     case "note": {
-      const block = subpathBlock(link.raw);
       return (
         <Link
           to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
-          state={block ? ({ block } satisfies NoteAt) : undefined}
+          state={noteAt(link.raw)}
           className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
         >
           {children}
@@ -288,10 +295,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
               target={link.target}
               candidates={link.candidates}
               hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
-              stateOf={(p) => {
-                const block = isAttachment(p) ? null : subpathBlock(link.raw);
-                return block ? ({ block } satisfies NoteAt) : undefined;
-              }}
+              stateOf={(p) => (isAttachment(p) ? undefined : noteAt(link.raw))}
               onClose={() => setChoosing(false)}
             />
           )}

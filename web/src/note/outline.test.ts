@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { atxHeading, outline, section } from "./outline";
+import { atxHeading, headingLine, outline, section } from "./outline";
 import { embedHeading } from "./wikiLinks";
 
 describe("outline", () => {
@@ -99,5 +99,55 @@ describe("embedHeading", () => {
     expect(embedHeading("![[plan#Goals|alias]]")).toBe("Goals");
     expect(embedHeading("![[plan]]")).toBeNull();
     expect(embedHeading("![[plan#^block1]]")).toBeNull();
+  });
+});
+
+describe("headingLine", () => {
+  it("finds a heading by its text as shown, at its source line", () => {
+    const body = ["", "", "# Plan", "", "## The **road**map", "", "text"].join("\n");
+    expect(headingLine(body, "The roadmap")).toBe(5);
+    expect(headingLine(body, "Plan")).toBe(3);
+  });
+
+  it("finds a heading by its source text too", () => {
+    const body = ["# Plan", "", "## The **road**map", "", "## The `api`", "", "## Q\\#A"].join("\n");
+    expect(headingLine(body, "The **road**map")).toBe(3);
+    expect(headingLine(body, "the **ROAD**map")).toBe(3);
+    expect(headingLine(body, "The `api`")).toBe(5);
+    expect(headingLine(body, "Q\\#A")).toBe(7);
+    // Duplicates are numbered by their text as written, as cat numbers them.
+    expect(headingLine(["# A", "## **Notes**", "## Notes", "## Notes"].join("\n"), "A#Notes[2]")).toBe(4);
+  });
+
+  it("takes the first of two headings of the same name", () => {
+    expect(headingLine(["# Plan", "## Roadmap", "a", "# Later", "## Roadmap", "b"].join("\n"), "Roadmap")).toBe(2);
+  });
+
+  it("follows a nested address under its parent", () => {
+    const body = ["# A", "## Notes", "# B", "## Notes"].join("\n");
+    expect(headingLine(body, "B#Notes")).toBe(4);
+    expect(headingLine(body, "A#Notes")).toBe(2);
+    expect(headingLine(body, "C#Notes")).toBeNull();
+  });
+
+  it("takes an index for a duplicate under one parent", () => {
+    const body = ["# A", "## Notes", "## Notes", "# B", "## Notes"].join("\n");
+    expect(headingLine(body, "A#Notes[2]")).toBe(3);
+    expect(headingLine(body, "B#Notes[1]")).toBe(5);
+    expect(headingLine(body, "B#Notes[2]")).toBeNull();
+  });
+
+  it("matches exactly first, then ignoring case", () => {
+    const body = ["## roadmap", "## Roadmap"].join("\n");
+    expect(headingLine(body, "Roadmap")).toBe(2);
+    expect(headingLine(body, "ROADMAP")).toBe(1);
+  });
+
+  it("reads an escaped # as text", () => {
+    expect(headingLine(["# C", "## C\\#"].join("\n"), "C\\#")).toBe(2);
+  });
+
+  it("is null for a heading the note doesn't have", () => {
+    expect(headingLine("# Plan\n\ntext", "Roadmap")).toBeNull();
   });
 });

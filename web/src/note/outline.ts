@@ -125,3 +125,72 @@ export function section(body: string, heading: string): string | null {
     .map((l, i) => (i + 1 >= start && i + 1 < end ? l : ""))
     .join("\n");
 }
+
+/** A section address's segments, as the Core reads one: `#` goes one level down, `\#` is a `#`, a trailing `[n]` an index. */
+function addressSegments(address: string): { text: string; index?: number }[] | null {
+  const segments: { text: string; index?: number }[] = [];
+  let text = "";
+  let escapedEnd = -1;
+  for (let i = 0; i <= address.length; i++) {
+    if (i === address.length || address[i] === "#") {
+      // A trailing [n] is an index unless its `[` was escaped.
+      const m = /\[(\d+)\]$/.exec(text);
+      const index = m && m.index >= escapedEnd ? Number(m[1]) : undefined;
+      const own = (index === undefined ? text : text.slice(0, m!.index)).trim();
+      if (!own) return null;
+      segments.push({ text: own, index });
+      text = "";
+      escapedEnd = -1;
+    } else if (address[i] === "\\" && i + 1 < address.length) {
+      text += address[++i];
+      escapedEnd = text.length;
+    } else text += address[i];
+  }
+  return segments;
+}
+
+/**
+ * The 1-based source line of the heading a section address names (`Roadmap`, `A#B`, `Notes[2]`), as `cat note#…`
+ * resolves it: its own text and the parents above it match the segments, exactly or else ignoring case. Of several
+ * matches the first in the note wins; null when none does.
+ */
+export function headingLine(body: string, address: string): number | null {
+  const segments = addressSegments(address);
+  if (!segments) return null;
+  // Each heading's parent (the nearest earlier one of a lower level) and its place among siblings of the same text.
+  // A heading answers to its text as written, as the Core keeps it (`The **road**map`), and as shown (`The roadmap`);
+  // both with Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`).
+  type Node = { written: string; shown: string; line: number; parent: Node | null; index: number };
+  const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+  const lines = body.split("\n");
+  const nodes: Node[] = [];
+  const open: (Node & { level: number })[] = [];
+  // Per parent (null: the top), how many headings of each written text it has so far: duplicates are numbered by it.
+  const seen = new Map<Node | null, Map<string, number>>();
+  for (const h of outline(body)) {
+    while (open.length && open[open.length - 1].level >= h.level) open.pop();
+    const parent = open[open.length - 1] ?? null;
+    const shown = unescaped(h.text);
+    // A setext heading has no ATX line: its text as written is the one shown.
+    const written = unescaped(atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text);
+    const siblings = seen.get(parent) ?? new Map<string, number>();
+    seen.set(parent, siblings);
+    const index = (siblings.get(written) ?? 0) + 1;
+    siblings.set(written, index);
+    const node = { written, shown, line: h.line, parent, index, level: h.level };
+    nodes.push(node);
+    open.push(node);
+  }
+  for (const same of [(a: string, b: string) => a === b, (a: string, b: string) => a.toLowerCase() === b.toLowerCase()]) {
+    const found = nodes.find((n) => {
+      let h: Node | null = n;
+      for (let i = segments.length - 1; i >= 0; i--, h = h.parent) {
+        const { text, index } = segments[i];
+        if (!h || !(same(text, h.written) || same(text, h.shown)) || (index !== undefined && index !== h.index)) return false;
+      }
+      return true;
+    });
+    if (found) return found.line;
+  }
+  return null;
+}
