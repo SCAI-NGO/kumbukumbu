@@ -18,12 +18,16 @@ export async function makeAgent(vaults: Record<string, "read" | "write" | "maint
   const maker = session
     ? await Api.from(await request.newContext({ baseURL, storageState: await session.storageState(), extraHTTPHeaders: { Origin: baseURL } }), "alice")
     : owner;
-  await maker.confirmPassword();
-  const created = await maker.json<{ key: string; apiKey: { id: string } }>("POST", "/api/keys", {
-    name: `e2e calendar ${label} ${randomBytes(3).toString("hex")}`,
-    vaults,
-    expiresInDays: 30,
-  });
+  // The password is checked at most 5 times a minute per account, across every tag's tests: it is confirmed only when
+  // the session's password window isn't open already (a fresh sign-in opens it).
+  const data = { name: `e2e calendar ${label} ${randomBytes(3).toString("hex")}`, vaults, expiresInDays: 30 };
+  let answer = await maker.context.post("/api/keys", { data });
+  if (answer.status() === 401) {
+    await maker.confirmPassword();
+    answer = await maker.context.post("/api/keys", { data });
+  }
+  expect(answer.status(), `POST /api/keys: ${answer.status()}`).toBe(201);
+  const created = (await answer.json()) as { key: string; apiKey: { id: string } };
   const mcp = new Mcp(await request.newContext({ baseURL }), created.key, { api: owner, id: created.apiKey.id });
   return {
     mcp,
