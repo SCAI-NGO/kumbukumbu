@@ -27,7 +27,8 @@ public class EntryStatesTests
 
     private static EntryStatus At(Entry entry, string nowUtc, TimeZoneInfo? zone = null) => EntryStates.Of(entry, Utc(nowUtc), zone ?? Vienna);
 
-    private static void Is(EntryState state, string? span, EntryStatus status) => Assert.Equal(new EntryStatus(state, span), status);
+    private static void Is(EntryState state, string? span, EntryStatus status, bool beforeTime = false) =>
+        Assert.Equal(new EntryStatus(state, span, beforeTime), status);
 
     [Fact]
     public void An_appointment_is_upcoming_then_ongoing_then_past()
@@ -85,7 +86,7 @@ public class EntryStatesTests
         Is(EntryState.Overdue, "3 weeks", At(entry, "2027-01-06T08:00Z"));
         Is(EntryState.Overdue, "8 weeks", At(entry, "2027-02-12T08:00Z"));
         Is(EntryState.Overdue, "2 months", At(entry, "2027-02-13T08:00Z"));
-        Is(EntryState.Overdue, "13 months", At(entry, "2028-01-15T08:00Z"));
+        Is(EntryState.Overdue, "1 year", At(entry, "2028-01-15T08:00Z"));
     }
 
     [Fact]
@@ -114,8 +115,8 @@ public class EntryStatesTests
         var entry = EntryOf("when: 2026-11-20T14:00\n");
 
         Is(EntryState.NotYet, null, At(entry, "2026-11-19T22:59Z"));
-        Is(EntryState.Ongoing, "until 14:00", At(entry, "2026-11-19T23:30Z"));
-        Is(EntryState.Ongoing, "until 14:00", At(entry, "2026-11-20T12:59Z"));
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-19T23:30Z"), beforeTime: true);
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-20T12:59Z"), beforeTime: true);
         Is(EntryState.Past, null, At(entry, "2026-11-20T13:01Z"));
     }
 
@@ -124,7 +125,7 @@ public class EntryStatesTests
     {
         var entry = EntryOf("when: 2026-11-20T14:00\ntask: open\n");
 
-        Is(EntryState.Ongoing, "until 14:00", At(entry, "2026-11-20T08:00Z"));
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-20T08:00Z"), beforeTime: true);
         Is(EntryState.Overdue, "1 hour", At(entry, "2026-11-20T13:00:01Z"));
         Is(EntryState.Overdue, "1 hour", At(entry, "2026-11-20T13:30Z"));
         Is(EntryState.Overdue, "3 hours", At(entry, "2026-11-20T16:10Z"));
@@ -132,15 +133,16 @@ public class EntryStatesTests
     }
 
     [Fact]
-    public void A_timed_window_is_upcoming_until_its_start()
+    public void A_timed_window_is_upcoming_until_the_start_of_its_day()
     {
         var entry = EntryOf("when: 2026-11-20T14:00\nuntil: 2026-11-22T10:00\nupcoming: 1d\n");
 
-        Assert.Equal(Utc("2026-11-20T13:00Z"), EntryStates.OngoingFromUtc(entry, Vienna));
+        Assert.Equal(Utc("2026-11-19T23:00Z"), EntryStates.OngoingFromUtc(entry, Vienna));
         Assert.Equal(Utc("2026-11-22T09:00Z"), EntryStates.EndUtc(entry, Vienna));
         Is(EntryState.NotYet, null, At(entry, "2026-11-19T12:59Z"));
         Is(EntryState.Upcoming, "tomorrow", At(entry, "2026-11-19T13:00Z"));
-        Is(EntryState.Upcoming, "today", At(entry, "2026-11-20T12:00Z"));
+        Is(EntryState.Upcoming, "tomorrow", At(entry, "2026-11-19T22:59Z"));
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-20T12:00Z"), beforeTime: true);
         Is(EntryState.Ongoing, "until Sun", At(entry, "2026-11-20T13:00Z"));
         Is(EntryState.Ongoing, "until 10:00", At(entry, "2026-11-22T08:00Z"));
         Is(EntryState.Past, null, At(entry, "2026-11-22T09:00Z"));
@@ -196,9 +198,9 @@ public class EntryStatesTests
         var timed = EntryOf("when: 2026-11-20T14:00\n");
 
         Assert.Equal(EntryState.Ongoing, At(timed, "2026-11-20T12:30Z", Vienna).State);
-        Is(EntryState.Ongoing, "until 14:00", At(timed, "2026-11-20T12:30Z", NewYork));
+        Is(EntryState.Ongoing, "14:00", At(timed, "2026-11-20T12:30Z", NewYork), beforeTime: true);
         Is(EntryState.Past, null, At(timed, "2026-11-20T14:30Z", Vienna));
-        Is(EntryState.Ongoing, "until 14:00", At(timed, "2026-11-20T14:30Z", NewYork));
+        Is(EntryState.Ongoing, "14:00", At(timed, "2026-11-20T14:30Z", NewYork), beforeTime: true);
 
         // A day is 20 November for both: from each one's midnight to each one's next.
         var day = EntryOf("when: 2026-11-20\n");
@@ -217,8 +219,8 @@ public class EntryStatesTests
 
         Assert.Equal(Utc("2026-11-20T14:00Z"), EntryStates.EndUtc(entry, Vienna));
         Assert.Equal(Utc("2026-11-19T23:00Z"), EntryStates.OngoingFromUtc(entry, Vienna));
-        Is(EntryState.Ongoing, "until 14:00 (Europe/London)", At(entry, "2026-11-20T13:30Z"));
-        Is(EntryState.Ongoing, "until 14:00", At(entry, "2026-11-20T13:30Z", Zones.Find("Europe/London")!));
+        Is(EntryState.Ongoing, "14:00 (Europe/London)", At(entry, "2026-11-20T13:30Z"), beforeTime: true);
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-20T13:30Z", Zones.Find("Europe/London")!), beforeTime: true);
         Is(EntryState.Past, null, At(entry, "2026-11-20T14:00Z"));
     }
 
@@ -228,7 +230,7 @@ public class EntryStatesTests
         var entry = EntryOf("when: 2026-11-20T14:00Z\n");
 
         Assert.Equal(Utc("2026-11-20T14:00Z"), EntryStates.EndUtc(entry, Vienna));
-        Is(EntryState.Ongoing, "until 15:00", At(entry, "2026-11-20T10:00Z"));
+        Is(EntryState.Ongoing, "15:00", At(entry, "2026-11-20T10:00Z"), beforeTime: true);
     }
 
     [Fact]
@@ -245,7 +247,7 @@ public class EntryStatesTests
 
         // 02:30 does not exist in Vienna that night; it is 03:30 summer time, 01:30Z.
         Assert.Equal(Utc("2026-03-29T01:30Z"), EntryStates.EndUtc(entry, Vienna));
-        Is(EntryState.Ongoing, "until 03:30", At(entry, "2026-03-29T01:00Z"));
+        Is(EntryState.Ongoing, "03:30", At(entry, "2026-03-29T01:00Z"), beforeTime: true);
         Is(EntryState.Overdue, "1 hour", At(entry, "2026-03-29T01:30Z"));
     }
 
@@ -268,6 +270,61 @@ public class EntryStatesTests
         Assert.Equal(DateTime.MinValue, EntryStates.RelevantFromUtc(entry, Vienna));
         Is(EntryState.Upcoming, "in 9 days", At(entry, "0002-01-01T08:00Z"));
     }
+
+    // Saturday, 14 November 2026, in Vienna (UTC+1): 08:00 local is 07:00Z.
+    [Fact]
+    public void A_timed_window_is_ongoing_from_the_start_of_its_day_before_its_time()
+    {
+        var entry = EntryOf("when: 2026-11-14T14:00\nuntil: 2026-11-14T15:00\n");
+
+        Assert.Equal(Utc("2026-11-13T23:00Z"), EntryStates.OngoingFromUtc(entry, Vienna));
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-14T07:00Z"), beforeTime: true);
+    }
+
+    [Fact]
+    public void A_timed_window_within_its_time_says_until()
+    {
+        var entry = EntryOf("when: 2026-11-14T14:00\nuntil: 2026-11-14T15:00\n");
+
+        Is(EntryState.Ongoing, "until 15:00", At(entry, "2026-11-14T13:30Z"));
+    }
+
+    [Fact]
+    public void A_timed_window_after_its_time_is_past()
+    {
+        Is(EntryState.Past, null, At(EntryOf("when: 2026-11-14T14:00\nuntil: 2026-11-14T15:00\n"), "2026-11-14T14:30Z"));
+        Is(EntryState.Overdue, "1 hour", At(EntryOf("when: 2026-11-14T14:00\nuntil: 2026-11-14T15:00\ntask: open\n"), "2026-11-14T14:30Z"));
+    }
+
+    [Fact]
+    public void A_time_without_until_reads_today_before_its_time()
+    {
+        var entry = EntryOf("when: 2026-11-14T14:00\n");
+
+        Is(EntryState.Ongoing, "14:00", At(entry, "2026-11-14T08:00Z"), beforeTime: true);
+    }
+
+    [Fact]
+    public void A_timed_window_the_day_before_is_not_yet()
+    {
+        var entry = EntryOf("when: 2026-11-14T14:00\nuntil: 2026-11-14T15:00\n");
+
+        Is(EntryState.NotYet, null, At(entry, "2026-11-13T19:00Z"));
+    }
+
+    private static readonly DateOnly Today = new(2026, 11, 14);
+
+    private static EntryStatus OverdueSince(DateOnly when) =>
+        At(EntryOf($"when: {when:yyyy-MM-dd}\ntask: open\n"), "2026-11-14T09:00Z");
+
+    [Fact]
+    public void Overdue_says_months_until_11() => Is(EntryState.Overdue, "11 months", OverdueSince(Today.AddMonths(-11)));
+
+    [Fact]
+    public void Overdue_says_a_year_at_12_months() => Is(EntryState.Overdue, "1 year", OverdueSince(Today.AddMonths(-12)));
+
+    [Fact]
+    public void Overdue_says_years() => Is(EntryState.Overdue, "3 years", OverdueSince(Today.AddYears(-3)));
 
     [Fact]
     public void On_is_upcoming_ongoing_and_overdue()

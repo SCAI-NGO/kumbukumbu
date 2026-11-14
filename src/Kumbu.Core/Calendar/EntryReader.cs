@@ -43,9 +43,12 @@ public static partial class EntryReader
                 : (null, null);
         }
 
-        var values = read.Values;
+        // On a card, reason is the board's key (BoardReader reads it as written).
+        var (values, twice) = CalendarKeys.Fold(read.Values, cardPlace && HasColumn(read.Values) ? "reason" : null);
+        var problems = new Problems(path, title);
+        problems.Twice(read.Values, twice);
         if (cardPlace && HasColumn(values))
-            return ReadCard(path, title, values, board!, (values["column"] as string ?? Text(values["column"])).Trim());
+            return ReadCard(values, problems, board!, (values["column"] as string ?? Text(values["column"])).Trim());
         // A card of a board that can't be read: its due would otherwise be nobody's (anti-goal 1).
         if (board is null && IsCard(path, values) && Given(values, "due") is { } due)
         {
@@ -53,8 +56,6 @@ public static partial class EntryReader
                 "This card's date can't be shown until its board can be read again", new Dictionary<string, string>()));
         }
 
-
-        var problems = new Problems(path, title);
         var whenValue = Given(values, "when");
         var untilValue = Given(values, "until");
         CalendarTime? when = null;
@@ -169,9 +170,8 @@ public static partial class EntryReader
 
     /// <summary>A card's <c>due</c> is its <c>when</c>; its column is its status (spec §2.5).</summary>
     private static (Entry? Entry, CalendarProblem? Problem) ReadCard(
-        VaultPath path, string title, IReadOnlyDictionary<string, object?> values, BoardDefinition board, string written)
+        IReadOnlyDictionary<string, object?> values, Problems problems, BoardDefinition board, string written)
     {
-        var problems = new Problems(path, title);
         var marked = Given(values, "task") is not null || Given(values, "closed") is not null;
         if (Given(values, "due") is not { } dueValue)
         {
@@ -195,12 +195,12 @@ public static partial class EntryReader
         var reason = ReadReason(values, problems);
         var upcoming = ReadUpcoming(values, problems);
         if (marked) problems.Add(CardMarked, CardMarkedPlain);
-        if (due is null || upcoming is null && Given(values, "upcoming") is not null) return (null, problems.Problem());
+        if (problems.Twofold || due is null || upcoming is null && Given(values, "upcoming") is not null) return (null, problems.Problem());
 
         // A column the board doesn't have is the board's problem; for the calendar the deadline is still open.
         var column = board.Find(written);
         var closed = column is { Archivable: true } or { NeedsReason: true };
-        var entry = new Entry(path, title, EntryKind.Card, due!, null, closed ? TaskMark.Closed : TaskMark.Open, null,
+        var entry = new Entry(problems.Path, problems.Title, EntryKind.Card, due!, null, closed ? TaskMark.Closed : TaskMark.Open, null,
             closed ? reason : null, upcoming, null, false, column?.Name ?? written);
 
         return (entry, problems.Any ? problems.Problem() : null);
@@ -301,7 +301,8 @@ public static partial class EntryReader
         return false;
     }
 
-    [GeneratedRegex(@"^(?<q>[""']?)(?<key>when|until|task|due)\k<q>[ \t]*:")]
+    // The calendar's keys in any case; due, the board's, only as written.
+    [GeneratedRegex(@"^(?<q>[""']?)(?<key>(?i:when|until|task)|due)\k<q>[ \t]*:")]
     private static partial Regex CalendarKeyLine();
 
     [GeneratedRegex(@"^([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-W[0-9]{2})\.md\z")]
@@ -312,14 +313,35 @@ public static partial class EntryReader
     {
         private readonly List<(string What, string Plain)> found = [];
         private readonly Dictionary<string, string> readable = [];
+        private readonly HashSet<string> twice = [];
+
+        public VaultPath Path => path;
+
+        public string Title => title;
 
         public bool Any => found.Count > 0;
 
+        /// <summary>Whether a calendar key is written in two spellings: then no spelling wins, and the note is no entry.</summary>
+        public bool Twofold => twice.Count > 0;
+
         public void Add(string what, string plain) => found.Add((what, plain));
+
+        /// <summary>A problem for each key of <paramref name="names"/>, written in more than one spelling in <paramref name="values"/>.</summary>
+        public void Twice(IReadOnlyDictionary<string, object?> values, IReadOnlyList<string> names)
+        {
+            foreach (var name in names)
+            {
+                var spellings = CalendarKeys.Spellings(values, name);
+                var quoted = spellings.Select(s => $"`{Text(s)}`").ToList();
+                Add($"{name} is written {(spellings.Count == 2 ? "twice" : $"{spellings.Count} times")} ({string.Join(", ", spellings.Select(Text))}); keep one",
+                    $"{string.Join(", ", quoted[..^1])} and {quoted[^1]} are {(spellings.Count == 2 ? "both" : "all")} there – I need just one");
+                twice.Add(name);
+            }
+        }
 
         public void Readable(string key, object value)
         {
-            if (value is string written) readable[key] = written;
+            if (value is string written && !twice.Contains(key)) readable[key] = written;
         }
 
         public CalendarProblem Problem() =>

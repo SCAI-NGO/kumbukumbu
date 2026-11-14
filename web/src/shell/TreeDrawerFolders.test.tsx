@@ -324,6 +324,15 @@ describe("folders of a vault shared with the user", () => {
     // Any other folder is a writer's to move.
     expect(await menuOf("Drafts")).toContain("Rename or move");
   });
+
+  it("on a touch device a writer may also take a photo there, after Upload here", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(pointer: coarse)", addEventListener() {}, removeEventListener() {} }));
+    localStorage.setItem("kumbu.installHint", "dismissed");
+    shared("write");
+    root.folders.push(folder("/Work/Board"));
+    await openDrawer();
+    expect(await menuOf("Board")).toEqual(["New note here", "New folder…", "Upload here", "Take photo"]);
+  });
 });
 
 describe("a new note in the board's folder", () => {

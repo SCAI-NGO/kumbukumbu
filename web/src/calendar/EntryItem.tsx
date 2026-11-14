@@ -13,6 +13,12 @@ const states: Partial<Record<EntryState, { icon: LucideIcon; word: string; class
   done: { icon: Check, word: "closed", className: "text-muted" },
 };
 
+/** The state's word and its span: "overdue · 3 weeks", "ongoing · until 15:00"; on its day before its time "today · 14:00". */
+const stateText = (entry: EntryView, word: string) => {
+  if (!entry.span || entry.state === "done") return word;
+  return entry.beforeTime ? `today · ${entry.span}` : `${word} · ${entry.span}`;
+};
+
 const kinds: Record<EntryKind, { icon: LucideIcon; word: string }> = {
   task: { icon: ListTodo, word: "To do" },
   card: { icon: SquareKanban, word: "Card" },
@@ -66,7 +72,7 @@ export default function EntryItem({ entry, actions, range, vault }: { entry: Ent
             {state && (
               <span className={`flex items-center gap-1 ${state.className}`}>
                 <state.icon aria-hidden size={14} className="flex-none" />
-                <span>{entry.span && entry.state !== "done" ? `${state.word} · ${entry.span}` : state.word}</span>
+                <span>{stateText(entry, state.word)}</span>
               </span>
             )}
           </p>

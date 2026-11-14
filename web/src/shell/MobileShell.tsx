@@ -5,7 +5,7 @@ import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
-import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
+import { Flag, FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -40,6 +40,7 @@ import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
 import DateDialog, { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import { flaggable, useFlagging } from "../flags/FlagMenu";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -301,6 +302,8 @@ export default function MobileShell() {
   // The note's header line asks the calendar about the note shown; its menu takes the same answer, asking nothing itself.
   const dated = useNoteEntry(path, false);
   const removeDate = useRemoveFromCalendar(copied.say);
+  // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
+  const flagging = useFlagging();
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
@@ -318,7 +321,7 @@ export default function MobileShell() {
   const noteChanges = !!path && mayChange(noteLevel, path);
   // On a phone the tree is a drawer: the frame and the pill go around and under the top bar instead (spec §3.7).
   const framed = discreetShown && !docked;
-  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating };
+  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating, onFlag: flagging.open };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
@@ -382,6 +385,7 @@ export default function MobileShell() {
                             // Not while it is being named from its heading: a name given by hand must not lose that race.
                             ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
+                            ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => flagging.open(path) }] : []),
                             ...calendarItems(path, dated, setDating, removeDate),
                           ]
                         : []),
@@ -404,7 +408,7 @@ export default function MobileShell() {
       {overlay === "upload" && upload && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
-            <UploadSheet folder={upload.folder} dropped={upload.dropped} />
+            <UploadSheet folder={upload.folder} dropped={upload.dropped} start={upload.start} />
           </Suspense>
         </LoadBoundary>
       )}
@@ -454,6 +458,7 @@ export default function MobileShell() {
         <DeleteFileDialog path={deleting.path} version={deleting.version} onDeleted={() => setDeleting(null)} onClose={() => setDeleting(null)} />
       )}
       {dating && <DateDialog path={dating} onClose={() => setDating(null)} />}
+      {flagging.element}
       {folderDialog && <NewFolderDialog parent={folderDialog} onClose={() => setFolderDialog(null)} />}
       {vaultDialog && (
         <NewVaultDialog

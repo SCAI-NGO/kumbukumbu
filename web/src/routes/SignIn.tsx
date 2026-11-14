@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -34,6 +34,12 @@ export default function SignIn() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
+
+  // After a sign-out, nothing of the session stays cached. Cleared here, once the signed-in pages are gone: cleared
+  // while they were still shown, they would ask again (for the session too) before the way here was in.
+  useEffect(() => {
+    if (useSession.getState().signedOut) queryClient.clear();
+  }, [queryClient]);
 
   const signIn = useMutation({
     mutationFn: () => call(api.POST("/api/session", { body: { username, password, remember } })),

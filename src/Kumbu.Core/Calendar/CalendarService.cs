@@ -392,7 +392,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
         return new Plan(changes, $"moved {c.Path.Value} to {Human(target, c.Today)}");
     }
 
-    /// <summary>A note as a write plans on it, read just now.</summary>
+    /// <summary>A note as a write plans on it, read just now; <see cref="Values"/> has the calendar's keys in lower case.</summary>
     private sealed record Current(VaultPath Path, IReadOnlyDictionary<string, object?> Values, Entry? Entry, CalendarProblem? Problem, bool Card,
         TimeZoneInfo Zone, DateOnly Today);
 
@@ -428,11 +428,13 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
             if (read.Problem is not null)
                 return Error($"{path.Value}: the frontmatter does not parse, so the calendar leaves it alone (fix it with edit): {read.Problem}", ShellErrorKind.Conflict);
             var (entry, problem) = EntryReader.Read(new Note(path, note.Content), null);
-            var current = new Current(path, read.Values, entry, problem, EntryReader.IsCard(path, read.Values), callerZone, today);
+            // The plan reads the calendar's keys in any case; the write keeps the spelling the note has.
+            var current = new Current(path, CalendarKeys.Fold(read.Values).Values, entry, problem, EntryReader.IsCard(path, read.Values), callerZone, today);
 
             var planned = plan(current);
             if (planned.Error is not null) return planned.Error;
-            if (!FrontmatterWrites.TryOwnedKeys(Tool, path, note.Content, planned.Changes, out var content, out error)) return error;
+            var changes = CalendarKeys.Spelled(read.Values, planned.Changes);
+            if (!FrontmatterWrites.TryOwnedKeys(Tool, path, note.Content, changes, out var content, out error)) return error;
             // A block that held only calendar keys goes with them; one that was empty before stays.
             if (EmptyBlock(content) is var empty and > 0 && EmptyBlock(note.Content) == 0) content = content[empty..];
             if (content == note.Content) return Written(planned.Unchanged ?? $"{path.Value} is unchanged", note);

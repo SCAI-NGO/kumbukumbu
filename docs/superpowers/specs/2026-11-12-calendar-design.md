@@ -1,6 +1,6 @@
 # The calendar
 
-Date: 2026-11-12, amended 2026-11-13 after a human-centric review (§11). Status: approved by the maintainer; builder check done.
+Date: 2026-11-12, amended 2026-11-13 after a human-centric review (§11) and 2026-11-14 with the calendar's fixes (`2026-11-14-flags-explorer-photo-design.md` §6, each marked "(amended 2026-11-14)"). Status: approved by the maintainer; builder check done.
 
 The flagship of 0.5.0. Every calendar entry is a note: its time lives in the frontmatter, and the calendar is a view of the notes that have one. Search, links, tags, vaults, history, sync, WebDAV and agents work for entries without anything new to learn. Two users asked for a calendar; the maintainer made it the flagship of 0.5.0 on 2026-11-12, in place of the kill switch (now 0.6.0). Why: it brings more, isn't a fringe feature and lifts work, hobbies, thoughts and ideas directly.
 
@@ -73,6 +73,7 @@ tz: Europe/Vienna           # optional: the zone of the times above
 - **Only `task` makes a task.** Without it an entry is an appointment or a dated note, never overdue. With `task: open` or `task: closed` it is a task. Any other value of `task` is a problem (§2.7), not a guess.
 - **Why these names and not `date`, `end`, `status`** *(maintainer, after a pressure test with real Obsidian vaults)*: `date:` is very common as a created date from templates, so an imported vault would get thousands of entries; `status:` is even more common, with `draft`, `active`, `done`. The cost, accepted: Obsidian plugins such as Full Calendar read `date` and won't see our entries.
 - **`upcoming`** is named after the state it brings ("upcoming from 7 days before"). *Maintainer:* "preroll" was jargon. Read `7d`, `2w`, `12h` and ISO 8601 `P7D`; written always in the short form. No months (28 to 31 days): `4w` or `30d`.
+- **The keys are read ignoring case** (amended 2026-11-14): `When:`, `TASK:` and `Until:` are `when`, `task` and `until`. Two spellings of one key in a note (`when:` and `When:`) are listed under **Dates I couldn't read** (§2.7, §7.12) rather than one winning; a write keeps the spelling that is there, and a removal removes every spelling. Only the calendar's keys: the board's `due` and `column` and the tags stay as they are. *Why:* a key typed with a capital shouldn't make a date vanish silently.
 - **Weeks** are ISO 8601 (`2026-W47`, Monday to Sunday, week 1 holds the year's first Thursday), as week numbers are used at work in Austria ("KW 25"). *Maintainer:* a must; the week is a first-class unit.
 
 ### 2.2 Values
@@ -91,14 +92,16 @@ tz: Europe/Vienna           # optional: the zone of the times above
 
 | Kind | Fields | Derived state |
 |---|---|---|
-| Dated note, appointment | `when`, optionally `until` | upcoming (from `upcoming` before `when`), ongoing (within `when` to `until`, or within the day or week of `when`), then nothing |
-| Task | `task: open` | upcoming, ongoing (if it has `until` or is a day or week), **overdue** after its end (`until`, else `when`) |
+| Dated note, appointment | `when`, optionally `until` | upcoming (from `upcoming` before `when`), ongoing (within `when` to `until`, or within the day or week of `when`; with a time, from the start of its day, amended 2026-11-14), then nothing |
+| Task | `task: open` | upcoming, ongoing (if it has `until`, is a day or week, or has a time: from the start of its day, amended 2026-11-14), **overdue** after its end (`until`, else `when`) |
 | Closed task | `task: closed`, `closed`, optionally `reason` | done, also when closed early |
 
 - An entry's **end** is `until`, else `when`; a day ends at the end of that day, a week at the end of its Sunday, a time at that time.
 - Without `upcoming`, an entry starts to matter at `when`.
 - An appointment with only a time (`when: …T14:00`, no `until`, the common "Zahnarzt 14:00") is ongoing from the start of its day until that time, then nothing *(Claude's call, accepted by the maintainer 2026-11-13: it shows in What's on and the badge on its day)*.
 - A task with only a time is ongoing from the start of its day until that time, then overdue.
+- **A timed entry is relevant from the start of its day** (amended 2026-11-14): an appointment or task with a time and an `until` (14:00–15:00) is ongoing from the start of the day it begins, as one with only a time is, so it is in What's on and the badge all that day. Only the words change: before its time both read "today · 14:00", within a window "ongoing · until 15:00". *Why:* the table and the bullets above disagreed for a window with a time; one rule for both.
+- **Day and week notes by their name count in What's on and the badge only when they are a task** (`task: open`, amended 2026-11-14); the calendar views show them as before. *Why:* tapping **Today** made the badge show 1 every day, for nothing that's on.
 - **"What's on" holds upcoming, ongoing and overdue, ever; never what isn't relevant yet, never what is done or merely past.** *Maintainer, explicitly.*
 - An appointment over a window counts as ongoing all along (a holiday of two weeks is two weeks in "What's on" and the badge). *Maintainer:* a deliberate expression of being campy, one rule, no exceptions.
 
@@ -139,7 +142,9 @@ A value the calendar can't read (`when: tomorrow`, `task: maybe`, `until` before
 ## 5. Notifications are pulled
 
 - No daemon, no push. Whoever wants them asks: the web app's "What's on" and badge (§7.6, §7.7), an agent's `sh calendar notifications`, for instance from a `CLAUDE.md` line such as "At the start of a session, get the calendar notifications from Kumbu² and tell me what's on".
-- The list: overdue first (longest overdue first), then ongoing (ending soonest first), then upcoming (soonest first). Each item: title, vault and path, its state with a human span ("overdue · 3 weeks", "ongoing · until Fri", "upcoming · in 7 days"), and whether it is a task.
+- The list: overdue first (longest overdue first), then ongoing (ending soonest first), then upcoming (soonest first). Each item: title, vault and path, its state with a human span ("overdue · 3 weeks", "ongoing · until Fri", "upcoming · in 7 days"; on its day before its time "today · 14:00", amended 2026-11-14), and whether it is a task.
+- **Overdue says years from 12 months on** (amended 2026-11-14): "overdue · 3 years", not "40 months"; up to 11 months it says months.
+- A day or week note by its name is on the list only when it is a task (§2.4, amended 2026-11-14).
 - `--tag` narrows it (§6.1).
 
 ## 6. For agents: `sh calendar`
@@ -232,11 +237,11 @@ The view (week or month) is remembered **per user and per calendar** on the serv
 
 ### 7.6 What's on
 
-A page of its own: the list of §5 over every vault the session shows, each item with its vault, tapping opens the note; an open task has ✓ (§7.8) and **Later** (§7.13). Empty: "Nothing on. Enjoy it." *(Claude's call: a calm sentence, not a blank page.)* The tag filter works here too. A line at the bottom names dates that couldn't be read, if any, with a link to them (§7.12).
+A page of its own: the list of §5 over every vault the session shows (a day or week note by its name only when it is a task, amended 2026-11-14), each item with its vault, tapping opens the note; an open task has ✓ (§7.8) and **Later** (§7.13). Empty: "Nothing on. Enjoy it." *(Claude's call: a calm sentence, not a blank page.)* The tag filter works here too. A line at the bottom names dates that couldn't be read, if any, with a link to them (§7.12).
 
 ### 7.7 The badge
 
-*Maintainer: one rule.* Its number is the length of "What's on" for the vaults the session shows; the scheme's warning colour when anything is overdue, a calm one otherwise; no badge at zero. On What's on in the navigation, on the **Calendar** entry of the active vault's menu in the tree and beside each vault in the vault switcher (that vault's share of the count), on the phone's menu button *(maintainer, 2026-11-13)*; and on the installed app's icon through the Badging API (`navigator.setAppBadge`, set while the app runs, so still pull; nothing where it isn't supported). Its count is refreshed when the app opens, when it comes back to the foreground, and after a change to an entry.
+*Maintainer: one rule.* Its number is the length of "What's on" for the vaults the session shows (so a day or week note by its name counts only when it is a task, amended 2026-11-14); the scheme's warning colour when anything is overdue, a calm one otherwise; no badge at zero. On What's on in the navigation, on the **Calendar** entry of the active vault's menu in the tree and beside each vault in the vault switcher (that vault's share of the count), on the phone's menu button *(maintainer, 2026-11-13)*; and on the installed app's icon through the Badging API (`navigator.setAppBadge`, set while the app runs, so still pull; nothing where it isn't supported). **The app's icon never counts discreet vaults**, shown or hidden (amended 2026-11-14): it is the count without the shares of the vaults the vault list marks discreet, and it is set only once that list is in. The badge inside the app follows the session as above *(Claude's call)*. *Why:* the icon outlives the session; closed while a discreet vault is shown, the app would leave a count that includes it. Its count is refreshed when the app opens, when it comes back to the foreground, and after a change to an entry.
 
 ### 7.8 From the note
 
@@ -263,7 +268,7 @@ Status never by colour alone (icon and word); WCAG AA contrast in every scheme (
 ## 8. Discreet and shared vaults
 
 - **Agents:** discreet vaults are ordinary vaults (as today): `sh calendar` reads and writes them.
-- **Web app:** the calendar, What's on, the badge (count and colour) and the note header follow the session's discreet state: entries of a discreet vault count and show only while that vault is shown. The app-icon badge too. No answer, count or colour lets a session tell that hidden vaults have entries.
+- **Web app:** the calendar, What's on, the badge (count and colour) and the note header follow the session's discreet state: entries of a discreet vault count and show only while that vault is shown. The app-icon badge never counts a discreet vault, shown or hidden (§7.7, amended 2026-11-14). No answer, count or colour lets a session tell that hidden vaults have entries.
 - **Shared vaults:** an entry is the vault's, so every member sees it in their calendar and What's on, in their own zone *(Claude's call: one rule; a task in a shared vault is everyone's to see, as a card on a shared board is)*. Writing follows the member's role.
 
 ### 7.12 Dates I couldn't read

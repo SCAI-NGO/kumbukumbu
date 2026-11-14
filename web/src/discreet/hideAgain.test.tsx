@@ -10,7 +10,7 @@ import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 import { entryView } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
-import { forgetHeld, hideAgain, holding, SAVE_AHEAD } from "./hideAgain";
+import { DISCREET_CHANNEL, forgetHeld, hideAgain, holding, SAVE_AHEAD } from "./hideAgain";
 import { useDiscreet } from "./state";
 
 beforeEach(() => {
@@ -650,7 +650,10 @@ describe("What's on and the badge, as the discreet vaults are hidden again", () 
     // The phone's tree button carries the count.
     const badge = () => screen.getByRole("button", { name: "Open file tree" });
     await waitFor(() => expect(badge()).toHaveAccessibleDescription("3 on, some overdue"));
-    expect(setAppBadge).toHaveBeenLastCalledWith(3);
+    // The app's icon never counts a discreet vault, shown or not: Work's share only.
+    await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
+    expect(setAppBadge).not.toHaveBeenCalledWith(3);
+    setAppBadge.mockClear();
     editorOn(diary.log);
     await userEvent.click(hideButton());
     await doneHiding(diary.router);
@@ -682,4 +685,96 @@ describe("What's on and the badge, as the discreet vaults are hidden again", () 
     expect(screen.queryByRole("link", { name: "Brief" })).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/whats-on");
   });
+
+  // Away from the notes there is no socket, so no `hidden` frame: the tab that hid them tells the others.
+  const hiddenInAnotherTab = () => {
+    const other = new BroadcastChannel(DISCREET_CHANNEL);
+    other.postMessage("hidden");
+    other.close();
+  };
+
+  it("hidden in another tab, a Recent changes page left open here drops the vault's rows and chip at once", async () => {
+    let hidden = false;
+    const asked: string[] = [];
+    const row = (vault: string, title: string) => ({ path: `/${vault}/${title}.md`, vault, title, folder: vault, kind: "note", flag: null, writer: "alice", writerKind: "self", writtenAt: new Date().toISOString() });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+      "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+      "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+      "GET /api/recent": (r) => {
+        asked.push(new URL(r.url).searchParams.get("words") ?? "");
+        return json(200, hidden ? { items: [row("Work", "Report")], more: false, vaults: ["Work"] } : { items: [row("Tagebuch", "Brief"), row("Work", "Report")], more: false, vaults: ["Tagebuch", "Work"] });
+      },
+    });
+    const router = renderApp("/recent");
+    expect(await screen.findByRole("link", { name: /Brief/ })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    // A vault switched off and words typed: the page asks with other filters than the ones the rows came with.
+    await userEvent.click(screen.getByRole("button", { name: "Work" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Tage");
+    await waitFor(() => expect(asked.at(-1)).toBe("Tage"));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.getByRole("link", { name: /Brief/ })).toBeInTheDocument();
+    hidden = true;
+    act(hiddenInAnotherTab);
+    await waitFor(() => expect(document.body).not.toHaveTextContent("Tagebuch"));
+    expect(screen.queryByRole("link", { name: /Brief/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Find by name" })).toHaveValue("");
+    expect(await screen.findByRole("link", { name: /Report/ })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Tagebuch");
+    expect(router.state.location.pathname).toBe("/recent");
+  });
+
+  it("hidden in another tab, a What's on page left open here drops the vault's entries", async () => {
+    let hidden = false;
+    const entry = (vault: string, title: string) => ({ ...entryView(title, { path: `/${vault}/${title}.md`, vault }) });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+      "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+      "GET /api/calendar/whats-on": () =>
+        json(200, { items: hidden ? [entry("Work", "Report")] : [entry("Tagebuch", "Brief"), entry("Work", "Report")], count: hidden ? 1 : 2, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+    });
+    renderApp("/whats-on");
+    expect(await screen.findByRole("link", { name: "Brief" })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    hidden = true;
+    act(hiddenInAnotherTab);
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Brief" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("link", { name: "Report" })).toBeInTheDocument();
+  });
+
+  it("✕ tells this browser's other tabs once the server has heard of it, by no vault's name", async () => {
+    const { router } = await openDiary(null);
+    const heard: unknown[] = [];
+    const other = new BroadcastChannel(DISCREET_CHANNEL);
+    other.onmessage = (e) => heard.push(e.data);
+    await userEvent.click(hideButton());
+    await doneHiding(router);
+    await waitFor(() => expect(heard).toEqual(["hidden"]));
+    other.close();
+  });
+
+  it("hiding again empties Recent changes on screen", async () => {
+    let hidden = false;
+    const row = (vault: string, title: string) => ({ path: `/${vault}/${title}.md`, vault, title, folder: vault, kind: "note", flag: null, writer: "alice", writerKind: "self", writtenAt: new Date().toISOString() });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+      "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+      "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+      "GET /api/recent": () =>
+        json(200, hidden ? { items: [row("Work", "Report")], more: false, vaults: ["Work"] } : { items: [row("Tagebuch", "Brief"), row("Work", "Report")], more: false, vaults: ["Tagebuch", "Work"] }),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/recent", queryClient);
+    expect(await screen.findByRole("link", { name: /Brief/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tagebuch" })).toBeInTheDocument();
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    hidden = true;
+    await act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname: "/recent" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Brief/ })).not.toBeInTheDocument());
+    expect(await screen.findByRole("link", { name: /Report/ })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Tagebuch");
+    expect(router.state.location.pathname).toBe("/recent");
+  });
+
 });

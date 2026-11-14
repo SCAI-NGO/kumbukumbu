@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarClock, CalendarDays, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -25,6 +25,8 @@ import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPi
 import PinDialog from "../discreet/PinDialog";
 import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
+import { isPhone } from "../update/InstallHint";
+import { extOf, photoName } from "../upload/photoName";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import { useMarking } from "./ConfirmMark";
@@ -36,11 +38,16 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
+import { filterTree } from "./treeFilter";
+import { orderTree, useTreeOrder } from "./treeOrder";
+import TreeTools, { type TreeSearch } from "./TreeTools";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
 import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
+import { flaggable } from "../flags/FlagMenu";
+import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
@@ -50,20 +57,20 @@ export const sidebarId = "file-tree";
 
 export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
-  | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
+  | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null; flag?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
-/** The visible rows, in the server's order (as `ls`: folders first, then notes and attachments, each in text order). */
+/** The visible rows in the order of `folder` (the server's, or `orderTree`'s): as `ls`, a level's folders first, then its notes and attachments. */
 export function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0): Row[] {
   return [
     ...folder.folders.flatMap((f): Row[] => {
       const open = !!expanded[f.path];
       return [{ kind: "folder", folder: f, depth, count: count(f), open }, ...(open ? rows(f, expanded, depth + 1) : [])];
     }),
-    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n), version: n.version })),
+    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n), version: n.version, flag: n.flag })),
   ];
 }
 
@@ -103,6 +110,8 @@ type FolderActions = {
   onNewFolder(parent: string): void;
   onMove(subject: MoveSubject): void;
   onRemove(folder: string): void;
+  /** Take photo: the camera, its photo into `folder`. */
+  onPhoto(folder: string): void;
   removing: boolean;
   /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
   level: Level;
@@ -114,7 +123,7 @@ type FolderActions = {
  * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
  * keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
@@ -124,6 +133,8 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
           { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
           { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+          // Only where the browser opens a camera: on a desktop it would open the file chooser, as Upload here does.
+          ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path) }] : []),
         ]
       : []),
     ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
@@ -216,6 +227,7 @@ function FileMenu({
   onDelete,
   onDate,
   onRemoveDate,
+  onFlag,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -226,6 +238,7 @@ function FileMenu({
   onDelete(subject: DeleteSubject): void;
   onDate?: (path: string) => void;
   onRemoveDate(path: string): void;
+  onFlag?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
@@ -245,6 +258,7 @@ function FileMenu({
       : note
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
+    ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path) }] : []),
     ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
   ];
   return (
@@ -254,7 +268,7 @@ function FileMenu({
   );
 }
 
-function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; current: boolean; unpublishable: boolean; onOpen(): void }) {
+function NoteButton({ path, fileKind, flag, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; flag?: string | null; current: boolean; unpublishable: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
   const Icon = fileKindIcon[fileKind];
   return (
@@ -269,6 +283,7 @@ function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: 
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
+      <FlagIcon flag={flag} size={14} />
       {unpublishable && <UnpublishableMark />}
     </button>
   );
@@ -338,7 +353,6 @@ function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useS
 function AccountRow() {
   const role = useSession((s) => s.user?.role);
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   // The drawer's state outlives the page: left open, it would be open again on the way back to the notes.
   const close = () => useEditor.getState().setOverlay("none");
   const [asking, setAsking] = useState(false);
@@ -361,8 +375,8 @@ function AccountRow() {
     }
     useEditor.getState().reset();
     useSession.getState().signOut();
+    // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.
     navigate("/signin", { replace: true });
-    queryClient.clear();
   };
 
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
@@ -452,8 +466,10 @@ export default function TreeDrawer(props: {
   onVaultSheet(sheet: VaultSheet): void;
   /** Add to calendar… and Edit date… of a note's menu. */
   onDate?: (path: string) => void;
+  /** A note menu's Flag. */
+  onFlag?: (path: string) => void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate, onFlag } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -496,6 +512,18 @@ export default function TreeDrawer(props: {
   const removeDate = useRemoveFromCalendar(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
+  // The tree's search and order (spec §3): the rows of what the search finds, in the order chosen. While it finds,
+  // every folder on the way is open; one closed by hand stays closed until the words or the flag change.
+  const [search, setSearch] = useState<TreeSearch | null>(null);
+  const [order, setOrder] = useTreeOrder();
+  const finding = !!search && (search.words.trim() !== "" || search.flag !== null);
+  const found = useMemo(() => (tree.data && finding ? filterTree(tree.data.root, search.words, search.flag) : null), [tree.data, finding, search?.words, search?.flag]);
+  const shownRoot = useMemo(() => tree.data && orderTree(found?.root ?? tree.data.root, order), [tree.data, found, order]);
+  const [shut, setShut] = useState<Record<string, boolean>>({});
+  useEffect(() => setShut({}), [found]);
+  const expanded = found ? Object.fromEntries([...found.open].filter((f) => !shut[f]).map((f) => [f, true])) : expandedFolders;
+  const toggle = (folder: string) => (found ? setShut((s) => ({ ...s, [folder]: !s[folder] })) : toggleFolder(folder));
+  const nothing = !!found && found.root.folders.length + found.root.notes.length === 0;
   const [publishing, setPublishing] = useState<string | null>(null);
   // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
   useEffect(
@@ -530,11 +558,32 @@ export default function TreeDrawer(props: {
       }
     : null;
   const marks = ownVault ? publications.data?.unpublishable : undefined;
+  // Take photo (spec §5): the camera's photo goes through the upload sheet at once, named after the moment it came back.
+  const camera = useRef<HTMLInputElement>(null);
+  const photoFolder = useRef<string | null>(null);
+  // The camera can take its time: a photo that comes back after another vault was chosen, or its own hidden, is dropped.
+  useEffect(() => {
+    photoFolder.current = null;
+  }, [activeVault]);
+  const tookPhoto = (file: File | undefined) => {
+    const folder = photoFolder.current;
+    photoFolder.current = null;
+    if (!file || !folder || goneVault(useDiscreet.getState(), vaultOf(folder))) return;
+    const ext = extOf(file.type);
+    const taken = new Set((tree.data && findFolder(tree.data.root, folder))?.notes.map((n) => n.name));
+    // Another format (HEIC) keeps the camera's name, and the upload refuses it with its own sentence.
+    const name = ext ? photoName(new Date(), ext, taken) : file.name;
+    useEditor.getState().openUpload(folder, [{ path: name, file }], true);
+  };
   const folderActions: FolderActions = {
     onNewNote,
     onNewFolder,
     onMove,
     onRemove: (folder) => removeFolder.mutate(folder),
+    onPhoto: (folder) => {
+      photoFolder.current = folder;
+      camera.current?.click();
+    },
     removing: removeFolder.isPending,
     level,
     publishing: publishingActions,
@@ -651,12 +700,13 @@ export default function TreeDrawer(props: {
         </div>
       )}
       {copied.status}
+      {tree.data && <TreeTools search={search} onSearch={setSearch} order={order} onOrder={setOrder} nothing={nothing} />}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
-        {tree.data && (
+        {shownRoot && (
           <ul>
-            {rows(tree.data.root, expandedFolders).map((row) => (
+            {rows(shownRoot, expanded).map((row) => (
               <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
                 {row.kind === "folder" ? (
                   <>
@@ -666,7 +716,7 @@ export default function TreeDrawer(props: {
                       open={row.open}
                       selected={row.folder.path === selectedFolder}
                       unpublishable={!!marks?.includes(row.folder.path)}
-                      onToggle={() => toggleFolder(row.folder.path)}
+                      onToggle={() => toggle(row.folder.path)}
                     />
                     <FolderMenu folder={row.folder} {...folderActions} />
                   </>
@@ -675,18 +725,19 @@ export default function TreeDrawer(props: {
                     <NoteButton
                       path={row.path}
                       fileKind={row.fileKind}
+                      flag={row.flag}
                       current={row.path === currentPath}
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onFlag={onFlag} />
                   </>
                 )}
               </li>
             ))}
           </ul>
         )}
-        {tree.data && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
+        {tree.data && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
           <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
         )}
         {!!tree.data?.damaged && (
@@ -694,7 +745,7 @@ export default function TreeDrawer(props: {
             {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
           </p>
         )}
-        {tree.data?.archive && activeVault && (
+        {tree.data?.archive && activeVault && !found && (
           <ArchiveEntry files={Number(tree.data.archive.files)} bytes={Number(tree.data.archive.bytes)} onOpen={() => onVaultSheet({ kind: "archive", vault: activeVault })} />
         )}
       </div>
@@ -712,6 +763,18 @@ export default function TreeDrawer(props: {
   // Outside the sidebar's box, which would otherwise hold them: they cover the whole shell, docked or not.
   const dialogs = (
     <>
+      <input
+        ref={camera}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={(e) => {
+          tookPhoto(e.target.files?.[0]);
+          // Cleared, so that the next photo is a change even when the camera gives the same file name again.
+          e.target.value = "";
+        }}
+      />
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
       {askingPin && (

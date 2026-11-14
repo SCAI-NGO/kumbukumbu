@@ -97,12 +97,14 @@ public static class CalendarLayout
 
 public sealed record WhatsOnItem(Entry Entry, EntryStatus Status);
 
-/// <summary>What's on (spec §5): every entry that is upcoming, ongoing or overdue, across the calendars given.</summary>
+/// <summary>What's on (spec §5): every entry that is upcoming, ongoing or overdue, across the calendars given. A day or week note by
+/// its name counts only when it is a task: otherwise opening today's would put it on every day (the calendar views keep it).</summary>
 public static class WhatsOn
 {
     /// <summary>Overdue (longest overdue first), then ongoing (ending soonest first), then upcoming (soonest first); ties by title, then path.</summary>
     public static IReadOnlyList<WhatsOnItem> Of(IEnumerable<VaultCalendar> calendars, DateTime nowUtc, TimeZoneInfo zone) =>
         [.. calendars.SelectMany(c => c.Entries)
+            .Where(entry => !entry.ByName || entry.Task != TaskMark.None)
             .Select(entry => new WhatsOnItem(entry, EntryStates.Of(entry, nowUtc, zone)))
             .Where(item => EntryStates.IsOn(item.Status.State))
             .OrderBy(item => item.Status.State switch { EntryState.Overdue => 0, EntryState.Ongoing => 1, _ => 2 })

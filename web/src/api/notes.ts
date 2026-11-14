@@ -7,10 +7,16 @@ import { addToFirstColumn } from "./board";
 import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
+import type { FlagName } from "../flags/api";
 import type { components } from "./schema";
 
-export type TreeFolder = components["schemas"]["TreeFolder"];
-export type TreeView = components["schemas"]["TreeView"];
+type Gen = components["schemas"];
+// The tree's flag and folder times, by hand until the generated schema has them.
+/** A note or attachment of the tree; a note carries its flag. */
+export type TreeNote = Gen["TreeNote"] & { flag?: FlagName | null };
+/** A folder of the tree; `writtenAt` is the newest write anywhere below it. */
+export type TreeFolder = Omit<Gen["TreeFolder"], "folders" | "notes"> & { writtenAt?: string | null; folders: TreeFolder[]; notes: TreeNote[] };
+export type TreeView = Omit<Gen["TreeView"], "root"> & { root: TreeFolder };
 export type NoteView = components["schemas"]["NoteView"];
 export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
 
@@ -125,6 +131,9 @@ const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(
 /** The list without discreet vaults, which a server whose clock is a little behind may still send after the end. */
 const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet) ? vaults.filter((v) => !v.discreet) : vaults);
 
+/** The vault list as the server sends it, discreet vaults and all: for a reader that needs to know which they are. */
+export const vaultsQuery = { queryKey: ["vaults"], queryFn: () => call(api.GET("/api/vaults")) };
+
 /**
  * The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. While
  * this tab doesn't show the discreet vaults, none is listed, whatever the answer. `passive` only reads the list the
@@ -133,8 +142,7 @@ const withoutDiscreet = (vaults: VaultView[]) => (vaults.some((v) => v.discreet)
 export const useVaults = ({ passive = false }: { passive?: boolean } = {}) => {
   const revealed = useDiscreet((s) => s.revealed);
   return useQuery({
-    queryKey: ["vaults"],
-    queryFn: () => call(api.GET("/api/vaults")),
+    ...vaultsQuery,
     select: revealed ? undefined : withoutDiscreet,
     enabled: !passive,
     refetchInterval: (query) => (!passive && query.state.data?.some((v) => v.pending) ? 5000 : false),
@@ -151,13 +159,13 @@ const whileBusy = (query: { state: { error: unknown } }) => (isVaultBusy(query.s
 export const useTree = (vault: string | null) =>
   useQuery({
     queryKey: ["tree", vault],
-    queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
+    queryFn: (): Promise<TreeView> => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
     enabled: vault !== null,
     refetchInterval: whileBusy,
   });
 
 /** What a tree entry is: an image, PDF or text file the vault keeps, or a note. */
-export const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
+export const fileKindOfEntry = (entry: Pick<TreeFolder["notes"][number], "kind">): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
 
 /** The folder at `path` (`/Work/projects`) in a vault's tree, if it is there. */
 export function findFolder(root: TreeFolder, path: string): TreeFolder | undefined {
@@ -308,6 +316,8 @@ export function useSaveNote(path: string) {
       if ("saved" in result) {
         void queryClient.invalidateQueries({ queryKey: ["changes"] });
         void queryClient.invalidateQueries({ queryKey: ["history", path] });
+        // The tree carries each note's last change and its flag, which any edit may change.
+        void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(path)] });
       }
     },
   });

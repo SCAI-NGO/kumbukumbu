@@ -29,11 +29,12 @@ public sealed record CalendarViewRequest(string View, bool Grid);
 /// from its column); <c>state</c>: <c>notYet</c>, <c>upcoming</c>, <c>ongoing</c>, <c>overdue</c>, <c>done</c> or <c>past</c>, with
 /// <c>span</c> beside it ("in 7 days", "until Fri", "3 weeks"); <c>time</c>: a timed entry's clock, "14:00", or "14:00 (Europe/London)"
 /// when its <c>tz</c> pins it to another zone; <c>firstDay</c>/<c>lastDay</c>: the caller's days it covers, <c>spans</c> when they
-/// differ or it is a week; <c>boardAction</c>: on a card, the board's one archivable column it can be moved to, if there is exactly one.
+/// differ or it is a week; <c>boardAction</c>: on a card, the board's one archivable column it can be moved to, if there is exactly one;
+/// <c>beforeTime</c>: ongoing on its day before its time, <c>span</c> then the clock ("today · 14:00").
 /// </summary>
 public sealed record EntryView(string Path, string Vault, string Title, string Kind, string When, string? Until,
     string Task, string? Closed, string? Reason, string? Upcoming, string? Tz, bool ByName, string? Column,
-    string State, string? Span, string? Time, string FirstDay, string LastDay, bool Spans, string? BoardAction);
+    string State, string? Span, string? Time, string FirstDay, string LastDay, bool Spans, string? BoardAction, bool BeforeTime = false);
 
 /// <summary>A note whose date couldn't be read: <c>plain</c> says what is wrong in plain words; <c>readable</c> holds the
 /// calendar keys that could be read, as written (for Fix…).</summary>
@@ -194,7 +195,7 @@ public static partial class CalendarApi
 
     /// <summary>The note <paramref name="path"/> in the caller's vault <paramref name="vault"/>: a vault she doesn't have, or
     /// that her session hides, is 404 before anything else; a path outside it is 400.</summary>
-    private static async Task<VaultPath> NoteInAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    internal static async Task<VaultPath> NoteInAsync(string vault, string? path, INoteStore store, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
@@ -208,13 +209,14 @@ public static partial class CalendarApi
     private static async Task<NoteEntryView> NoteEntryAsync(
         VaultPath notePath, INoteStore store, RequestCaller caller, ICallerZone callerZone, TimeProvider time, CancellationToken ct)
     {
-        var (entry, problem, board) = await ReadEntryAsync(notePath, store, ct);
+        var (_, entry, problem, board) = await ReadEntryAsync(notePath, store, ct);
         var zone = await callerZone.ZoneAsync(ct);
         var view = entry is null ? null : View(entry, EntryStates.Of(entry, time.GetUtcNow().UtcDateTime, zone), zone, board);
         return new NoteEntryView(view, problem is null ? null : CouldntRead(problem), caller.CanWrite(notePath.Segments[0]));
     }
 
-    private static async Task<(Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
+    /// <summary>The note at <paramref name="notePath"/> as read, with its entry in the calendar read from that same state.</summary>
+    internal static async Task<(StoredNote Note, Entry? Entry, CalendarProblem? Problem, BoardDefinition? Board)> ReadEntryAsync(
         VaultPath notePath, INoteStore store, CancellationToken ct)
     {
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
@@ -222,7 +224,7 @@ public static partial class CalendarApi
         var definition = await store.GetAsync(BoardPaths.Definition(notePath.Segments[0]), ct);
         var board = definition is null ? null : BoardDefinition.Parse(definition.Content).Definition;
         var (entry, problem) = EntryReader.Read(new Note(notePath, note.Content), board);
-        return (entry, problem, board);
+        return (note, entry, problem, board);
     }
 
     private static async Task<Ok<WrittenView>> SetAsync(
@@ -300,7 +302,7 @@ public static partial class CalendarApi
         };
         // The caller's rights first, as every other write: a read-only member hears 403 before anything about the entry.
         if (((ICaller)caller).Refuse("calendar", path) is { } refused) BoardApi.Check(refused with { Kind = ShellErrorKind.Refused }, "calendar");
-        var (entry, _, _) = await ReadEntryAsync(path, store, ct);
+        var (_, entry, _, _) = await ReadEntryAsync(path, store, ct);
         if (entry is not { Task: TaskMark.Open }) throw ApiErrors.BadRequest("Later is for something still to do.");
         return TypedResults.Ok(await WrittenAsync(await calendar.LaterAsync(path.Value, part, step, body.Date, ct), store, caller, zone, time, ct));
     }
@@ -372,7 +374,7 @@ public static partial class CalendarApi
             status.Span,
             // Over several days the start's clock alone: the span says where it ends.
             entry.When.Kind == TimeKind.Time ? EntryText.Clock(entry, zone, withEnd: !spans) : null,
-            Day(first), Day(last), spans, BoardAction(entry, board));
+            Day(first), Day(last), spans, BoardAction(entry, board), status.BeforeTime);
     }
 
     // Kumbu² writes no offset: a time given with one is shown as the local time it is, in the note's tz, else the caller's zone.

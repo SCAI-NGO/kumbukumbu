@@ -5,8 +5,10 @@ namespace Kumbu.Core.Calendar;
 
 public enum EntryState { NotYet, Upcoming, Ongoing, Overdue, Done, Past }
 
-/// <param name="Span">The human span beside the state: "in 7 days", "until Fri", "1 day"; null for NotYet, Done and Past.</param>
-public sealed record EntryStatus(EntryState State, string? Span);
+/// <param name="Span">The human span beside the state: "in 7 days", "until Fri", "1 day", or the clock "14:00" before a time; null for
+/// NotYet, Done and Past.</param>
+/// <param name="BeforeTime">Ongoing on the day of <c>when</c>'s time, before it: shown as "today · 14:00".</param>
+public sealed record EntryStatus(EntryState State, string? Span, bool BeforeTime = false);
 
 /// <summary>
 /// An entry's state at an instant, for a viewer in a zone (spec §2.4). A day or week is the same day for everyone, bounded by the
@@ -27,7 +29,12 @@ public static class EntryStates
         var endUtc = EndUtc(entry, zone);
         var lastDay = LastDay(end, entry, zone);
         if (nowUtc < endUtc)
+        {
+            // Before its time on the day it begins, a time reads as the clock it is at; within a window, as where it ends.
+            if (entry.When.Kind == TimeKind.Time && nowUtc < entry.When.StartUtc(ZoneOf(entry.When, entry, zone)))
+                return new EntryStatus(EntryState.Ongoing, EntryText.Clock(entry, zone, withEnd: false), BeforeTime: true);
             return new EntryStatus(EntryState.Ongoing, Until(end, endUtc, lastDay, today, entry, zone));
+        }
 
         if (entry.Task == TaskMark.Open)
             return new EntryStatus(EntryState.Overdue, Behind(today.DayNumber - lastDay.DayNumber, nowUtc - endUtc));
@@ -35,12 +42,12 @@ public static class EntryStates
     }
 
     /// <summary>
-    /// When the entry turns ongoing: the start of <c>when</c>'s first day; for a time without <c>until</c> the start of its day (it is
-    /// ongoing until that time), for a time with <c>until</c> the time itself.
+    /// When the entry turns ongoing: the start of <c>when</c>'s first day; for a time, with or without <c>until</c>, the start of the
+    /// viewer's day it falls on (spec §2.4, amended: a timed entry is relevant from the start of its day).
     /// </summary>
     public static DateTime OngoingFromUtc(Entry entry, TimeZoneInfo zone)
     {
-        if (entry.When.Kind != TimeKind.Time || entry.Until is not null) return entry.When.StartUtc(ZoneOf(entry.When, entry, zone));
+        if (entry.When.Kind != TimeKind.Time) return entry.When.StartUtc(ZoneOf(entry.When, entry, zone));
         return Zones.ToUtc(FirstDay(entry.When, entry, zone), TimeOnly.MinValue, zone);
     }
 
@@ -109,7 +116,8 @@ public static class EntryStates
         <= 0 => Count(Math.Max(1, (int)since.TotalHours), "hour"),
         < 14 => Count(days, "day"),
         < 60 => Count(days / 7, "week"),
-        _ => Count(days / 30, "month"),
+        _ when days / 30 < 12 => Count(days / 30, "month"),
+        _ => Count(Math.Max(1, days / 365), "year"),
     };
 
     private static string Count(int count, string unit) => count == 1 ? $"1 {unit}" : $"{count} {unit}s";

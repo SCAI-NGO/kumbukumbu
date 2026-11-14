@@ -58,7 +58,7 @@ public class WhatsOnTests
     public async Task Whats_on_covers_every_vault_with_or_without_a_Calendar_folder()
     {
         var store = new InMemoryNoteStore(
-            ("/Work/Calendar/2026-12-16.md", "# Wednesday\n"),
+            ("/Work/Calendar/2026-12-16.md", "---\ntask: open\n---\n# Wednesday\n"),
             ("/Home/Zahnarzt.md", "---\nwhen: 2026-12-16T14:00\n---\n"),
             ("/Tagebuch/Deep/Down/Letter.md", "---\nwhen: 2026-12-10\ntask: open\n---\n"),
             ("/Tagebuch/_archive/Old.md", "---\nwhen: 2026-12-10\ntask: open\n---\n"));
@@ -69,5 +69,35 @@ public class WhatsOnTests
         Assert.Equal(
             [("Tagebuch", "Letter", EntryState.Overdue), ("Home", "Zahnarzt", EntryState.Ongoing), ("Work", "2026-12-16", EntryState.Ongoing)],
             on.Select(i => (i.Entry.Vault, i.Entry.Title, i.Status.State)));
+    }
+
+    // Saturday, 14 November 2026, 10:00 in Vienna.
+    private static readonly DateTime Saturday = new(2026, 11, 14, 9, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void A_day_note_today_without_task_is_not_on()
+    {
+        var calendar = CalendarLayoutTests.CalendarOf("Work", ("/Work/Calendar/2026-11-14.md", "# Saturday\n"));
+
+        Assert.Empty(WhatsOn.Of([calendar], Saturday, Vienna));
+        var day = CalendarLayout.Week(calendar, 2026, 46, Saturday, Vienna).Days.Single(d => d.Day == new DateOnly(2026, 11, 14));
+        Assert.Equal(["2026-11-14"], day.Entries.Select(e => e.Entry.Title));
+    }
+
+    [Fact]
+    public void A_day_note_today_with_task_open_is_on()
+    {
+        var calendar = CalendarLayoutTests.CalendarOf("Work", ("/Work/Calendar/2026-11-14.md", "---\ntask: open\n---\n# Saturday\n"));
+
+        Assert.Equal([("2026-11-14", EntryState.Ongoing)], WhatsOn.Of([calendar], Saturday, Vienna).Select(i => (i.Entry.Title, i.Status.State)));
+    }
+
+    [Fact]
+    public void A_week_note_without_task_is_not_on()
+    {
+        var calendar = CalendarLayoutTests.CalendarOf("Work", ("/Work/Calendar/2026-W46.md", "# Week 46\n"));
+
+        Assert.Empty(WhatsOn.Of([calendar], Saturday, Vienna));
+        Assert.Equal(["2026-W46"], CalendarLayout.Week(calendar, 2026, 46, Saturday, Vienna).Spanning.Select(e => e.Entry.Title));
     }
 }

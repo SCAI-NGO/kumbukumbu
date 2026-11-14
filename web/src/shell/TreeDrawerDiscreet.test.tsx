@@ -75,6 +75,14 @@ describe("Discreet in the vault's menu", () => {
     expect(items).toEqual(before);
   });
 
+  it("on a touch device lists Take photo after Upload here, and is otherwise as before", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(pointer: coarse)", addEventListener() {}, removeEventListener() {} }));
+    localStorage.setItem("kumbu.installHint", "dismissed");
+    api(false, own);
+    const items = await openMenu(false);
+    expect(items).toEqual([...before.slice(0, 3), "Take photo", ...before.slice(3)]);
+  });
+
   it("offers Discreet for an unmarked vault, just before Delete vault…, and confirms the mark", async () => {
     const fetch = api(true, own, { "PUT /api/account/discreet/vaults/Work": () => noContent() });
     const items = await openMenu(true);

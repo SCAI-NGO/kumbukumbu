@@ -451,11 +451,15 @@ describe("the shell", () => {
 
   it("signs out and forgets the last note", async () => {
     const fetch = signedInApi({ "DELETE /api/session": () => noContent() });
-    const router = renderApp("/notes/Work/inbox.md");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
     await openDrawer();
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
-    expect(fetch.mock.calls.some(([r]) => r.method === "DELETE")).toBe(true);
+    await waitFor(() => expect(queryClient.getQueryCache().getAll()).toEqual([]));
+    // Nothing asks for the session again on the way out: the shell, shown again for it, would open the note again.
+    const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(calls.slice(calls.indexOf("DELETE /api/session"))).toEqual(["DELETE /api/session"]);
     expect(useEditor.getState().recentPaths).toEqual([]);
     expect(useSession.getState().user).toBeNull();
   });
@@ -813,7 +817,7 @@ describe("vaults shared with the user", () => {
     await openDrawer();
     await within(drawer()).findByRole("button", { name: "Board" });
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
-    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Add to calendar…"]);
+    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
     expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
     expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
