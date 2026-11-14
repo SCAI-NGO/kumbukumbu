@@ -149,6 +149,31 @@ public class FlagTagsTests
     }
 
     [Fact]
+    public void A_comment_between_block_items_is_refused()
+    {
+        Assert.Null(FlagTags.Set("---\ntags:\n  - a\n  # c\n  - b\n---\n", "red"));
+        Assert.Null(FlagTags.Set("---\ntags:\n  - a\n  # c\n  - flag/red\n---\n", null));
+    }
+
+    // Neither TagReader nor Frontmatter.Read sees frontmatter behind a byte order mark, so nothing here can say what the note's
+    // tags are.
+    [Theory]
+    [InlineData("\uFEFFText\n", "red")]
+    [InlineData("\uFEFF---\ntags: [a]\n---\nText\n", "red")]
+    [InlineData("\uFEFF---\ntags: [flag/red]\n---\nText\n", null)]
+    public void A_byte_order_mark_is_refused(string note, string? flag) => Assert.Null(FlagTags.Set(note, flag));
+
+    [Fact]
+    public void A_result_that_would_not_parse_is_refused() => Assert.Null(FlagTags.Set("---\n tags: [a]\n---\n", "red"));
+
+    [Fact]
+    public void A_comment_after_an_empty_tags_stays() =>
+        Assert.Equal("---\ntags: [flag/red] # mine\n---\n", FlagTags.Set("---\ntags: # mine\n---\n", "red"));
+
+    [Fact]
+    public void A_block_that_was_empty_stays() => Assert.Equal("---\n---\nText\n", FlagTags.Set("---\n---\nText\n", null));
+
+    [Fact]
     public void A_frontmatter_that_does_not_parse_is_refused() => Assert.Null(FlagTags.Set("---\ntags: [a\ntitle: : x\n---\n", "red"));
 
     [Fact]

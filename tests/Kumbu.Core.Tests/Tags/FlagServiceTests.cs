@@ -143,6 +143,31 @@ public class FlagServiceTests
     }
 
     [Fact]
+    public async Task Mark_done_and_undo_keep_crlf()
+    {
+        const string before = "---\r\ntags: [flag/red]\r\nwhen: 2026-11-20\r\ntask: open\r\n---\r\nText\r\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", before));
+        var service = Service(store);
+
+        Ok(await service.SetAsync("/Work/x.md", "done", FlagTask.Close, Ct));
+        Assert.Equal("---\r\ntags: [flag/done]\r\nwhen: 2026-11-20\r\ntask: closed\r\nclosed: 2026-11-14\r\n---\r\nText\r\n", await Content(store, "/Work/x.md"));
+        Ok(await service.SetAsync("/Work/x.md", "red", FlagTask.Reopen, Ct));
+
+        Assert.Equal(before, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task Mark_done_leaves_a_line_without_cr_as_it_was()
+    {
+        const string before = "---\r\ntitle: x\nwhen: 2026-11-20\r\ntask: open\r\n---\r\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", before));
+
+        Ok(await Service(store).SetAsync("/Work/x.md", "done", FlagTask.Close, Ct));
+
+        Assert.Equal("---\r\ntitle: x\nwhen: 2026-11-20\r\ntask: closed\r\ntags: [flag/done]\r\nclosed: 2026-11-14\r\n---\r\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
     public async Task Undo_without_a_flag_before_gives_the_note_back()
     {
         const string before = "---\nwhen: 2026-11-20\ntask: open\n---\nText\n";
@@ -274,6 +299,19 @@ public class FlagServiceTests
         var store = new InMemoryNoteStore(("/Work/x.md", note));
 
         var result = await Service(store).SetAsync("/Work/x.md", "red", FlagTask.None, Ct);
+
+        Assert.Equal(ShellResult.Error("flag: I can't change this note's tags; edit them in the note") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(note, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task No_flag_that_would_leave_one_is_refused()
+    {
+        // YAML reads the item after the comment as one of the list; the line editor stops at the comment.
+        const string note = "---\ntags:\n  - a\n# c\n  - flag/red\n---\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", note));
+
+        var result = await Service(store).SetAsync("/Work/x.md", null, FlagTask.None, Ct);
 
         Assert.Equal(ShellResult.Error("flag: I can't change this note's tags; edit them in the note") with { Kind = ShellErrorKind.Invalid }, result);
         Assert.Equal(note, await Content(store, "/Work/x.md"));

@@ -15,12 +15,16 @@ public static partial class FlagTags
     /// <summary>
     /// The content with every flag tag removed from the frontmatter's <c>tags</c> and <paramref name="flag"/>'s tag in the
     /// place of the first one (appended if there was none); null when <c>tags</c> has a form this can't edit (a map, a
-    /// nested list, a value over several lines) or the frontmatter doesn't parse. A <c>tags</c> left empty is removed, and
-    /// a frontmatter left empty with it, so setting a flag and removing it gives the note back.
+    /// nested list, a value over several lines), the frontmatter doesn't parse before or after, or the note starts with a
+    /// byte order mark. A <c>tags</c> left empty is removed, and a frontmatter left empty with it, so setting a flag and
+    /// removing it gives the note back.
     /// </summary>
     public static string? Set(string content, string? flag)
     {
         var tag = flag is null ? null : Flags.Tag(flag);
+        // Neither TagReader nor Frontmatter.Read sees frontmatter behind a byte order mark, so neither the tags this would
+        // edit nor the result could be read back.
+        if (content.StartsWith('\uFEFF')) return null;
         var lines = Split(content);
         var end = Outline.FrontmatterEnd(lines.Select(l => l.Text).ToList());
         var eol = lines[0].End + "\n";
@@ -40,10 +44,11 @@ public static partial class FlagTags
         {
             if (tag is null) return content;
             lines.Insert(close, ($"tags: [{tag}]", lines[0].End));
-            return Join(lines);
+            return Parsed(Join(lines));
         }
 
-        // As Frontmatter.Set: the key's extent is its line, the lines indented under it or starting with "-", and the blank lines between.
+        // The key's extent is its line, the lines indented under it or starting with '-', and the blank lines between: as
+        // Frontmatter.Set's, except that a line such as "-x" counts too, so the block is refused rather than cut short.
         var stop = key + 1;
         for (var next = stop; next < close; next++)
         {
@@ -66,7 +71,7 @@ public static partial class FlagTags
         }
         else
         {
-            var changed = bare ? Empty(text, colon, tag) : text[value] == '[' ? Flow(text, value, tag) : Scalar(text, colon, value, tag);
+            var changed = bare ? Empty(text, colon, text[value..], tag) : text[value] == '[' ? Flow(text, value, tag) : Scalar(text, colon, value, tag);
             if (changed is null) return null;
             emptied = changed.Length == 0;
             if (!emptied) lines[key] = (changed, lines[key].End);
@@ -79,11 +84,15 @@ public static partial class FlagTags
             if (close == 1) lines.RemoveRange(0, 2);
         }
 
-        return Join(lines);
+        return Parsed(Join(lines));
     }
 
-    /// <summary><c>tags:</c> with no value: the flag as a flow list, or nothing to remove.</summary>
-    private static string Empty(string text, int colon, string? tag) => tag is null ? text : $"{text[..colon]} [{tag}]";
+    /// <summary>The result, or null when its frontmatter no longer parses (a line added beside an indented map).</summary>
+    private static string? Parsed(string result) => Frontmatter.Read(result).Problem is null ? result : null;
+
+    /// <summary><c>tags:</c> with no value (or null, or ""): the flag as a flow list before any comment, or nothing to remove.</summary>
+    private static string Empty(string text, int colon, string comment, string? tag) =>
+        tag is null ? text : $"{text[..colon]} [{tag}]" + (comment.Length > 0 ? " " + comment : "");
 
     /// <summary>A flow list on the key's line, <c>tags: [a, "b"] # c</c>: the new line, "" when no item is left, null when refused.</summary>
     private static string? Flow(string text, int open, string? tag)
@@ -172,7 +181,8 @@ public static partial class FlagTags
     {
         if (Item(text, value) is not var (s, e, quote)) return null;
         var inner = text[s..e];
-        if (quote == '\0' && inner is "~" or "null" or "Null" or "NULL") return Empty(text, colon, tag);
+        var comment = text[(quote == '\0' ? e : e + 1)..].TrimStart(' ', '\t');
+        if (quote == '\0' && inner is "~" or "null" or "Null" or "NULL") return Empty(text, colon, comment, tag);
 
         var tokens = new List<string>();
         var separators = new List<string>();
@@ -186,7 +196,7 @@ public static partial class FlagTags
             last = m.Index + m.Length;
         }
 
-        if (tokens.Count == 0) return Empty(text, colon, tag);
+        if (tokens.Count == 0) return Empty(text, colon, comment, tag);
         if (Plan(tokens, tag) is not var (replace, remove)) return text;
         if (replace >= 0) tokens[replace] = tag!;
         foreach (var j in remove.OrderDescending())
@@ -313,6 +323,8 @@ public static partial class FlagTags
 
     private static string Join(List<(string Text, string End)> lines) => string.Join('\n', lines.Select(l => l.Text + l.End));
 
+    // Stricter than TagReader's, which only decides whether to parse the YAML at all: this one finds the line to edit, so the
+    // colon must end the key (in YAML, "tags:x" is not the key tags).
     [GeneratedRegex(@"^(tags|""tags""|'tags')[ \t]*:(?=[ \t]|$)")]
     private static partial Regex TagsKeyRegex();
 

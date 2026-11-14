@@ -60,15 +60,15 @@ public sealed class FlagService(INoteStore store, NoteWriter writer, Func<DateTi
             if (changes.Count > 0)
             {
                 // The note's own spelling of the task's keys; they are no tags, so the flag's edit left them where they were.
-                if (!FrontmatterWrites.TryOwnedKeys(Tool, path, content, CalendarKeys.Spelled(read.Values, changes), out content, out var error)) return error;
-            }
-            else if (Encoding.UTF8.GetByteCount(content) is var bytes and > NoteWriter.MaxBytes)
-            {
-                return Error($"this note would be {bytes} bytes with the flag; the limit is {NoteWriter.MaxBytes} (1 MiB)");
+                if (!FrontmatterWrites.TryOwnedKeys(Tool, path, content, CalendarKeys.Spelled(read.Values, changes), out var written, out var error)) return error;
+                content = WithLineEnding(content, written);
             }
 
-            if (content == note.Content) return Written($"{path.Value} is unchanged", note);
+            if (Encoding.UTF8.GetByteCount(content) is var bytes and > NoteWriter.MaxBytes)
+                return Error($"this note would be {bytes} bytes with the flag; the limit is {NoteWriter.MaxBytes} (1 MiB)");
+            // Also when nothing changed: the line editor may not have seen a flag that YAML reads (an item after a comment).
             if (!ReadsBack(note.Content, content, flag)) return Error(CantEdit);
+            if (content == note.Content) return Written($"{path.Value} is unchanged", note);
 
             var next = NoteWriter.Next(note, content, Caller.WriterIn(vault), Caller.ReferenceIn(vault), writer.Now, await writer.ChangesetAsync(path, ct));
             if (!await store.TryReplaceAsync(note, next, ct)) continue;
@@ -89,10 +89,29 @@ public sealed class FlagService(INoteStore store, NoteWriter writer, Func<DateTi
         return task switch
         {
             FlagTask.Close when mark == "open" => ([("task", "closed"), ("closed", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))], null),
-            FlagTask.Close => ([], Error("this note is no open to-do in the calendar, so there is nothing to mark done")),
+            FlagTask.Close => ([], Error("this note is not an open to-do in the calendar, so there is nothing to mark done")),
             FlagTask.Reopen when mark == "closed" => ([("task", "open"), ("closed", null)], null),
-            _ => ([], Error("this note is no done to-do in the calendar, so there is nothing to open again")),
+            _ => ([], Error("this note is not a done to-do in the calendar, so there is nothing to open again")),
         };
+    }
+
+    /// <summary>
+    /// <paramref name="after"/>, which <see cref="Frontmatter.Set"/> made of <paramref name="before"/>, with "\r\n" on the
+    /// frontmatter lines it wrote, when the note's frontmatter starts with that ending: Set ends the lines it writes with
+    /// "\n". A line <paramref name="before"/>'s frontmatter has as it is keeps its ending.
+    /// </summary>
+    private static string WithLineEnding(string before, string after)
+    {
+        if (!before.StartsWith("---\r\n", StringComparison.Ordinal)) return after;
+        var had = before.Split('\n').Take(Outline.FrontmatterEnd(Lines.Split(before))).ToHashSet(StringComparer.Ordinal);
+        var lines = after.Split('\n');
+        var end = Outline.FrontmatterEnd(Lines.Split(after));
+        for (var i = 0; i < end; i++)
+        {
+            if (!lines[i].EndsWith('\r') && !had.Contains(lines[i])) lines[i] += "\r";
+        }
+
+        return string.Join('\n', lines);
     }
 
     /// <summary>Whether the written note reads as meant: its tags those it had without the frontmatter's flags, plus the new one,
