@@ -41,17 +41,21 @@ test("flags #18: Take photo sits beside Upload here on the phone @photo @phone",
   await seedAs("tags/photo/Meetings/Agenda.md", `/Work/${folder}/Meetings/Agenda.md`);
   await openNote(page, `/Work/${folder}/Meetings/Agenda.md`);
 
-  const menu = await folderMenu(page, await openTree(page, testInfo), "Meetings");
-  await expect(menu.getByRole("menuitem", { name: "Upload here" })).toBeVisible();
-  await shot(page, testInfo, "photo");
-  if (onPhone(testInfo)) {
-    await expect(menu.getByRole("menuitem", { name: "Take photo" })).toBeVisible();
-    // Beside Upload here: the next item.
-    const items = (await menu.getByRole("menuitem").allInnerTexts()).map((t) => t.trim());
-    expect(items.indexOf("Take photo")).toBe(items.indexOf("Upload here") + 1);
-  } else {
-    await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
-  }
+  const tree = await openTree(page, testInfo);
+  // F-02: the checks sit in the attempt that opens the menu, so a menu closed by the tree's scroll just retries.
+  await expect(async () => {
+    const menu = await folderMenu(page, tree, "Meetings");
+    await expect(menu.getByRole("menuitem", { name: "Upload here" })).toBeVisible({ timeout: 2_000 });
+    if (onPhone(testInfo)) {
+      await expect(menu.getByRole("menuitem", { name: "Take photo" })).toBeVisible({ timeout: 2_000 });
+      // Beside Upload here: the next item.
+      const items = (await menu.getByRole("menuitem").allInnerTexts()).map((t) => t.trim());
+      expect(items.indexOf("Take photo")).toBe(items.indexOf("Upload here") + 1);
+    } else {
+      await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0, { timeout: 2_000 });
+    }
+    await shot(page, testInfo, "photo");
+  }).toPass({ timeout: 20_000 });
 });
 
 test("flags #18: Bob is not offered Take photo @photo @phone", async ({ bobPage }, testInfo) => {
