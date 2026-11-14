@@ -83,7 +83,6 @@ test("flags #11: flag chips narrow the tree; no match offers Search the contents
   await tree.getByRole("button", { name: "Search the contents…" }).click();
   const sheet = page.getByRole("dialog", { name: "Search" });
   await expect(sheet.getByRole("searchbox", { name: "Search" })).toHaveValue("zzqxj nothing");
-  await shot(page, testInfo, "explorer-search");
 });
 
 test("flags #12: Escape and ✕ bring the full tree back @explorer @phone", async ({ page, seedAs, folder }, testInfo) => {
