@@ -180,6 +180,7 @@ export default function MobileShell() {
         setMoving((subject) => (gonePath(subject?.path) ? null : subject));
         setHistory((path) => (gonePath(path) ? null : path));
         setPublishing((path) => (gonePath(path) ? null : path));
+        setDating((path) => (gonePath(path) ? null : path));
         setVaultSheet((sheet) => (sheet && goneVault(s, sheet.vault) ? null : sheet));
       }),
     [],

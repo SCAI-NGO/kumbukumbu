@@ -8,7 +8,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
-import { entryView } from "../test/calendar";
+import { entryView, noteEntry } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import { DISCREET_CHANNEL, forgetHeld, hideAgain, holding, SAVE_AHEAD } from "./hideAgain";
 import { useDiscreet } from "./state";
@@ -437,6 +437,41 @@ describe("hiding the discreet vaults again", () => {
     await doneHiding(router);
     expect(log).toEqual(["save", "hide"]);
     await waitFor(() => expectForgotten(queryClient));
+  });
+
+  it("the date dialog closes when the vault is hidden", async () => {
+    let shown = true;
+    const flag = () => json(200, { flag: null, inText: null, openTask: false, canWrite: true });
+    const day = "2026-12-24";
+    const { log, queryClient, router, hidden } = await openDiary(null, {
+      "GET /api/vaults/Tagebuch/calendar/entry": () =>
+        shown
+          ? json(200, noteEntry(entryView("a", { path: "/Tagebuch/a.md", vault: "Tagebuch", when: day, firstDay: day, lastDay: day })))
+          : json(404, { error: "you have no vault named Tagebuch" }),
+      "GET /api/vaults/Work/calendar/entry": () => json(200, noteEntry(null)),
+      "GET /api/vaults/Tagebuch/flag": flag,
+      "GET /api/vaults/Work/flag": flag,
+      "GET /api/mentions/*": () => json(200, []),
+      "GET /api/tags": () => json(200, []),
+      "GET /api/publications": () => json(200, { enabled: false, publications: [], unpublishable: [] }),
+      "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
+    });
+    editorOn(log);
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit date…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit date" });
+    expect(within(dialog).getByDisplayValue(day)).toBeInTheDocument();
+
+    await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    shown = false;
+    hidden();
+    FakeSocket.all.at(-1)!.open();
+    FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+    await doneHiding(router);
+    // Every answer asked for after the hide is in before the screen is looked at.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.queryAllByRole("dialog")).toEqual([]);
+    expect(screen.queryByDisplayValue(day)).not.toBeInTheDocument();
   });
 
   it("ends its hiding even when a step fails", async () => {

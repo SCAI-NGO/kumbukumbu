@@ -4,6 +4,7 @@ import { useId, useState, type ReactNode } from "react";
 import { errorText } from "../api/error-text";
 import { fileKindOf } from "../api/paths";
 import FormDialog from "../board/FormDialog";
+import { useErrorTextFor } from "../discreet/errorText";
 import { narrowInputClass, inputClass, labelClass } from "../components/form";
 import type { MenuItem } from "../components/Menu";
 import { useEntryAction, useNoteEntry, type CouldntReadView, type SetEntryRequest } from "./api";
@@ -120,6 +121,7 @@ export function useRemoveFromCalendar(say: (text: string) => void) {
 function DateForm({ path, initial, editing, onClose }: { path: string; initial: DateFields; editing: boolean; onClose(): void }) {
   const id = useId();
   const action = useEntryAction();
+  const errorTextOf = useErrorTextFor(path);
   const [week, setWeek] = useState(WEEK.test(initial.when));
   const [whenDay, setWhenDay] = useState(dayOf(initial.when));
   const [whenTime, setWhenTime] = useState(timeOf(initial.when));
@@ -137,6 +139,7 @@ function DateForm({ path, initial, editing, onClose }: { path: string; initial: 
       submitLabel="Save"
       ready={ready}
       onCancel={onClose}
+      errorTextOf={errorTextOf}
       onSubmit={async () => {
         await action.mutateAsync({ kind: "set", ...setRequestOf(path, initial, { week, whenDay, whenTime, whenWeek, untilDay, untilTime, untilWeek, task, early }) });
         onClose();
