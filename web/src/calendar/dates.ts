@@ -71,6 +71,9 @@ export function monthTitle(day: string): string {
   return `${MONTHS[month - 1]} ${year}`;
 }
 
+/** "November", for `2026-11`. */
+export const monthName = (month: string) => MONTHS[Number(month.slice(5, 7)) - 1];
+
 /** "Thursday, 12 November". */
 export function dayHeading(day: string): string {
   const { month, day: date } = partsOf(day);
