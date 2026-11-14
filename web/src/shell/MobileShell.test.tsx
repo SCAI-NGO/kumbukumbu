@@ -451,11 +451,15 @@ describe("the shell", () => {
 
   it("signs out and forgets the last note", async () => {
     const fetch = signedInApi({ "DELETE /api/session": () => noContent() });
-    const router = renderApp("/notes/Work/inbox.md");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
     await openDrawer();
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
-    expect(fetch.mock.calls.some(([r]) => r.method === "DELETE")).toBe(true);
+    await waitFor(() => expect(queryClient.getQueryCache().getAll()).toEqual([]));
+    // Nothing asks for the session again on the way out: the shell, shown again for it, would open the note again.
+    const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(calls.slice(calls.indexOf("DELETE /api/session"))).toEqual(["DELETE /api/session"]);
     expect(useEditor.getState().recentPaths).toEqual([]);
     expect(useSession.getState().user).toBeNull();
   });

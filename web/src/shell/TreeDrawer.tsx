@@ -353,7 +353,6 @@ function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useS
 function AccountRow() {
   const role = useSession((s) => s.user?.role);
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   // The drawer's state outlives the page: left open, it would be open again on the way back to the notes.
   const close = () => useEditor.getState().setOverlay("none");
   const [asking, setAsking] = useState(false);
@@ -376,8 +375,8 @@ function AccountRow() {
     }
     useEditor.getState().reset();
     useSession.getState().signOut();
+    // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.
     navigate("/signin", { replace: true });
-    queryClient.clear();
   };
 
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
