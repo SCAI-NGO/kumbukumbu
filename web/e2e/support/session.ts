@@ -98,3 +98,14 @@ export async function revealDiscreet(page: Page) {
   await page.getByText("More vaults…").click();
   await enterPin(page);
 }
+
+/**
+ * For a discreet test's `finally`: hides the discreet vaults of the page's session whatever the screen shows, through
+ * the call ✕ makes (POST /api/account/discreet/hide), so a failed test never leaves its session revealed.
+ */
+export async function endHidden(page: Page) {
+  if (page.isClosed()) return;
+  const origin = new URL(page.url()).origin;
+  if (!origin.startsWith("http")) return;
+  await page.context().request.post("/api/account/discreet/hide", { headers: { Origin: origin } }).catch(() => undefined);
+}
