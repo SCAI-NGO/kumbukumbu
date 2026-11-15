@@ -342,6 +342,26 @@ describe("the toolbar where the row is narrow", () => {
     });
   });
 
+  it("shows Sort in ⋯ with the icon the row's Sort has: the order shown now", async () => {
+    await openDrawer({ root: withBoard });
+    const icon = (el: HTMLElement) => el.querySelector("svg")!.getAttribute("class")!.match(/lucide-(arrow-down-a-z|clock-arrow-down)\b/)?.[1];
+    const inMenu = async () => {
+      await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+      const item = screen.getByRole("menuitem", { name: /^Sorted by/ });
+      const shown = icon(item);
+      await userEvent.keyboard("{Escape}");
+      return shown;
+    };
+    const inRow = () => icon(within(toolbar()).getByRole("button", { name: /^Sorted by/ }));
+    expect(await inMenu()).toBe("arrow-down-a-z");
+    resize(600);
+    expect(inRow()).toBe("arrow-down-a-z");
+    await userEvent.click(within(toolbar()).getByRole("button", { name: /^Sorted by/ }));
+    expect(inRow()).toBe("clock-arrow-down");
+    resize(300);
+    expect(await inMenu()).toBe("clock-arrow-down");
+  });
+
   it("moves Upload, Sort and Recent changes to the top of ⋯, and follows the width live", async () => {
     await openDrawer({ root: withBoard });
     expect(tools()).toEqual(["New note", "Calendar", "Board", "Find in this vault", "Actions for Notes"]);

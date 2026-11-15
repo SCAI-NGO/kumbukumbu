@@ -18,6 +18,8 @@ export type TreeSearch = { words: string; flag: FlagFilter | null };
 export const sortLabel = (order: TreeOrder) => (order === "name" ? "Sorted by name. Sort by last changed" : "Sorted by last changed. Sort by name");
 
 const target = "flex min-h-12 items-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent";
+/** The Sort button's icon, in the row and in ⋯ alike: the order shown. */
+const sortIcon = (order: TreeOrder) => (order === "name" ? ArrowDownAZ : ClockArrowDown);
 const iconTarget = `${target} relative size-12 flex-none justify-center text-muted`;
 
 /**
@@ -113,6 +115,7 @@ export default function TreeTools({
 
   if (!search) {
     const sort = sortLabel(order);
+    const SortIcon = sortIcon(order);
     const share = calendar.share && calendar.share.count > 0 ? calendar.share : undefined;
     const toggleOrder = () => onOrder(order === "name" ? "changed" : "name");
     const findOpen = () => onSearch({ words: "", flag: null });
@@ -121,7 +124,7 @@ export default function TreeTools({
     // The vault's menu has Calendar and Board already; Upload here and Recent changes give way to the moved ones.
     const moved: MenuItem[] = inMenu.flatMap((t): MenuItem[] => {
       if (t === "upload") return [{ label: "Upload", icon: Upload, onSelect: onUpload }];
-      if (t === "sort") return [{ label: sort, icon: order === "name" ? ClockArrowDown : ArrowDownAZ, onSelect: toggleOrder }];
+      if (t === "sort") return [{ label: sort, icon: SortIcon, onSelect: toggleOrder }];
       if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: onRecent }];
       if (t === "find") return [{ label: "Find in this vault", icon: Search, onSelect: findOpen }];
       return [];
@@ -170,7 +173,7 @@ export default function TreeTools({
       ),
       sort: (
         <button type="button" aria-label={sort} title={sort} onClick={toggleOrder} className={iconTarget}>
-          {order === "name" ? <ArrowDownAZ size={20} aria-hidden /> : <ClockArrowDown size={20} aria-hidden />}
+          <SortIcon size={20} aria-hidden />
         </button>
       ),
       find: (
