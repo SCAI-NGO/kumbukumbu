@@ -16,9 +16,11 @@ public sealed class Glob
 {
     private readonly Regex regex;
     private readonly bool anchored;
+    private readonly bool foldersOnly;
 
-    private Glob(Regex regex, bool anchored, bool excludes)
+    private Glob(Regex regex, bool anchored, bool excludes, bool foldersOnly)
     {
+        this.foldersOnly = foldersOnly;
         this.regex = regex;
         this.anchored = anchored;
         Excludes = excludes;
@@ -33,6 +35,9 @@ public sealed class Glob
         error = null;
         var excludes = pattern.StartsWith('!');
         var body = excludes ? pattern[1..] : pattern;
+        // A trailing slash says "folders only" and doesn't anchor, as in ripgrep.
+        var foldersOnly = body.Length > 1 && body.EndsWith('/');
+        if (foldersOnly) body = body[..^1];
         if (body.Length == 0)
         {
             error = $"rg: bad glob '{pattern}': empty";
@@ -42,7 +47,25 @@ public sealed class Glob
         var anchored = body.Contains('/');
         if (body.StartsWith('/')) body = body[1..];
 
-        var sb = new StringBuilder("^");
+        if (!TryTranslate(body, pattern, true, out var translated, out error)) return false;
+        try
+        {
+            glob = new Glob(new Regex("^" + translated + "$", RegexOptions.NonBacktracking | RegexOptions.CultureInvariant), anchored, excludes, foldersOnly);
+        }
+        catch (ArgumentException)
+        {
+            error = $"rg: bad glob '{pattern}': invalid class";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryTranslate(string body, string pattern, bool braces, [NotNullWhen(true)] out string? regex, [NotNullWhen(false)] out string? error)
+    {
+        regex = null;
+        error = null;
+        var sb = new StringBuilder();
         for (var i = 0; i < body.Length; i++)
         {
             var c = body[i];
@@ -77,13 +100,39 @@ public sealed class Glob
                         return false;
                     }
 
-                    var inside = body[(i + 1)..end];
-                    var negated = inside.StartsWith('!') || inside.StartsWith('^');
-                    if (negated) inside = inside[1..];
-                    sb.Append(negated ? "[^/" : "[");
-                    foreach (var k in inside) sb.Append(k is '\\' or '[' or ']' or '^' ? "\\" + k : k.ToString());
-                    sb.Append(']');
+                    var negated = first > i + 1;
+                    var content = new StringBuilder();
+                    foreach (var k in body[first..end]) content.Append(k is '\\' or '[' or ']' or '^' ? "\\" + k : k.ToString());
+                    // A trailing '-' is a literal, not the start of the range that the '/' below would make.
+                    if (content.Length > 0 && content[^1] == '-' && (content.Length < 2 || content[^2] != '\\')) content.Insert(content.Length - 1, '\\');
+                    // A class never matches '/', as in ripgrep.
+                    sb.Append(negated ? $"[^{content}/]" : $"[{content}-[/]]");
                     i = end;
+                    break;
+                case '{' when braces:
+                    var close = body.IndexOf('}', i + 1);
+                    if (close < 0)
+                    {
+                        error = $"rg: bad glob '{pattern}': unclosed {{";
+                        return false;
+                    }
+
+                    var inner = body[(i + 1)..close];
+                    if (inner.Contains('{'))
+                    {
+                        error = $"rg: bad glob '{pattern}': nested {{}}";
+                        return false;
+                    }
+
+                    var alternatives = new List<string>();
+                    foreach (var part in inner.Split(','))
+                    {
+                        if (!TryTranslate(part, pattern, false, out var one, out error)) return false;
+                        alternatives.Add(one);
+                    }
+
+                    sb.Append("(?:").AppendJoin('|', alternatives).Append(')');
+                    i = close;
                     break;
                 case '\\' when i + 1 < body.Length:
                     sb.Append(Regex.Escape(body[++i].ToString()));
@@ -94,19 +143,21 @@ public sealed class Glob
             }
         }
 
-        sb.Append('$');
-        glob = new Glob(new Regex(sb.ToString(), RegexOptions.NonBacktracking | RegexOptions.CultureInvariant), anchored, excludes);
+        regex = sb.ToString();
         return true;
     }
 
-    /// <summary>Whether the pattern applies to the path, judged from <paramref name="root"/>, the operand the search started at.</summary>
+    /// <summary>Whether the pattern applies to the path, judged from <paramref name="root"/>, the operand the search started at.
+    /// An excluding pattern also applies when it matches a folder on the way, as ripgrep prunes the folder.</summary>
     public bool Matches(VaultPath path, VaultPath root)
     {
         var below = path.Segments.Count > root.Segments.Count && root.Segments.SequenceEqual(path.Segments.Take(root.Segments.Count))
             ? path.Segments.Skip(root.Segments.Count).ToList()
             : [path.Name];
-        if (anchored) return regex.IsMatch(string.Join('/', below));
-        return Excludes ? below.Any(regex.IsMatch) : regex.IsMatch(below[^1]);
+        var folders = Enumerable.Range(1, below.Count - 1).Select(k => anchored ? string.Join('/', below.Take(k)) : below[k - 1]);
+        var full = anchored ? string.Join('/', below) : below[^1];
+        IEnumerable<string> candidates = foldersOnly ? folders : Excludes ? folders.Append(full) : [full];
+        return candidates.Any(regex.IsMatch);
     }
 
     /// <summary>Kept when it matches at least one include (or there are none) and no exclude.</summary>

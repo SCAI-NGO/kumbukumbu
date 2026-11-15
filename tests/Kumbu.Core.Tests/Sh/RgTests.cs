@@ -293,4 +293,22 @@ public class RgTests
         Assert.True(result.IsError);
         Assert.Equal("rg: --glob filters paths and can't be used on piped input", result.Output);
     }
+
+    [Theory]
+    [InlineData("!**/Memory")]
+    [InlineData("!Kumbu/Memory")]
+    public async Task Glob_without_trailing_stars_still_prunes_a_folder(string glob) => Assert.Equal(
+        "/SWE/Kumbu/a.md:1:Kumbu here\n/SWE/Other/b.md:1:Kumbu there",
+        await GlobOk($"rg Kumbu /SWE -g '{glob}'"));
+
+    [Fact]
+    public async Task Bad_glob_is_reported()
+    {
+        var result = await Globbed.RunAsync("rg Kumbu -g '[z-a]'", CancellationToken.None);
+        Assert.True(result.IsError);
+        Assert.Equal("rg: bad glob '[z-a]': invalid class", result.Output);
+        var empty = await Globbed.RunAsync("rg Kumbu -g ''", CancellationToken.None);
+        Assert.True(empty.IsError);
+        Assert.Equal("rg: bad glob '': empty", empty.Output);
+    }
 }

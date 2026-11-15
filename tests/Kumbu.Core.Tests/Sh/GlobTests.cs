@@ -72,4 +72,64 @@ public class GlobTests
         Assert.False(Glob.TryParse("[ab", out _, out var error));
         Assert.Equal("rg: bad glob '[ab': unclosed [", error);
     }
+
+    [Theory]
+    [InlineData("[z-a].md")]
+    [InlineData("[a-\\].md")]
+    public void Reversed_class_range_is_an_error(string pattern)
+    {
+        Assert.False(Glob.TryParse(pattern, out _, out var error));
+        Assert.Equal($"rg: bad glob '{pattern}': invalid class", error);
+    }
+
+    [Theory]
+    [InlineData("!**/Memory")]
+    [InlineData("!Kumbu/Memory")]
+    [InlineData("!/Kumbu/Memory")]
+    [InlineData("!Memory/")]
+    [InlineData("!Kumbu/Memory/")]
+    public void Anchored_or_folder_excludes_prune_the_folder(string pattern)
+    {
+        Assert.False(Keeps(pattern, "/SWE/Kumbu/Memory/m.md"));
+        Assert.True(Keeps(pattern, "/SWE/Kumbu/a.md"));
+    }
+
+    [Fact]
+    public void Folders_only_pattern_leaves_a_file_of_that_name()
+    {
+        Assert.True(Keeps("!Memory/", "/SWE/Kumbu/Memory"));
+        Assert.False(Keeps("!Memory", "/SWE/Kumbu/Memory"));
+    }
+
+    [Fact]
+    public void Double_star_slash_also_matches_at_the_root() =>
+        Assert.False(Keeps("!**/Memory/**", "/SWE/Memory/a.md"));
+
+    [Fact]
+    public void Braces_are_alternatives()
+    {
+        Assert.True(Keeps("*.{md,pdf}", "/SWE/a.pdf"));
+        Assert.True(Keeps("*.{md,pdf}", "/SWE/a.md"));
+        Assert.False(Keeps("*.{md,pdf}", "/SWE/a.png"));
+        Assert.True(Keeps("{Kumbu,Other}/*.md", "/SWE/Other/b.md"));
+    }
+
+    [Fact]
+    public void Bad_braces_are_errors()
+    {
+        Assert.False(Glob.TryParse("{a,{b}}", out _, out var nested));
+        Assert.Equal("rg: bad glob '{a,{b}}': nested {}", nested);
+        Assert.False(Glob.TryParse("{a,b", out _, out var unclosed));
+        Assert.Equal("rg: bad glob '{a,b': unclosed {", unclosed);
+    }
+
+    [Fact]
+    public void Classes_never_match_a_slash()
+    {
+        Assert.True(Keeps("[!-a].md", "/SWE/b.md"));
+        Assert.False(Keeps("[!-a].md", "/SWE/-.md"));
+        Assert.False(Keeps("[!-a].md", "/SWE/a.md"));
+        Assert.False(Keeps("Kumbu[+-0]a.md", "/SWE/Kumbu/a.md"));
+        Assert.True(Keeps("[a-]x", "/SWE/-x"));
+    }
 }
