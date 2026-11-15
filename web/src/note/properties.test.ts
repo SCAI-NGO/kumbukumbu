@@ -36,6 +36,15 @@ describe("parseProperties", () => {
   it("keeps a # that is no comment, as in a URL's fragment", () => {
     expect(parseProperties("source: https://example.org/a#part")).toEqual([{ key: "source", value: "https://example.org/a#part" }]);
   });
+
+  it("undoes YAML's escapes inside double quotes, and only there", () => {
+    expect(parseProperties('quote: "say \\"hi\\""\npath: "C:\\\\temp"\nraw: \'a\\"b\'\nbare: a\\"b')).toEqual([
+      { key: "quote", value: 'say "hi"' },
+      { key: "path", value: "C:\\temp" },
+      { key: "raw", value: 'a\\"b' },
+      { key: "bare", value: 'a\\"b' },
+    ]);
+  });
 });
 
 describe("flowMap", () => {
