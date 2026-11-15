@@ -22,9 +22,10 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
     private const int ExcerptContext = 30;
 
     public async Task<ShellResult> RunAsync(
-        string pathText, string oldText, string newText, bool word, string? plan, CancellationToken ct)
+        string pathText, string oldText, string newText, bool word, string? plan, CancellationToken ct, string? message = null)
     {
         const string tool = "replace";
+        if (!NoteWriter.TryMessage(message, tool, out message, out var messageError)) return messageError!;
         if (SectionAddress.Split(pathText).Fragment is not null) return ShellResult.Error("replace: works on whole notes; to change one section, use edit");
         if (!VaultPath.TryParse(pathText, out var path)) return ShellResult.Error($"replace: {pathText}: paths must be absolute, e.g. /Work/projects");
         // A folder may be named like a file (/Work/d.png/), so only an attachment that exists is refused.
@@ -38,7 +39,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
         return plan is null
             ? await PreviewAsync(tool, path, oldText, newText, word, ct)
-            : await ApplyAsync(path, oldText, newText, word, plan, ct);
+            : await ApplyAsync(path, oldText, newText, word, plan, message, ct);
     }
 
     private async Task<ShellResult> PreviewAsync(string tool, VaultPath path, string oldText, string newText, bool word, CancellationToken ct)
@@ -180,7 +181,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         return output;
     }
 
-    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, CancellationToken ct)
+    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string? note, CancellationToken ct)
     {
         var writer = caller.WriterIn(path.Segments[0]);
         var reference = caller.ReferenceIn(path.Segments[0]);
@@ -222,7 +223,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             }
 
             // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset, message: note)));
         }
 
         if (changed.Count == 0)

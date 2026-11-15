@@ -285,6 +285,70 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task A_write_message_reaches_history()
+    {
+        var v1 = (await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "consolidated")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(11));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "two", Ct, message: "tidied");
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("tidied", note.Message);
+        Assert.Equal(["consolidated", null], note.History.Select(h => h.Message));
+        Assert.Equal(["tidied", "consolidated", null], NoteHistory.Versions(note).Select(v => v.Message));
+    }
+
+    [Fact]
+    public async Task A_coalesced_write_keeps_the_last_message()
+    {
+        var v1 = (await _writer.EditAsync("/Work/plan.md", V(Plan), null, "a", Ct, message: "first")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "b", Ct, message: "second");
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("second", note.Message);
+        Assert.Single(note.History);
+    }
+
+    [Fact]
+    public async Task A_coalesced_write_without_message_keeps_the_earlier_one()
+    {
+        var v1 = (await _writer.EditAsync("/Work/plan.md", V(Plan), null, "a", Ct, message: "first")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "b", Ct);
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("first", note.Message);
+        Assert.Single(note.History);
+    }
+
+    [Theory]
+    [InlineData("two\nlines")]
+    [InlineData("long")]
+    public void A_message_is_one_line(string kind)
+    {
+        var message = kind == "long" ? new string('x', 201) : kind;
+
+        Assert.False(NoteWriter.TryMessage(message, "write", out _, out var error));
+        Assert.Equal("write: message is one line of at most 200 characters", error!.Output);
+        Assert.True(error.IsError);
+        Assert.True(NoteWriter.TryMessage("  " + new string('x', 200) + " ", "write", out var clean, out _));
+        Assert.Equal(new string('x', 200), clean);
+        Assert.True(NoteWriter.TryMessage("  ", "write", out clean, out _));
+        Assert.Null(clean);
+    }
+
+    [Fact]
+    public async Task A_bad_message_writes_nothing()
+    {
+        var result = await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "a\nb");
+        var edit = await _writer.EditAsync("/Work/plan.md", V(Plan), null, "x", Ct, message: new string('x', 201));
+
+        Assert.True(result.IsError);
+        Assert.True(edit.IsError);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
     public async Task APauseOrAnotherWriterStartsANewVersion()
     {
         var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;

@@ -35,6 +35,17 @@ public class ReplacerTests
         preview.Output.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))["plan: ".Length..];
 
     [Fact]
+    public async Task Replace_gives_its_message_to_every_note()
+    {
+        var preview = await Run("/Work", "Hecate", "Selene");
+        var applied = await _replacer.RunAsync("/Work", "Hecate", "Selene", false, Plan(preview), Ct, message: "renamed the goddess");
+
+        Assert.False(applied.IsError);
+        Assert.Equal("renamed the goddess", (await _store.GetAsync(P("/Work/a.md"), Ct))!.Message);
+        Assert.Equal("renamed the goddess", (await _store.GetAsync(P("/Work/sub/b.md"), Ct))!.Message);
+    }
+
+    [Fact]
     public async Task PreviewListsEveryNoteAndWritesNothing()
     {
         var preview = await Run("/Work", "Hecate", "Selene");

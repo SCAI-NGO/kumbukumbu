@@ -38,6 +38,19 @@ public class WriteCommandsTests
         Assert.Equal(VersionToken.Of("two\nlines\n"), result.Version!.Token);
     }
 
+    [Fact]
+    public async Task HistoryShowsTheMessageBeforeCurrent()
+    {
+        var v = (await _writer.WriteAsync("/Demo/a.md", "two\n", VersionToken.Of("one\n"), CancellationToken.None, message: "consolidated")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(11));
+        await _writer.EditAsync("/Demo/a.md", v, null, "x", CancellationToken.None, message: "tidied");
+
+        var lines = (await Run("history /Demo/a.md")).Output.Split('\n');
+
+        Assert.EndsWith("dev  1 line  \u2014 consolidated", lines[1]);
+        Assert.EndsWith("dev  2 lines  \u2014 tidied  (current)", lines[0]);
+    }
+
     [Theory]
     [InlineData("history /Demo/nope.md", "history: /Demo/nope.md: No such file or directory")]
     [InlineData("history /Demo --since soon", "history: --since takes 30m, 2h, 1d or a UTC time like 2026-10-23 14:00 (got 'soon')")]

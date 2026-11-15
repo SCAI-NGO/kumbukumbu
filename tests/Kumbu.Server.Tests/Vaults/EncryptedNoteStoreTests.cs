@@ -415,6 +415,33 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_message_survives_sealing_on_the_note_and_its_history()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = New("/Work/a.md", "one") with { Message = "first" };
+        await store.TryCreateAsync(note, Ct);
+        var next = NoteWriter.Next(note, "two", Writers.Dev, WriterRef.Server, T0.AddHours(1), message: "second");
+        Assert.True(await store.TryReplaceAsync(note, next, Ct));
+
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+
+        Assert.Equal("second", read.Message);
+        Assert.Equal(["first"], read.History.Select(h => h.Message));
+    }
+
+    [Fact]
+    public void A_document_without_a_message_reads_with_none()
+    {
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[{"Content":"o","WrittenBy":"dev","WrittenAt":"2026-10-22T12:00:00Z"}],"SeedContent":null}""";
+        var note = JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1);
+        Assert.Null(note.Message);
+        Assert.Null(note.History[0].Message);
+
+        var written = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        Assert.DoesNotContain("\"msg\"", written, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Trash_fails_and_leaves_no_copy_if_the_note_changed()
     {
         var (world, _, store) = await WorldAsync();
