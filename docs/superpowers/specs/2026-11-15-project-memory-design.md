@@ -63,7 +63,7 @@ Shipped beside `create-skill` and `ingest-attachments` (`src/Kumbu.Core/Skills/S
 - Offer to consolidate past about fifteen index lines.
 - In a shared vault, members read the memory too.
 
-**The text** is copied from the maintainer's skill and reworded as above; it names no person, customer or employer. The maintainer reviews the final wording in its pull request, since the text is the feature.
+**The text** is copied from the maintainer's skill and reworded as above; it names no person, customer or employer. It is read at every session start, so it is kept tight: about 500 tokens, against about 900 for the draft. The maintainer reviews the final wording in its pull request, since the text is the feature.
 
 A person who wants their own variant copies it (`skills copy project-memory`) and changes the copy. **Only a skill in the person's own vault Skills** (`/Skills/project-memory`) takes the system skill's place, in the handshake list and in `skills cat project-memory`; a `_skills/project-memory` in any vault, shared or not, doesn't. *Claude's call:* every session follows this skill before its first answer, so a member of a shared vault must not be able to swap it for everyone with access to that vault. **Left to the builder:** how a user skill and a system skill of the same name are listed today.
 
@@ -72,6 +72,7 @@ A person who wants their own variant copies it (`skills copy project-memory`) an
 Today the instructions say "Before a task, look for a skill whose description matches it and follow it" (`src/Kumbu.Core/Skills/SkillInstructions.cs:15`). A skill meant for the start of every session has no sentence of its own, and in the second test it lost to a repository's start-up protocol.
 
 - **Add one sentence to the skills section,** in both modes (list and hint): a skill whose description says to use it at the start of a session is read and followed before the first answer, alongside the client's or project's own start-up steps. The wording is general: any start-up skill, not memory.
+- **In "Hint only" mode, start-up skills are named too,** one line each as in the list, while task skills stay unlisted. Decided by the maintainer, because otherwise a hint-only key never meets its memory (`skills find` with a greeting finds nothing), and the cost is about 100 tokens per session, in the cached prefix ("bei 5000 hätte ich nein gesagt, aber bei 100…"). README's description of the setting changes with it.
 - **Credentials that can read nothing the skill would find** still get the sentence. *Claude's call:* the skill's two `rg` calls find no memory and it stops there; filtering by rights would add code for a harmless case.
 - **List such skills first.** **Left to the builder:** how a skill is recognised as a start-up skill. Options: a front-matter key (`when: session-start`, checked by `skills check`), or the description's wording. A front-matter key is explicit and testable; the description alone needs no new key. Recommended: the front-matter key, since it is unambiguous and the sentence can name it.
 
