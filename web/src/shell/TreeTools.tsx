@@ -7,6 +7,7 @@ import { Menu, type MenuItem } from "../components/Menu";
 import FlagChips from "../flags/FlagChips";
 import { useEditor } from "../state/editor";
 import { cut, type Tool } from "./toolbarCut";
+import type { FlagName } from "../flags/api";
 import type { FlagFilter } from "./treeFilter";
 import type { TreeOrder } from "./treeOrder";
 
@@ -35,6 +36,7 @@ export default function TreeTools({
   calendar,
   board,
   menu,
+  flags,
   search,
   onSearch,
   order,
@@ -51,6 +53,8 @@ export default function TreeTools({
   board: (() => void) | null;
   /** The vault's menu. */
   menu: MenuItem[];
+  /** The flags some note of the vault carries: Find by name's chips. */
+  flags: readonly FlagName[];
   /** Null while the search is closed. */
   search: TreeSearch | null;
   onSearch(search: TreeSearch | null): void;
@@ -195,7 +199,7 @@ export default function TreeTools({
           <X size={20} aria-hidden />
         </button>
       </div>
-      <FlagChips flag={search.flag} onFlag={(flag) => onSearch({ ...search, flag })} />
+      <FlagChips flag={search.flag} onFlag={(flag) => onSearch({ ...search, flag })} shown={flags} />
       {nothing && (
         <p role="status" className="px-2.5 pt-1 text-sm text-muted">
           Nothing called that here.

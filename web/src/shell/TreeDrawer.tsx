@@ -38,7 +38,7 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
-import { filterTree } from "./treeFilter";
+import { filterTree, usedFlags } from "./treeFilter";
 import { orderTree, useTreeOrder } from "./treeOrder";
 import TreeTools, { type TreeSearch } from "./TreeTools";
 import { useCopied } from "./useCopied";
@@ -586,6 +586,7 @@ export default function TreeDrawer(props: {
   const expanded = found ? Object.fromEntries([...found.open].filter((f) => !shut[f]).map((f) => [f, true])) : expandedFolders;
   const toggle = (folder: string) => (found ? setShut((s) => ({ ...s, [folder]: !s[folder] })) : toggleFolder(folder));
   const nothing = !!found && found.root.folders.length + found.root.notes.length === 0;
+  const flagsInUse = useMemo(() => (tree.data ? usedFlags(tree.data.root) : []), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
   // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
   useEffect(
@@ -783,6 +784,7 @@ export default function TreeDrawer(props: {
           calendar={{ open: () => openCalendar(activeVault), share }}
           board={hasBoard ? () => openBoard(activeVault) : null}
           menu={[...folderItems(tree.data.root, folderActions), ...vaultItems]}
+          flags={flagsInUse}
           search={search}
           onSearch={setSearch}
           order={order}

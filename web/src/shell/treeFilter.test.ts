@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import type { TreeFolder, TreeNote } from "../api/notes";
-import { filterTree } from "./treeFilter";
+import { filterTree, usedFlags } from "./treeFilter";
 
 const note = (path: string, extra: Partial<TreeNote> = {}): TreeNote => ({ name: path.split("/").at(-1)!, path, size: 10, kind: "note", mediaType: "text/markdown", ...extra });
 const folder = (path: string, folders: TreeFolder[], notes: TreeNote[]): TreeFolder => ({ name: path.split("/").at(-1)!, path, folders, notes });
@@ -57,5 +57,17 @@ describe("filterTree", () => {
   it("words and flag together", () => {
     expect(paths(filterTree(root, "pump", "red").root)).toEqual(["/Notes/Pump/Old/Manual.md"]);
     expect(paths(filterTree(root, "garden", "red").root)).toEqual([]);
+  });
+});
+
+describe("usedFlags", () => {
+  it("names each flag some note carries, in nested folders too, once and in the flags' order", () => {
+    expect(usedFlags(root)).toEqual(["red", "done"]);
+    const more = folder("/Notes", [root, folder("/Notes/B", [folder("/Notes/B/C", [], [note("/Notes/B/C/x.md", { flag: "important" })])], [note("/Notes/B/y.md", { flag: "blue" })])], []);
+    expect(usedFlags(more)).toEqual(["red", "blue", "done", "important"]);
+  });
+
+  it("is empty without flags, and leaves out a value that is no flag", () => {
+    expect(usedFlags(folder("/Notes", [], [note("/Notes/a.md"), note("/Notes/b.md", { flag: "orange" as unknown as TreeNote["flag"] })]))).toEqual([]);
   });
 });

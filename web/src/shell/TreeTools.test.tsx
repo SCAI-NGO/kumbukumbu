@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -143,14 +144,44 @@ describe("finding in the tree", () => {
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
   });
 
-  it("the chips are one row that scrolls sideways, named apart from the note's flag", async () => {
+  it("the chips wrap onto further rows instead of scrolling, named apart from the note's flag", async () => {
     await openDrawer();
     await find("");
     const flags = within(drawer()).getByRole("group", { name: "Find by flag" });
-    // Each chip as wide as its words, which then stay on one line.
-    expect(flags).toHaveClass("flex-nowrap", "overflow-x-auto", "[&>button]:flex-none");
-    expect(flags).not.toHaveClass("flex-wrap");
+    expect(flags).toHaveClass("flex-wrap");
+    expect(flags).not.toHaveClass("flex-nowrap");
+    expect(flags).not.toHaveClass("overflow-x-auto");
     expect(within(drawer()).queryByRole("group", { name: "Flag" })).not.toBeInTheDocument();
+  });
+
+  it("a pressed chip stays shown while it is pressed, even when no note carries its flag any more", async () => {
+    let root = tree.root;
+    signedIn({ extra: { "GET /api/vaults/Notes/tree": () => json(200, { ...tree, root }) } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Notes/inbox.md", queryClient);
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("later");
+    await find("");
+    const flags = () => within(drawer()).getByRole("group", { name: "Find by flag" });
+    await userEvent.click(within(flags()).getByRole("button", { name: "Red" }));
+    // The red note loses its flag elsewhere.
+    root = { ...tree.root, folders: tree.root.folders.map((f) => ({ ...f, notes: f.notes.map((n) => ({ ...n, flag: undefined })) })) };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["tree", "Notes"] }));
+    await waitFor(() => expect(shown()).toEqual([]));
+    expect(within(flags()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Red", "Done"]);
+    expect(within(flags()).getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "true");
+    // Let go, it goes.
+    await userEvent.click(within(flags()).getByRole("button", { name: "Red" }));
+    expect(within(flags()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Done"]);
+  });
+
+  it("shows no chips where no note carries a flag", async () => {
+    const plain = { ...tree.root, folders: tree.root.folders.map((f) => ({ ...f, notes: f.notes.map((n) => ({ ...n, flag: undefined })) })), notes: tree.root.notes.map((n) => ({ ...n, flag: undefined })) };
+    await openDrawer({ root: plain });
+    await find("");
+    expect(within(drawer()).queryByRole("group", { name: "Find by flag" })).not.toBeInTheDocument();
+    expect(within(drawer()).queryByRole("button", { name: "Any flag" })).not.toBeInTheDocument();
+    expect(within(drawer()).getByRole("button", { name: "Search the contents…" })).toBeInTheDocument();
   });
 
   it("the field is a 48 px target", async () => {
@@ -162,7 +193,8 @@ describe("finding in the tree", () => {
     await openDrawer();
     await find("");
     const flags = within(drawer()).getByRole("group", { name: "Find by flag" });
-    expect(within(flags).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Red", "Green", "Blue", "Purple", "Yellow", "White", "Done", "Important"]);
+    // Only the flags some note of this vault carries, in the flags' order.
+    expect(within(flags).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Red", "Done"]);
     await userEvent.click(within(flags).getByRole("button", { name: "Any flag" }));
     expect(shown()).toEqual(["Garden", "beds", "later"]);
     await userEvent.click(within(flags).getByRole("button", { name: "Done" }));
