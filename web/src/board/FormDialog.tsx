@@ -9,12 +9,12 @@ import { useDialog } from "../hooks/useDialog";
  * refusal keeps the dialog open with the server's sentence, or what `errorTextOf` makes of it. `onSubmit` closes it
  * from outside once it succeeds.
  */
-export default function FormDialog(props: { title: string; submitLabel: string; ready: boolean; onCancel(): void; onSubmit(): Promise<unknown>; errorTextOf?(error: unknown): string; children: ReactNode }) {
+export default function FormDialog(props: { title: string; submitLabel: string; ready: boolean; onCancel(): void; onSubmit(): Promise<unknown>; errorTextOf?(error: unknown): ReactNode; children: ReactNode }) {
   const { title, submitLabel, ready, onCancel, onSubmit, errorTextOf = errorText, children } = props;
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onCancel);
   const [pending, setPending] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<ReactNode>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();

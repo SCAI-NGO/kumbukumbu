@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { onlineManager, QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -921,5 +921,94 @@ describe("properties at the top", () => {
     await userEvent.click(write);
     await screen.findByRole("textbox", { name: "Markdown source" });
     expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+});
+
+describe("adding a property", () => {
+  /** The plan, read again as the last write left it; every PUT's body is kept. */
+  function planApi(extra: Parameters<typeof fakeApi>[0] = {}) {
+    let current = noteView(PLAN, source);
+    const puts: { content: string; version: string }[] = [];
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => json(200, current),
+      [`PUT /api/notes${PLAN}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = noteView(PLAN, body.content, `v${puts.length + 1}`);
+        return json(200, current);
+      },
+      ...extra,
+    });
+    return puts;
+  }
+  async function adding(name: string, value: string) {
+    renderApp(planUrl);
+    await userEvent.click(await screen.findByRole("button", { name: "Add property" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), name);
+    if (value) await userEvent.type(within(dialog).getByLabelText("Value"), value);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    return dialog;
+  }
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+
+  it("writes name: value as the properties' last line with the note's version, every other byte as it was", async () => {
+    const puts = planApi();
+    const dialog = await adding("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: source.replace("tags: [work]\n", "tags: [work]\nowner: Alice\n"), version: "v1" }]));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(within(screen.getByLabelText("Properties")).getAllByRole("term").map((t) => t.textContent)).toEqual(["tags", "owner"]);
+  });
+
+  it("writes a value YAML would take for something else in quotes", async () => {
+    const puts = planApi();
+    await adding("done", "true");
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].content.split("\n").slice(0, 4)).toEqual(["---", "tags: [work]", 'done: "true"', "---"]);
+  });
+
+  it("refuses a name that is there already, naming it, and writes nothing", async () => {
+    const puts = planApi();
+    const dialog = await adding("tags", "more");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("tags is already in the properties: change it in the note.");
+    expect(within(within(dialog).getByRole("alert")).getByText("tags", { selector: "code" })).toBeInTheDocument();
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("refuses a name that isn't a plain key", async () => {
+    const puts = planApi();
+    const dialog = await adding("2nd", "x");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Use letters, digits, - and _, starting with a letter.");
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("refuses a value that wouldn't read back as given", async () => {
+    const puts = planApi();
+    renderApp(planUrl);
+    await userEvent.click(await screen.findByRole("button", { name: "Add property" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "bell");
+    fireEvent.change(within(dialog).getByLabelText("Value"), { target: { value: "ring\u0007" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("That value can't be written as a property here.");
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("on a conflict says so in the dialog and shows the newer version", async () => {
+    const newer = source.replace("- [x] read", "- [x] read\n- [ ] added by liz");
+    let puts = 0;
+    planApi({
+      [`PUT /api/notes${PLAN}`]: () => {
+        puts++;
+        return json(409, { error: "changed", current: { content: newer, version: "v7" } });
+      },
+    });
+    const dialog = await adding("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This note changed elsewhere; try again.");
+    expect(screen.getByRole("checkbox", { name: "added by liz" })).toBeInTheDocument();
+    expect(puts).toBe(1);
   });
 });

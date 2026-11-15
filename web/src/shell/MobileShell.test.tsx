@@ -1203,3 +1203,83 @@ describe("the calendar in the note's menus", () => {
     expect(await Promise.all(unset.map((r) => r.clone().json()))).toEqual([{ path: "/Work/inbox.md" }]);
   });
 });
+
+describe("Add property… in the note's menu", () => {
+  const INBOX = "/Work/inbox.md";
+  /** The inbox as written, read again as the last write left it; every PUT's body is kept. */
+  function inboxApi(content: string, level = "owner") {
+    let current = { path: INBOX, content, version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" };
+    const puts: { content: string; version: string }[] = [];
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", canWrite: level !== "read", level, ...(level === "owner" ? {} : { owner: '"Alice"', shared: true, membership: "m1" }) }]),
+      [`GET /api/notes${INBOX}`]: () => json(200, current),
+      [`PUT /api/notes${INBOX}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = { ...current, content: body.content, version: `v${puts.length + 1}` };
+        return json(200, current);
+      },
+    });
+    return puts;
+  }
+  const noteMenu = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await userEvent.keyboard("{Escape}");
+    return items;
+  };
+  async function add(name: string, value: string) {
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add property…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), name);
+    await userEvent.type(within(dialog).getByLabelText("Value"), value);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    return dialog;
+  }
+
+  it("a note without properties offers it, and adding makes them at the very top", async () => {
+    const puts = inboxApi("# Inbox\n\nText.\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    await waitFor(async () => expect(await noteMenu()).toContain("Add property…"));
+    const dialog = await add("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: "---\nowner: Alice\n---\n# Inbox\n\nText.\n", version: "v1" }]));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(within(screen.getByLabelText("Properties")).getByRole("term")).toHaveTextContent("owner");
+    // The box has its own button now.
+    expect(await noteMenu()).not.toContain("Add property…");
+  });
+
+  it("an empty frontmatter has no box either: the property goes into it", async () => {
+    const puts = inboxApi("---\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    await add("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: "---\nowner: Alice\n---\n# Inbox\n", version: "v1" }]));
+  });
+
+  it("properties that can't be read are refused with the reason, and nothing is written", async () => {
+    const puts = inboxApi("---\nabout: |\n  more\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    const dialog = await add("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The properties at the top can't be read here; change them in Write mode.");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("isn't offered where the box shows, nor without write", async () => {
+    inboxApi("---\ntags: [work]\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("button", { name: "Add property" });
+    expect(await noteMenu()).not.toContain("Add property…");
+    cleanup();
+    useEditor.getState().reset();
+
+    inboxApi("# Inbox\n", "read");
+    renderApp(`/notes${INBOX}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await noteMenu()).not.toContain("Add property…");
+  });
+});

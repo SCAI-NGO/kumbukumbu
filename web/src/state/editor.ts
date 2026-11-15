@@ -7,8 +7,8 @@ import type { Picked } from "../upload/collectFiles";
 export type Mode = "read" | "write";
 export type Overlay = "none" | "tree" | "search" | "upload";
 export type SearchMode = "hybrid" | "meaning" | "exact";
-/** The open note's tools in Read mode: its outline (a sheet), or find in the note (a bar in place of the dock). */
-export type NoteTool = "outline" | "find" | null;
+/** The open note's tools in Read mode: its outline (a sheet), find in the note (a bar in place of the dock), or the Add property dialog. */
+export type NoteTool = "outline" | "find" | "addProperty" | null;
 export type Find = { query: string; index: number; count: number };
 export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
 /** The open editor's text and the version it goes on, while any of it isn't saved. */
