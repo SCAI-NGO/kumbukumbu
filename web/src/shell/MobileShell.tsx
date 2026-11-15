@@ -21,6 +21,7 @@ import { NO_SUCH_NOTE, useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
+import NoteBar from "./NoteBar";
 import { parseProperties, splitFrontmatter } from "../note/properties";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
@@ -78,6 +79,7 @@ function SearchLoadFailed({ onClose }: { onClose(): void }) {
 /** `/` without a last note, or asked for ("All vaults" in the switcher): the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   const vaults = useVaults();
+  const activeVault = useEditor((s) => s.activeVault);
   const open = (vault: string) => {
     useEditor.getState().setActiveVault(vault);
     useEditor.getState().setOverlay("tree");
@@ -101,8 +103,11 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
     <li key={v.name}>
       <button
         type="button"
+        aria-current={v.name === activeVault ? "true" : undefined}
         onClick={() => open(v.name)}
-        className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[12px] border border-line bg-surface px-4 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
+        className={`flex min-h-12 w-full items-center justify-between gap-3 rounded-[12px] border px-4 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+          v.name === activeVault ? "border-accent bg-accent/15 font-medium text-accent-text" : "border-line bg-surface text-text"
+        }`}
       >
         <span className="truncate font-medium">{v.name}</span>
         <span className="flex-none font-mono text-[12px] text-dim">
@@ -397,7 +402,12 @@ export default function MobileShell() {
               // Empty while the hide goes on; reached again later (a bookmark, say), said as a discreet note's 404 is.
               <div className="flex-1 px-[22px] pt-[22px]">{!hiding && <p className="text-text-body">{NO_SUCH_NOTE}</p>}</div>
             ) : path ? (
-              <NoteView key={path} path={path} />
+              <>
+                {noteChanges && (
+                  <NoteBar onRename={renaming ? null : () => setMoving({ kind: "note", path })} onDelete={() => setDeleting({ kind: "note", path })} />
+                )}
+                <NoteView key={path} path={path} />
+              </>
             ) : keptPending ? (
               <div className="flex-1" />
             ) : (
