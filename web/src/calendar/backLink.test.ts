@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { cameFromHere, cameFromOf, withCameFrom, type CameFrom } from "./backLink";
+import { cameFromHere, cameFromOf, keptTagOf, keptTagState, withCameFrom, type CameFrom } from "./backLink";
 
 const at = (url: string) => {
   const u = new URL(url, "https://kumbu.test");
@@ -60,5 +60,27 @@ describe("the state that carries it", () => {
   it("refuses a state from another page load: a reload shows the note without it", () => {
     const state = { cameFrom: { label: "What's on", to: "/whats-on", load: "an earlier load" } };
     expect(cameFromOf(state, "/Work/a.md")).toBeNull();
+  });
+});
+
+describe("a tag kept on What's on only", () => {
+  it("goes along with the way back, and comes back with it", () => {
+    const from = cameFromHere(at("/whats-on"), "kumbu");
+    expect(from).toEqual({ label: "What's on", to: "/whats-on", tag: "kumbu" });
+    expect(cameFromOf(withCameFrom(undefined, from), "/Work/a.md")).toEqual(from);
+    expect(keptTagOf(keptTagState("kumbu"))).toBe("kumbu");
+  });
+
+  it("is left out where the page has none", () => {
+    expect(cameFromHere(at("/whats-on"))).toEqual({ label: "What's on", to: "/whats-on" });
+  });
+
+  it.each([["another load's", { keptTag: { tag: "kumbu", load: "earlier" } }], ["an empty one", keptTagState("")], ["none", { line: 2 }], ["a string", "x"]])("refuses %s", (_, state) => {
+    expect(keptTagOf(state)).toBeUndefined();
+  });
+
+  it("refuses a way back whose tag isn't text", () => {
+    const state = withCameFrom(undefined, { label: "What's on", to: "/whats-on" }) as { cameFrom: Record<string, unknown> };
+    expect(cameFromOf({ cameFrom: { ...state.cameFrom, tag: 3 } }, "/Work/a.md")).toBeNull();
   });
 });

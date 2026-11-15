@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { startsWithH1 } from "./NoteView";
-import { withCameFrom } from "../calendar/backLink";
+import { keptTagOf, withCameFrom } from "../calendar/backLink";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -537,6 +537,15 @@ describe("the way back", () => {
     const goals = screen.getByRole("heading", { level: 2, name: "Goals" });
     await waitFor(() => expect(scrollIntoView.mock.contexts).toContain(goals));
     expect(goals).toHaveClass("k-flash");
+  });
+
+  it("takes What's on's tag back with it, in the history's state and not the address", async () => {
+    noteApi({ "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }) });
+    const router = renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on", tag: "kumbu" }) });
+    await userEvent.click(await screen.findByRole("link", { name: "Back to What's on" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+    expect(router.state.location.search).toBe("");
+    expect(keptTagOf(router.state.location.state)).toBe("kumbu");
   });
 
   it("shows no way back for a note opened any other way", async () => {

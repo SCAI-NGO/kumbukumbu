@@ -11,6 +11,7 @@ import { fakeApi, json, renderApp, user } from "../test/app";
 import { calendarApp, calendarOf, calendarQueries, entryView, november, week46 } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import type { EntryView } from "./api";
+import { cameFromOf, keptTagState } from "./backLink";
 
 beforeEach(() => {
   FakeSocket.all = [];
@@ -173,5 +174,36 @@ describe("the tag filter of What's on, while discreet vaults are shown", () => {
     await userEvent.click(screen.getByRole("button", { name: "#kumbu (show everything)" }));
     await screen.findByRole("link", { name: "Zahnarzt" });
     expect(router.state.location.search).toBe("");
+  });
+
+  it("a note opened from What's on, narrowed, takes the tag along on its way back", async () => {
+    whatsOnServer();
+    const router = renderApp("/whats-on");
+    await screen.findByRole("link", { name: "Zahnarzt" });
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    await filter("kumbu");
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("link", { name: "Weekly report" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Weekly%20report.md"));
+    expect(cameFromOf(router.state.location.state, "/Work/Weekly report.md")).toEqual({ label: "What's on", to: "/whats-on", tag: "kumbu" });
+  });
+
+  it("back on What's on with the tag it took along, it narrows by it again, the address untouched", async () => {
+    const { asked } = whatsOnServer();
+    const router = renderApp({ pathname: "/whats-on", state: keptTagState("kumbu") });
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    expect(await screen.findByRole("button", { name: "#kumbu (show everything)" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Weekly report" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Zahnarzt" })).not.toBeInTheDocument();
+    expect(asked.at(-1)).toBe("kumbu");
+    expect(router.state.location.search).toBe("");
+  });
+
+  it("a tag taken along by an earlier page load isn't taken up", async () => {
+    whatsOnServer();
+    renderApp({ pathname: "/whats-on", state: { keptTag: { tag: "kumbu", load: "an earlier load" } } });
+    await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+    expect(await screen.findByRole("link", { name: "Zahnarzt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "#kumbu (show everything)" })).not.toBeInTheDocument();
   });
 });
