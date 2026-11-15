@@ -72,11 +72,12 @@ export default function Dock(props: { phone: boolean; newNote: (() => void) | nu
           standIn.current?.focus({ preventScroll: true });
           setOverlay("search");
         }}
-        className="flex h-12 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-line bg-surface pr-2 pl-4 text-left text-muted focus-visible:outline-2 focus-visible:outline-accent"
+        className="@container flex h-12 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-line bg-surface pr-2 pl-4 text-left text-muted focus-visible:outline-2 focus-visible:outline-accent"
       >
         <Search size={20} strokeWidth={1.9} aria-hidden />
         <span className="min-w-0 flex-1 truncate text-[15px]">Search</span>
-        <span className="flex-none rounded-full bg-surface-2 px-2.5 py-1 font-mono text-[11px] text-accent-text">{searchMode}</span>
+        {/* Where the field is too narrow for both (about 170 px), the mode gives way and the word stays. */}
+        <span className="flex-none rounded-full bg-surface-2 px-2.5 py-1 font-mono text-[11px] text-accent-text @max-[11rem]:hidden">{searchMode}</span>
       </button>
       {noteActions && (
         <Menu

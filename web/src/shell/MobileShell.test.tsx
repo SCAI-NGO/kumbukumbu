@@ -704,6 +704,17 @@ describe("the calendar in the phone's dock", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
   });
 
+  it("lets Search's mode give way before its word where the field is narrow", async () => {
+    signedInApi(whatsOn(0, false));
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const search = within(dock()).getByRole("button", { name: /^Search/ });
+    // A container query: below 11rem (the word, the icon and the chip need about 170 px) the chip hides.
+    expect(search).toHaveClass("@container");
+    expect(within(search).getByText("hybrid")).toHaveClass("@max-[11rem]:hidden");
+    expect(within(search).getByText("Search")).not.toHaveClass("@max-[11rem]:hidden");
+  });
+
   it("closes the drawer on its way to What's on", async () => {
     signedInApi(whatsOn(0, false));
     const router = renderApp("/notes/Work/inbox.md");
