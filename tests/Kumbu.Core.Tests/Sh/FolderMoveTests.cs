@@ -190,4 +190,51 @@ public class FolderMoveTests
         Assert.NotNull(await Content("/W/Old/Sub/s.md"));
         Assert.Null(await Content("/W/Sub/s.md"));
     }
+
+    [Fact]
+    public async Task A_folder_that_already_exists_in_the_target_is_a_plain_collision()
+    {
+        _store.AddVault("W");
+        await Seed("/W/Sub/s.md", "s\n");
+        await Seed("/W/X/x.md", "x\n");
+        await Seed("/W/Old/Sub/t.md", "t\n");
+
+        var result = await Run("mv /W/Sub/ /W/X/ /W/Old/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal("mv: /W/Old/Sub already exists; rm it first, or choose another name", lines[0]);
+        Assert.StartsWith("moved /W/X/ to /W/Old/X/", lines[1]);
+        Assert.NotNull(await Content("/W/Sub/s.md"));
+        Assert.NotNull(await Content("/W/Old/X/x.md"));
+    }
+
+    [Fact]
+    public async Task Two_folders_land_inside_a_target_that_does_not_exist_yet()
+    {
+        _store.AddVault("W");
+        await Seed("/W/A/a.md", "a\n");
+        await Seed("/W/B/b.md", "b\n");
+
+        var result = await Run("mv /W/A/ /W/B/ /W/New/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/New/A/a.md"));
+        Assert.NotNull(await Content("/W/New/B/b.md"));
+    }
+
+    [Fact]
+    public async Task Several_sources_with_keep_links_leave_links_as_they_are()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+        await Seed("/W/c.md", "[b](/b.md) [[a]]\n");
+
+        var result = await Run("mv --keep-links /W/a.md /W/b.md /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.Equal("[b](/b.md) [[a]]\n", await Content("/W/c.md"));
+    }
 }

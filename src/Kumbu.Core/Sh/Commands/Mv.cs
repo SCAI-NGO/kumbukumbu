@@ -89,17 +89,20 @@ public sealed class Mv(NoteMover mover) : ICommand
         return firstFailure is null ? ShellResult.Ok(output) : firstFailure with { Output = output };
     }
 
-    private Task<ShellResult> MoveOneAsync(VaultPath source, bool sourceIsFolder, VaultPath target, bool targetIsFolder, bool several, bool rewriteLinks, CancellationToken ct)
+    private async Task<ShellResult> MoveOneAsync(VaultPath source, bool sourceIsFolder, VaultPath target, bool targetIsFolder, bool several, bool rewriteLinks, CancellationToken ct)
     {
         // The trailing '/' says "the folder": a mistyped note name never moves a folder.
         // With several sources each lands in the folder under its own name, whether or not that folder exists yet.
         if (sourceIsFolder)
         {
-            return several
-                ? mover.MoveFolderAsync(source, target.Child(source.Name), rewriteLinks, Name, exact: true, ct)
-                : mover.MoveFolderAsync(source, target, rewriteLinks, ct);
+            if (!several) return await mover.MoveFolderAsync(source, target, rewriteLinks, ct);
+            var inside = target.Child(source.Name);
+            // exact: true would call this a race ("appeared meanwhile"); here it is a plain collision.
+            return await mover.OccupiedAsync(inside, ct)
+                ? ShellResult.Error($"{Name}: {inside.Value} already exists; rm it first, or choose another name")
+                : await mover.MoveFolderAsync(source, inside, rewriteLinks, Name, exact: true, ct);
         }
 
-        return mover.MoveAsync(source, targetIsFolder ? target.Child(source.Name) : target, rewriteLinks, ct);
+        return await mover.MoveAsync(source, targetIsFolder ? target.Child(source.Name) : target, rewriteLinks, ct);
     }
 }

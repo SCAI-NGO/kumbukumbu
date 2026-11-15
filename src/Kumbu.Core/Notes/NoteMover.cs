@@ -172,6 +172,10 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         return result;
     }
 
+    /// <summary>Whether a note, an attachment or a folder is at <paramref name="path"/>.</summary>
+    public async Task<bool> OccupiedAsync(VaultPath path, CancellationToken ct) =>
+        await ExistsAsync(path, ct) || await IsFolderAsync(path, ct);
+
     /// <summary>Whether a note or an attachment is at <paramref name="path"/>.</summary>
     private async Task<bool> ExistsAsync(VaultPath path, CancellationToken ct) =>
         await store.GetAsync(path, ct) is not null || await StoreAttachments.GetAsync(store, path, ct) is not null;
