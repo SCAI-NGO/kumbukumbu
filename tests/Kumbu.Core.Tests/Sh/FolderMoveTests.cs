@@ -121,4 +121,73 @@ public class FolderMoveTests
     [InlineData("mv /Demo/welcome.md/ /Demo/x/", "mv: /Demo/welcome.md/: Not a directory (to move the note, leave out the '/')")]
     [InlineData("mv /Demo/projects/ /Demo/welcome.md", "mv: /Demo/welcome.md: Not a directory")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
+
+    [Fact]
+    public async Task Several_notes_move_into_a_folder_and_their_links_follow()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "see [[b]]\n");
+        await Seed("/W/b.md", "b\n");
+        await Seed("/W/c.md", "[b](/b.md)\n");
+
+        var result = await Run("mv /W/a.md /W/b.md /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(2, result.Output.Split('\n').Length);
+        Assert.Null(await Content("/W/a.md"));
+        Assert.Null(await Content("/W/b.md"));
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/b.md"));
+        Assert.Equal("[b](/Old/b.md)\n", await Content("/W/c.md"));
+        // a.md moved before b.md did, so its link was rewritten to keep leading to b.
+        Assert.Equal("see [[b]]\n", await Content("/W/Old/a.md"));
+    }
+
+    [Fact]
+    public async Task A_failing_source_leaves_the_others_moved()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+
+        var result = await Run("mv /W/a.md /W/missing.md /W/b.md /W/Old/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal(3, lines.Length);
+        Assert.Contains("missing.md: No such file or directory", lines[1]);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/b.md"));
+        Assert.Null(await Content("/W/a.md"));
+        Assert.Null(await Content("/W/b.md"));
+    }
+
+    [Fact]
+    public async Task Several_sources_need_a_folder_target()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+
+        var result = await Run("mv /W/a.md /W/b.md /W/Old");
+
+        Assert.Equal(ShellResult.Error("mv: with several sources the target must be a folder, ending in '/'"), result);
+        Assert.NotNull(await Content("/W/a.md"));
+        Assert.NotNull(await Content("/W/b.md"));
+    }
+
+    [Fact]
+    public async Task Notes_and_folders_mix()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/Sub/s.md", "s\n");
+
+        var result = await Run("mv /W/a.md /W/Sub/ /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/Sub/s.md"));
+        Assert.Null(await Content("/W/Sub/s.md"));
+    }
 }
