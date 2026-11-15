@@ -60,7 +60,8 @@ test("calendar #2: an empty week shows its vault above the week, seven days and 
   await page.goto("/");
   const panel = await treePanel(page, testInfo);
   await switchVault(page, panel, "Welcome");
-  await panel.getByRole("button", { name: "Actions for Welcome", exact: true }).click();
+  // The vault's ⋯ sits in the toolbar above the folders now (UI round spec §2.1), not beside the vault's name.
+  await panel.getByRole("group", { name: "Tools for this vault" }).getByRole("button", { name: "Actions for Welcome", exact: true }).click();
   await page.getByRole("menuitem", { name: /^Calendar/ }).click();
   await expect(page).toHaveURL(/\/calendar\/Welcome$/);
 
