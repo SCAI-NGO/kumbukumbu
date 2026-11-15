@@ -56,8 +56,10 @@ test("fixes §2.5 #2: a note that is gone opens its vault's root @smoke", async 
 
   await page.goto("/");
   const tree = page.getByRole("complementary", { name: "File tree" });
+  // Work's root, not the vault list's first vault (Skills): the kept note was read, and is forgotten.
   await expect(tree.getByRole("heading", { level: 2, name: "Work" })).toBeVisible();
   await expect.poll(() => new URL(page.url()).pathname).toBe("/");
+  await expect.poll(() => keptNotes(page)).toEqual([]);
 });
 
 test("fixes §2.5 #3: a discreet note is never kept, and sign-out forgets the last note @smoke @serial", async ({ freshSession, aliceApi, folder }) => {
@@ -112,4 +114,23 @@ test("fixes §2.6: Ctrl+S in Write mode saves and goes back to Read mode @smoke"
   await expect(page.locator("article").getByText("Lighthouse.")).toBeVisible();
   expect((await aliceApi.getNote(path)).content).toContain("Lighthouse.");
   expect(await page.evaluate(() => (window as unknown as { __saveKey?: boolean }).__saveKey), "the browser's Save page doesn't open").toBe(true);
+});
+
+test("fixes §2.6: Ctrl+S on a save that meets a change elsewhere stays in Write mode @smoke", async ({ page, aliceApi, folder }, testInfo) => {
+  test.skip(onPhone(testInfo), "a keyboard's shortcut");
+  const path = `/Work/${folder}/Note.md`;
+  await aliceApi.putNote(path, "# Note\n");
+  await openNote(page, path);
+
+  await page.getByRole("button", { name: "Write" }).click();
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  await expect(source).toBeVisible();
+  // Changed elsewhere while this tab writes.
+  await aliceApi.putNote(path, "# Note\n\nWritten elsewhere.\n");
+  await source.fill(`${await source.inputValue()}\nLighthouse.\n`);
+  await page.keyboard.press("ControlOrMeta+s");
+
+  await expect(page.getByRole("button", { name: "Done" })).toBeVisible();
+  await expect(source).toHaveValue(/Lighthouse\./);
+  expect((await aliceApi.getNote(path)).content, "nothing written over the other change").toBe("# Note\n\nWritten elsewhere.\n");
 });

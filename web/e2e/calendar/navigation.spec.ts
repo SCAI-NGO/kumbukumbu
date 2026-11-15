@@ -2,7 +2,7 @@
 // The calendar's way to the weeks and months around (fixes spec 2026-11-14-0-5-0-fixes-design.md §2.3). Each test
 // narrows the view to a tag of its own, which no note carries: its pages stay empty and alike.
 import type { Locator, Page } from "@playwright/test";
-import { addDays, addMonths, isoWeek, monday, today } from "../support/time";
+import { addDays, addMonths, awayFromMidnight, isoWeek, monday, today } from "../support/time";
 import { dismissInstallHint, expect, onPhone, tagOf, test, weekId, weekTitle, weekUrl } from "./helpers";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -57,6 +57,7 @@ test("fixes §2.3 #2: below the month, ‹ <previous month> and <next month> ›
 
 test("fixes §2.3 #3: → and ← move a week on the desktop; Back to this week returns @calendar", async ({ page, folder }, testInfo) => {
   test.skip(onPhone(testInfo), "the keys turn the page where the tree is docked");
+  await awayFromMidnight();
   const t = today();
   const title = page.getByRole("banner").getByRole("heading", { level: 1 });
   /** The page at the week `n` from this one: its address, and its title once its days are in. */
@@ -70,6 +71,8 @@ test("fixes §2.3 #3: → and ← move a week on the desktop; Back to this week 
   await expect(page.getByRole("navigation", { name: "Weeks before and after" })).toBeVisible();
   await expect(back).toHaveCount(0);
 
+  // With a modifier the key is left alone: one move only, from the plain → after it.
+  await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("ArrowRight");
   await atWeek(1);
   await page.keyboard.press("ArrowRight");
@@ -85,6 +88,7 @@ test("fixes §2.3 #3: → and ← move a week on the desktop; Back to this week 
 
 test("fixes §2.3 #4: the arrow keys do nothing in the tag filter's field @calendar", async ({ page }, testInfo) => {
   test.skip(onPhone(testInfo), "the keys turn the page where the tree is docked");
+  await awayFromMidnight();
   const t = today();
   // Without a tag: the tag filter is a field then.
   await page.goto(weekUrl("Work", t));
