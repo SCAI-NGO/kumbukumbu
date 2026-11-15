@@ -36,7 +36,30 @@ public class SkillDirectoryTests
 
     [Fact]
     public async Task Lists_system_then_Skills_then_vaults() =>
-        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "project-memory", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+
+    [Fact]
+    public async Task A_skill_in_the_Skills_vault_takes_the_place_of_the_system_skill()
+    {
+        Put("/Skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Mine.\n---\n");
+
+        var effective = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+
+        var memory = Assert.Single(effective, s => s.Name == "project-memory");
+        Assert.Equal("/Skills/project-memory", memory.Folder?.Value);
+        Assert.Equal(await dir.ListAsync(null, Ct) is { Count: var all } ? all - 1 : 0, effective.Count);
+    }
+
+    [Fact]
+    public async Task A_skill_in_a_vaults_skills_folder_never_replaces_a_system_skill()
+    {
+        Put("/Work/_skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Theirs.\n---\n");
+
+        var effective = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+
+        Assert.Equal(["project-memory", "project-memory"], effective.Where(s => s.Name == "project-memory").Select(s => s.Name));
+        Assert.True(effective.First(s => s.Name == "project-memory").IsSystem);
+    }
 
     [Fact]
     public async Task System_skills_say_so()
@@ -54,7 +77,7 @@ public class SkillDirectoryTests
         Put("/Private/_skills/a-skill/SKILL.md", "---\nname: a-skill\ndescription: A.\n---\n");
         Put("/Archiv/_skills/old/SKILL.md", "---\nname: old\ndescription: Old.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "project-memory", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -235,7 +258,7 @@ public class SkillDirectoryTests
         Put("/Skills/readme.md", "# Readme\n");
         Put("/Work/_skills/readme.md", "# Readme\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "project-memory", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -258,7 +281,7 @@ public class SkillDirectoryTests
         // Only the vault Skills has its archive in a skill's place.
         Put("/Work/_skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Kept.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "project-memory", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Equal(["write-as-alice"], (await dir.ListAsync("Skills", Ct)).Select(s => s.Name));
     }
 
@@ -267,7 +290,7 @@ public class SkillDirectoryTests
     {
         _store.SkillsVault = null;
 
-        Assert.Equal(["create-skill", "ingest-attachments", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "project-memory", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Empty(await dir.ListAsync("Skills", Ct));
     }
 

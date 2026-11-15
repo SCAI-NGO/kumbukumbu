@@ -32,6 +32,28 @@ public class SystemSkillsTests
     }
 
     [Fact]
+    public void Project_memory_is_a_start_up_skill()
+    {
+        Assert.NotNull(SystemSkills.Find("project-memory"));
+        Assert.True(SystemSkills.All.Single(s => s.Name == "project-memory") is { } skill
+            && SkillManifest.Read(skill.Name, skill.Files[0].Content).AtStart);
+    }
+
+    [Fact]
+    public void Project_memory_presumes_no_project()
+    {
+        var text = Skill("project-memory");
+        Assert.Contains("Without `project:`", text);
+        Assert.Contains("project memories are optional", text);
+        Assert.DoesNotContain("kumbukumbu", text);
+        Assert.DoesNotContain("Chris", text);
+    }
+
+    // It is read at every session start: its size is paid each time.
+    [Fact]
+    public void Project_memory_stays_short() => Assert.True(Skill("project-memory").Length <= 2400);
+
+    [Fact]
     public void Create_skill_says_what_to_do_without_write() =>
         Assert.Contains("give the user each file's path and content", Skill("create-skill"));
 

@@ -146,7 +146,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         var file = slash < 0 || slash == named.Length - 1 ? SkillPaths.Manifest : named[(slash + 1)..];
         // A name's file stays in its folder: no '.' or '..' segment leads out of it.
         if (Inside(VaultPath.Root, file) is null) return (null, "", Invalid($"{command}: {address} {NotInAFolder}"));
-        var matches = visible.Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
+        // A name finds what the person sees: her own skill in Skills takes a system skill's place; system: still reaches it.
+        var matches = (builtIn ? visible : SkillDirectory.Effective(visible)).Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
         return matches.Count switch
         {
             0 => (null, "", NotFound(builtIn ? $"{command}: there is no built-in skill '{name}'" : $"{command}: no skill named '{name}' ('skills ls' lists them)")),

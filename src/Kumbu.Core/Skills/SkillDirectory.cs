@@ -34,6 +34,17 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         return skills;
     }
 
+    /// <summary>
+    /// The skills as a name finds them: a system skill gives way to one of the same name in the person's own Skills vault,
+    /// directly under its root. Its <c>_skills</c> and a shared vault's never replace one: a system skill is not to be
+    /// switched off by whoever may write to a vault shared with her.
+    /// </summary>
+    public static IReadOnlyList<Skill> Effective(IReadOnlyList<Skill> skills)
+    {
+        var replaced = skills.Where(s => s.Folder is { Segments.Count: 2 }).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+        return [.. skills.Where(s => !s.IsSystem || !replaced.Contains(s.Name))];
+    }
+
     /// <summary>The skill's files relative to its folder, <c>SKILL.md</c> first, then in <see cref="TextOrder"/>.</summary>
     public async Task<IReadOnlyList<SkillFile>> FilesAsync(Skill skill, CancellationToken ct)
     {
