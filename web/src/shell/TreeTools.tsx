@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { History, Search, TextSearch, X } from "lucide-react";
+import { ArrowDownAZ, CalendarDays, ClockArrowDown, Ellipsis, History, Plus, Search, SquareKanban, TextSearch, Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
+import Badge from "../calendar/Badge";
+import { Menu, type MenuItem } from "../components/Menu";
 import FlagChips from "../flags/FlagChips";
 import { useEditor } from "../state/editor";
 import type { FlagFilter } from "./treeFilter";
@@ -10,25 +12,43 @@ import type { TreeOrder } from "./treeOrder";
 /** What the tree's search holds while it is open: the words typed and the flag chip pressed, if any. */
 export type TreeSearch = { words: string; flag: FlagFilter | null };
 
-const orders: { id: TreeOrder; label: string }[] = [
-  { id: "name", label: "Name" },
-  { id: "changed", label: "Last changed" },
-];
+/** What the Sort button says: the order shown, and what a tap does. */
+export const sortLabel = (order: TreeOrder) => (order === "name" ? "Sorted by name. Sort by last changed" : "Sorted by last changed. Sort by name");
 
 const target = "flex min-h-12 items-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent";
+const iconTarget = `${target} relative size-12 flex-none justify-center text-muted`;
 
 /**
- * The tree's toolbar, under the vault's heading (spec §3.1, §3.2, §4): a search by name and flag over the vault the tree
- * shows, the order, and Recent changes across the vaults. Closing the search (✕ or Escape) clears it and gives the full tree back; Search the contents…
+ * The tree's toolbar, one row directly above the folders (UI round spec §2.1): + New note, then Upload, the vault's
+ * Calendar (with its share of What's on), its Board, Recent changes across the vaults, the order, Find in this vault,
+ * and the vault's menu. What the person can't do (`writes`) isn't offered. Find opens the search by name and flag over
+ * the vault the tree shows; closing it (✕ or Escape) clears it and gives the full tree back; Search the contents…
  * hands the words to the search sheet, for a search by words and meaning.
  */
 export default function TreeTools({
+  vault,
+  writes,
+  onNewNote,
+  onUpload,
+  calendar,
+  board,
+  menu,
   search,
   onSearch,
   order,
   onOrder,
   nothing,
 }: {
+  vault: string;
+  writes: boolean;
+  /** A note in the vault's root, as the menu's New note here. */
+  onNewNote(): void;
+  onUpload(): void;
+  calendar: { open(): void; share?: { count: number; overdue: boolean } };
+  /** Null while the vault has no board. */
+  board: (() => void) | null;
+  /** The vault's menu. */
+  menu: MenuItem[];
   /** Null while the search is closed. */
   search: TreeSearch | null;
   onSearch(search: TreeSearch | null): void;
@@ -37,7 +57,7 @@ export default function TreeTools({
   /** The search found nothing. */
   nothing: boolean;
 }) {
-  const name = useId();
+  const badge = useId();
   const opener = useRef<HTMLButtonElement>(null);
   const closed = useRef(false);
   useEffect(() => {
@@ -60,40 +80,49 @@ export default function TreeTools({
     useEditor.getState().setSearchQuery(search?.words.trim() ?? "");
     useEditor.getState().setOverlay("search");
   };
-  // A page of its own, as the calendar: the drawer around the tree closes.
-  const recent = (
-    <Link to="/recent" onClick={() => useEditor.getState().setOverlay("none")} className={`${target} gap-2 self-start px-2.5 text-[15px] text-text-body`}>
-      <History size={18} aria-hidden className="flex-none text-muted" />
-      Recent changes
-    </Link>
-  );
-
-  const orderSwitch = (
-    <div role="radiogroup" aria-label="Order" className="flex min-w-0 flex-1 rounded-[9px] border border-line bg-bg p-0.5">
-      {orders.map((o) => (
-        <label
-          key={o.id}
-          className={`flex min-h-12 flex-1 cursor-pointer items-center justify-center rounded-[7px] px-1 text-center text-[13px] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent ${
-            order === o.id ? "bg-accent font-semibold text-on-accent" : "text-text-body"
-          }`}
-        >
-          <input type="radio" name={name} value={o.id} checked={order === o.id} onChange={() => onOrder(o.id)} className="sr-only" />
-          {o.label}
-        </label>
-      ))}
-    </div>
-  );
 
   if (!search) {
+    const sort = sortLabel(order);
+    const share = calendar.share && calendar.share.count > 0 ? calendar.share : undefined;
     return (
-      <div className="flex flex-none flex-col px-3 pb-2">
-        <div className="flex items-center gap-2">
-          <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={() => onSearch({ words: "", flag: null })} className={`${target} size-12 flex-none justify-center text-muted`}>
-            <Search size={20} aria-hidden />
+      <div role="group" aria-label="Tools for this vault" className="flex flex-none items-center px-2 pb-2">
+        {writes && (
+          <button type="button" onClick={onNewNote} className={`${target} flex-none pr-1`}>
+            <span className="flex h-9 items-center gap-1 rounded-[8px] bg-accent px-3 text-[14px] font-medium text-on-accent">
+              <Plus size={16} aria-hidden />
+              New note
+            </span>
           </button>
-          {orderSwitch}
+        )}
+        {writes && (
+          <button type="button" aria-label="Upload" title="Upload" onClick={onUpload} className={iconTarget}>
+            <Upload size={20} aria-hidden />
+          </button>
+        )}
+        <button type="button" aria-label="Calendar" title="Calendar" aria-describedby={share && badge} onClick={calendar.open} className={iconTarget}>
+          <CalendarDays size={20} aria-hidden />
+          {share && <Badge id={badge} count={share.count} overdue={share.overdue} className="pointer-events-none absolute top-0.5 right-0" />}
+        </button>
+        {board && (
+          <button type="button" aria-label="Board" title="Board" onClick={board} className={iconTarget}>
+            <SquareKanban size={20} aria-hidden />
+          </button>
+        )}
+        {/* A page of its own, as the calendar: the drawer around the tree closes. */}
+        <Link to="/recent" aria-label="Recent changes" title="Recent changes" onClick={() => useEditor.getState().setOverlay("none")} className={iconTarget}>
+          <History size={20} aria-hidden />
+        </Link>
+        <button type="button" aria-label={sort} title={sort} onClick={() => onOrder(order === "name" ? "changed" : "name")} className={iconTarget}>
+          {order === "name" ? <ArrowDownAZ size={20} aria-hidden /> : <ClockArrowDown size={20} aria-hidden />}
+        </button>
+        <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={() => onSearch({ words: "", flag: null })} className={iconTarget}>
+          <Search size={20} aria-hidden />
+        </button>
+        <div className="ml-auto flex-none">
+          <Menu label={`Actions for ${vault}`} items={menu} title={`Actions for ${vault}`} placement="below" className={iconTarget}>
+            <Ellipsis size={20} aria-hidden />
+          </Menu>
         </div>
-        {recent}
       </div>
     );
   }
@@ -128,8 +157,6 @@ export default function TreeTools({
         <TextSearch size={18} aria-hidden className="flex-none" />
         Search the contents…
       </button>
-      {orderSwitch}
-      {recent}
     </div>
   );
 }

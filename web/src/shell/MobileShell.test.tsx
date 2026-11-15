@@ -570,7 +570,8 @@ describe("the shell", () => {
     expect(within(drawer()).getByRole("button", { name: "Sign out" })).toHaveFocus();
     await userEvent.tab();
     await userEvent.tab();
-    expect(within(drawer()).getByRole("button", { name: "Actions for Work" })).toHaveFocus();
+    // Round to the first stop: the toolbar's first, above the folders.
+    expect(within(drawer()).getByRole("button", { name: "New note" })).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
@@ -846,8 +847,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the calendar, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
+    // Reading, the trash, activity, checkpoints, the calendar, the gallery, recent changes, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Recent changes", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(await menuItems("Actions for soup")).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
   });
@@ -866,7 +867,9 @@ describe("vaults shared with the user", () => {
     await userEvent.keyboard("{Escape}");
 
     await openDrawer();
-    await within(drawer()).findByRole("button", { name: "Board" });
+    // The board's note in the tree, and the toolbar's Board.
+    expect(await within(drawer()).findAllByRole("button", { name: "Board" })).toHaveLength(2);
+    expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
     expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
@@ -945,7 +948,9 @@ describe("vaults shared with the user", () => {
     expect(await screen.findByRole("heading", { name: "Board" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
     await openDrawer();
-    await within(drawer()).findByRole("button", { name: "Board" });
+    // The board's note in the tree, and the toolbar's Board.
+    expect(await within(drawer()).findAllByRole("button", { name: "Board" })).toHaveLength(2);
+    expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // The folder's menu, then the note's.
     expect(await menuItems("Actions for Board")).toContain("Rename or move");
     expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);

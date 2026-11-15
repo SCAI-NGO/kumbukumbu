@@ -121,7 +121,10 @@ describe("the badge", () => {
     expect(links[0]).toHaveTextContent(/^What's on/);
     expect(within(links[0]).getByText("3 on, some overdue")).toBeInTheDocument();
 
-    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    // The toolbar's Calendar carries the vault's share, as its description: its name stays what it does.
+    const tools = within(drawer()).getByRole("group", { name: "Tools for this vault" });
+    expect(within(tools).getByRole("button", { name: "Calendar" })).toHaveAccessibleDescription("2 on, some overdue");
+    await userEvent.click(within(tools).getByRole("button", { name: "Actions for Work" }));
     expect(within(screen.getByRole("menuitem", { name: /^Calendar/ })).getByText("2 on, some overdue")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
 

@@ -29,6 +29,8 @@ export interface MenuSection {
  */
 export function Menu(props: {
   label: string;
+  /** A tooltip for a button that shows only its icon. */
+  title?: string;
   items: MenuItem[];
   /** After the items, each under its heading. */
   sections?: MenuSection[];
@@ -152,6 +154,7 @@ export function Menu(props: {
         ref={button}
         type="button"
         aria-label={props.label}
+        title={props.title}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {

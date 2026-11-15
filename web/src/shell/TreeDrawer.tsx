@@ -123,15 +123,15 @@ type FolderActions = {
 };
 
 /**
- * The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). An
- * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
- * keeps it.
+ * The items of a folder's menu (the vault's root too, which can't be moved; the toolbar's menu adds the vault's own
+ * entries to them). An empty folder shown in the tree is there only by its marker, so it can be removed: without
+ * asking, as the trash keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing }: FolderActions): MenuItem[] {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
-  const items: MenuItem[] = [
+  return [
     ...(writes
       ? [
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
@@ -145,8 +145,11 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto,
     ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     // The vault itself is no folder to mark.
     ...(inner ? entriesOf(publishing, folder.path, false) : []),
-    ...extra,
   ];
+}
+
+function FolderMenu({ folder, ...actions }: FolderActions & { folder: TreeFolder }) {
+  const items = folderItems(folder, actions);
   if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
@@ -664,6 +667,11 @@ export default function TreeDrawer(props: {
     if (row.folder.path === `/${vault}/Board` && hasBoard) return { label: "Board, open the board", open: () => openBoard(vault) };
     return undefined;
   };
+  // Across the vaults, a page of its own as the calendar.
+  const openRecent = () => {
+    setOverlay("none");
+    navigate("/recent");
+  };
   const openGallery = (vault: string) => {
     setOverlay("none");
     navigate(galleryUrl(vault));
@@ -699,6 +707,7 @@ export default function TreeDrawer(props: {
               ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
               : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
+          { label: "Recent changes", icon: History, onSelect: openRecent },
           ...(owner
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
@@ -743,7 +752,6 @@ export default function TreeDrawer(props: {
           <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${ownerLabel(active)}` : "Vault"}</p>
           <h2 tabIndex={-1} data-autofocus={docked ? undefined : true} className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
-        {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
       </div>
       {createBoard.isError && (
         <div className="flex-none px-[18px] pb-2.5">
@@ -766,7 +774,22 @@ export default function TreeDrawer(props: {
         </div>
       )}
       {copied.status}
-      {tree.data && <TreeTools search={search} onSearch={setSearch} order={order} onOrder={setOrder} nothing={nothing} />}
+      {tree.data && activeVault && (
+        <TreeTools
+          vault={activeVault}
+          writes={atLeast(level, "write")}
+          onNewNote={() => onNewNote(tree.data.root.path)}
+          onUpload={() => useEditor.getState().openUpload(tree.data.root.path)}
+          calendar={{ open: () => openCalendar(activeVault), share }}
+          board={hasBoard ? () => openBoard(activeVault) : null}
+          menu={[...folderItems(tree.data.root, folderActions), ...vaultItems]}
+          search={search}
+          onSearch={setSearch}
+          order={order}
+          onOrder={setOrder}
+          nothing={nothing}
+        />
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -805,7 +828,7 @@ export default function TreeDrawer(props: {
           </ul>
         )}
         {tree.data && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
-          <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
+          <p className="px-2.5 py-2 text-sm text-muted">{atLeast(level, "write") ? "No notes yet. Make the first with + New note above." : "No notes yet."}</p>
         )}
         {!!tree.data?.damaged && (
           <p className="px-2.5 py-2 text-sm text-muted">
