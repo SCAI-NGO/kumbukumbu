@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { vi } from "vitest";
-import { routerFuture, routes } from "../router";
+import { routes } from "../router";
 
 type InitialEntry = NonNullable<NonNullable<Parameters<typeof createMemoryRouter>[1]>["initialEntries"]>[number];
 
@@ -13,13 +13,22 @@ type InitialEntry = NonNullable<NonNullable<Parameters<typeof createMemoryRouter
  */
 export function renderApp(path: InitialEntry | InitialEntry[], queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   const entries = Array.isArray(path) ? path : [path];
-  const router = createMemoryRouter(routes, { initialEntries: entries, initialIndex: entries.length - 1, future: routerFuture });
+  const router = createMemoryRouter(routes, { initialEntries: entries, initialIndex: entries.length - 1 });
   render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
   return router;
+}
+
+/**
+ * Navigates within the app as a person would: once the effects of what is on screen have run. React 19 may run them
+ * after the paint, and a leave guard's blocker (useBlocker) comes with one.
+ */
+export async function navigateAway(router: { navigate: (to: string) => Promise<void> }, to: string) {
+  await act(async () => {});
+  await act(() => router.navigate(to));
 }
 
 type Handler = (request: Request) => Response | Promise<Response>;

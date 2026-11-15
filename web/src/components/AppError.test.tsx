@@ -3,7 +3,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { routerFuture } from "../router";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -35,8 +34,8 @@ afterEach(() => {
 });
 
 function renderFailing(error: Error) {
-  const router = createMemoryRouter([{ path: "/", errorElement: <RouteError />, lazy: () => Promise.reject(error) }], { future: routerFuture });
-  render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+  const router = createMemoryRouter([{ path: "/", errorElement: <RouteError />, lazy: () => Promise.reject(error) }]);
+  render(<RouterProvider router={router} />);
 }
 
 const chunkError = () => new TypeError("Failed to fetch dynamically imported module: /assets/Keys-old.js");

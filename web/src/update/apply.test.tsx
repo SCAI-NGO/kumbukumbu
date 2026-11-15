@@ -3,7 +3,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useState } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { useLeaveGuard } from "../components/shownOnce";
-import { routerFuture } from "../router";
 import userEvent from "@testing-library/user-event";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -25,7 +24,7 @@ vi.mock("./version", async (importOriginal) => {
 
 const NEWER = "0.2.0+a6362ec";
 const initialUpdate = useUpdate.getState();
-let reload: ReturnType<typeof vi.fn>;
+let reload: () => void;
 /** What was stored for after the reload, at the moment of reloading (a stubbed reload leaves the page running). */
 let atReload: unknown;
 
@@ -403,8 +402,8 @@ describe("what a reload must never lose (I2, I3)", () => {
         </button>
       );
     }
-    const router = createMemoryRouter([{ path: "/", element: <Secret /> }], { initialEntries: ["/"], future: routerFuture });
-    render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const router = createMemoryRouter([{ path: "/", element: <Secret /> }], { initialEntries: ["/"] });
+    render(<RouterProvider router={router} />);
     useUpdate.getState().report(NEWER);
 
     expect(await tryReload("auto")).toBe(false);

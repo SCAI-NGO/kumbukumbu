@@ -7,7 +7,11 @@ afterEach(() => {
 });
 
 /** A browser whose `Intl.Locale` answers only with `info`. */
-const localeWith = (info: object) => vi.spyOn(Intl, "Locale").mockImplementation((() => info) as unknown as () => Intl.Locale);
+// A function, not an arrow: the code calls it with `new`, which an arrow can't be.
+const localeWith = (info: object) =>
+  vi.spyOn(Intl, "Locale").mockImplementation(function () {
+    return info;
+  } as unknown as () => Intl.Locale);
 
 describe("the browser's weekend", () => {
   it("en-GB's weekend is Saturday and Sunday", () => {

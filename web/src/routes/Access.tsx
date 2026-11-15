@@ -56,7 +56,9 @@ export default function Access() {
           {tabs.map((t) => (
             <Link
               key={t.id}
-              ref={(el) => (refs.current[t.id] = el)}
+              ref={(el) => {
+                refs.current[t.id] = el;
+              }}
               to={`/access/${t.id}`}
               role="tab"
               id={`access-tab-${t.id}`}

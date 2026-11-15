@@ -51,7 +51,7 @@ describe("the spec's example", () => {
     const links: LinkView[] = [{ line: 10, raw: "![[Ruling#Decision]]", kind: "note", path: RULING, target: "Ruling", candidates: [] }];
     const { container } = render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter>
           <MarkdownView source={plan} links={links} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Plan.md" />
         </MemoryRouter>
       </QueryClientProvider>,

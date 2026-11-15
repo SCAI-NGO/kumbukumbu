@@ -68,7 +68,9 @@ export default function Skills() {
           {tabs.map((t) => (
             <Link
               key={t.id}
-              ref={(el) => (refs.current[t.id] = el)}
+              ref={(el) => {
+                refs.current[t.id] = el;
+              }}
               to={`/skills/${t.id}`}
               role="tab"
               id={`skills-tab-${t.id}`}

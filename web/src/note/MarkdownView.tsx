@@ -342,7 +342,7 @@ function InlineTag({ tag }: { tag: string }) {
  * Each view's footnote ids start with its own prefix (an embedded note's `fn-1` is not the note's), and a jump looks
  * for its target inside the view's own root.
  */
-const FootnoteContext = createContext<{ prefix: string; root: RefObject<HTMLDivElement> }>({ prefix: "user-content-", root: { current: null } });
+const FootnoteContext = createContext<{ prefix: string; root: RefObject<HTMLDivElement | null> }>({ prefix: "user-content-", root: { current: null } });
 
 // The heading of the footnotes always gets this id from remark-rehype, whatever the prefix.
 const footnoteLabel = "footnote-label";

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { routerFuture } from "../router";
+import { navigateAway } from "../test/app";
 import { RecoveryKeyReveal } from "./RecoveryKeyReveal";
 
 const key = "ABCD-EFGH-JKMN-PQRS";
@@ -15,9 +15,8 @@ function setup() {
       { path: "/", element: <RecoveryKeyReveal value={key} onContinue={onContinue} /> },
       { path: "/elsewhere", element: <p>Elsewhere</p> },
     ],
-    { future: routerFuture },
   );
-  render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+  render(<RouterProvider router={router} />);
   return { router, onContinue };
 }
 
@@ -125,7 +124,7 @@ describe("RecoveryKeyReveal", () => {
   it("asks once before leaving inside the app, and stays if asked to", async () => {
     const { router } = setup();
 
-    await act(() => router.navigate("/elsewhere"));
+    await navigateAway(router, "/elsewhere");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your recovery key");
     expect(router.state.location.pathname).toBe("/");
 
@@ -133,14 +132,14 @@ describe("RecoveryKeyReveal", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
 
-    await act(() => router.navigate("/elsewhere"));
+    await navigateAway(router, "/elsewhere");
     await userEvent.click(screen.getByRole("button", { name: "Leave without it" }));
     expect(await screen.findByText("Elsewhere")).toBeInTheDocument();
   });
 
   it("moves focus to Stay, keeps it inside, and stays on Escape", async () => {
     const { router } = setup();
-    await act(() => router.navigate("/elsewhere"));
+    await navigateAway(router, "/elsewhere");
     const stay = screen.getByRole("button", { name: "Stay" });
     expect(stay).toHaveFocus();
     await userEvent.tab({ shift: true });

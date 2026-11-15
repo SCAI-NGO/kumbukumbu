@@ -19,7 +19,7 @@ afterEach(() => {
 function show(source: string, links: LinkView[] = []) {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <MarkdownView source={source} links={links} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -76,7 +76,7 @@ describe("Block ids in the note view", () => {
     const link: LinkView = { line: 1, raw: "[[Plan#^controller]]", kind: "note", path: PLAN, target: "Plan", candidates: [] };
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter initialEntries={["/notes/Work/Pump/Tasks.md"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter initialEntries={["/notes/Work/Pump/Tasks.md"]}>
           <Routes>
             <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
             <Route
@@ -98,7 +98,7 @@ describe("Block ids in the note view", () => {
     const link: LinkView = { line: 1, raw: "[[#^controller]]", kind: "self", path: PLAN, target: "", candidates: [] };
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter initialEntries={["/here"]}>
           <Routes>
             <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
             <Route path="*" element={<MarkdownView source="See [[#^controller]]." links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path={PLAN} />} />
@@ -117,7 +117,7 @@ describe("Block ids in the note view", () => {
     const link: LinkView = { line: 1, raw: "[[Plan#^controller]]", kind: "ambiguous", path: null, target: "Plan", candidates: [PLAN, "/Work/Home/Plan.md"] };
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter initialEntries={["/here"]}>
           <Routes>
             <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
             <Route path="*" element={<MarkdownView source="See [[Plan#^controller]]." links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />} />
@@ -136,7 +136,7 @@ describe("Block ids in the note view", () => {
     }
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter initialEntries={["/here"]}>
           <Routes>
             <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
             <Route path="*" element={<MarkdownView source={`See ${raw}.`} links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />} />

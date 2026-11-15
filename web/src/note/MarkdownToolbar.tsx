@@ -52,7 +52,7 @@ export default function MarkdownToolbar({
   onChange,
   onDone,
 }: {
-  textarea: RefObject<HTMLTextAreaElement>;
+  textarea: RefObject<HTMLTextAreaElement | null>;
   onChange(value: string): void;
   onDone(): void;
 }) {

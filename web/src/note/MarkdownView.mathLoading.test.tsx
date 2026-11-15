@@ -13,7 +13,7 @@ vi.mock("./math", async (importOriginal) => {
 
 const show = (source: string) =>
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView source={source} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
     </MemoryRouter>,
   );

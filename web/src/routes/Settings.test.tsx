@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { fakeApi, json, noContent, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
 import { useUpdate } from "../update/store";
 
 const version = vi.hoisted(() => ({ app: "0.2.0+a6362ec" }));
@@ -260,7 +260,7 @@ describe("Settings", () => {
     await userEvent.click(within(part).getByRole("button", { name: "Make a new recovery key" }));
     await screen.findByText(recoveryKey);
 
-    await act(() => router.navigate("/keys"));
+    await navigateAway(router, "/keys");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your recovery key");
     expect(router.state.location.pathname).toBe("/settings");
   });
@@ -519,7 +519,12 @@ describe("Settings", () => {
   it("deletes the account with the password and the username typed, and goes to sign-in", async () => {
     localStorage.setItem("kumbu.lastNote.u1", "/Work/inbox.md");
     const bodies: unknown[] = [];
-    api({ "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()) });
+    // As the server: once the account is gone, its session is too.
+    let deleted = false;
+    api({
+      "POST /api/account/delete": async (r) => (bodies.push(await r.json()), (deleted = true), noContent()),
+      "GET /api/session": () => (deleted ? json(401, { error: "Sign in first." }) : json(200, { user, previousSignInAt: null })),
+    });
     const router = renderApp("/settings");
     const form = await screen.findByRole("region", { name: "Delete account" });
     const button = within(form).getByRole("button", { name: "Delete my account" });

@@ -21,7 +21,7 @@ const plan = "# Plan\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
 
 const show = (source: string, { nested = false, highlight = null }: { nested?: boolean; highlight?: Highlight | null } = {}) =>
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView source={source} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} nested={nested} highlight={highlight} />
     </MemoryRouter>,
   );

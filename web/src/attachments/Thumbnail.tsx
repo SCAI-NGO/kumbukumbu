@@ -16,7 +16,7 @@ export const ScrollRoot = createContext<HTMLElement | null | undefined>(undefine
  * A screen ahead loads before it is reached; further away the picture goes again, which bounds what a phone holds
  * (iOS Safari above all) at the price of fetching it anew on the way back.
  */
-export function useNear(element: RefObject<HTMLElement>) {
+export function useNear(element: RefObject<HTMLElement | null>) {
   const root = useContext(ScrollRoot);
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
   useEffect(() => {

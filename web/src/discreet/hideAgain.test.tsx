@@ -246,9 +246,10 @@ describe("hiding the discreet vaults again", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { log, queryClient, router, requests } = await openDiary(inMinutes(1));
     const beforeRead = editorOn(log);
-    // Asleep: the clock moves on, no timer runs; on waking, the timers due meanwhile run at once.
+    // Asleep: the clock moves on, no timer runs; on waking, the timers due meanwhile run at once. Then a second at a
+    // time, so React renders between them as in a browser: inside one act() React 19 holds every render to its end.
     vi.setSystemTime(Date.now() + 3 * 60_000);
-    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    for (let s = 0; s < 60; s++) await act(() => vi.advanceTimersByTimeAsync(1_000));
     await doneHiding(router);
     expect(beforeRead).toHaveBeenCalledTimes(1);
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });

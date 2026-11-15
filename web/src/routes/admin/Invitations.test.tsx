@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../../state/session";
-import { fakeApi, json, noContent, renderApp } from "../../test/app";
+import { fakeApi, json, navigateAway, noContent, renderApp } from "../../test/app";
 
 const admin = { id: "u1", username: "ada", display: "Ada", role: "admin" };
 const link = "https://kumbu.example/join#kumbu-inv_Zx81Qp";
@@ -183,7 +183,7 @@ describe("Admin invitations", () => {
     const { dialog, router } = await createInvitation();
     await userEvent.click(within(dialog).getByRole("button", { name: "Create invitation" }));
     await screen.findByText(link);
-    await act(() => router.navigate("/"));
+    await navigateAway(router, "/");
     expect(screen.getByRole("alertdialog", { name: "You haven't saved the invitation link" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/admin/invitations");
   });

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { timeText } from "../components/Sheet";
 import { useSession } from "../state/session";
-import { fakeApi, json, noContent, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
 
 const secret = "kumbu_Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56";
 const vaults = [
@@ -282,7 +282,7 @@ describe("Keys", () => {
   it("asks once before leaving the page or closing the key unsaved", async () => {
     const { router } = await createKey();
 
-    await act(() => router.navigate("/settings"));
+    await navigateAway(router, "/settings");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your API key");
     await userEvent.click(screen.getByRole("button", { name: "Stay" }));
     expect(router.state.location.pathname).toBe("/access/keys");
@@ -305,7 +305,7 @@ describe("Keys", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     const { router } = await createKey();
     await userEvent.click(screen.getByRole("button", { name: "Copy key" }));
-    await act(() => router.navigate("/settings"));
+    await navigateAway(router, "/settings");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/settings");
   });

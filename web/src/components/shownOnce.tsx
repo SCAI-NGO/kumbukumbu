@@ -92,7 +92,7 @@ export function CopyButton({
   onResult(copied: boolean): void;
 }) {
   const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   async function copy() {
