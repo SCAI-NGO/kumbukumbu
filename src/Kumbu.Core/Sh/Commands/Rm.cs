@@ -11,7 +11,7 @@ public sealed class Rm(NoteWriter writer, AttachmentWriter? files = null) : ICom
 
     public string Usage => "rm <path> [<path>…]";
 
-    public string Summary => "move a note, an attachment or an empty folder to the trash";
+    public string Summary => "move notes, attachments or empty folders to the trash";
 
     public string Help => $"""
         rm <path> [<path>…]

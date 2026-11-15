@@ -129,7 +129,7 @@ Exact answers (the spec's behaviour, worded here once):
 | read-only | Error from `ICaller.Refuse("mkdir", …)` |
 | `-p` | Error `mkdir: there is no -p: the folders above are always made` |
 | `rm` kept empty folder | Ok `removed folder /Work/Drafts/; it stays in the trash for 30 days ('restore /Work/Drafts/' brings it back)` |
-| `rm` folder with content | Error `rm: /Work/Drafts: Is a directory holding 3 entries (rm removes notes, files and empty folders; there is no -r)` — entries = notes and files below, at any depth, the folder's own marker left out (a kept subfolder's marker counts as one) |
+| `rm` folder with content | Error `rm: /Work/Drafts: Is a directory holding 3 entries (rm removes one note or file at a time, or an empty folder)` — entries = notes and files below, at any depth, the folder's own marker left out (a kept subfolder's marker counts as one) |
 | `restore /Work/Drafts/` | no note or file at the path and its marker in the trash: `files.RestoreAsync(FolderMarker.In(path).Value, null, ct)` → `restored /Work/Drafts/ from the trash` |
 
 `help mkdir`:

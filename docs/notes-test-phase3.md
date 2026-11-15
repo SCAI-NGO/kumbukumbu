@@ -67,7 +67,7 @@ The Claude Code session had been started before the deploy, so it only knew the 
 | `restore` while a note exists at the path | Rejected, pointing to `history` |
 | `rm` twice at the same path, then `trash /Demo` | Two identical lines (see observation 2) |
 | `restore /Demo/inbox.md` | Most recently removed one comes back with its old version token |
-| `rm /Demo`, `rm /Demo/projects` | `Is a directory (rm doesn't remove folders with notes in them; there is no -r)` |
+| `rm /Demo`, `rm /Demo/projects` | `Is a directory (rm removes one note at a time)` |
 | `rm /Demo/*.md`, `rg -l x \| rm` | No globbing; `rm` does not read from a pipe |
 
 ### Smart seeding
