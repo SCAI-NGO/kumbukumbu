@@ -10,8 +10,11 @@ const unquote = (v: string) => {
   return t.startsWith("'") && t.endsWith("'") ? t.slice(1, -1) : t;
 };
 
+/** One whole quoted scalar (`"…"` with its escapes, `'…'` with `''`), where a `#` is text. */
+const quoted = (v: string) => /^"(?:[^"\\]|\\.)*"$/.test(v) || /^'(?:[^']|'')*'$/.test(v);
+
 /** A trailing comment (` # …`, as YAML has it: after a space) is YAML syntax this reading doesn't take apart. */
-const commented = (v: string) => /(^|\s)#/.test(v);
+const commented = (v: string) => !quoted(v.trim()) && /(^|\s)#/.test(v);
 
 /** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`). */
 const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));

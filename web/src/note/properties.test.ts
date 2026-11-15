@@ -37,6 +37,15 @@ describe("parseProperties", () => {
     expect(parseProperties("source: https://example.org/a#part")).toEqual([{ key: "source", value: "https://example.org/a#part" }]);
   });
 
+  it("takes a # inside a quoted value as text, not as a comment", () => {
+    expect(parseProperties("title: \"Issue #42\"\nshort: 'a #b'\nitems:\n  - \"x #1\"")).toEqual([
+      { key: "title", value: "Issue #42" },
+      { key: "short", value: "a #b" },
+      { key: "items", value: ["x #1"] },
+    ]);
+    expect(parseProperties('title: "a" # note')).toBeNull();
+  });
+
   it("undoes YAML's escapes inside double quotes, and only there", () => {
     expect(parseProperties('quote: "say \\"hi\\""\npath: "C:\\\\temp"\nraw: \'a\\"b\'\nbare: a\\"b')).toEqual([
       { key: "quote", value: 'say "hi"' },

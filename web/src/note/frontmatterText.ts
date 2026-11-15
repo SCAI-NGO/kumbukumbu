@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { parseProperties, splitFrontmatter } from "./properties";
+import { flowMap, parseProperties, splitFrontmatter } from "./properties";
 
 /** A block in a note's body that looks like frontmatter: 0-based lines of its opening and closing `---`. */
 export type PropertyBlock = { start: number; end: number; keys: string[] };
 
-const BOM = "﻿";
+const BOM = "\uFEFF";
 const plainKey = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const keyLine = /^([A-Za-z][A-Za-z0-9_-]*):(\s|$)/;
 const itemLine = /^\s*-(\s|$)/;
@@ -30,40 +30,72 @@ function lineStarts(lines: string[]): number[] {
 
 const endingOf = (line: string) => (line.endsWith("\r") ? "\r\n" : "\n");
 
-/** The lines between a block's rules, as properties: each top-level key plain, `- item` lines only under `key:`. */
+/** A value `parseProperties` takes but YAML wouldn't: a quote left open, a flow map that doesn't read. */
+const unfinished = (v: string) =>
+  ((v.startsWith('"') || v.startsWith("'")) && (v.length < 2 || !v.endsWith(v[0]))) ||
+  (v.startsWith("{") && flowMap(v) === null);
+
+/**
+ * The lines between a block's rules, as properties: each top-level key plain and once, `- item` lines only under
+ * `key:`, no value left unfinished.
+ */
 function blockKeys(lines: string[]): string[] | null {
   let underKey = false;
   for (const line of lines) {
     if (itemLine.test(line)) {
-      if (!underKey) return null;
+      if (!underKey || unfinished(line.replace(/^\s*-\s?/, "").trim())) return null;
     } else {
       const m = keyLine.exec(line);
-      if (!m) return null;
-      underKey = line.slice(m[1].length + 1).trim() === "";
+      const value = m && line.slice(m[1].length + 1).trim();
+      if (value === null || unfinished(value)) return null;
+      underKey = value === "";
     }
   }
-  return parseProperties(lines.join("\n"))?.map((p) => p.key) ?? null;
+  const keys = parseProperties(lines.join("\n"))?.map((p) => p.key);
+  return keys && new Set(keys).size === keys.length ? keys : null;
+}
+
+/** The test for the line that ends an HTML block of CommonMark's type 1 or 2 opening at `line`, or null. */
+function htmlBlockEnd(line: string): ((line: string) => boolean) | null {
+  const raw = /^ {0,3}<(script|pre|style|textarea)(?=[\s>]|$)/i.exec(line);
+  if (raw) {
+    const closing = new RegExp(`</${raw[1]}>`, "i");
+    return (l) => closing.test(l);
+  }
+  return /^ {0,3}<!--/.test(line) ? (l) => l.includes("-->") : null;
 }
 
 /**
  * The blocks in a note's body that look like frontmatter but render as a rule and a heading: `---` after a blank
- * line or an ATX heading, lines that read as properties, `---`. Fenced code and the real frontmatter are skipped;
+ * line or an ATX heading, lines that read as properties, `---`. Fenced code, HTML blocks that run across blank
+ * lines (comments, `<pre>`, `<script>`, `<style>`, `<textarea>`) and the real frontmatter are skipped;
  * anything doubtful is no block.
  */
 export function findPropertyBlocks(content: string): PropertyBlock[] {
   const lines = withoutBom(content).text.split("\n").map((l) => l.replace(/\r$/, ""));
   const blocks: PropertyBlock[] = [];
-  let fence: { char: string; length: number } | null = null;
+  // The test for the line that ends the fenced code or HTML block the scan is in.
+  let skipUntil: ((line: string) => boolean) | null = null;
   for (let i = frontmatterEnd(lines) + 1; i < lines.length; i++) {
     const line = lines[i];
-    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
-      if (f && f[1][0] === fence.char && f[1].length >= fence.length && f[2].trim() === "") fence = null;
+    if (skipUntil) {
+      if (skipUntil(line)) skipUntil = null;
       continue;
     }
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     // A backtick fence's info string can't hold a backtick (CommonMark); such a line is no fence.
     if (f && !(f[1][0] === "`" && f[2].includes("`"))) {
-      fence = { char: f[1][0], length: f[1].length };
+      const [char, length] = [f[1][0], f[1].length];
+      skipUntil = (l) => {
+        const c = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(l);
+        return !!c && c[1][0] === char && c[1].length >= length;
+      };
+      continue;
+    }
+    const html = htmlBlockEnd(line);
+    if (html) {
+      // The block may end on its opening line, after the opening tag.
+      if (!html(line.replace(/^ {0,3}<(!--|\w+)/, ""))) skipUntil = html;
       continue;
     }
     // After prose, the `---` would make the line above a setext heading rather than open a block.
@@ -128,7 +160,7 @@ export function moveToProperties(
 /**
  * The note's text with `name: value` as the frontmatter's last line (created at the top when there is none);
  * every other byte as it was. Refused for a name that isn't a plain key or is there already, an unreadable
- * frontmatter, or a value that wouldn't read back as given.
+ * frontmatter, or a value that wouldn't read back as given or holds a control character other than a tab.
  */
 export function addProperty(
   content: string,
@@ -141,7 +173,10 @@ export function addProperty(
   const props = frontmatter === null ? [] : parseProperties(frontmatter);
   if (!props) return { refused: "unreadable" };
   if (props.some((p) => p.key === name)) return { refused: "exists" };
+  // A control character other than a tab (a line break among them) would need an escape this reading doesn't undo.
+  if (/[\u0000-\u0008\u000A-\u001F\u007F-\u009F]/.test(value)) return { refused: "unreadable" };
   const added = withProperties(text, [`${name}: ${yamlValue(value)}`]);
+  // Written only when it reads back as given, so the box never turns into raw text.
   if (propertiesOf(added)?.find((p) => p.key === name)?.value !== value) return { refused: "unreadable" };
   return { content: bom + added };
 }

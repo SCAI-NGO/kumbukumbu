@@ -19,6 +19,20 @@ describe("findPropertyBlocks", () => {
     ["no closing rule", "# T\n---\na: 1\n", []],
     ["a closing rule with a trailing space", "# T\n---\na: 1\n--- \n", []],
     ["a longer opening rule", "# T\n----\na: 1\n---\n", []],
+    ["a key twice", "# T\n---\na: 1\na: 2\n---\n", []],
+    ["inside an HTML comment across blank lines", "<!--\n\n---\nk: v\n---\n-->\n", []],
+    ["inside <pre> across blank lines", "<PRE>\n\n---\nk: v\n---\n</pre>\n", []],
+    ["inside <script> until its own closing tag", "<script>\n</pre>\n\n---\nk: v\n---\n</script>\n", []],
+    [
+      "after an HTML comment and a <style> on one line",
+      "<!-- x -->\n<style>p {}</style>\n\n---\nk: v\n---\n",
+      [{ start: 3, end: 5, keys: ["k"] }],
+    ],
+    ["an unclosed quote", "# T\n---\nk: \"unclosed\n---\n", []],
+    ["a lone quote", "# T\n---\nk: '\n---\n", []],
+    ["an unclosed quote in an item", "# T\n---\nk:\n  - 'a\n---\n", []],
+    ["a flow map that does not read", "# T\n---\nk: {a: [1}\n---\n", []],
+    ["a flow map that reads", "# T\n---\nk: {a: 1}\n---\n", [{ start: 1, end: 3, keys: ["k"] }]],
     [
       "two blocks",
       "# A\n---\na: 1\n---\n\n---\nb: [x, y]\n---\n",
@@ -128,9 +142,17 @@ describe("addProperty", () => {
     expect(addProperty("---\nauthor:\n  name: Ada\n---\n", "owner", "Alice")).toEqual({ refused: "unreadable" });
   });
 
-  it("refuses a value that wouldn't read back", () => {
-    expect(addProperty("# T\n", "note", "a #b")).toEqual({ refused: "unreadable" });
-    expect(addProperty("# T\n", "note", "two\nlines")).toEqual({ refused: "unreadable" });
+  it("writes a # inside quotes", () => {
+    expect(addProperty("# T\n", "b", "Issue #42")).toEqual({ content: '---\nb: "Issue #42"\n---\n# T\n' });
+    expect(addProperty("# T\n", "note", "a #b")).toEqual({ content: '---\nnote: "a #b"\n---\n# T\n' });
+  });
+
+  it.each(["bell\u0007", "nul\u0000", "esc\u001b", "del\u007f", "two\nlines", "cr\r"])("refuses the control character in %j", (value) => {
+    expect(addProperty("# T\n", "note", value)).toEqual({ refused: "unreadable" });
+  });
+
+  it("takes a tab", () => {
+    expect(addProperty("# T\n", "note", "a\tb")).toEqual({ content: '---\nnote: "a\tb"\n---\n# T\n' });
   });
 });
 
