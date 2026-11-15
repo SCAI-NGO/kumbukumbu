@@ -11,12 +11,15 @@ export const CHANGED_ELSEWHERE = "This note changed elsewhere; try again.";
  */
 export type MoveSaid = { exists: string } | { unreadable: true } | { unwritable: true } | { text: string };
 
+const actionClass = "min-h-12 rounded-[10px] border border-line bg-surface px-4 font-medium text-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent";
+
 /**
  * Above a block in the body that looks like frontmatter but renders as a rule and a heading (spec §2.2): where
  * properties go, and with `onMove` (write) the way to move them there, waiting while a save of the note is under way.
- * A refusal takes the button's place.
+ * A refusal takes the button's place; for a key that is there already, with `onWrite` (Write is on), the way to change
+ * it there.
  */
-export default function PropertyHint({ path, onMove, said }: { path: string; onMove?: () => void; said: MoveSaid | null }) {
+export default function PropertyHint({ path, onMove, onWrite, said }: { path: string; onMove?: () => void; onWrite?: () => void; said: MoveSaid | null }) {
   const saving = useIsMutating({ mutationKey: ["save", path] }) > 0;
   const refused = !!said && !("text" in said);
   return (
@@ -37,12 +40,17 @@ export default function PropertyHint({ path, onMove, said }: { path: string; onM
           )}
         </p>
       )}
+      {said && "exists" in said && onWrite && (
+        <button type="button" onClick={onWrite} className={actionClass}>
+          Change it in Write mode
+        </button>
+      )}
       {onMove && !refused && (
         <button
           type="button"
           disabled={saving}
           onClick={onMove}
-          className="min-h-12 rounded-[10px] border border-line bg-surface px-4 font-medium text-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
+          className={actionClass}
         >
           Move to properties
         </button>

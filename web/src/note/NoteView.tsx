@@ -46,6 +46,7 @@ import BackLink from "../calendar/BackLink";
 import { cameFromOf } from "../calendar/backLink";
 import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
+import { startWrite } from "../shell/ModeToggle";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -130,6 +131,8 @@ export default function NoteView({ path }: { path: string }) {
   const changes = !vaults.data || mayChange(levelOf(vault), path);
   // Moving and adding properties rewrite the note's text: offered only once the vault list says it may be changed.
   const mayWrite = !!vaults.data && mayChange(levelOf(vault), path);
+  // Where the top bar's Write is on: not while the note is renamed, nor while the server's refusal of a save holds.
+  const writeOn = useEditor((s) => mayWrite && !s.renaming.includes(path) && !(s.refused?.path === path && vaults.dataUpdatedAt <= s.refused.at));
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
@@ -436,9 +439,9 @@ export default function NoteView({ path }: { path: string }) {
       const block = blocks.find((b) => b.start === line - 1);
       if (!block) return null;
       const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
-      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} said={said} />;
+      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
     },
-    [blocks, moveSaid, note.data?.version, path, mayWrite, moveBlock],
+    [blocks, moveSaid, note.data?.version, path, mayWrite, writeOn, moveBlock],
   );
 
   const createMissing = useCallback(

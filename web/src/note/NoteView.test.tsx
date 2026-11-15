@@ -924,10 +924,32 @@ describe("properties at the top", () => {
     renderApp(`/notes${ALIAS}`);
     await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
     expect(await within(await hint()).findByText("aliases", { selector: "code" })).toBeInTheDocument();
-    expect(await hint()).toHaveTextContent("aliases is already in the properties: change it there.");
-    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+    expect(await hint()).toHaveTextContent("aliases is already in the properties: change it there.Change it in Write mode");
+    // The way there, and nothing else: no Move to properties to meet the refusal again.
+    expect(within(await hint()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Change it in Write mode"]);
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(puts).toEqual([]);
+  });
+
+  it("after that refusal, Change it in Write mode opens the note in Write mode, as the top bar's Write does", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await move();
+    const change = await within(await hint()).findByRole("button", { name: "Change it in Write mode" });
+    expect(change).toHaveClass("min-h-12");
+    await userEvent.click(change);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(screen.getByRole("button", { name: "Write", pressed: true })).toBeInTheDocument();
+  });
+
+  it("offers no Change it in Write mode while the note is being renamed, as Write is off then", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await move();
+    expect(await within(await hint()).findByRole("button", { name: "Change it in Write mode" })).toBeInTheDocument();
+    act(() => useEditor.getState().setRenaming(ALIAS, true));
+    await waitFor(async () => expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Write" })).toBeDisabled();
   });
 
   it("moves nothing when the properties at the top can't be read, and says so", async () => {

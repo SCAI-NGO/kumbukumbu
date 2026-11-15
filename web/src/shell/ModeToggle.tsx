@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useRef } from "react";
 import { useEditor, type Mode } from "../state/editor";
 
 const modes: { mode: Mode; label: string }[] = [
@@ -7,25 +6,29 @@ const modes: { mode: Mode; label: string }[] = [
   { mode: "write", label: "Write" },
 ];
 
+const standInId = "write-stand-in";
+
+/**
+ * Write mode, as the top bar's Write starts it; for a caller that may offer it only where that Write is on. iOS raises
+ * the keyboard only for a focus inside the tap, and the editor may still be loading then: the top bar's stand-in field
+ * takes the focus at once, and the editor's textarea takes it over as it mounts.
+ */
+export function startWrite() {
+  document.getElementById(standInId)?.focus({ preventScroll: true });
+  useEditor.getState().setMode("write");
+}
+
 /**
  * Segmented Read / Write; Read ends Write mode the way Done does. Write is there only for a note the caller may change;
  * `refusal` is the server's reason why not (collab design §9.3).
  */
 export default function ModeToggle({ writable, refusal }: { writable: boolean; refusal?: string | null }) {
   const current = useEditor((s) => s.mode);
-  const setMode = useEditor((s) => s.setMode);
   const endWrite = useEditor((s) => s.endWrite);
-  const standIn = useRef<HTMLInputElement>(null);
-  const write = () => {
-    // iOS raises the keyboard only for a focus inside the tap; the editor may still be loading then. This field takes
-    // the focus at once, and the editor's textarea takes it over as it mounts.
-    standIn.current?.focus({ preventScroll: true });
-    setMode("write");
-  };
   return (
     <div role="group" aria-label="Editor mode" className="relative flex flex-none gap-0.5 rounded-[12px] border border-line bg-surface p-[3px]">
       <input
-        ref={standIn}
+        id={standInId}
         aria-label="Markdown source, opening"
         tabIndex={-1}
         data-stand-in
@@ -38,7 +41,7 @@ export default function ModeToggle({ writable, refusal }: { writable: boolean; r
           aria-pressed={current === mode}
           disabled={mode === "write" && !writable}
           title={mode === "write" && !writable ? (refusal ?? "You can only read this note.") : undefined}
-          onClick={() => (mode === "read" ? void endWrite() : current !== "write" && write())}
+          onClick={() => (mode === "read" ? void endWrite() : current !== "write" && startWrite())}
           className={`min-h-11 rounded-[9px] px-3.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
             current === mode ? "bg-accent text-on-accent" : "text-muted"
           } disabled:opacity-50`}
