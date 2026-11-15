@@ -40,7 +40,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
         new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true), new(null, "tag", TakesValue: true),
-        new(null, "regions"), new(null, "archive"),
+        new(null, "regions"), new(null, "archive"), new('g', "glob", TakesValue: true),
     ];
 
     public string Name => "rg";
@@ -89,6 +89,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
           --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
+          -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules; repeatable)
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
         never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.
@@ -99,6 +100,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           rg -l '\[\[kumbu\]\]'              which notes link to kumbu
           rg -n -i 'attention is' /Work/Papers   notes and PDFs below a folder
           rg --tag research -i capabilit /Work
+          rg -n Kumbu /SWE -g '!**/Memory/**'
           cat /Demo/welcome.md | rg -n '^#'
         """;
 
@@ -108,6 +110,18 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
         var tags = options.Values("tag");
+        List<Glob> globs = [];
+        foreach (var pattern in options.Values("glob"))
+        {
+            if (!Glob.TryParse(pattern, out var glob, out var globError)) return ShellResult.Error(globError);
+            globs.Add(glob);
+        }
+
+        if (globs.Count > 0 && input is not null)
+        {
+            return ShellResult.Error("rg: --glob filters paths and can't be used on piped input");
+        }
+
         if (tags.Count > 0 && (input is not null || options.Has("version")))
         {
             return ShellResult.Error("rg: --tag chooses the notes rg reads; it works neither right of a pipe nor with --version");
@@ -119,7 +133,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             return ShellResult.Error("rg: --regions says where matches lie in PDFs; it doesn't go with -l, -c, -v, --files, --tag or --version, nor right of a pipe");
         }
 
-        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, options.Has("archive"), input, ct);
+        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, globs, options.Has("archive"), input, ct);
 
         List<string> patterns = [.. options.Values("regexp")];
         var operands = options.Operands;
@@ -166,7 +180,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         {
             if (versioned is not null) return SearchContents(search, options, [versioned]);
             return input is null
-                ? await SearchNotesAsync(search, options, operands, tags, ct)
+                ? await SearchNotesAsync(search, options, operands, tags, globs, ct)
                 : SearchInput(search, options, operands, input);
         }
         catch (RegexMatchTimeoutException)
@@ -175,7 +189,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         }
     }
 
-    private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, IReadOnlyList<string> tags, CancellationToken ct)
+    private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, IReadOnlyList<string> tags, IReadOnlyList<Glob> globs, CancellationToken ct)
     {
         var found = new Dictionary<VaultPath, Note>();
         var archived = new Dictionary<VaultPath, Note>();
@@ -218,13 +232,13 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
             // After the checks above, so that a vault holding nothing but its archive has nothing to find, not nothing there.
             var shown = ArchiveFolder.Shown(path, options.Has("archive"));
-            foreach (var note in below)
+            foreach (var note in below.Where(n => Glob.Keeps(globs, n.Path, path)))
             {
                 if (shown || !ArchiveFolder.Contains(note.Path)) found.TryAdd(note.Path, note);
                 else archived.TryAdd(note.Path, note);
             }
 
-            foreach (var pdf in pdfs.Where(p => shown || !ArchiveFolder.Contains(p.Path))) documents.TryAdd(pdf.Path, pdf.Current);
+            foreach (var pdf in pdfs.Where(p => (shown || !ArchiveFolder.Contains(p.Path)) && Glob.Keeps(globs, p.Path, path))) documents.TryAdd(pdf.Path, pdf.Current);
         }
 
         IReadOnlyList<Note> searched = [.. found.Values];
@@ -640,7 +654,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             lineNumbers ? $"{n}{sep}{text}" : text)));
     }
 
-    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, bool archive, string? input, CancellationToken ct)
+    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, IReadOnlyList<Glob> globs, bool archive, string? input, CancellationToken ct)
     {
         if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
         if (tags.Count > 0)
@@ -654,7 +668,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             var (carrying, tagError) = TagFilter.Narrow(all, tags, scope, (archived, $"rg --files --archive{listing} lists them"));
             return carrying is null
                 ? ShellResult.Error($"rg: {tagError}")
-                : ShellResult.Ok(Lines.Join(carrying.Select(n => n.Path.Value).Order(TextOrder.Default)));
+                : ShellResult.Ok(Lines.Join(carrying.Where(n => Glob.Keeps(globs, n.Path, scope)).Select(n => n.Path.Value).Order(TextOrder.Default)));
         }
 
         var found = new HashSet<string>(StringComparer.Ordinal);
@@ -670,7 +684,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             }
 
             var shown = ArchiveFolder.Shown(path, archive);
-            found.UnionWith(below.Where(p => shown || !ArchiveFolder.Contains(p)).Select(p => p.Value));
+            found.UnionWith(below.Where(p => (shown || !ArchiveFolder.Contains(p)) && Glob.Keeps(globs, p, path)).Select(p => p.Value));
         }
 
         return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));

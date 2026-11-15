@@ -259,4 +259,38 @@ public class RgTests
         Assert.Equal("[/Garten/plan.md: last written by another user]\n/Garten/plan.md:1:Beete planen", (await bob.RunAsync("rg planen /Garten", CancellationToken.None)).Output);
         Assert.Equal("/Garten/own.md:1:Beete jäten", (await bob.RunAsync("rg jäten /Garten", CancellationToken.None)).Output);
     }
+
+    private static readonly Shell Globbed = TestShell.Of(
+        ("/SWE/Kumbu/a.md", "Kumbu here\n"),
+        ("/SWE/Kumbu/Memory/m.md", "Kumbu remembered\n"),
+        ("/SWE/Other/b.md", "Kumbu there\n"));
+
+    private static async Task<string> GlobOk(string line)
+    {
+        var result = await Globbed.RunAsync(line, CancellationToken.None);
+        Assert.False(result.IsError, result.Output);
+        return result.Output;
+    }
+
+    [Fact]
+    public async Task Glob_excludes_a_folder_from_the_search() => Assert.Equal(
+        "/SWE/Kumbu/a.md:1:Kumbu here\n/SWE/Other/b.md:1:Kumbu there",
+        await GlobOk("rg Kumbu /SWE -g '!**/Memory/**'"));
+
+    [Fact]
+    public async Task Glob_narrows_files() => Assert.Equal(
+        "/SWE/Other/b.md", await GlobOk("rg --files /SWE -g 'Other/*.md'"));
+
+    [Fact]
+    public async Task Several_globs_combine() => Assert.Equal(
+        "/SWE/Kumbu/a.md:1:Kumbu here",
+        await GlobOk("rg Kumbu /SWE -g '*.md' -g '!Memory' --glob '!Other'"));
+
+    [Fact]
+    public async Task Glob_on_piped_input_is_refused()
+    {
+        var result = await Globbed.RunAsync("cat /SWE/Kumbu/a.md | rg -g '*.md' x", CancellationToken.None);
+        Assert.True(result.IsError);
+        Assert.Equal("rg: --glob filters paths and can't be used on piped input", result.Output);
+    }
 }

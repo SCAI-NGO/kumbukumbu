@@ -10,7 +10,7 @@ public static class Manual
           ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
           cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block
           outline <path>                  the headings of a note, with line ranges and sizes
-          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
+          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages (--archive: also archived notes)
           img <path>                      look at an image attachment, whole or a part of it
