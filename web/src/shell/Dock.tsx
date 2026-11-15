@@ -38,7 +38,8 @@ export default function Dock(props: { phone: boolean; newNote: (() => void) | nu
         <Folder size={22} strokeWidth={1.8} aria-hidden />
       </button>
       {phone && (
-        // Its name says what it is, What's on's count is its description; the badge sits on its corner, within its box.
+        // Its name says what it is, What's on's count is its description. The badge sits on its top corner, 4 px past
+        // its edge into the dock's 10 px gap, so it covers none of its neighbours.
         <button
           type="button"
           aria-label="Calendar"

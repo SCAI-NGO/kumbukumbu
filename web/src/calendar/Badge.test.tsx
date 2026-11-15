@@ -105,7 +105,8 @@ describe("the badge", () => {
     // The dock's Calendar carries the total, as its description: its name stays what it does.
     await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on, some overdue"));
     expect(within(screen.getByRole("navigation", { name: "Vault actions" })).getByRole("button", { name: "Calendar" })).toBe(await dockCalendar());
-    // On the button's corner, within its box: the dock's buttons keep their gap, so it covers none of its neighbours.
+    // On the button's top corner, inside its top edge and only a little past its side, into the dock's gap: it covers none of
+    // its neighbours.
     const pill = within(await dockCalendar()).getByText("3 on, some overdue").parentElement!;
     expect(pill).toHaveClass("absolute", "top-0", "right-0", "pointer-events-none");
     expect(pill.className).not.toMatch(/-right-|-top-/);
