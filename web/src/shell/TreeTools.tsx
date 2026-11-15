@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowDownAZ, CalendarDays, ClockArrowDown, Ellipsis, History, Plus, Search, SquareKanban, TextSearch, Upload, X } from "lucide-react";
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import Badge from "../calendar/Badge";
 import { Menu, type MenuItem } from "../components/Menu";
+import type { FlagName } from "../flags/api";
 import FlagChips from "../flags/FlagChips";
 import { useEditor } from "../state/editor";
 import { cut, type Tool } from "./toolbarCut";
-import type { FlagName } from "../flags/api";
 import type { FlagFilter } from "./treeFilter";
 import type { TreeOrder } from "./treeOrder";
 
@@ -24,15 +24,16 @@ const iconTarget = `${target} relative size-12 flex-none justify-center text-mut
  * The tree's toolbar, one row directly above the folders (UI round spec §2.1): + New note, then Upload, the vault's
  * Calendar (with its share of What's on), its Board, Recent changes across the vaults, the order, Find in this vault,
  * and the vault's menu. What the person can't do (`writes`) isn't offered. Where the row is too narrow (its width
- * followed live, as the sidebar is resized), `cut` moves the rarer tools to the top of the menu. Find opens the search by name and flag over
- * the vault the tree shows; closing it (✕ or Escape) clears it and gives the full tree back; Search the contents…
- * hands the words to the search sheet, for a search by words and meaning.
+ * followed live, as the sidebar is resized), `cut` moves the rarer tools to the top of the menu. Find opens the search
+ * by name and flag over the vault the tree shows; closing it (✕ or Escape) clears it and gives the full tree back;
+ * Search the contents… hands the words to the search sheet, for a search by words and meaning.
  */
 export default function TreeTools({
   vault,
   writes,
   onNewNote,
   onUpload,
+  onRecent,
   calendar,
   board,
   menu,
@@ -48,10 +49,15 @@ export default function TreeTools({
   /** A note in the vault's root, as the menu's New note here. */
   onNewNote(): void;
   onUpload(): void;
+  /** Recent changes, a page of its own: the drawer around the tree closes. */
+  onRecent(): void;
   calendar: { open(): void; share?: { count: number; overdue: boolean } };
   /** Null while the vault has no board. */
   board: (() => void) | null;
-  /** The vault's menu. */
+  /**
+   * The vault's menu. Its items with the `id` of a tool (the root's Upload here is `upload`, Recent changes `recent`)
+   * give way to that tool where the row moves it into the menu, so each is there once.
+   */
   menu: MenuItem[];
   /** The flags some note of the vault carries: Find by name's chips. */
   flags: readonly FlagName[];
@@ -64,7 +70,6 @@ export default function TreeTools({
   nothing: boolean;
 }) {
   const badge = useId();
-  const navigate = useNavigate();
   const row = useRef<HTMLDivElement>(null);
   const newNote = useRef<HTMLButtonElement>(null);
   const [room, setRoom] = useState({ width: 0, newNote: 0 });
@@ -76,14 +81,20 @@ export default function TreeTools({
     // Find may sit in the menu where the row is narrow: the focus goes back to the menu's button then.
     (opener.current ?? row.current?.querySelector<HTMLElement>("[aria-haspopup=menu]"))?.focus();
   }, [search]);
-  // Without a layout (no ResizeObserver) the width stays unknown, and everything shows.
+  // Without a layout (no ResizeObserver) the width stays unknown, and everything shows. + New note is observed too: it
+  // comes and goes with `writes` (the docked sidebar stays mounted across vaults) and changes as the web font arrives.
   const open = !search;
   useLayoutEffect(() => {
-    if (!open || !row.current || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => setRoom({ width: entry.contentRect.width, newNote: newNote.current?.offsetWidth ?? 0 }));
-    observer.observe(row.current);
+    const box = row.current;
+    if (!open || !box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const ofRow = entries.find((e) => e.target === box);
+      setRoom((room) => ({ width: ofRow ? ofRow.contentRect.width : room.width, newNote: newNote.current?.offsetWidth ?? 0 }));
+    });
+    observer.observe(box);
+    if (newNote.current) observer.observe(newNote.current);
     return () => observer.disconnect();
-  }, [open]);
+  }, [open, writes]);
   const close = () => {
     closed.current = true;
     onSearch(null);
@@ -104,27 +115,22 @@ export default function TreeTools({
     const sort = sortLabel(order);
     const share = calendar.share && calendar.share.count > 0 ? calendar.share : undefined;
     const toggleOrder = () => onOrder(order === "name" ? "changed" : "name");
-    const recent = () => {
-      useEditor.getState().setOverlay("none");
-      navigate("/recent");
-    };
     const findOpen = () => onSearch({ words: "", flag: null });
     const tools: Tool[] = [...(writes ? (["newNote", "upload"] as const) : []), "calendar", ...(board ? (["board"] as const) : []), "recent", "sort", "find", "menu"];
     const { shown, inMenu } = cut(room.width, tools, room.newNote);
-    // The vault's menu has Calendar and Board already, and the root's Upload here is the toolbar's Upload: each once.
+    // The vault's menu has Calendar and Board already; Upload here and Recent changes give way to the moved ones.
     const moved: MenuItem[] = inMenu.flatMap((t): MenuItem[] => {
       if (t === "upload") return [{ label: "Upload", icon: Upload, onSelect: onUpload }];
-      if (t === "sort") return [order === "name" ? { label: "Sort by last changed", icon: ClockArrowDown, onSelect: toggleOrder } : { label: "Sort by name", icon: ArrowDownAZ, onSelect: toggleOrder }];
-      if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: recent }];
+      if (t === "sort") return [{ label: sort, icon: order === "name" ? ClockArrowDown : ArrowDownAZ, onSelect: toggleOrder }];
+      if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: onRecent }];
       if (t === "find") return [{ label: "Find in this vault", icon: Search, onSelect: findOpen }];
       return [];
     });
-    const twice = new Set([...(inMenu.includes("upload") ? ["Upload here"] : []), ...(inMenu.includes("recent") ? ["Recent changes"] : [])]);
-    const items = [...moved, ...menu.filter((i) => !twice.has(i.label))];
+    const items = [...moved, ...menu.filter((i) => !(i.id && inMenu.includes(i.id as Tool)))];
     const targets: Record<Tool, ReactNode> = {
       newNote: (
-        <button ref={newNote} type="button" onClick={onNewNote} className={`${target} flex-none pr-1`}>
-          <span className="flex h-9 items-center gap-1 rounded-[8px] bg-accent px-3 text-[14px] font-medium whitespace-nowrap text-on-accent">
+        <button ref={newNote} type="button" onClick={onNewNote} className={`${target} flex-none`}>
+          <span className="flex h-9 items-center gap-1 rounded-[8px] bg-accent pr-3 pl-2.5 text-[14px] font-medium whitespace-nowrap text-on-accent">
             <Plus size={16} aria-hidden />
             New note
           </span>
@@ -146,9 +152,19 @@ export default function TreeTools({
           <SquareKanban size={20} aria-hidden />
         </button>
       ),
-      // A page of its own, as the calendar: the drawer around the tree closes.
+      // A link, so it can open in a tab of its own; a plain tap goes the menu's way.
       recent: (
-        <Link to="/recent" aria-label="Recent changes" title="Recent changes" onClick={() => useEditor.getState().setOverlay("none")} className={iconTarget}>
+        <Link
+          to="/recent"
+          aria-label="Recent changes"
+          title="Recent changes"
+          onClick={(e) => {
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            onRecent();
+          }}
+          className={iconTarget}
+        >
           <History size={20} aria-hidden />
         </Link>
       ),

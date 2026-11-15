@@ -5,6 +5,8 @@ import type { LucideIcon } from "lucide-react";
 
 /** One entry of a small menu; later steps add theirs to the same list (Upload, for one). */
 export interface MenuItem {
+  /** Names the item apart from its label, for a caller that looks for it (the toolbar's, which moves tools in). */
+  id?: string;
   label: string;
   icon: LucideIcon;
   onSelect(): void;

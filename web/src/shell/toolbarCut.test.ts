@@ -5,22 +5,22 @@ import { cut, type Tool } from "./toolbarCut";
 const all: Tool[] = ["newNote", "upload", "calendar", "board", "recent", "sort", "find", "menu"];
 const reading: Tool[] = ["calendar", "board", "recent", "sort", "find", "menu"];
 const noBoard: Tool[] = ["newNote", "upload", "calendar", "recent", "sort", "find", "menu"];
-/** + New note as wide as the phone's drawer has it. */
-const newNote = 108;
+/** + New note in IBM Plex Sans, 14 px medium: about 100 px. */
+const newNote = 100;
 
 describe("the toolbar's cut by width", () => {
   it.each([
-    // The phone's drawer at 375 px: 318 px, less the row's padding.
-    [302, all, { shown: ["newNote", "calendar", "board", "find", "menu"], inMenu: ["upload", "sort", "recent"] }],
+    // The phone's drawer at 375 px: 318 px, less its 1 px border on the right and the row's padding (2 × 8 px).
+    [301, all, { shown: ["newNote", "calendar", "board", "find", "menu"], inMenu: ["upload", "sort", "recent"] }],
     // Room for one of the three: Upload goes first.
     [400, all, { shown: ["newNote", "calendar", "board", "recent", "sort", "find", "menu"], inMenu: ["upload"] }],
     // Room for two: Sort goes next, Recent changes stays.
     [360, all, { shown: ["newNote", "calendar", "board", "recent", "find", "menu"], inMenu: ["upload", "sort"] }],
     [600, all, { shown: all, inMenu: [] }],
-    [302, noBoard, { shown: ["newNote", "calendar", "recent", "find", "menu"], inMenu: ["upload", "sort"] }],
+    [301, noBoard, { shown: ["newNote", "calendar", "recent", "find", "menu"], inMenu: ["upload", "sort"] }],
     [600, noBoard, { shown: noBoard, inMenu: [] }],
     // Without write there is neither New note nor Upload: the room goes to the rest.
-    [302, reading, { shown: reading, inMenu: [] }],
+    [301, reading, { shown: reading, inMenu: [] }],
     [250, reading, { shown: ["calendar", "board", "recent", "find", "menu"], inMenu: ["sort"] }],
   ])("at %i px", (width, tools, expected) => {
     expect(cut(width, tools, newNote)).toEqual(expected);

@@ -136,7 +136,7 @@ function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRem
       ? [
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
           { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
-          { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+          { id: "upload", label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
           // Only where the browser opens a camera: on a desktop it would open the file chooser, as Upload here does.
           ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path) }] : []),
         ]
@@ -708,7 +708,7 @@ export default function TreeDrawer(props: {
               ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
               : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
-          { label: "Recent changes", icon: History, onSelect: openRecent },
+          { id: "recent", label: "Recent changes", icon: History, onSelect: openRecent },
           ...(owner
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
@@ -781,6 +781,7 @@ export default function TreeDrawer(props: {
           writes={atLeast(level, "write")}
           onNewNote={() => onNewNote(tree.data.root.path)}
           onUpload={() => useEditor.getState().openUpload(tree.data.root.path)}
+          onRecent={openRecent}
           calendar={{ open: () => openCalendar(activeVault), share }}
           board={hasBoard ? () => openBoard(activeVault) : null}
           menu={[...folderItems(tree.data.root, folderActions), ...vaultItems]}

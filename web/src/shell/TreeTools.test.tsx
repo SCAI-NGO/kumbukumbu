@@ -318,7 +318,8 @@ describe("the toolbar where the row is narrow", () => {
     });
 
   beforeEach(() => {
-    width = 302;
+    // The phone's drawer at 375 px: 318 px, less its 1 px border and the row's padding.
+    width = 301;
     observers.clear();
     // jsdom lays nothing out: the row reports its width through this stand-in, + New note its own.
     vi.stubGlobal(
@@ -337,7 +338,7 @@ describe("the toolbar where the row is narrow", () => {
       },
     );
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.textContent === "New note" ? 108 : 0;
+      return this.textContent === "New note" ? 100 : 0;
     });
   });
 
@@ -346,11 +347,11 @@ describe("the toolbar where the row is narrow", () => {
     expect(tools()).toEqual(["New note", "Calendar", "Board", "Find in this vault", "Actions for Notes"]);
     await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
     const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
-    expect(items.slice(0, 4)).toEqual(["Upload", "Sort by last changed", "Recent changes", "New note here"]);
+    expect(items.slice(0, 4)).toEqual(["Upload", "Sorted by name. Sort by last changed", "Recent changes", "New note here"]);
     // Once each: Upload is the root's Upload here, Recent changes no longer further down.
     expect(items).not.toContain("Upload here");
     expect(items.filter((i) => i === "Recent changes")).toHaveLength(1);
-    await userEvent.click(screen.getByRole("menuitem", { name: "Sort by last changed" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Sorted by name. Sort by last changed" }));
     expect(shown()).toEqual(["Garden", "Board", "Pump", "later", "inbox"]);
 
     // Wider: everything is back in the row, and the menu is as before.
@@ -364,9 +365,26 @@ describe("the toolbar where the row is narrow", () => {
     resize(252);
     expect(tools()).toEqual(["New note", "Calendar", "Board", "Actions for Notes"]);
     await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent).slice(0, 4)).toEqual(["Upload", "Sort by name", "Recent changes", "Find in this vault"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent).slice(0, 4)).toEqual(["Upload", "Sorted by last changed. Sort by name", "Recent changes", "Find in this vault"]);
     await userEvent.click(screen.getByRole("menuitem", { name: "Find in this vault" }));
     expect(within(drawer()).getByRole("searchbox", { name: "Find by name" })).toHaveFocus();
+    // Closed again, the focus goes back to ⋯, where Find sits.
+    await userEvent.keyboard("{Escape}");
+    expect(within(toolbar()).getByRole("button", { name: "Actions for Notes" })).toHaveFocus();
+  });
+
+  it("cuts the row again when New note comes, as the person may write after all", async () => {
+    let level = "read";
+    signedIn({ extra: { "GET /api/vaults": () => json(200, [{ name: "Notes", notes: 4, embeddings: "internal", canWrite: level !== "read", level }]) } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Notes/inbox.md", queryClient);
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("later");
+    // Without New note and Upload everything fits.
+    expect(tools()).toEqual(["Calendar", "Recent changes", "Sorted by name. Sort by last changed", "Find in this vault", "Actions for Notes"]);
+    level = "write";
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(tools()).toEqual(["New note", "Calendar", "Recent changes", "Find in this vault", "Actions for Notes"]));
   });
 
   it("Upload and Recent changes from ⋯ do what their buttons do", async () => {
