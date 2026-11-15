@@ -254,6 +254,7 @@ describe("the note's header line", () => {
     const toast = await screen.findByRole("status", { name: "Closed" });
     // "Closed · Undo": the dot keeps its spaces in the flex row.
     for (const dot of within(toast).getAllByText("·", { selector: "span", normalizer: (t) => t.trim() })) expect(dot).toHaveClass("whitespace-pre");
+    expect(within(toast).getByRole("button", { name: "Undo" })).toHaveClass("min-h-12", "min-w-12", "text-center");
     await waitFor(async () => expect(await line()).toHaveTextContent(/Done Closed 16 Dec Add a reason$/));
     await userEvent.click(within(await line()).getByRole("button", { name: "Add a reason" }));
     // One field, in the message, not at the top of the note.
@@ -290,10 +291,12 @@ describe("the note's header line", () => {
     renderApp(`/notes${CERT}`);
     const header = await line();
     expect(within(header).getByRole("checkbox", { name: "To do" })).toHaveClass("min-h-12", "min-w-12");
-    expect(within(header).getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12");
+    expect(within(header).getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12", "min-w-12", "justify-center");
     await userEvent.click(within(header).getByRole("button", { name: "Later: Certificate" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "+1 day" }));
-    expect(await screen.findByRole("status", { name: "Moved" })).toHaveTextContent("Moved to Wed 16 Dec · Undo");
+    const toast = await screen.findByRole("status", { name: "Moved" });
+    expect(toast).toHaveTextContent("Moved to Wed 16 Dec · Undo");
+    expect(within(toast).getByRole("button", { name: "Undo" })).toHaveClass("min-h-12", "min-w-12", "text-center");
   });
 
   it("unticking a closed to-do reopens it, and there is no Reopen button", async () => {

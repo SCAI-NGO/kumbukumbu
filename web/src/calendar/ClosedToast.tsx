@@ -7,7 +7,7 @@ import { useEntryAction, type EntryView } from "./api";
 
 const SHOWN_MS = 8_000;
 
-const choiceClass = "min-h-12 px-1.5 font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent";
+const choiceClass = "min-h-12 min-w-12 px-1.5 text-center font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent";
 // White space kept: a flex item drops its spaces at either end, which ran "Closed· Undo" together.
 const Dot = () => <span aria-hidden className="whitespace-pre">{" · "}</span>;
 

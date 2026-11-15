@@ -254,7 +254,7 @@ test("calendar #9: the month is a stack of weeks, the grid marks weekends and da
       expect(backgrounds[5], "Saturday apart from the weekdays").not.toBe(backgrounds[0]);
       expect(backgrounds[6], "Sunday as Saturday").toBe(backgrounds[5]);
       const date = Number(t.slice(8));
-      await expect(grid.getByRole("button", { name: new RegExp(`^${date}\\s*, has entries$`) })).toHaveAttribute("aria-current", "date");
+      await expect(grid.getByRole("button", { name: new RegExp(`^${date}\\s*,(?: (?:Day off|Lighter day),)? has entries$`) })).toHaveAttribute("aria-current", "date");
       await expect(grid.getByRole("button", { name: /has entries/ })).toHaveCount(1);
     };
     await checkGrid();

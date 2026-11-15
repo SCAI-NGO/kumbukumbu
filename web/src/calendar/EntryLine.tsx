@@ -16,7 +16,7 @@ import TaskCheckbox from "./TaskCheckbox";
 import { rangeOf } from "./WeekList";
 
 const actionClass =
-  "inline-flex min-h-12 items-center rounded-[8px] px-1 font-medium text-accent-text underline-offset-[3px] hover:underline focus-visible:outline-2 focus-visible:outline-accent";
+  "inline-flex min-h-12 min-w-12 items-center justify-center rounded-[8px] px-1 font-medium text-accent-text underline-offset-[3px] hover:underline focus-visible:outline-2 focus-visible:outline-accent";
 const linkClass = "inline-flex min-h-12 items-center font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent";
 
 const LONGEST_SHOWN = 2000;

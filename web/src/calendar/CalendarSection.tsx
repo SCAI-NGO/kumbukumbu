@@ -12,9 +12,9 @@ const LEVELS: [DayLevel, string][] = [
   ["lighter", "Lighter day"],
   ["off", "Day off"],
 ];
-// As the calendar's Week | Month.
+// As the calendar's Week | Month, but the chosen level in the accent: with three to a row, a shade alone hardly showed.
 const switchClass = (on: boolean) =>
-  `min-h-12 px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-surface-2 text-text" : "text-muted"}`;
+  `min-h-12 px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent font-bold text-on-accent" : "font-medium text-muted"}`;
 // The calendar's controls are 48 px; secondaryButtonClass is 44.
 const resetClass = secondaryButtonClass.replace("min-h-11", "min-h-12");
 
@@ -119,9 +119,9 @@ function YourWeek() {
       </h3>
       <p className="text-text-body">Days off are shaded in your calendar, lighter days lightly.</p>
       {WEEKDAY_NAMES.map((name, i) => (
-        <div key={name} role="group" aria-label={name} className="flex flex-wrap items-center justify-between gap-2">
+        <div key={name} role="group" aria-label={name} className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
           <span className="text-text">{name}</span>
-          <div className="flex overflow-hidden rounded-[10px] border border-line">
+          <div className="flex self-start overflow-hidden rounded-[10px] border border-line sm:self-auto">
             {LEVELS.map(([level, word]) => (
               <button
                 key={level}

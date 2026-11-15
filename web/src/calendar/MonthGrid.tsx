@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { WeekView } from "./api";
 import { monthId, monthTitle, partsOf } from "./dates";
-import { dayLevelOf, dayShade } from "./dayLevels";
+import { dayLevelOf, dayShade, dayWord } from "./dayLevels";
 import { useDays } from "./preferences";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -37,8 +37,9 @@ export default function MonthGrid({ month, weeks, today, onDay }: { month: strin
             </th>
             {w.days.map((d) => {
               const has = d.entries.length > 0;
+              const level = dayLevelOf(days, d.day);
               return (
-                <td key={d.day} className={`p-0.5 ${dayShade[dayLevelOf(days, d.day)]}`}>
+                <td key={d.day} className={`p-0.5 ${dayShade[level]}`}>
                   {monthId(d.day) === month && (
                     <button
                       type="button"
@@ -49,6 +50,7 @@ export default function MonthGrid({ month, weeks, today, onDay }: { month: strin
                       }`}
                     >
                       {partsOf(d.day).day}
+                      {dayWord[level] && <span className="sr-only">, {dayWord[level]}</span>}
                       {has && (
                         <>
                           <span aria-hidden className="absolute bottom-1.5 size-1.5 rounded-full bg-current" />

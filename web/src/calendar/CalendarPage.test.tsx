@@ -161,7 +161,7 @@ describe("the calendar's week", () => {
     await title();
     expect(screen.getByRole("link", { name: "Certificate" })).toHaveAttribute("href", "/notes/Work/Certificate.md");
     expect(screen.getByRole("link", { name: "Zahnarzt" })).toHaveAttribute("href", "/notes/Work/Zahnarzt.md");
-    expect(screen.getByRole("button", { name: "Later: Certificate" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12", "min-w-12", "justify-center");
     expect(screen.queryByRole("checkbox", { name: /Zahnarzt/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Later: Zahnarzt" })).not.toBeInTheDocument();
     const zahnarzt = screen.getByRole("link", { name: "Zahnarzt" }).closest("li")!;

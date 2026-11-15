@@ -73,6 +73,10 @@ describe("days off", () => {
     const row = within(grid).getAllByRole("row")[3];
     await waitFor(() => expect(within(row).getAllByRole("cell")[0]).toHaveClass(LIGHTER));
     expect(within(row).getAllByRole("cell").map((c) => c.classList.contains(OFF))).toEqual([false, false, false, false, false, true, true]);
+    // The grid says it in words too.
+    expect(within(row).getByRole("button", { name: "9, Lighter day" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "14, Day off, has entries" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "10" })).toBeInTheDocument();
     const saturday = screen.getByRole("heading", { level: 3, name: /^Saturday, 14 November/ }).closest("section")!;
     expect(saturday).toHaveClass(OFF);
     expect(saturday).toHaveTextContent("Day off");

@@ -121,8 +121,8 @@ describe("the calendar's month", () => {
     expect(within(grid).getByRole("button", { name: "3, has entries" })).toBeInTheDocument();
     expect(within(grid).getByRole("button", { name: "4" })).toBeInTheDocument();
     expect(within(grid).getByRole("button", { name: "13" })).toHaveAttribute("aria-current", "date");
-    // The days of other months are left blank: 30 November is a Monday.
-    expect(within(rows[1]).getAllByRole("button").map((b) => b.textContent)).toEqual(["1"]);
+    // The days of other months are left blank: 30 November is a Monday, 1 November a Sunday.
+    expect(within(rows[1]).getAllByRole("button").map((b) => b.textContent)).toEqual(["1, Day off"]);
     expect(within(rows[6]).getAllByRole("button").map((b) => b.textContent)).toEqual(["30"]);
 
     // Hiding it is remembered too.
@@ -155,7 +155,7 @@ describe("the calendar's month", () => {
     const router = renderApp("/calendar/Work");
     await screen.findByRole("heading", { level: 1, name: "Week 46 · 9–15 November 2026" });
     const grid = await screen.findByRole("table", { name: "November 2026" });
-    expect(within(grid).getByRole("button", { name: "15, has entries" })).toBeInTheDocument();
+    expect(within(grid).getByRole("button", { name: "15, Day off, has entries" })).toBeInTheDocument();
     expect(calendarQueries(fetch)).toContainEqual({ month: "2026-11" });
     await userEvent.click(within(grid).getByRole("button", { name: "25" }));
     await waitFor(() => expect(router.state.location.search).toBe("?week=2026-W48"));

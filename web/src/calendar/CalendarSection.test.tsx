@@ -224,6 +224,21 @@ describe("the person's week", () => {
     expect(pressed(calendar)).toEqual(["Workday", "Workday", "Workday", "Workday", "Workday", "Day off", "Day off"]);
   });
 
+  it("the chosen level stands out, and every day is laid out alike", async () => {
+    api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
+    renderApp("/settings");
+    const calendar = await weekSection();
+    expect(level(calendar, "Monday", "Day off")).toHaveClass("bg-accent", "text-on-accent", "font-bold");
+    expect(level(calendar, "Monday", "Workday")).not.toHaveClass("bg-accent");
+    expect(level(calendar, "Monday", "Workday")).not.toHaveClass("font-bold");
+    // The name above the switch on a narrow screen, beside it on a wide one: never one way for some days, the other for the rest.
+    for (const day of WEEK) {
+      const row = within(calendar).getByRole("group", { name: day });
+      expect(row).toHaveClass("flex-col", "sm:flex-row");
+      expect(row).not.toHaveClass("flex-wrap");
+    }
+  });
+
   it("shows a stored week", async () => {
     api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
     renderApp("/settings");
