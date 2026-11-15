@@ -38,6 +38,7 @@ const rowText = (v: HistoryEntry) => (
       <span className="min-w-0 flex-1 truncate">
         by {v.writer}
         {v.writerKind === "device" && " · Obsidian device"}
+        {v.message && ` — ${v.message}`}
       </span>
       <span className="flex-none font-mono text-[12px]">{sizeText(Number(v.size))}</span>
     </span>
@@ -114,6 +115,7 @@ function VersionView({ path, entry, expected, onBack, onRestored }: { path: stri
         By {entry.writer}
         {entry.writerKind === "device" && " (Obsidian device)"}, {ago(entry.writtenAt)} · {sizeText(Number(entry.size))}
       </p>
+      {entry.message && <p className="text-sm text-text-body">{entry.message}</p>}
       <div role="group" aria-label="Show" className="flex gap-1 rounded-[12px] border border-line p-1">
         <button type="button" aria-pressed={tab === "rendered"} onClick={() => setTab("rendered")} className={tabClass(tab === "rendered")}>
           This version

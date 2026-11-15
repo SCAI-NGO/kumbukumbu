@@ -76,6 +76,8 @@ public static class Manual
         Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
+        message: optionally one line on why you wrote, kept with the version and shown by history. A write that
+        changes nothing makes no version and so keeps no message.
         """;
 
     public const string EditDescription = """
@@ -95,6 +97,8 @@ public static class Manual
         version is the token from 'cat' (or from the last write or edit). If the note changed since, the edit
         fails: cat it again and redo the change. Returns the new version token; earlier versions stay
         recoverable (sh: history, restore).
+        message: optionally one line on why you changed it, kept with the version and shown by history. An edit
+        that changes nothing makes no version and so keeps no message.
         """;
 
     public const string BoardDescription = """
@@ -132,6 +136,8 @@ public static class Manual
         one hour and once. Each changed note keeps the state before this session in its history
         (sh: history, diff, restore). The replace is literal, in links too: the preview names links that
         would lead nowhere afterwards. To rename a note, mv it first (that rewrites its links), then replace.
+        message: optionally one line on why, kept with each changed version and shown by history (given on the
+        apply step). A note that does not change gets no version and so no message.
         """;
 }
 

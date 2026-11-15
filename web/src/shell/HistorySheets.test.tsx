@@ -65,6 +65,27 @@ describe("a note's history", () => {
     expect(rows[1]).not.toHaveTextContent("Obsidian device");
   });
 
+  it("shows a version's message in the history list", async () => {
+    api({
+      "GET /api/history/Work/inbox.md": () =>
+        json(200, [
+          { version: "v2", writtenAt: "2026-10-25T09:00:00Z", writer: "liz", lines: 3, size: 21, current: true, changeset: null, message: "consolidated <b>x</b>" },
+          { version: "v1", writtenAt: "2026-10-24T09:00:00Z", writer: "liz", lines: 3, size: 21, current: false, changeset: null },
+        ]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+
+    const versions = await within(await screen.findByRole("dialog", { name: "History" })).findByRole("list", { name: "Versions" });
+    const rows = within(versions).getAllByRole("button");
+    expect(rows[0]).toHaveTextContent("by liz — consolidated <b>x</b>");
+    expect(rows[1]).not.toHaveTextContent("—");
+
+    await userEvent.click(rows[0]);
+    expect(await screen.findByText("consolidated <b>x</b>")).toBeInTheDocument();
+  });
+
   it("lists the versions, shows an earlier one and its changes, and restores it", async () => {
     const fetch = api({
       "GET /api/history/Work/inbox.md": () =>

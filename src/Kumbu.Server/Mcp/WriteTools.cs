@@ -18,8 +18,9 @@ public static class WriteTools
         [Description("Absolute path of the note, e.g. /Work/projects/plan.md")] string path,
         [Description("The note's full Markdown content")] string content,
         [Description("Version token from cat or the last write/edit; leave out to create a new note")] string? version = null,
+        [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct, message));
 
     [McpServerTool(Name = "edit", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.EditDescription)]
     public static async Task<CallToolResult> Edit(
@@ -30,8 +31,9 @@ public static class WriteTools
         [Description("Text to replace; must occur exactly once (in the section, if the path has one). Leave out to append new_text")] string? old_text = null,
         [Description("Replace the whole section in the path, heading included, with new_text")] bool replace_section = false,
         [Description("Replace every occurrence of old_text, not just a unique one")] bool replace_all = false,
+        [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Edit, () => writer.EditAsync(path, version, old_text, new_text, ct, replace_section, replace_all));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Edit, () => writer.EditAsync(path, version, old_text, new_text, ct, replace_section, replace_all, message));
 
     [McpServerTool(Name = "replace", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description(Manual.ReplaceDescription)]
     public static async Task<CallToolResult> Replace(
@@ -41,6 +43,7 @@ public static class WriteTools
         [Description("The text to put in its place")] string new_text,
         [Description("Match old_text only as a whole word")] bool word = false,
         [Description("The plan token from the preview; leave out to preview")] string? plan = null,
+        [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Replace, () => replacer.RunAsync(path, old_text, new_text, word, plan, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Replace, () => replacer.RunAsync(path, old_text, new_text, word, plan, ct, message));
 }

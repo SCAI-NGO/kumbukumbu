@@ -193,7 +193,7 @@ public sealed record MentionMarkView(int Start, int Length);
 /// come from <c>GET /api/files</c> with <c>?version=</c>.</summary>
 public sealed record HistoryEntryView(
     string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null,
-    string Kind = "note", string MediaType = NoteApi.NoteMediaType);
+    string Kind = "note", string MediaType = NoteApi.NoteMediaType, string? Message = null);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -842,7 +842,7 @@ public static class NoteApi
         {
             var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
             entries.Add(new HistoryEntryView(
-                v.Version, v.WrittenAt, writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short, kind));
+                v.Version, v.WrittenAt, writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short, kind, Message: v.Message));
         }
 
         return TypedResults.Ok(entries.ToArray());

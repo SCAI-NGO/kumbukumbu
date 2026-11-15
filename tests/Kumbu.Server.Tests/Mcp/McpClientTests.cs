@@ -74,11 +74,11 @@ public sealed class McpClientTests(KumbuAppFactory app)
         static string[] Required(McpClientTool tool) =>
             [.. tool.ProtocolTool.InputSchema.GetProperty("required").EnumerateArray().Select(p => p.GetString()!).Order()];
 
-        Assert.Equal(["content", "path", "version"], Properties(tools["write"]));
+        Assert.Equal(["content", "message", "path", "version"], Properties(tools["write"]));
         Assert.Equal(["content", "path"], Required(tools["write"]));
-        Assert.Equal(["new_text", "old_text", "path", "replace_all", "replace_section", "version"], Properties(tools["edit"]));
+        Assert.Equal(["message", "new_text", "old_text", "path", "replace_all", "replace_section", "version"], Properties(tools["edit"]));
         Assert.Equal(["new_text", "path", "version"], Required(tools["edit"]));
-        Assert.Equal(["new_text", "old_text", "path", "plan", "word"], Properties(tools["replace"]));
+        Assert.Equal(["message", "new_text", "old_text", "path", "plan", "word"], Properties(tools["replace"]));
         Assert.Equal(["new_text", "old_text", "path"], Required(tools["replace"]));
     }
 
@@ -169,6 +169,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var restored = await ShAsync($"restore {path} {Token(edited)}");
         Assert.True(restored.IsError);
         Assert.StartsWith($"restore: {path} has no version {Token(edited)}", Text(restored), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Write_with_a_message_shows_it_in_history()
+    {
+        var path = "/Demo/scratch-message.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "# One\n", ["message"] = "started the note" });
+        Assert.NotEqual(true, created.IsError);
+        var written = await CallAsync("write", new() { ["path"] = path, ["content"] = "# Two\n", ["version"] = Token(created), ["message"] = "consolidated" });
+        Assert.NotEqual(true, written.IsError);
+
+        Assert.Contains("— consolidated", Text(await ShAsync($"history {path}")), StringComparison.Ordinal);
     }
 
     [Fact]
