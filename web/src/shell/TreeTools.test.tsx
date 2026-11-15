@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -272,6 +272,82 @@ describe("the toolbar", () => {
     expect(within(drawer()).queryByRole("link", { name: "Recent changes" })).not.toBeInTheDocument();
     expect(within(drawer()).queryByRole("button", { name: /^Sorted by/ })).not.toBeInTheDocument();
     expect(within(drawer()).getByRole("button", { name: "Search the contents…" })).toBeInTheDocument();
+  });
+});
+
+describe("the toolbar where the row is narrow", () => {
+  let width = 0;
+  const observers = new Set<{ target: Element; callback: ResizeObserverCallback }>();
+  /** The row's width changes, as the sidebar is resized: every observer of the toolbar hears it. */
+  const resize = (next: number) =>
+    act(() => {
+      width = next;
+      for (const o of observers) o.callback([{ target: o.target, contentRect: { width } } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    });
+
+  beforeEach(() => {
+    width = 302;
+    observers.clear();
+    // jsdom lays nothing out: the row reports its width through this stand-in, + New note its own.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          if (target.getAttribute("aria-label") !== "Tools for this vault") return;
+          observers.add({ target, callback: this.callback });
+          this.callback([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve() {}
+        disconnect() {
+          for (const o of observers) if (o.callback === this.callback) observers.delete(o);
+        }
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.textContent === "New note" ? 108 : 0;
+    });
+  });
+
+  it("moves Upload, Sort and Recent changes to the top of ⋯, and follows the width live", async () => {
+    await openDrawer({ root: withBoard });
+    expect(tools()).toEqual(["New note", "Calendar", "Board", "Find in this vault", "Actions for Notes"]);
+    await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items.slice(0, 4)).toEqual(["Upload", "Sort by last changed", "Recent changes", "New note here"]);
+    // Once each: Upload is the root's Upload here, Recent changes no longer further down.
+    expect(items).not.toContain("Upload here");
+    expect(items.filter((i) => i === "Recent changes")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Sort by last changed" }));
+    expect(shown()).toEqual(["Garden", "Board", "Pump", "later", "inbox"]);
+
+    // Wider: everything is back in the row, and the menu is as before.
+    resize(600);
+    expect(tools()).toEqual(["New note", "Upload", "Calendar", "Board", "Recent changes", "Sorted by last changed. Sort by name", "Find in this vault", "Actions for Notes"]);
+    await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+    expect(screen.getAllByRole("menuitem")[0]).toHaveTextContent("New note here");
+    await userEvent.keyboard("{Escape}");
+
+    // Narrower than the drawer: Find goes too, into ⋯ after the three; New note and ⋯ stay.
+    resize(252);
+    expect(tools()).toEqual(["New note", "Calendar", "Board", "Actions for Notes"]);
+    await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent).slice(0, 4)).toEqual(["Upload", "Sort by name", "Recent changes", "Find in this vault"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Find in this vault" }));
+    expect(within(drawer()).getByRole("searchbox", { name: "Find by name" })).toHaveFocus();
+  });
+
+  it("Upload and Recent changes from ⋯ do what their buttons do", async () => {
+    const router = await openDrawer();
+    await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Upload" }));
+    expect(await screen.findByRole("dialog", { name: "Upload" })).toBeInTheDocument();
+    expect(useEditor.getState().upload?.folder).toBe("/Notes");
+    act(() => useEditor.getState().setOverlay("tree"));
+    await userEvent.click(within(toolbar()).getByRole("button", { name: "Actions for Notes" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Recent changes" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/recent"));
+    expect(useEditor.getState().overlay).toBe("none");
   });
 });
 

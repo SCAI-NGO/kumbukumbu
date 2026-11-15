@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowDownAZ, CalendarDays, ClockArrowDown, Ellipsis, History, Plus, Search, SquareKanban, TextSearch, Upload, X } from "lucide-react";
-import { useEffect, useId, useRef, type KeyboardEvent } from "react";
-import { Link } from "react-router-dom";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import Badge from "../calendar/Badge";
 import { Menu, type MenuItem } from "../components/Menu";
 import FlagChips from "../flags/FlagChips";
 import { useEditor } from "../state/editor";
+import { cut, type Tool } from "./toolbarCut";
 import type { FlagFilter } from "./treeFilter";
 import type { TreeOrder } from "./treeOrder";
 
@@ -21,7 +22,8 @@ const iconTarget = `${target} relative size-12 flex-none justify-center text-mut
 /**
  * The tree's toolbar, one row directly above the folders (UI round spec §2.1): + New note, then Upload, the vault's
  * Calendar (with its share of What's on), its Board, Recent changes across the vaults, the order, Find in this vault,
- * and the vault's menu. What the person can't do (`writes`) isn't offered. Find opens the search by name and flag over
+ * and the vault's menu. What the person can't do (`writes`) isn't offered. Where the row is too narrow (its width
+ * followed live, as the sidebar is resized), `cut` moves the rarer tools to the top of the menu. Find opens the search by name and flag over
  * the vault the tree shows; closing it (✕ or Escape) clears it and gives the full tree back; Search the contents…
  * hands the words to the search sheet, for a search by words and meaning.
  */
@@ -58,13 +60,26 @@ export default function TreeTools({
   nothing: boolean;
 }) {
   const badge = useId();
+  const navigate = useNavigate();
+  const row = useRef<HTMLDivElement>(null);
+  const newNote = useRef<HTMLButtonElement>(null);
+  const [room, setRoom] = useState({ width: 0, newNote: 0 });
   const opener = useRef<HTMLButtonElement>(null);
   const closed = useRef(false);
   useEffect(() => {
     if (search || !closed.current) return;
     closed.current = false;
-    opener.current?.focus();
+    // Find may sit in the menu where the row is narrow: the focus goes back to the menu's button then.
+    (opener.current ?? row.current?.querySelector<HTMLElement>("[aria-haspopup=menu]"))?.focus();
   }, [search]);
+  // Without a layout (no ResizeObserver) the width stays unknown, and everything shows.
+  const open = !search;
+  useLayoutEffect(() => {
+    if (!open || !row.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setRoom({ width: entry.contentRect.width, newNote: newNote.current?.offsetWidth ?? 0 }));
+    observer.observe(row.current);
+    return () => observer.disconnect();
+  }, [open]);
   const close = () => {
     closed.current = true;
     onSearch(null);
@@ -84,45 +99,78 @@ export default function TreeTools({
   if (!search) {
     const sort = sortLabel(order);
     const share = calendar.share && calendar.share.count > 0 ? calendar.share : undefined;
-    return (
-      <div role="group" aria-label="Tools for this vault" className="flex flex-none items-center px-2 pb-2">
-        {writes && (
-          <button type="button" onClick={onNewNote} className={`${target} flex-none pr-1`}>
-            <span className="flex h-9 items-center gap-1 rounded-[8px] bg-accent px-3 text-[14px] font-medium text-on-accent">
-              <Plus size={16} aria-hidden />
-              New note
-            </span>
-          </button>
-        )}
-        {writes && (
-          <button type="button" aria-label="Upload" title="Upload" onClick={onUpload} className={iconTarget}>
-            <Upload size={20} aria-hidden />
-          </button>
-        )}
+    const toggleOrder = () => onOrder(order === "name" ? "changed" : "name");
+    const recent = () => {
+      useEditor.getState().setOverlay("none");
+      navigate("/recent");
+    };
+    const findOpen = () => onSearch({ words: "", flag: null });
+    const tools: Tool[] = [...(writes ? (["newNote", "upload"] as const) : []), "calendar", ...(board ? (["board"] as const) : []), "recent", "sort", "find", "menu"];
+    const { shown, inMenu } = cut(room.width, tools, room.newNote);
+    // The vault's menu has Calendar and Board already, and the root's Upload here is the toolbar's Upload: each once.
+    const moved: MenuItem[] = inMenu.flatMap((t): MenuItem[] => {
+      if (t === "upload") return [{ label: "Upload", icon: Upload, onSelect: onUpload }];
+      if (t === "sort") return [order === "name" ? { label: "Sort by last changed", icon: ClockArrowDown, onSelect: toggleOrder } : { label: "Sort by name", icon: ArrowDownAZ, onSelect: toggleOrder }];
+      if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: recent }];
+      if (t === "find") return [{ label: "Find in this vault", icon: Search, onSelect: findOpen }];
+      return [];
+    });
+    const twice = new Set([...(inMenu.includes("upload") ? ["Upload here"] : []), ...(inMenu.includes("recent") ? ["Recent changes"] : [])]);
+    const items = [...moved, ...menu.filter((i) => !twice.has(i.label))];
+    const targets: Record<Tool, ReactNode> = {
+      newNote: (
+        <button ref={newNote} type="button" onClick={onNewNote} className={`${target} flex-none pr-1`}>
+          <span className="flex h-9 items-center gap-1 rounded-[8px] bg-accent px-3 text-[14px] font-medium whitespace-nowrap text-on-accent">
+            <Plus size={16} aria-hidden />
+            New note
+          </span>
+        </button>
+      ),
+      upload: (
+        <button type="button" aria-label="Upload" title="Upload" onClick={onUpload} className={iconTarget}>
+          <Upload size={20} aria-hidden />
+        </button>
+      ),
+      calendar: (
         <button type="button" aria-label="Calendar" title="Calendar" aria-describedby={share && badge} onClick={calendar.open} className={iconTarget}>
           <CalendarDays size={20} aria-hidden />
           {share && <Badge id={badge} count={share.count} overdue={share.overdue} className="pointer-events-none absolute top-0.5 right-0" />}
         </button>
-        {board && (
-          <button type="button" aria-label="Board" title="Board" onClick={board} className={iconTarget}>
-            <SquareKanban size={20} aria-hidden />
-          </button>
-        )}
-        {/* A page of its own, as the calendar: the drawer around the tree closes. */}
+      ),
+      board: (
+        <button type="button" aria-label="Board" title="Board" onClick={() => board?.()} className={iconTarget}>
+          <SquareKanban size={20} aria-hidden />
+        </button>
+      ),
+      // A page of its own, as the calendar: the drawer around the tree closes.
+      recent: (
         <Link to="/recent" aria-label="Recent changes" title="Recent changes" onClick={() => useEditor.getState().setOverlay("none")} className={iconTarget}>
           <History size={20} aria-hidden />
         </Link>
-        <button type="button" aria-label={sort} title={sort} onClick={() => onOrder(order === "name" ? "changed" : "name")} className={iconTarget}>
+      ),
+      sort: (
+        <button type="button" aria-label={sort} title={sort} onClick={toggleOrder} className={iconTarget}>
           {order === "name" ? <ArrowDownAZ size={20} aria-hidden /> : <ClockArrowDown size={20} aria-hidden />}
         </button>
-        <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={() => onSearch({ words: "", flag: null })} className={iconTarget}>
+      ),
+      find: (
+        <button ref={opener} type="button" aria-label="Find in this vault" title="Find in this vault" onClick={findOpen} className={iconTarget}>
           <Search size={20} aria-hidden />
         </button>
+      ),
+      menu: (
         <div className="ml-auto flex-none">
-          <Menu label={`Actions for ${vault}`} items={menu} title={`Actions for ${vault}`} placement="below" className={iconTarget}>
+          <Menu label={`Actions for ${vault}`} title={`Actions for ${vault}`} items={items} placement="below" className={iconTarget}>
             <Ellipsis size={20} aria-hidden />
           </Menu>
         </div>
+      ),
+    };
+    return (
+      <div ref={row} role="group" aria-label="Tools for this vault" className="flex flex-none items-center px-2 pb-2">
+        {shown.map((t) => (
+          <Fragment key={t}>{targets[t]}</Fragment>
+        ))}
       </div>
     );
   }
