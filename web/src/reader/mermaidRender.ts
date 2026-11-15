@@ -2,6 +2,7 @@
 // Loaded only for a note with a diagram (MermaidDiagram's `import("./mermaidRender")`): Mermaid stays out of the
 // first load of the app and of the reader page.
 import mermaid, { type MermaidConfig } from "mermaid";
+import { keyword, lines } from "./diagramSize";
 
 // Mermaid's default `maxTextSize`, which a longer source doesn't fail: it is drawn as a diagram saying so.
 const maxTextSize = 50_000;
@@ -18,8 +19,6 @@ const config = (dark: boolean): MermaidConfig => ({
   flowchart: { htmlLabels: false },
   fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
 });
-
-const lines = (source: string) => source.split(/\r?\n/);
 
 /** What follows `key` at the start of a line, past blank lines as Mermaid's `\s*` reads them, and the line it is on. */
 function* keyed(rows: string[], key: string) {
@@ -53,13 +52,6 @@ function accBlock(rows: string[], key: string) {
   }
 }
 
-/** The diagram's keyword, past a front matter block (`---` … `---`), which Mermaid takes for its title and config. */
-function keyword(rows: string[]) {
-  if (rows[0]?.trim() === "---") rows = rows.slice(rows.findIndex((l, i) => i > 0 && l.trim() === "---") + 1);
-  const first = rows.map((l) => l.trim()).find((l) => l && !l.startsWith("%%"));
-  return first && /^[A-Za-z][\w-]*/.exec(first)?.[0];
-}
-
 /** The diagram's `accTitle` and `accDescr`, else its type: "Diagram (flowchart)". */
 export function diagramAlt(source: string): string {
   const rows = lines(source);
@@ -68,7 +60,7 @@ export function diagramAlt(source: string): string {
   const given = [title, description].filter((s): s is string => !!s);
   if (given.length) return given.join(". ");
 
-  const name = keyword(rows);
+  const name = keyword(source);
   if (!name) return "Diagram";
   const type = name === "graph" ? "flowchart" : name.replace(/-(v2|beta)$/, "").replace(/Diagram$/, "");
   return `Diagram (${type.toLowerCase()})`;
@@ -130,7 +122,9 @@ function loadsImage(source: string, decoded: string) {
   if (/(?:url|image-set|image|cross-fade|element|src)\(/i.test(decoded)) return true;
   if (shapeData(source).some((block) => /\bimg\b|\\[xuU]/.test(block))) return true;
   const rows = lines(source);
-  if (keyword(rows) !== "sequenceDiagram") return false;
+  // A source whose type can't be read is checked as a sequence diagram would be.
+  const name = keyword(source);
+  if (name && name !== "sequenceDiagram") return false;
   return rows.some((row) =>
     row.split(";").some((statement) => /^\s*details\b/i.test(statement) || (/^\s*properties\b/i.test(statement) && /icon|\\u/i.test(statement))),
   );
@@ -188,9 +182,15 @@ async function draw(source: string, dark: boolean) {
   }
 }
 
-/** The diagram as an SVG string, one at a time in call order: Mermaid's configuration is global. */
-export async function renderDiagram(source: string, dark: boolean): Promise<{ svg: string; alt: string }> {
-  const run = queue.then(() => draw(source, dark));
+/**
+ * The diagram as an SVG string, one at a time in call order: Mermaid's configuration is global. A diagram whose
+ * signal is aborted before its turn is not drawn.
+ */
+export async function renderDiagram(source: string, dark: boolean, signal?: AbortSignal): Promise<{ svg: string; alt: string }> {
+  const run = queue.then(() => {
+    signal?.throwIfAborted();
+    return draw(source, dark);
+  });
   queue = run.catch(() => undefined);
   return run;
 }

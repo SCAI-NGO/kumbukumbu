@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { schemes } from "../theme/schemes";
@@ -58,16 +58,27 @@ describe("Mermaid in the note view", () => {
 
   it("redraws on a change of data-scheme", async () => {
     show(plan);
-    await waitFor(() => expect(renderDiagram).toHaveBeenCalledWith("flowchart LR\n  A --> B", false));
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledWith("flowchart LR\n  A --> B", false, expect.any(AbortSignal)));
     await act(async () => {
       document.documentElement.dataset.scheme = dark;
     });
-    await waitFor(() => expect(renderDiagram).toHaveBeenLastCalledWith("flowchart LR\n  A --> B", true));
+    await waitFor(() => expect(renderDiagram).toHaveBeenLastCalledWith("flowchart LR\n  A --> B", true, expect.any(AbortSignal)));
   });
 
   it("an embedded note's mermaid block is drawn too", async () => {
     show(plan, { nested: true });
     expect(await screen.findByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
+  });
+
+  it("a note's first diagrams draw by themselves, the others when asked", async () => {
+    show(Array.from({ length: 12 }, (_, i) => `\`\`\`mermaid\nflowchart LR\n  A${i} --> B${i}\n\`\`\``).join("\n\n"));
+    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(10));
+    const asks = screen.getAllByRole("button", { name: "Draw diagram" });
+    expect(asks).toHaveLength(2);
+    expect(asks[0].closest("[data-line]")).toHaveAttribute("data-line", "51");
+    fireEvent.click(asks[0]);
+    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(11));
+    expect(renderDiagram).toHaveBeenCalledTimes(11);
   });
 
   it("keeps the agent's highlight on a diagram", async () => {

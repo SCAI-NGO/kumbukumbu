@@ -10,6 +10,7 @@ import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState
 import { fileKindIcon } from "../components/fileKindIcon";
 import { useErrorTextFor } from "../discreet/errorText";
 import { remarkHideBlockIds } from "../reader/blockIds";
+import { drawing } from "../reader/diagramSize";
 import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
@@ -33,6 +34,7 @@ export interface Highlight {
 
 interface MdBlock {
   type: string;
+  lang?: string | null;
   children?: MdBlock[];
   position?: { start: { line: number }; end: { line: number } };
   data?: { hProperties?: Record<string, unknown> };
@@ -53,6 +55,18 @@ function remarkChanged({ highlight }: { highlight: Highlight | null }) {
         if (touched(node)) node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataChanged: true, dataWriter: highlight.writer } };
       }
     }
+  };
+}
+
+/** Numbers the note's Mermaid blocks in reading order: the first few draw by themselves. */
+function remarkDiagramOrder() {
+  return (tree: MdBlock) => {
+    let n = 0;
+    const walk = (node: MdBlock) => {
+      if (node.type === "code" && node.lang === "mermaid") node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataDiagram: n++ } };
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(tree);
   };
 }
 
@@ -414,8 +428,23 @@ function mermaidCode(pre: HastNode | undefined) {
   return [code.properties.className].flat().includes("language-mermaid") ? code : null;
 }
 
-function Mermaid({ source }: { source: string }) {
-  return <MermaidDiagram source={source} dark={useDarkScheme()} />;
+const AUTO_DIAGRAMS = 10;
+
+/** The diagrams of a note, its embedded notes' included, that draw by themselves. */
+const DiagramSlots = createContext<Set<string> | null>(null);
+
+function Mermaid({ source, order }: { source: string; order: number }) {
+  const slots = useContext(DiagramSlots)!;
+  const key = useContext(FootnoteContext).prefix + order;
+  const small = useMemo(() => drawing(source) === "itself", [source]);
+  // Claimed while rendering, in reading order; a key claims once, so rendering again changes nothing.
+  const auto = small && (slots.has(key) || (slots.size < AUTO_DIAGRAMS && !!slots.add(key)));
+  useEffect(() => {
+    if (!auto) return;
+    slots.add(key);
+    return () => void slots.delete(key);
+  }, [auto, key, slots]);
+  return <MermaidDiagram source={source} dark={useDarkScheme()} auto={auto} />;
 }
 
 const components: Components = {
@@ -496,7 +525,7 @@ const components: Components = {
     const line = useLine(node);
     return code ? (
       <div data-line={line} data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
-        <Mermaid source={textOf(code).replace(/\n$/, "")} />
+        <Mermaid source={textOf(code).replace(/\n$/, "")} order={Number(code.properties.dataDiagram ?? 0)} />
       </div>
     ) : (
       <pre data-line={line} className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
@@ -589,6 +618,7 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
         [remarkFind, { query, current }],
         // Before the agent's highlights, which land on the `div` a display gets.
         ...(math ? [math.remarkDisplayParagraph, math.remarkMathBlocks] : []),
+        remarkDiagramOrder,
         [remarkChanged, { highlight }],
       ] as const,
     [links, highlight, query, current, math, math ? source : null, mask],
@@ -607,17 +637,22 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
   const footnotes = useMemo(() => ({ prefix, root }), [prefix]);
   // The back link's arrow in text presentation: no colour emoji.
   const rehypeOptions = useMemo(() => ({ clobberPrefix: prefix, footnoteBackContent: "↩︎" }), [prefix]);
+  // An embedded note's diagrams count with the note's.
+  const outer = useContext(DiagramSlots);
+  const slots = useMemo(() => outer ?? new Set<string>(), [outer]);
 
   return (
-    <NoteContext.Provider value={context}>
-      <FootnoteContext.Provider value={footnotes}>
-        <div ref={root} className="text-[16px] leading-[1.6] break-words text-text-body">
-          <ReactMarkdown remarkPlugins={remarkPlugins as never} rehypePlugins={math?.rehypePlugins} remarkRehypeOptions={rehypeOptions} components={components}>
-            {math ? prepared.source : source}
-          </ReactMarkdown>
-        </div>
-      </FootnoteContext.Provider>
-    </NoteContext.Provider>
+    <DiagramSlots.Provider value={slots}>
+      <NoteContext.Provider value={context}>
+        <FootnoteContext.Provider value={footnotes}>
+          <div ref={root} className="text-[16px] leading-[1.6] break-words text-text-body">
+            <ReactMarkdown remarkPlugins={remarkPlugins as never} rehypePlugins={math?.rehypePlugins} remarkRehypeOptions={rehypeOptions} components={components}>
+              {math ? prepared.source : source}
+            </ReactMarkdown>
+          </div>
+        </FootnoteContext.Provider>
+      </NoteContext.Provider>
+    </DiagramSlots.Provider>
   );
 }
 
