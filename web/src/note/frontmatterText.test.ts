@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { addProperty, findPropertyBlocks, moveToProperties, yamlValue } from "./frontmatterText";
+import { addProperty, findPropertyBlocks, frontmatterUnreadable, moveToProperties, yamlValue } from "./frontmatterText";
 
 describe("findPropertyBlocks", () => {
   it.each([
@@ -181,5 +181,17 @@ describe("yamlValue", () => {
     ["two\nlines", '"two\\nlines"'],
   ])("%j → %s", (value, yaml) => {
     expect(yamlValue(value)).toBe(yaml);
+  });
+});
+
+describe("frontmatterUnreadable", () => {
+  it.each([
+    ["no frontmatter", "# T\n", false],
+    ["an empty one", "---\n---\n# T\n", false],
+    ["one that reads", "---\nowner: Bob\n---\n", false],
+    ["one that doesn't", "---\nauthor:\n  name: Ada\n---\n", true],
+    ["one that doesn't, after a BOM", "\uFEFF---\nabout: |\n  more\n---\n", true],
+  ])("%s", (_, content, unreadable) => {
+    expect(frontmatterUnreadable(content)).toBe(unreadable);
   });
 });

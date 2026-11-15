@@ -31,7 +31,7 @@ import { OutlineSheet } from "./NoteTools";
 import { atxHeading, headingLine, outline } from "./outline";
 import { maskedBody } from "./comments";
 import AddPropertyDialog, { type AddRefusal, type AddSaid } from "./AddPropertyDialog";
-import { addProperty, findPropertyBlocks, moveToProperties, type PropertyBlock } from "./frontmatterText";
+import { addProperty, findPropertyBlocks, frontmatterUnreadable, moveToProperties, type PropertyBlock } from "./frontmatterText";
 import { parseProperties, splitFrontmatter } from "./properties";
 import PropertyHint, { CHANGED_ELSEWHERE, type MoveSaid } from "./PropertyHint";
 import { useStoredOpen } from "./propertiesOpen";
@@ -369,17 +369,18 @@ export default function NoteView({ path }: { path: string }) {
    * moved or added changes the calendar's. Gives `written`, or what stopped it with the version it speaks of: on a
    * conflict the cache already holds the newer one, and nothing is written on top of it.
    */
+  const saveAsync = save.mutateAsync;
   const rewrite = useCallback(
-    async <R,>(change: (content: string) => { content: string } | { refused: R }): Promise<Rewritten<R> | null> => {
+    async <R,>(change: (content: string) => { content: string } | { refused: R }): Promise<Rewritten<R>> => {
       const before = queryClient.getQueryData<typeof note.data>(["note", path]);
-      if (!(await editorSettled(path))) return before ? { text: UNSAVED, version: before.version } : null;
-      // The text as it is now, not as the tap saw it.
+      if (!(await editorSettled(path))) return { text: UNSAVED, version: before?.version ?? "" };
+      // The text as it is now, not as the tap saw it; none left, it went or changed under the tap.
       const latest = queryClient.getQueryData<typeof note.data>(["note", path]);
-      if (!latest) return null;
+      if (!latest) return { text: CHANGED_ELSEWHERE, version: "" };
       const changed = change(latest.content);
       if ("refused" in changed) return { refused: changed.refused, version: latest.version };
       try {
-        const result = await save.mutateAsync({ content: changed.content, version: latest.version });
+        const result = await saveAsync({ content: changed.content, version: latest.version });
         if ("conflict" in result) return { text: CHANGED_ELSEWHERE, version: result.conflict.version };
         void afterEntryWrite(queryClient, vaultOf(path), path);
         return { written: true };
@@ -387,7 +388,7 @@ export default function NoteView({ path }: { path: string }) {
         return { text: errorFor(err), version: latest.version };
       }
     },
-    [path, queryClient, save, errorFor],
+    [path, queryClient, saveAsync, errorFor],
   );
 
   // Blocks below the title that look like frontmatter, and what the last tap on Move to properties came to: for the
@@ -399,11 +400,20 @@ export default function NoteView({ path }: { path: string }) {
       setMoveSaid(null);
       const done = await rewrite((content) => {
         const moved = moveToProperties(content, block);
-        return "refused" in moved ? { refused: moved } : moved;
+        // Either the properties there can't be read, or they can and the keys wouldn't read back once moved.
+        return "refused" in moved ? { refused: { ...moved, frontmatter: frontmatterUnreadable(content) } } : moved;
       });
-      if (!done || "written" in done) return;
+      if ("written" in done) return;
       const said: MoveSaid | null =
-        "text" in done ? { text: done.text } : done.refused.refused === "exists" ? { exists: done.refused.key } : done.refused.refused === "unreadable" ? { unreadable: true } : null;
+        "text" in done
+          ? { text: done.text }
+          : done.refused.refused === "exists"
+            ? { exists: done.refused.key }
+            : done.refused.refused === "unreadable"
+              ? done.refused.frontmatter
+                ? { unreadable: true }
+                : { unwritable: true }
+              : null;
       // Gone: the note changed under the tap, and the hints follow it as it is now.
       if (said) setMoveSaid({ start: block.start, version: done.version, said });
     },
@@ -415,10 +425,9 @@ export default function NoteView({ path }: { path: string }) {
         const added = addProperty(content, name, value);
         if (!("refused" in added) || added.refused !== "unreadable") return added;
         // Either the properties there can't be read, or they can and the value wouldn't read back.
-        const { frontmatter } = splitFrontmatter(content.replace(/^\uFEFF/, ""));
-        return { refused: frontmatter !== null && parseProperties(frontmatter) === null ? "frontmatter" : "value" };
+        return { refused: frontmatterUnreadable(content) ? "frontmatter" : "value" };
       });
-      return !done || "written" in done ? null : "text" in done ? { text: done.text } : { refused: done.refused };
+      return "written" in done ? null : "text" in done ? { text: done.text } : { refused: done.refused };
     },
     [rewrite],
   );
@@ -427,9 +436,9 @@ export default function NoteView({ path }: { path: string }) {
       const block = blocks.find((b) => b.start === line - 1);
       if (!block) return null;
       const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
-      return <PropertyHint onMove={mayWrite ? () => void moveBlock(block) : undefined} pending={save.isPending} said={said} />;
+      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} said={said} />;
     },
-    [blocks, moveSaid, note.data?.version, mayWrite, moveBlock, save.isPending],
+    [blocks, moveSaid, note.data?.version, path, mayWrite, moveBlock],
   );
 
   const createMissing = useCallback(

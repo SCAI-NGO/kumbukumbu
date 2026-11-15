@@ -1207,13 +1207,13 @@ describe("the calendar in the note's menus", () => {
 describe("Add property… in the note's menu", () => {
   const INBOX = "/Work/inbox.md";
   /** The inbox as written, read again as the last write left it; every PUT's body is kept. */
-  function inboxApi(content: string, level = "owner") {
-    let current = { path: INBOX, content, version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" };
+  function inboxApi(content: string, level = "owner", path = INBOX) {
+    let current = { path, content, version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" };
     const puts: { content: string; version: string }[] = [];
     signedInApi({
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", canWrite: level !== "read", level, ...(level === "owner" ? {} : { owner: '"Alice"', shared: true, membership: "m1" }) }]),
-      [`GET /api/notes${INBOX}`]: () => json(200, current),
-      [`PUT /api/notes${INBOX}`]: async (r) => {
+      [`GET /api/notes${path}`]: () => json(200, current),
+      [`PUT /api/notes${path}`]: async (r) => {
         const body = (await r.json()) as { content: string; version: string };
         puts.push(body);
         current = { ...current, content: body.content, version: `v${puts.length + 1}` };
@@ -1279,6 +1279,13 @@ describe("Add property… in the note's menu", () => {
 
     inboxApi("# Inbox\n", "read");
     renderApp(`/notes${INBOX}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await noteMenu()).not.toContain("Add property…");
+  });
+
+  it("isn't offered on the board's own note below maintain", async () => {
+    inboxApi("# Board\n", "write", "/Work/Board/Board.md");
+    renderApp("/notes/Work/Board/Board.md");
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
     expect(await noteMenu()).not.toContain("Add property…");
   });

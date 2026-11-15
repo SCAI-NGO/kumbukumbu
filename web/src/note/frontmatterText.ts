@@ -129,6 +129,12 @@ const propertiesOf = (text: string) => {
   return frontmatter === null ? null : parseProperties(frontmatter);
 };
 
+/** Whether the note has a frontmatter at the top that can't be read as properties. */
+export const frontmatterUnreadable = (content: string) => {
+  const { frontmatter } = splitFrontmatter(withoutBom(content).text);
+  return frontmatter !== null && parseProperties(frontmatter) === null;
+};
+
 /**
  * The note's text with a block's keys moved into its frontmatter (created at the top when there is none) and the
  * block removed; every other byte as it was. Refused for a key the frontmatter has, an unreadable frontmatter, or
@@ -192,5 +198,6 @@ export function yamlValue(value: string): string {
     !/^(true|false|yes|no|on|off|null|~)$/i.test(value)
   )
     return value;
+  // A line break can't reach here from addProperty, but yamlValue stands alone: it is exported and tested on its own.
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n?|\n/g, "\\n")}"`;
 }

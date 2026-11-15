@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { onlineManager, QueryClient } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { startsWithH1 } from "./NoteView";
+import PropertyHint from "./PropertyHint";
 import { keptTagOf, withCameFrom } from "../calendar/backLink";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -68,6 +69,8 @@ function noteApi(extra: Parameters<typeof fakeApi>[0] = {}, previousSignInAt: st
 }
 
 const view = () => screen.getByRole("article");
+const asked = (fetch: ReturnType<typeof fakeApi>, path: string) =>
+  fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === path).length;
 
 describe("the note view", () => {
   it("reads the note again by itself once its vault is no longer being re-encrypted", async () => {
@@ -827,21 +830,83 @@ describe("properties at the top", () => {
   const hint = async () => (await screen.findByText(HINT)).closest<HTMLElement>("[role=note]")!;
 
   /** The note as written, read again as the last write left it; every PUT's body is kept. */
-  function aliasApi(content: string, extra: Parameters<typeof fakeApi>[0] = {}) {
-    let current = noteView(ALIAS, content);
+  function aliasApi(content: string, extra: Parameters<typeof fakeApi>[0] = {}, path = ALIAS) {
+    let current = noteView(path, content);
     const puts: { content: string; version: string }[] = [];
-    noteApi({
-      [`GET /api/notes${ALIAS}`]: () => json(200, current),
-      [`PUT /api/notes${ALIAS}`]: async (r) => {
+    fetched = noteApi({
+      "GET /api/vaults/Work/calendar/entry": () => json(200, { entry: null, couldntRead: null, canWrite: true }),
+      [`GET /api/notes${path}`]: () => json(200, current),
+      [`PUT /api/notes${path}`]: async (r) => {
         const body = (await r.json()) as { content: string; version: string };
         puts.push(body);
-        current = noteView(ALIAS, body.content, `v${puts.length + 1}`);
+        current = noteView(path, body.content, `v${puts.length + 1}`);
         return json(200, current);
       },
       ...extra,
     });
     return puts;
   }
+  let fetched: ReturnType<typeof fakeApi>;
+  const move = async () => userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+
+  it("asks the calendar again after the move: a `when:` moved changes its line", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(0));
+    const [entries, vaults] = [asked(fetched, "/api/vaults/Work/calendar/entry"), asked(fetched, "/api/vaults")];
+    await move();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(entries));
+    expect(asked(fetched, "/api/vaults")).toBeGreaterThan(vaults);
+  });
+
+  it("writes nothing while the editor's text isn't saved, and says so", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await hint();
+    act(() => useEditor.getState().setBeforeRead(async () => false));
+    await move();
+    expect(await within(await hint()).findByText("Your typing isn't saved yet; try again in a moment.")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("moves in the text as the editor's save left it, on that version", async () => {
+    const puts = aliasApi(chris);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp(`/notes${ALIAS}`, queryClient);
+    await hint();
+    // The save the tap waits for brings a newer version.
+    act(() =>
+      useEditor.getState().setBeforeRead(async () => {
+        queryClient.setQueryData(["note", ALIAS], noteView(ALIAS, `${chris}\nMore.\n`, "v9"));
+        return true;
+      }),
+    );
+    await move();
+    await waitFor(() => expect(puts).toEqual([{ content: "---\naliases: [kumbu]\n---\n# aliastest\n\nMore.\n", version: "v9" }]));
+  });
+
+  it("the board's own note, below maintain, offers neither the move nor + Add property", async () => {
+    const BOARD_NOTE = "/Work/Board/Board.md";
+    aliasApi(`---\nowner: Bob\n---\n${chris}`, { "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, canWrite: true, level: "write", owner: '"Ada"', shared: true }]) }, BOARD_NOTE);
+    renderApp(`/notes${BOARD_NOTE}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Properties")).toHaveTextContent("owner");
+    expect(screen.queryByRole("button", { name: "Add property" })).not.toBeInTheDocument();
+  });
+
+  it("says why when the moved keys wouldn't read back", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PropertyHint path={ALIAS} onMove={vi.fn()} said={{ unwritable: true }} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("That can't be written as properties here, so nothing was moved.");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 
   it("points out the block right above its rule, and moves it to the top on a tap, as one write with the note's version", async () => {
     const puts = aliasApi(chris);
@@ -929,7 +994,8 @@ describe("adding a property", () => {
   function planApi(extra: Parameters<typeof fakeApi>[0] = {}) {
     let current = noteView(PLAN, source);
     const puts: { content: string; version: string }[] = [];
-    noteApi({
+    fetched = noteApi({
+      "GET /api/vaults/Work/calendar/entry": () => json(200, { entry: null, couldntRead: null, canWrite: true }),
       [`GET /api/notes${PLAN}`]: () => json(200, current),
       [`PUT /api/notes${PLAN}`]: async (r) => {
         const body = (await r.json()) as { content: string; version: string };
@@ -951,6 +1017,26 @@ describe("adding a property", () => {
     return dialog;
   }
   const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  let fetched: ReturnType<typeof fakeApi>;
+
+  it("asks the calendar again after the write: a `when:` added changes its line", async () => {
+    const puts = planApi();
+    await adding("owner", "Alice");
+    await waitFor(() => expect(puts).toHaveLength(1));
+    // Once on opening the note, and again after the write.
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(1));
+    expect(asked(fetched, "/api/vaults")).toBeGreaterThan(1);
+  });
+
+  it("writes nothing while the editor's text isn't saved, says so and stays open", async () => {
+    const puts = planApi();
+    useEditor.getState().setBeforeRead(async () => false);
+    const dialog = await adding("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your typing isn't saved yet; try again in a moment.");
+    await settle();
+    expect(puts).toEqual([]);
+    expect(dialog).toBeInTheDocument();
+  });
 
   it("writes name: value as the properties' last line with the note's version, every other byte as it was", async () => {
     const puts = planApi();
