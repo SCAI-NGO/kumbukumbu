@@ -53,7 +53,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         };
     }
 
-    /// <summary>The message is one line of at most 200 characters; blank is none. Trimmed.</summary>
+    /// <summary>The message is one line of at most 200 characters (UTF-16 code units); blank is none. Trimmed. Control
+    /// characters and the Unicode line and paragraph separators are refused, so a message can't fake a line of <c>history</c>.</summary>
     public static bool TryMessage(string? message, string tool, out string? clean, out ShellResult? error)
     {
         clean = message?.Trim();
@@ -64,7 +65,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             return true;
         }
 
-        if (clean.Length <= MaxMessage && !clean.Contains('\n', StringComparison.Ordinal) && !clean.Contains('\r', StringComparison.Ordinal)) return true;
+        if (clean.Length <= MaxMessage && !clean.Any(c => char.IsControl(c) || c is '\u2028' or '\u2029')) return true;
 
         clean = null;
         error = ShellResult.Error($"{tool}: message is one line of at most {MaxMessage} characters") with { Kind = ShellErrorKind.Invalid };

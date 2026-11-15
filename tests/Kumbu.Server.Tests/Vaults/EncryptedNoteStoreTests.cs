@@ -334,13 +334,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync();
         var v1 = New("/Work/a.md", "one");
         await store.TryCreateAsync(v1, Ct);
-        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1));
+        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1), message: "second");
         await store.TryReplaceAsync(v1, v2, Ct);
 
         Assert.True(await store.TryTrashAsync(v2, Writers.Dev, WriterRef.Server, T0.AddHours(2), Ct));
         Assert.Null(await store.GetAsync(P("/Work/a.md"), Ct));
         var trashed = Assert.Single(await Store(world.Catalog()).ListTrashAsync(P("/Work"), Ct));
         Assert.Equal((T0.AddHours(2), Writers.Dev, "two"), (trashed.DeletedAt, trashed.DeletedBy, trashed.Note.Content));
+        Assert.Equal("second", trashed.Note.Message);
 
         var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), new Changeset("c1", T0.AddHours(3)), Ct);
 

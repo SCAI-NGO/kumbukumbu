@@ -181,7 +181,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         return output;
     }
 
-    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string? note, CancellationToken ct)
+    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string? message, CancellationToken ct)
     {
         var writer = caller.WriterIn(path.Segments[0]);
         var reference = caller.ReferenceIn(path.Segments[0]);
@@ -223,7 +223,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             }
 
             // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset, message: note)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset, message: message)));
         }
 
         if (changed.Count == 0)
@@ -238,9 +238,9 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             return ShellResult.Error($"replace: nothing was replaced: {string.Join(", ", changed)} changed since the preview; preview again");
         }
 
-        var message = $"replaced {Count(total, "occurrence")} in {Count(batch.Replaces.Count, "note")}";
-        plans.Applied(token, message, now);
-        return ShellResult.Ok(message);
+        var summary = $"replaced {Count(total, "occurrence")} in {Count(batch.Replaces.Count, "note")}";
+        plans.Applied(token, summary, now);
+        return ShellResult.Ok(summary);
     }
 
     /// <summary>Start indexes of the non-overlapping occurrences; with <paramref name="word"/>, only where

@@ -323,6 +323,11 @@ public class NoteWriterTests
 
     [Theory]
     [InlineData("two\nlines")]
+    [InlineData("two\rlines")]
+    [InlineData("two\u2028lines")]
+    [InlineData("two\u2029lines")]
+    [InlineData("two\u0085lines")]
+    [InlineData("two\u001b[2Klines")]
     [InlineData("long")]
     public void A_message_is_one_line(string kind)
     {
