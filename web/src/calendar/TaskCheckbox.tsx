@@ -11,6 +11,7 @@ export default function TaskCheckbox({ closed, title, disabled, onChange }: { cl
       type="button"
       role="checkbox"
       aria-checked={closed}
+      aria-label={title ? `${closed ? "Done" : "To do"}: ${title}` : undefined}
       disabled={disabled}
       onClick={onChange}
       className="inline-flex min-h-12 min-w-12 flex-none items-center gap-2 rounded-[10px] px-1 font-medium text-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
@@ -19,7 +20,6 @@ export default function TaskCheckbox({ closed, title, disabled, onChange }: { cl
         {closed && <Check size={14} strokeWidth={3} />}
       </span>
       <span>{closed ? "Done" : "To do"}</span>
-      {title && <span className="sr-only">: {title}</span>}
     </button>
   );
 }
