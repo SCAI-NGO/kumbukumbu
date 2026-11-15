@@ -79,15 +79,13 @@ test("aliases #1+#2: links by alias are drawn as links and open Kumbukumbu, at R
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Diary/2026-11-12\\.md$`));
     await press(testInfo, roadmap);
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Projects/Kumbukumbu\\.md$`));
-    // That it opens at the Roadmap section is F-03 (below): the app jumps to no heading.
+    // The Roadmap section comes into view in a long note: aliases #2.
     await expect(page.locator("article").getByRole("heading", { name: "Kumbukumbu", level: 1 })).toBeVisible();
     await expect(page.locator("article").getByRole("heading", { name: "Roadmap", level: 2 })).toBeVisible();
   });
 });
 
 test("aliases #2: roadmap opens Kumbukumbu at its Roadmap section @aliases @serial @phone", async ({ page, aliceApi, seedAs, folder }, testInfo) => {
-  test.fail(true, "F-03 a link to a heading opens the note at its top, not at the heading (MarkdownView.tsx passes only a block, NoteView.tsx handles block and line)");
-  test.info().annotations.push({ type: "finding", description: "F-03" });
   await withNotes({ aliceApi, seedAs, folder }, ["Long/Kumbukumbu.md", diary], async (at) => {
     await openNote(page, at(diary));
     await press(testInfo, page.locator("article").getByRole("link", { name: "roadmap", exact: true }));

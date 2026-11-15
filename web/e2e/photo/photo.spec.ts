@@ -26,14 +26,11 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
   return page.getByRole("dialog", { name: "File tree" });
 }
 
-/** Opens the ⋯ menu of the folder `name` in the tree; F-02: it closes while the tree still scrolls to the open note, so it is opened again if so. */
+/** Opens the ⋯ menu of the folder `name` in the tree. */
 async function folderMenu(page: Page, tree: Locator, name: string) {
+  await tree.getByRole("button", { name: `Actions for ${name}` }).click();
   const menu = page.getByRole("menu", { name: `Actions for ${name}` });
-  await expect(async () => {
-    // Not Escape: on the phone it would close the drawer too.
-    if (!(await menu.isVisible())) await tree.getByRole("button", { name: `Actions for ${name}` }).click();
-    await expect(menu.getByRole("menuitem").first()).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 10_000 });
+  await expect(menu.getByRole("menuitem").first()).toBeVisible();
   return menu;
 }
 
@@ -42,20 +39,17 @@ test("flags #18: Take photo sits beside Upload here on the phone @photo @phone",
   await openNote(page, `/Work/${folder}/Meetings/Agenda.md`);
 
   const tree = await openTree(page, testInfo);
-  // F-02: the checks sit in the attempt that opens the menu, so a menu closed by the tree's scroll just retries.
-  await expect(async () => {
-    const menu = await folderMenu(page, tree, "Meetings");
-    await expect(menu.getByRole("menuitem", { name: "Upload here" })).toBeVisible({ timeout: 2_000 });
-    if (onPhone(testInfo)) {
-      await expect(menu.getByRole("menuitem", { name: "Take photo" })).toBeVisible({ timeout: 2_000 });
-      // Beside Upload here: the next item.
-      const items = (await menu.getByRole("menuitem").allInnerTexts()).map((t) => t.trim());
-      expect(items.indexOf("Take photo")).toBe(items.indexOf("Upload here") + 1);
-    } else {
-      await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0, { timeout: 2_000 });
-    }
-    await shot(page, testInfo, "photo");
-  }).toPass({ timeout: 20_000 });
+  const menu = await folderMenu(page, tree, "Meetings");
+  await expect(menu.getByRole("menuitem", { name: "Upload here" })).toBeVisible();
+  if (onPhone(testInfo)) {
+    await expect(menu.getByRole("menuitem", { name: "Take photo" })).toBeVisible();
+    // Beside Upload here: the next item.
+    const items = (await menu.getByRole("menuitem").allInnerTexts()).map((t) => t.trim());
+    expect(items.indexOf("Take photo")).toBe(items.indexOf("Upload here") + 1);
+  } else {
+    await expect(menu.getByRole("menuitem", { name: /photo/i })).toHaveCount(0);
+  }
+  await shot(page, testInfo, "photo");
 });
 
 test("flags #18: Bob is not offered Take photo @photo @phone", async ({ bobPage }, testInfo) => {
@@ -85,11 +79,8 @@ test("flags #19: three photos land as Photo <date> <time>.jpg with the upload's 
     if (n > 1) await expect(tree.getByRole("button", { name: /^Photo .*\.jpg/ })).toHaveCount(n - 1);
     const chooser = page.waitForEvent("filechooser");
     chooser.catch(() => {});
-    // F-02 again: the menu may close before the item is tapped; opened and tried again.
-    await expect(async () => {
-      const menu = await folderMenu(page, tree, "Meetings");
-      await menu.getByRole("menuitem", { name: "Take photo" }).click({ timeout: 2_000 });
-    }).toPass({ timeout: 10_000 });
+    const menu = await folderMenu(page, tree, "Meetings");
+    await menu.getByRole("menuitem", { name: "Take photo" }).click();
     await (await chooser).setFiles(whiteboard);
 
     const sheet = page.getByRole("dialog", { name: "Upload" });

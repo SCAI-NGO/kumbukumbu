@@ -234,8 +234,6 @@ async function phoneWeek(page: Page, api: Api, folder: string, check: (scheme: "
 }
 
 const LONG_TITLE = "A to-do with a rather long title that has to wrap on a phone of 375 pixels";
-/** F-01: these two are 44 px; the second #13 test holds the finding, the first one asserts every other control. */
-const FOUND_SMALL = ["Today", "This week"];
 
 test("calendar #13: at 375 px the week stacks, wraps and doesn't scroll sideways, in light and dark @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
   test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
@@ -259,22 +257,20 @@ test("calendar #13: at 375 px the week stacks, wraps and doesn't scroll sideways
     expect(link.height, `${scheme}: the long title wraps onto more lines`).toBeGreaterThan(60);
     expect(link.x + link.width, `${scheme}: the long title stays within the screen`).toBeLessThanOrEqual(375);
 
-    expect((await smallControls(page)).filter((c) => !FOUND_SMALL.includes(c.name)), `${scheme}: no other control under 48 px`).toEqual([]);
+    expect(await smallControls(page), `${scheme}: no control under 48 px`).toEqual([]);
   });
 });
 
 test("calendar #13: every control is at least 48 px high @calendar @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(onPhone(testInfo), "F-01 Today and This week are 44 px high, under the 48 px of spec §7.11");
-  test.info().annotations.push({ type: "finding", description: "F-01" });
   test.skip(!onPhone(testInfo), "the phone's layout; the desktop has seven columns");
   const small: { scheme: string; name: string; height: number }[] = [];
   await phoneWeek(page, aliceApi, folder, async (scheme) => {
-    // The week is in, with the two controls the finding is about.
+    // The week is in, with + Today and + This week.
     await expect(page.getByRole("region", { name: /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), / })).toHaveCount(7);
-    for (const name of FOUND_SMALL) await expect(page.getByRole("button", { name, exact: true }), `${scheme}: ${name}`).toBeVisible();
+    for (const name of ["+ Today", "+ This week"]) await expect(page.getByRole("button", { name, exact: true }), `${scheme}: ${name}`).toBeVisible();
     small.push(...(await smallControls(page)).map((c) => ({ scheme, ...c })));
   });
-  expect(small, "F-01: every control is at least 48 px high").toEqual([]);
+  expect(small, "every control is at least 48 px high").toEqual([]);
 });
 
 // Serial: Bob's zone is his account's, and the other project's #14 would set and restore it meanwhile.
