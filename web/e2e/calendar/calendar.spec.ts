@@ -96,31 +96,32 @@ test("calendar #4: Add to calendar… writes when, task and upcoming unquoted, e
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toBeHidden();
 
-  await expect(entryLine(page)).toHaveText(`📅 ${shortDay(when, true)} · To do · ✓ · Later`);
+  await expect(entryLine(page)).toHaveText(`📅 ${shortDay(when, true)} To do Later`);
   // The keys after the existing ones, in the spec's order, unquoted; nothing else touched.
   expect((await aliceApi.getNote(path)).content).toBe(before.replace("owner: Alice\n---\n", `owner: Alice\nwhen: ${when}\ntask: open\nupcoming: 7d\n---\n`));
 });
 
-test("calendar #6: ✓ closes at once, Undo reopens, and the reason is kept with the day it was closed @calendar @phone", async ({ page, aliceApi, folder }) => {
+test("calendar #6: the box closes at once, Undo reopens, and the reason is kept with the day it was closed @calendar @phone", async ({ page, aliceApi, folder }) => {
   const path = `/Work/${folder}/Certificate.md`;
   const when = addDays(today(), 30);
   await aliceApi.putNote(path, note({ tags: "[pump]", when, task: "open", upcoming: "7d" }, "# Certificate\n\nThe pump's certificate.\n"));
 
   await page.goto(notePage(path));
   const line = entryLine(page);
-  await expect(line).toHaveText(`📅 ${shortDay(when, true)} · To do · ✓ · Later`);
+  await expect(line).toHaveText(`📅 ${shortDay(when, true)} To do Later`);
 
-  await line.getByRole("button", { name: "Done: Certificate" }).click();
+  await line.getByRole("checkbox", { name: "To do" }).click();
   const toast = page.getByRole("status", { name: "Closed" });
   await expect(toast).toHaveText("Closed · Undo · Add a reason");
   await toast.getByRole("button", { name: "Undo" }).click();
   await expect(toast).toBeHidden();
-  await expect(line).toHaveText(`📅 ${shortDay(when, true)} · To do · ✓ · Later`);
+  await expect(line).toHaveText(`📅 ${shortDay(when, true)} To do Later`);
   expect((await aliceApi.getNote(path)).content).toMatch(/^task: open$/m);
 
   // The day it is closed on, read once: midnight in Vienna may pass while the test runs.
   const closedOn = today();
-  await line.getByRole("button", { name: "Done: Certificate" }).click();
+  await line.getByRole("checkbox", { name: "To do" }).click();
+  await expect(line.getByRole("checkbox", { name: "Done" })).toBeChecked();
   await expect(toast).toHaveText("Closed · Undo · Add a reason");
   await toast.getByRole("button", { name: "Add a reason" }).click();
   const reason = toast.getByRole("textbox", { name: "Reason" });
@@ -130,11 +131,18 @@ test("calendar #6: ✓ closes at once, Undo reopens, and the reason is kept with
   await toast.getByRole("button", { name: "Save" }).click();
   await expect(toast).toBeHidden();
 
-  await expect(line).toHaveText(`📅 ${shortDay(when, true)} · Closed ${dayAndMonth(closedOn)} · renewed until 2027 · Reopen · Edit reason`);
+  await expect(line).toHaveText(`📅 ${shortDay(when, true)} Done Closed ${dayAndMonth(closedOn)} · renewed until 2027 Edit reason`);
+  await expect(line.getByRole("button", { name: "Reopen" })).toHaveCount(0);
   const content = (await aliceApi.getNote(path)).content;
   expect(content).toMatch(/^task: closed$/m);
   expect(content).toMatch(new RegExp(`^closed: ${closedOn}$`, "m"));
   expect(content).toMatch(/^reason: renewed until 2027$/m);
+
+  // Unticking reopens it, as Reopen did.
+  await line.getByRole("checkbox", { name: "Done" }).click();
+  await expect(line).toHaveText(`📅 ${shortDay(when, true)} To do Later`);
+  await expect.poll(async () => (await aliceApi.getNote(path)).content).toMatch(/^task: open$/m);
+  expect((await aliceApi.getNote(path)).content).not.toMatch(/^closed:/m);
 });
 
 test("calendar #8: Later +1 day counts from the later of today and the date, and a task with until offers Postpone and More time @calendar @phone", async ({ page, aliceApi, folder }) => {
@@ -274,7 +282,7 @@ test("calendar #13: every control is at least 48 px high @calendar @phone", asyn
 });
 
 // Serial: Bob's zone is his account's, and the other project's #14 would set and restore it meanwhile.
-test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, Today, This week, Fix… or the note's calendar items @calendar @serial @phone", async ({ bobPage, bobApi, aliceApi, folder }) => {
+test("calendar #14: Bob sees Work's entries in his zone, without the box, Later, +, + Today, + This week, Fix… or the note's calendar items @calendar @serial @phone", async ({ bobPage, bobApi, aliceApi, folder }) => {
   const t = today();
   // His zone other than Alice's for the test (preset from his browser, Europe/Vienna, as hers), back at its end.
   const his = "Europe/London";
@@ -284,8 +292,10 @@ test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, 
     const tag = tagOf(folder);
     const task = `/Work/${folder}/Bob task.md`;
     await aliceApi.putNote(task, note({ when: t, task: "open", tags: `[${tag}]` }, "# Bob task\n"));
-    await aliceApi.putNote(`/Work/${folder}/Call London.md`, note({ when: `${addDays(t, 1)}T14:00`, tz: "Europe/London", tags: `[${tag}]` }, "# Call London\n"));
-    await aliceApi.putNote(`/Work/${folder}/Call Vienna.md`, note({ when: `${addDays(t, 1)}T09:00`, tz: "Europe/Vienna", tags: `[${tag}]` }, "# Call Vienna\n"));
+    // The calls on another day of this week: tomorrow, or yesterday on a Sunday.
+    const call = t === addDays(monday(t), 6) ? addDays(t, -1) : addDays(t, 1);
+    await aliceApi.putNote(`/Work/${folder}/Call London.md`, note({ when: `${call}T14:00`, tz: "Europe/London", tags: `[${tag}]` }, "# Call London\n"));
+    await aliceApi.putNote(`/Work/${folder}/Call Vienna.md`, note({ when: `${call}T09:00`, tz: "Europe/Vienna", tags: `[${tag}]` }, "# Call Vienna\n"));
     await aliceApi.putNote(`/Work/${folder}/Someday.md`, note({ when: "someday", tags: `[${tag}]` }, "# Someday\n"));
     await dismissInstallHint(bobPage);
 
@@ -302,7 +312,8 @@ test("calendar #14: Bob sees Work's entries in his zone, without ✓, Later, +, 
     await expect(itemOf(bobPage, "Call London")).not.toContainText("(Europe/London)");
     await expect(itemOf(bobPage, "Call Vienna")).toContainText("09:00 (Europe/Vienna)");
     await expect(bobPage.getByRole("heading", { name: "Dates I couldn't read" })).toBeVisible();
-    for (const name of [/^Done:/, /^Later/, /^Add something on/, /^Today$/, /^This week$/, /^Fix…/]) await expect(bobPage.getByRole("button", { name }), String(name)).toHaveCount(0);
+    await expect(bobPage.getByRole("checkbox", { name: /^(To do|Done)/ })).toHaveCount(0);
+    for (const name of [/^Later/, /^Add something on/, /^\+ Today$/, /^\+ This week$/, /^Fix…/]) await expect(bobPage.getByRole("button", { name }), String(name)).toHaveCount(0);
 
     await bobPage.goto(notePage(task));
     await expect(entryLine(bobPage)).toHaveText(`📅 ${shortDay(t, true)} · To do`);

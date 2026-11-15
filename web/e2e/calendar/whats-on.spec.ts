@@ -71,7 +71,7 @@ test("calendar #3: Today makes the day note in /Work/Calendar/ with its heading,
   expect((await aliceApi.send("GET", `/api/notes/Work/Calendar/${t}.md`)).status(), "no day note of today yet").toBe(404);
   try {
     await page.goto(weekUrl("Work", t));
-    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await page.getByRole("button", { name: "+ Today", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/notes/Work/Calendar/${t}\\.md$`));
     const editor = page.getByLabel("Markdown source", { exact: true });
     await expect(editor).toHaveValue(new RegExp(`^# ${longDay(t)}\\n`));
@@ -199,7 +199,7 @@ test("calendar #7: What's on lists the open tasks with vault, icon and a calm sp
 
   // Closing the overdue one: the badge counts one less and turns calm.
   await page.goto("/whats-on");
-  await pay.getByRole("button", { name: "Done: Pay invoice" }).click();
+  await pay.getByRole("checkbox", { name: "To do: Pay invoice" }).click();
   await expect(pay).toHaveCount(0);
   await expect(whatsOnItems(page)).toHaveCount(count - 1);
   const after = await whatsOnLink(page, testInfo);
@@ -428,7 +428,7 @@ test("calendar #16: a board card shows its column, Move to Done only with one ar
 
     await page.goto(notePage(card));
     const line = entryLine(page);
-    await expect(line).toHaveText(`📅 ${shortDay(due, true)} · In progress · Move to Done · Later`);
+    await expect(line).toHaveText(`📅 ${shortDay(due, true)} · In progress Move to Done Later`);
     await expect(line.getByRole("button", { name: "Move to Done" })).toBeVisible();
 
     const close = await mcp.sh(`calendar close "${card}"`);
@@ -445,7 +445,7 @@ test("calendar #16: a board card shows its column, Move to Done only with one ar
 
     await aliceApi.putNote("/Work/Board/Board.md", readFileSync(join(fixturesDir, "tags", "calendar", "Board2", "Board.md"), "utf8"));
     await page.reload();
-    await expect(line).toHaveText(`📅 ${shortDay(addDays(due, 1), true)} · In progress · Open the board · Later`);
+    await expect(line).toHaveText(`📅 ${shortDay(addDays(due, 1), true)} · In progress Open the board Later`);
     await expect(line.getByRole("button", { name: /^Move to/ })).toHaveCount(0);
   } finally {
     await aliceApi.deleteNote(card).catch(() => {});
@@ -460,7 +460,7 @@ test("flags #20: Today's day note isn't counted by What's on and the badge until
   const before = await whatsOn(aliceApi);
   try {
     await page.goto(weekUrl("Work", t));
-    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await page.getByRole("button", { name: "+ Today", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/notes/Work/Calendar/${t}\\.md$`));
     await expect(page.getByLabel("Markdown source", { exact: true })).toHaveValue(new RegExp(`^# ${longDay(t)}`));
 

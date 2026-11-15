@@ -44,6 +44,17 @@ async function zonePreset(page: Page) {
     .toBe("Europe/Vienna");
 }
 
+/**
+ * Saves the context's session for the tests, without the last note this device opened (`kumbu.lastNote.<id>`): every
+ * test starts as a fresh device, at the vault list.
+ */
+async function saveSession(page: Page, user: User) {
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage)) if (key.startsWith("kumbu.lastNote.")) localStorage.removeItem(key);
+  });
+  await page.context().storageState({ path: storageState(user) });
+}
+
 async function newPage(browser: Browser, baseURL: string) {
   const context = await browser.newContext({ baseURL, timezoneId: "Europe/Vienna", locale: "en-GB", viewport: { width: 1280, height: 800 } });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -88,7 +99,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   const alice = await newPage(browser, baseURL!);
   await joinWith(alice.page, link, "alice", secrets);
   await zonePreset(alice.page);
-  await alice.context.storageState({ path: storageState("alice") });
+  await saveSession(alice.page, "alice");
 
   const api = await Api.from(alice.context.request, "alice");
   // The API context sends the session cookie (Secure, on http://localhost) and keeps it.
@@ -126,9 +137,9 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   await bob.page.getByRole("button", { name: "Accept" }).click();
   await expect(bob.page.getByRole("heading", { name: "Work is shared with you" })).toBeVisible();
   await zonePreset(bob.page);
-  await bob.context.storageState({ path: storageState("bob") });
+  await saveSession(bob.page, "bob");
 
-  await alice.context.storageState({ path: storageState("alice") });
+  await saveSession(alice.page, "alice");
   await write.dispose();
   await alice.context.close();
   await bob.context.close();
