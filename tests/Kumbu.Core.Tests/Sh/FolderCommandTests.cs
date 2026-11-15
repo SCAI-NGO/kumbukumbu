@@ -136,7 +136,7 @@ public class FolderCommandTests
     public async Task Rm_refuses_a_folder_with_content_and_counts_it()
     {
         Assert.Equal(
-            ShellResult.Error("rm: /Work/Sub: Is a directory holding 1 entry (rm removes one note or file at a time, or an empty folder)"),
+            ShellResult.Error("rm: /Work/Sub: Is a directory holding 1 entry (rm removes notes, files and empty folders; there is no -r)"),
             await Run("rm /Work/Sub"));
 
         await Run("mkdir /Work/Drafts");
@@ -153,7 +153,7 @@ public class FolderCommandTests
         await Run("mkdir /Work/A/B");
 
         Assert.Equal(
-            ShellResult.Error("rm: /Work/A: Is a directory holding 1 entry (rm removes one note or file at a time, or an empty folder)"),
+            ShellResult.Error("rm: /Work/A: Is a directory holding 1 entry (rm removes notes, files and empty folders; there is no -r)"),
             await Run("rm /Work/A"));
     }
 

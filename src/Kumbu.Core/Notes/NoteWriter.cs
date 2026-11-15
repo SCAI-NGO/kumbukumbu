@@ -289,7 +289,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("rm", path));
             return (await store.ListNotesUnderAsync(path, ct)).Count > 0 || path.IsRoot
-                ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm removes one note at a time)")
+                ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm doesn't remove folders with notes in them; there is no -r)")
                 : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
         }
 

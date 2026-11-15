@@ -32,7 +32,7 @@ public static class Manual
           mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
           archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)
           mkdir <path>                    make a folder; an empty folder stays until you remove it
-          rm <path>                       move a note or an empty folder to the trash (kept 30 days)
+          rm <path> [<path>…]             move notes or empty folders to the trash (kept 30 days)
           trash [path]                    list removed notes and folders
           df [-h] [-b] [/vault]           what your own vaults take, history and trash included, against your limit
           du [-h] [-b] [-s] [-d N] [path] sizes of what is below a path now, largest first

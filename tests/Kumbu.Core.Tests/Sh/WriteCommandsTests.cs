@@ -43,7 +43,6 @@ public class WriteCommandsTests
     [InlineData("history /Demo --since soon", "history: --since takes 30m, 2h, 1d or a UTC time like 2026-10-23 14:00 (got 'soon')")]
     [InlineData("history", "history: missing operand")]
     [InlineData("rm", "rm: missing operand")]
-    [InlineData("rm /Demo/a.md /Demo/b.md", "rm: too many arguments (rm removes one note at a time)")]
     [InlineData("rm -r /Demo", "rm: invalid option -- 'r'")]
     [InlineData("restore", "restore: missing operand")]
     [InlineData("restore a.md", "restore: a.md: paths must be absolute (there is no working directory)")]
@@ -72,6 +71,22 @@ public class WriteCommandsTests
         Assert.Equal("restored /Demo/Meeting Notes.md from the trash", restored.Output);
         Assert.Equal($"2026-10-22 14:08 UTC  /Demo/a.md  {VersionToken.Of("one\n")}  1 line  (by dev)", (await Run("trash /Demo")).Output);
         Assert.Equal("m\n", (await Run("cat \"/Demo/Meeting Notes.md\"")).Output);
+    }
+
+    [Fact]
+    public async Task Rm_removes_each_path_and_reports_each()
+    {
+        var result = await Run("rm /Demo/a.md /Demo/nope.md \"/Demo/Meeting Notes.md\"");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal(3, lines.Length);
+        Assert.StartsWith("removed /Demo/a.md", lines[0]);
+        Assert.Equal("rm: /Demo/nope.md: No such file or directory", lines[1]);
+        Assert.StartsWith("removed /Demo/Meeting Notes.md", lines[2]);
+        Assert.Equal("", (await Run("ls /Demo")).Output);
+        Assert.Contains("/Demo/a.md", (await Run("trash /Demo")).Output);
+        Assert.Contains("/Demo/Meeting Notes.md", (await Run("trash /Demo")).Output);
     }
 
     [Fact]

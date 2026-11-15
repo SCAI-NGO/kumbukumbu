@@ -208,7 +208,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (entries > 0)
         {
             return ShellResult.Error(
-                $"{tool}: {folder.Value}: Is a directory holding {entries} {(entries == 1 ? "entry" : "entries")} (rm removes one note or file at a time, or an empty folder)");
+                $"{tool}: {folder.Value}: Is a directory holding {entries} {(entries == 1 ? "entry" : "entries")} (rm removes notes, files and empty folders; there is no -r)");
         }
 
         return await RemoveAsync(marker.Value, ct);

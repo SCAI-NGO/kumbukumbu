@@ -443,7 +443,7 @@ public class NoteWriterTests
         await _writer.RestoreAsync(P("/Work/none.md"), null, Ct));
 
     [Theory]
-    [InlineData("/Work/sub", "rm: /Work/sub: Is a directory (rm removes one note at a time)")]
+    [InlineData("/Work/sub", "rm: /Work/sub: Is a directory (rm doesn't remove folders with notes in them; there is no -r)")]
     [InlineData("/Work/none.md", "rm: /Work/none.md: No such file or directory")]
     public async Task RemoveErrors(string path, string error) =>
         Assert.Equal(ShellResult.Error(error), await _writer.RemoveAsync(P(path), Ct));
