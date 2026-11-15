@@ -674,6 +674,57 @@ describe("the shell", () => {
   });
 });
 
+describe("the calendar in the phone's dock", () => {
+  const whatsOn = (count: number, overdue: boolean) => ({
+    "GET /api/calendar/whats-on": () => json(200, { items: [], count, overdue, vaults: [{ vault: "Work", count, overdue }], couldntRead: 0, couldntReadVaults: [] }),
+  });
+  const dock = () => screen.getByRole("navigation", { name: "Vault actions" });
+
+  it("sits between Files and Search, carries What's on's count, and opens What's on", async () => {
+    signedInApi(whatsOn(2, true));
+    const router = renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const names = within(dock()).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names.slice(0, 3)).toEqual(["Files", "Calendar", expect.stringMatching(/^Search/)]);
+    const calendar = within(dock()).getByRole("button", { name: "Calendar" });
+    expect(calendar).toHaveClass("size-12");
+    expect(calendar).toHaveAttribute("title", "What's on");
+    await waitFor(() => expect(calendar).toHaveAccessibleDescription("2 on, some overdue"));
+    const pill = within(calendar).getByText("2 on, some overdue").parentElement!;
+    expect(pill).toHaveTextContent(/^2/);
+    expect(pill).toHaveClass("absolute", "top-0", "right-0", "pointer-events-none");
+    // The tree's button keeps only its own job.
+    const tree = screen.getByRole("button", { name: "Open file tree" });
+    expect(tree).not.toHaveAttribute("aria-describedby");
+    expect(within(tree).queryByText(/on/)).not.toBeInTheDocument();
+    expect(tree).not.toHaveClass("mr-1.5");
+
+    await userEvent.click(calendar);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+  });
+
+  it("closes the drawer on its way to What's on", async () => {
+    signedInApi(whatsOn(0, false));
+    const router = renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const calendar = within(dock()).getByRole("button", { name: "Calendar" });
+    expect(calendar).not.toHaveAttribute("aria-describedby");
+    act(() => useEditor.getState().setOverlay("tree"));
+    act(() => calendar.click());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+
+  it("isn't in the dock at desktop widths", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+    signedInApi(whatsOn(2, true));
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    expect(within(dock()).getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(within(dock()).queryByRole("button", { name: "Calendar" })).not.toBeInTheDocument();
+  });
+});
+
 describe("the first vault", () => {
   const skills = { name: "Skills", notes: 1, embeddings: "internal", kind: "skills" };
   const welcome = { name: "Welcome", notes: 1, embeddings: "internal" };

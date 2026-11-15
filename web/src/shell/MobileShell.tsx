@@ -416,6 +416,7 @@ export default function MobileShell() {
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
+              phone={!docked}
               newNote={dockFolder && dockWrites ? () => newNote(dockFolder) : null}
               newFolder={dockFolder && dockWrites ? () => setFolderDialog(dockFolder) : null}
               upload={dockFolder && dockWrites ? () => openUpload(dockFolder) : null}

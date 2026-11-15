@@ -1,15 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Ellipsis, FilePlus, Folder, FolderPlus, Plus, Search, Upload } from "lucide-react";
+import { CalendarClock, Ellipsis, FilePlus, Folder, FolderPlus, Plus, Search, Upload } from "lucide-react";
 import { useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import Badge from "../calendar/Badge";
+import { useBadge } from "../calendar/useBadge";
 import { Menu, type MenuItem } from "../components/Menu";
 import { useEditor } from "../state/editor";
 
+const badgeId = "dock-calendar-badge";
+
 /**
  * The bottom of Read mode: files, search (showing its mode), the open note's actions and "+", all in the thumb's
- * reach. `newNote`, `newFolder` and `upload` are null while there is no vault, `noteActions` while no note is open.
+ * reach; on a phone (`phone`) also the calendar, What's on with its count. `newNote`, `newFolder` and `upload` are null
+ * while there is no vault, `noteActions` while no note is open.
  */
-export default function Dock(props: { newNote: (() => void) | null; newFolder: (() => void) | null; upload: (() => void) | null; noteActions: MenuItem[] | null }) {
-  const { newNote, newFolder, upload, noteActions } = props;
+export default function Dock(props: { phone: boolean; newNote: (() => void) | null; newFolder: (() => void) | null; upload: (() => void) | null; noteActions: MenuItem[] | null }) {
+  const { phone, newNote, newFolder, upload, noteActions } = props;
+  const navigate = useNavigate();
+  const badge = useBadge();
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
   const standIn = useRef<HTMLInputElement>(null);
@@ -29,6 +37,23 @@ export default function Dock(props: { newNote: (() => void) | null; newFolder: (
       >
         <Folder size={22} strokeWidth={1.8} aria-hidden />
       </button>
+      {phone && (
+        // Its name says what it is, What's on's count is its description; the badge sits on its corner, within its box.
+        <button
+          type="button"
+          aria-label="Calendar"
+          title="What's on"
+          aria-describedby={badge.count > 0 ? badgeId : undefined}
+          onClick={() => {
+            setOverlay("none");
+            navigate("/whats-on");
+          }}
+          className="relative flex size-12 flex-none items-center justify-center rounded-[14px] border border-line bg-surface text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <CalendarClock size={22} strokeWidth={1.8} aria-hidden />
+          <Badge id={badgeId} count={badge.count} overdue={badge.overdue} className="pointer-events-none absolute top-0 right-0 translate-x-1" />
+        </button>
+      )}
       {/* iOS raises the keyboard only for a focus inside the tap, and the search sheet may still be loading then:
           this field takes the focus at once, keeping the keyboard up until the sheet's input takes it over. */}
       <input
