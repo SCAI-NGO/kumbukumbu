@@ -3,6 +3,9 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal, flushSync } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 
+/** The least a list is given where the screen has less room on its side: three items. */
+const MIN_HEIGHT = 152;
+
 /** One entry of a small menu; later steps add theirs to the same list (Upload, for one). */
 export interface MenuItem {
   /** Names the item apart from its label, for a caller that looks for it (the toolbar's, which moves tools in). */
@@ -25,9 +28,9 @@ export interface MenuSection {
  * A button that opens a short list of actions; a tap outside or Escape closes it. The list is `position: fixed` at the
  * button's position, in `document.body` or, for a button inside an `aria-modal` dialog, in that dialog (so assistive
  * technology that keeps to the dialog still reaches it), so no scrolling or clipping container around the button can
- * cut it off; it turns upward where there is no room below. A scroll the person makes (the wheel, a drag, a key, a
- * scrollbar) closes it; a scroll the page makes by itself (the tree bringing the open note into view) moves it with its
- * button; a resize repositions it.
+ * cut it off; it turns upward where there is no room below, and scrolls within the room on its side where it is
+ * taller. A scroll the person makes (the wheel, a drag, a key, a scrollbar) closes it; a scroll the page makes by itself
+ * (the tree bringing the open note into view) moves it with its button; a resize repositions it.
  */
 export function Menu(props: {
   label: string;
@@ -45,18 +48,26 @@ export function Menu(props: {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [host, setHost] = useState<HTMLElement>(document.body);
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const [at, setAt] = useState<{ top: number; right: number; maxHeight: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
   const place = () => {
     if (!button.current || !list.current) return;
     const anchor = button.current.getBoundingClientRect();
-    const height = list.current.getBoundingClientRect().height;
+    // Its whole height, not the part its limit shows: the scroll height once it scrolls.
+    const height = Math.max(list.current.getBoundingClientRect().height, list.current.scrollHeight);
     const below = anchor.bottom + 4;
-    const above = anchor.top - 8 - height;
-    const down = props.placement === "below" ? below + height <= window.innerHeight || above < 0 : above < 0;
-    setAt({ top: down ? below : above, right: window.innerWidth - anchor.right });
+    const fitsBelow = below + height <= window.innerHeight;
+    const fitsAbove = anchor.top - 8 - height >= 0;
+    const roomBelow = window.innerHeight - below - 8;
+    const roomAbove = anchor.top - 8 - 8;
+    // Where it fits on neither side, it takes the side with more room and scrolls within it.
+    const down =
+      props.placement === "below" ? fitsBelow || (!fitsAbove && roomBelow >= roomAbove) : !fitsAbove && (fitsBelow || roomBelow > roomAbove);
+    const maxHeight = Math.max(MIN_HEIGHT, down ? roomBelow : roomAbove);
+    const top = down ? below : Math.max(8, anchor.top - 8 - Math.min(height, maxHeight));
+    setAt({ top, right: window.innerWidth - anchor.right, maxHeight });
   };
 
   useLayoutEffect(() => {
@@ -113,6 +124,7 @@ export function Menu(props: {
       e.preventDefault();
       e.stopPropagation();
       next.focus();
+      next.scrollIntoView?.({ block: "nearest" });
     } else if (isTab) {
       if (e.shiftKey) e.preventDefault();
       // Gone from the DOM before the dialog's trap looks for its last control.
@@ -188,8 +200,8 @@ export function Menu(props: {
               role="menu"
               aria-label={props.label}
               onKeyDown={onItemKey}
-              style={at ? { top: at.top, right: at.right } : { top: 0, right: 0, visibility: "hidden" }}
-              className="fixed z-[70] min-w-48 rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg"
+              style={at ? { top: at.top, right: at.right, maxHeight: at.maxHeight } : { top: 0, right: 0, visibility: "hidden" }}
+              className="fixed z-[70] min-w-48 overflow-y-auto overscroll-contain rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg"
             >
               {props.items.map((item) => renderItem(item, item.label))}
               {props.sections?.map((section, i) => (
