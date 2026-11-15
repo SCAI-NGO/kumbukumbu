@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { CalendarClock, CalendarPlus, CalendarX } from "lucide-react";
+import { CalendarCheck, CalendarClock, CalendarPlus, CalendarX, ListTodo } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { errorText } from "../api/error-text";
 import { fileKindOf } from "../api/paths";
@@ -7,7 +7,7 @@ import FormDialog from "../board/FormDialog";
 import { useErrorTextFor } from "../discreet/errorText";
 import { narrowInputClass, inputClass, labelClass } from "../components/form";
 import type { MenuItem } from "../components/Menu";
-import { useEntryAction, useNoteEntry, type CouldntReadView, type SetEntryRequest } from "./api";
+import { useEntryAction, useNoteEntry, type CouldntReadView, type EntryView, type SetEntryRequest } from "./api";
 import { weekId, weekOf } from "./dates";
 
 const switchClass = (on: boolean) =>
@@ -92,12 +92,17 @@ export const readableFields = (couldntRead: CouldntReadView): Partial<DateFields
  * date… and Remove from calendar. A day or week note by its name has no Remove; a board card none of them, its date
  * and status are the board's. `known` is the calendar's answer for the note while it is asked for, the menu offers
  * Add, not yet to be chosen; when it can't be asked, Add, whose dialog asks again.
+ *
+ * With `onTask`, an entry with a date of its own also switches between a to-do and an appointment (spec §2.3.4): Make
+ * it a to-do, or for an open to-do Just an appointment. Not for a closed one, whose `closed` and reason `task: false`
+ * would drop, nor for a day or week note, an entry by its name.
  */
 export function calendarItems(
   path: string,
-  known: { data?: { entry: { kind: string; byName: boolean } | null; couldntRead: unknown; canWrite: boolean }; isError: boolean },
+  known: { data?: { entry: { kind: string; byName: boolean; task: EntryView["task"] } | null; couldntRead: unknown; canWrite: boolean }; isError: boolean },
   onDate: (path: string) => void,
   onRemove: (path: string) => void,
+  onTask?: (path: string, task: boolean) => void,
 ): MenuItem[] {
   if (fileKindOf(path) !== "note" || !path.toLowerCase().endsWith(".md") || /^\/[^/]+\/Board\/Board\.md$/.test(path)) return [];
   const add: MenuItem = { label: "Add to calendar…", icon: CalendarPlus, onSelect: () => onDate(path) };
@@ -105,8 +110,12 @@ export function calendarItems(
   if (!view) return [known.isError ? add : { ...add, disabled: true }];
   if (!view.canWrite || view.entry?.kind === "card") return [];
   if (!view.entry && !view.couldntRead) return [add];
+  const entry = view.entry;
+  const switchable = onTask && entry && !entry.byName;
   return [
     { label: "Edit date…", icon: CalendarClock, onSelect: () => onDate(path) },
+    ...(switchable && entry.task === "none" ? [{ label: "Make it a to-do", icon: ListTodo, onSelect: () => onTask(path, true) }] : []),
+    ...(switchable && entry.task === "open" ? [{ label: "Just an appointment", icon: CalendarCheck, onSelect: () => onTask(path, false) }] : []),
     ...(view.entry?.byName ? [] : [{ label: "Remove from calendar", icon: CalendarX, onSelect: () => onRemove(path) }]),
   ];
 }
@@ -116,6 +125,16 @@ export function useRemoveFromCalendar(say: (text: string) => void) {
   const action = useEntryAction();
   return (path: string) =>
     action.mutate({ kind: "unset", path }, { onSuccess: () => say("Removed from the calendar."), onError: (err) => say(errorText(err)) });
+}
+
+/**
+ * Make it a to-do and Just an appointment: `task` alone, so the server keeps the entry's `when`, `until` and Show early
+ * as they are; said afterwards, as the menu has closed.
+ */
+export function useTaskSwitch(say: (text: string) => void) {
+  const action = useEntryAction();
+  return (path: string, task: boolean) =>
+    action.mutate({ kind: "set", path, task }, { onSuccess: () => say(task ? "It's a to-do now." : "Just an appointment now."), onError: (err) => say(errorText(err)) });
 }
 
 function DateForm({ path, initial, editing, onClose }: { path: string; initial: DateFields; editing: boolean; onClose(): void }) {

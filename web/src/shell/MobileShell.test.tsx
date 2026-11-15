@@ -1169,6 +1169,22 @@ describe("the calendar in the note's menus", () => {
     expect(entryAsks(reading)).toEqual(["/Work/inbox.md"]);
   });
 
+  it("the tree's menu turns a note given a day into a to-do", async () => {
+    const fetch = calendarApi({
+      "POST /api/vaults/Work/calendar/set": () => json(200, { path: "/Work/inbox.md", version: "v2", note: { entry: null, couldntRead: null, canWrite: true } }),
+    });
+    renderApp("/notes/Work/readme.md");
+    await openDrawer();
+    expect(await treeItems("Actions for inbox")).toContain("Make it a to-do");
+    expect(await treeItems("Actions for readme")).not.toContain("Make it a to-do");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for inbox" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Make it a to-do" }));
+    const set = async () =>
+      Promise.all(fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/vaults/Work/calendar/set").map((r) => r.clone().json()));
+    await waitFor(async () => expect(await set()).toEqual([{ path: "/Work/inbox.md", task: true }]));
+    expect(await screen.findByText("It's a to-do now.")).toBeInTheDocument();
+  });
+
   it("Remove from calendar takes the note out at once and says so", async () => {
     const fetch = calendarApi({
       "POST /api/vaults/Work/calendar/unset": () => json(200, { path: "/Work/inbox.md", version: "v2", note: { entry: null, couldntRead: null, canWrite: true } }),

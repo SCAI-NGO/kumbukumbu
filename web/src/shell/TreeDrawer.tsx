@@ -43,7 +43,7 @@ import { orderTree, useTreeOrder } from "./treeOrder";
 import TreeTools, { type TreeSearch } from "./TreeTools";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
-import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
 import { flaggable } from "../flags/FlagMenu";
@@ -228,6 +228,7 @@ function FileMenu({
   onDelete,
   onDate,
   onRemoveDate,
+  onTask,
   onFlag,
 }: {
   row: Extract<Row, { kind: "note" }>;
@@ -239,6 +240,7 @@ function FileMenu({
   onDelete(subject: DeleteSubject): void;
   onDate?: (path: string) => void;
   onRemoveDate(path: string): void;
+  onTask(path: string, task: boolean): void;
   onFlag?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
@@ -260,7 +262,7 @@ function FileMenu({
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
     ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path) }] : []),
-    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
+    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate, onTask) : []),
   ];
   return (
     <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass} onOpen={() => setAsked(true)}>
@@ -512,6 +514,7 @@ export default function TreeDrawer(props: {
   // Said here, not over the note: the drawer covers that on a phone.
   const copied = useCopied("mx-[18px] mb-2.5");
   const removeDate = useRemoveFromCalendar(copied.say);
+  const switchTask = useTaskSwitch(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   // The tree's search and order (spec §3): the rows of what the search finds, in the order chosen. While it finds,
@@ -734,7 +737,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onFlag={onFlag} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} />
                   </>
                 )}
               </li>

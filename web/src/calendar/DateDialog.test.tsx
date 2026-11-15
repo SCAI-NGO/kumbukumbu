@@ -7,6 +7,8 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { json, renderApp, user } from "../test/app";
 import { bodiesOf, entryView, noteEntry, noteWithEntry, openTask, writtenView } from "../test/calendar";
+import type { EntryView } from "./api";
+import { calendarItems } from "./DateDialog";
 
 afterEach(() => {
   cleanup();
@@ -128,6 +130,57 @@ describe("the date dialog", () => {
     await userEvent.type(within(within(dialog).getByRole("group", { name: "When" })).getByLabelText("Day"), "2026-11-20");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(await within(dialog).findByText("There is no note /Work/Plan.md.")).toBeInTheDocument();
+  });
+});
+
+describe("a to-do, or just an appointment", () => {
+  const labels = (entry: EntryView | null, canWrite = true) =>
+    calendarItems(PLAN, { data: noteEntry(entry, canWrite), isError: false }, () => {}, () => {}, () => {}).map((i) => i.label);
+  const closed = openTask("Plan", { task: "closed", state: "done", closed: "2026-11-13" });
+
+  it.each<[string, EntryView | null, boolean, string[]]>([
+    ["a note given a day", entryView("Plan"), true, ["Make it a to-do"]],
+    ["an open to-do", openTask("Plan"), true, ["Just an appointment"]],
+    ["a closed to-do, which would lose its closed and its reason", closed, true, []],
+    ["a day note, an entry by its name", entryView("Plan", { byName: true }), true, []],
+    ["a week note that is a to-do", openTask("Plan", { byName: true }), true, []],
+    ["a board card", entryView("Plan", { kind: "card", column: "Doing" }), true, []],
+    ["a note without a date", null, true, []],
+    ["a note one may not write", entryView("Plan"), false, []],
+  ])("%s", (_, entry, canWrite, offered) => {
+    expect(labels(entry, canWrite).filter((l) => l === "Make it a to-do" || l === "Just an appointment")).toEqual(offered);
+  });
+
+  it("offers neither where the menu gives no way to switch", () => {
+    const items = calendarItems(PLAN, { data: noteEntry(entryView("Plan")), isError: false }, () => {}, () => {}).map((i) => i.label);
+    expect(items).toEqual(["Edit date…", "Remove from calendar"]);
+  });
+
+  it("Make it a to-do sets only task, keeping the rest of the date as it is", async () => {
+    const dentist = entryView("Plan", { when: "2026-11-19T14:00", until: "2026-11-19T15:00", time: "14:00" });
+    const fetch = noteWithEntry(PLAN, noteEntry(dentist), { "POST /api/vaults/Work/calendar/set": () => json200(PLAN) });
+    renderApp(`/notes${PLAN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Make it a to-do" }));
+    await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([{ path: PLAN, task: true }]));
+    expect(await screen.findByText("It's a to-do now.")).toBeInTheDocument();
+  });
+
+  it("Just an appointment takes the to-do away, and says so", async () => {
+    const fetch = noteWithEntry(PLAN, noteEntry(openTask("Plan")), { "POST /api/vaults/Work/calendar/set": () => json200(PLAN) });
+    renderApp(`/notes${PLAN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Just an appointment" }));
+    await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([{ path: PLAN, task: false }]));
+    expect(await screen.findByText("Just an appointment now.")).toBeInTheDocument();
+  });
+
+  it("says the server's sentence when it refuses", async () => {
+    noteWithEntry(PLAN, noteEntry(entryView("Plan")), { "POST /api/vaults/Work/calendar/set": () => json(409, { error: "The note changed meanwhile." }) });
+    renderApp(`/notes${PLAN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Make it a to-do" }));
+    expect(await screen.findByText("The note changed meanwhile.")).toBeInTheDocument();
   });
 });
 

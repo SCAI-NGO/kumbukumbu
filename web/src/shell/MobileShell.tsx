@@ -41,7 +41,7 @@ import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./Tr
 import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
-import DateDialog, { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import DateDialog, { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
 import { flaggable, useFlagging } from "../flags/FlagMenu";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
@@ -341,6 +341,7 @@ export default function MobileShell() {
   // The note's header line asks the calendar about the note shown; its menu takes the same answer, asking nothing itself.
   const dated = useNoteEntry(path, false);
   const removeDate = useRemoveFromCalendar(copied.say);
+  const switchTask = useTaskSwitch(copied.say);
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
@@ -433,7 +434,7 @@ export default function MobileShell() {
                             ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
                             ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => flagging.open(path) }] : []),
-                            ...calendarItems(path, dated, setDating, removeDate),
+                            ...calendarItems(path, dated, setDating, removeDate, switchTask),
                           ]
                         : []),
                     ]
