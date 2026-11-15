@@ -43,12 +43,28 @@ public class SkillDirectoryTests
     {
         Put("/Skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Mine.\n---\n");
 
-        var effective = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+        var list = await dir.ListAsync(null, Ct);
+        var effective = SkillDirectory.Effective(list);
 
         var memory = Assert.Single(effective, s => s.Name == "project-memory");
         Assert.Equal("/Skills/project-memory", memory.Folder?.Value);
-        Assert.Equal(await dir.ListAsync(null, Ct) is { Count: var all } ? all - 1 : 0, effective.Count);
+        Assert.Equal(list.Count - 1, effective.Count);
     }
+
+    [Fact]
+    public async Task A_vault_merely_named_Skills_does_not_replace_a_system_skill()
+    {
+        _store.SkillsVault = null;
+        Put("/Skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Mine.\n---\n");
+
+        var effective = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+
+        Assert.Contains(effective, s => s.Name == "project-memory" && s.IsSystem);
+    }
+
+    [Fact]
+    public async Task Project_memory_is_a_start_up_skill() =>
+        Assert.True(Assert.Single(await dir.ListAsync(null, Ct), s => s.Name == "project-memory" && s.IsSystem).AtStart);
 
     [Fact]
     public async Task A_skill_in_a_vaults_skills_folder_never_replaces_a_system_skill()

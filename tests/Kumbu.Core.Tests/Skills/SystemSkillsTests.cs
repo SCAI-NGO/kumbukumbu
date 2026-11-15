@@ -32,14 +32,6 @@ public class SystemSkillsTests
     }
 
     [Fact]
-    public void Project_memory_is_a_start_up_skill()
-    {
-        Assert.NotNull(SystemSkills.Find("project-memory"));
-        Assert.True(SystemSkills.All.Single(s => s.Name == "project-memory") is { } skill
-            && SkillManifest.Read(skill.Name, skill.Files[0].Content).AtStart);
-    }
-
-    [Fact]
     public void Project_memory_presumes_no_project()
     {
         var text = Skill("project-memory");
