@@ -132,4 +132,24 @@ public class GlobTests
         Assert.False(Keeps("Kumbu[+-0]a.md", "/SWE/Kumbu/a.md"));
         Assert.True(Keeps("[a-]x", "/SWE/-x"));
     }
+
+    [Theory]
+    [InlineData("[")]
+    [InlineData("a[")]
+    [InlineData("[!")]
+    [InlineData("{[}")]
+    [InlineData("{a,[}")]
+    public void Class_opened_at_the_end_is_unclosed(string pattern)
+    {
+        Assert.False(Glob.TryParse(pattern, out _, out var error));
+        Assert.Equal($"rg: bad glob '{pattern}': unclosed [", error);
+    }
+
+    [Fact]
+    public void Backslash_in_a_class_is_literal_before_a_trailing_dash()
+    {
+        Assert.True(Keeps("[\\-]x", "/SWE/\\x"));
+        Assert.True(Keeps("[\\-]x", "/SWE/-x"));
+        Assert.False(Keeps("[\\-]x", "/SWE/ax"));
+    }
 }

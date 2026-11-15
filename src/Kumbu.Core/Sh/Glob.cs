@@ -93,7 +93,7 @@ public sealed class Glob
                     break;
                 case '[':
                     var first = i + 1 < body.Length && body[i + 1] is '!' or '^' ? i + 2 : i + 1;
-                    var end = body.IndexOf(']', first + 1);
+                    var end = first < body.Length ? body.IndexOf(']', first + 1) : -1;
                     if (end < 0)
                     {
                         error = $"rg: bad glob '{pattern}': unclosed [";
@@ -104,7 +104,7 @@ public sealed class Glob
                     var content = new StringBuilder();
                     foreach (var k in body[first..end]) content.Append(k is '\\' or '[' or ']' or '^' ? "\\" + k : k.ToString());
                     // A trailing '-' is a literal, not the start of the range that the '/' below would make.
-                    if (content.Length > 0 && content[^1] == '-' && (content.Length < 2 || content[^2] != '\\')) content.Insert(content.Length - 1, '\\');
+                    if (body[end - 1] == '-' && end - 1 >= first) content.Insert(content.Length - 1, '\\');
                     // A class never matches '/', as in ripgrep.
                     sb.Append(negated ? $"[^{content}/]" : $"[{content}-[/]]");
                     i = end;
