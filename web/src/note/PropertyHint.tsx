@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+/** Said by the app after a write of the note's properties that didn't happen, whatever started it. */
+export const CHANGED_ELSEWHERE = "This note changed elsewhere; try again.";
+
+/**
+ * What a tap on Move to properties came to: a key the properties have already, properties that can't be read (both
+ * refusals: the tap would only meet them again), or a sentence after which it may be tried again (a conflict, a failure).
+ */
+export type MoveSaid = { exists: string } | { unreadable: true } | { text: string };
+
+/**
+ * Above a block in the body that looks like frontmatter but renders as a rule and a heading (spec §2.2): where
+ * properties go, and with `onMove` (write) the way to move them there. A refusal takes the button's place.
+ */
+export default function PropertyHint({ onMove, pending, said }: { onMove?: () => void; pending: boolean; said: MoveSaid | null }) {
+  const refused = !!said && !("text" in said);
+  return (
+    <div role="note" className="my-3 flex flex-col items-start gap-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+      <p>Properties go at the very top of a note.</p>
+      {said && (
+        <p role="status">
+          {"exists" in said ? (
+            <>
+              <code className="rounded-[4px] bg-surface px-[5px] py-px font-mono text-[0.85em]">{said.exists}</code> is already in the properties: change it there.
+            </>
+          ) : "unreadable" in said ? (
+            "The properties at the top can't be read here, so nothing was moved."
+          ) : (
+            said.text
+          )}
+        </p>
+      )}
+      {onMove && !refused && (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onMove}
+          className="min-h-12 rounded-[10px] border border-line bg-surface px-4 font-medium text-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          Move to properties
+        </button>
+      )}
+    </div>
+  );
+}

@@ -30,14 +30,16 @@ import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { atxHeading, headingLine, outline } from "./outline";
 import { maskedBody } from "./comments";
+import { findPropertyBlocks, moveToProperties, type PropertyBlock } from "./frontmatterText";
 import { parseProperties, splitFrontmatter } from "./properties";
+import PropertyHint, { CHANGED_ELSEWHERE, type MoveSaid } from "./PropertyHint";
 import { useStoredOpen } from "./propertiesOpen";
 import { taskToggle } from "./taskToggle";
 import { createdPath } from "./wikiLinks";
 import { registerScrollTop, takeRestore } from "../update/apply";
 import BoardLine from "../board/BoardLine";
 import { boardCard } from "../board/cardLine";
-import { useNoteEntry } from "../calendar/api";
+import { afterEntryWrite, editorSettled, UNSAVED, useNoteEntry } from "../calendar/api";
 import EntryLine from "../calendar/EntryLine";
 import BackLink from "../calendar/BackLink";
 import { cameFromOf } from "../calendar/backLink";
@@ -122,6 +124,8 @@ export default function NoteView({ path }: { path: string }) {
   const vault = vaults.data?.find((v) => v.name === vaultOf(path));
   const unnamed = useUnnamedVault(path);
   const changes = !vaults.data || mayChange(levelOf(vault), path);
+  // Moving and adding properties rewrite the note's text: offered only once the vault list says it may be changed.
+  const mayWrite = !!vaults.data && mayChange(levelOf(vault), path);
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
@@ -355,6 +359,48 @@ export default function NoteView({ path }: { path: string }) {
     [note.data, save, errorFor],
   );
 
+  // Blocks below the title that look like frontmatter (spec §2.2), and what the last tap on Move to properties came
+  // to: for the block at that line, in the version it speaks of.
+  const blocks = useMemo(() => findPropertyBlocks(note.data?.content ?? ""), [note.data?.content]);
+  const [moveSaid, setMoveSaid] = useState<{ start: number; version: string; said: MoveSaid } | null>(null);
+  const moveBlock = useCallback(
+    async (block: PropertyBlock) => {
+      setMoveSaid(null);
+      const before = queryClient.getQueryData<typeof note.data>(["note", path]);
+      if (!(await editorSettled(path))) return before && setMoveSaid({ start: block.start, version: before.version, said: { text: UNSAVED } });
+      // The text as it is now, not as the tap saw it.
+      const latest = queryClient.getQueryData<typeof note.data>(["note", path]);
+      if (!latest) return;
+      const moved = moveToProperties(latest.content, block);
+      if ("refused" in moved) {
+        // Gone: the note changed under the tap, and the hints follow it as it is now.
+        if (moved.refused !== "gone") setMoveSaid({ start: block.start, version: latest.version, said: moved.refused === "exists" ? { exists: moved.key } : { unreadable: true } });
+        return;
+      }
+      save.mutate(
+        { content: moved.content, version: latest.version },
+        {
+          // On a conflict the cache already holds the newer version; nothing is moved on top of it.
+          onSuccess: (result) =>
+            "conflict" in result
+              ? setMoveSaid({ start: block.start, version: result.conflict.version, said: { text: CHANGED_ELSEWHERE } })
+              : void afterEntryWrite(queryClient, vaultOf(path), path),
+          onError: (err) => setMoveSaid({ start: block.start, version: latest.version, said: { text: errorFor(err) } }),
+        },
+      );
+    },
+    [path, queryClient, save, errorFor],
+  );
+  const ruleNotice = useCallback(
+    (line: number) => {
+      const block = blocks.find((b) => b.start === line - 1);
+      if (!block) return null;
+      const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
+      return <PropertyHint onMove={mayWrite ? () => void moveBlock(block) : undefined} pending={save.isPending} said={said} />;
+    },
+    [blocks, moveSaid, note.data?.version, mayWrite, moveBlock, save.isPending],
+  );
+
   const createMissing = useCallback(
     (target: string) => {
       const created = createdPath(path, target);
@@ -494,6 +540,7 @@ export default function NoteView({ path }: { path: string }) {
               highlight={highlight}
               find={finding}
               path={path}
+              ruleNotice={ruleNotice}
             />
           </article>
         )}

@@ -818,3 +818,108 @@ describe("the note's flag in its header", () => {
     expect(await screen.findByRole("button", { name: "Green flag" })).toBeInTheDocument();
   });
 });
+
+describe("properties at the top", () => {
+  const ALIAS = "/Work/aliastest.md";
+  // Chris's note (spec §2.2): a rule and a setext H2, not properties.
+  const chris = "# aliastest\n---\naliases: [kumbu]\n---\n";
+  const HINT = "Properties go at the very top of a note.";
+  const hint = async () => (await screen.findByText(HINT)).closest<HTMLElement>("[role=note]")!;
+
+  /** The note as written, read again as the last write left it; every PUT's body is kept. */
+  function aliasApi(content: string, extra: Parameters<typeof fakeApi>[0] = {}) {
+    let current = noteView(ALIAS, content);
+    const puts: { content: string; version: string }[] = [];
+    noteApi({
+      [`GET /api/notes${ALIAS}`]: () => json(200, current),
+      [`PUT /api/notes${ALIAS}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = noteView(ALIAS, body.content, `v${puts.length + 1}`);
+        return json(200, current);
+      },
+      ...extra,
+    });
+    return puts;
+  }
+
+  it("points out the block right above its rule, and moves it to the top on a tap, as one write with the note's version", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    const note = await hint();
+    expect(document.querySelector("article hr")!.previousElementSibling).toBe(note);
+    await userEvent.click(await within(note).findByRole("button", { name: "Move to properties" }));
+    await waitFor(() => expect(puts).toEqual([{ content: "---\naliases: [kumbu]\n---\n# aliastest\n", version: "v1" }]));
+    expect(within(await screen.findByLabelText("Properties")).getByRole("term")).toHaveTextContent("aliases");
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it("refuses a key the properties have already, naming it, and writes nothing", async () => {
+    const puts = aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("aliases", { selector: "code" })).toBeInTheDocument();
+    expect(await hint()).toHaveTextContent("aliases is already in the properties: change it there.");
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("moves nothing when the properties at the top can't be read, and says so", async () => {
+    const puts = aliasApi(`---\nabout: |\n  more\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("The properties at the top can't be read here, so nothing was moved.")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("without write, says where properties go and offers nothing", async () => {
+    aliasApi(chris, { "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, canWrite: false, level: "read", owner: '"Ada"', shared: true }]) });
+    renderApp(`/notes${ALIAS}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers the move only once the vault list says the note may be changed", async () => {
+    aliasApi(chris, { "GET /api/vaults": () => new Promise<Response>(() => {}) });
+    renderApp(`/notes${ALIAS}`);
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("on a conflict writes nothing more, says so and shows the newer version", async () => {
+    const newer = `${chris}\nAdded elsewhere.\n`;
+    let puts = 0;
+    aliasApi(chris, {
+      [`PUT /api/notes${ALIAS}`]: () => {
+        puts++;
+        return json(409, { error: "changed", current: { content: newer, version: "v7" } });
+      },
+    });
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("This note changed elsewhere; try again.")).toBeInTheDocument();
+    expect(screen.getByText("Added elsewhere.")).toBeInTheDocument();
+    expect(puts).toBe(1);
+  });
+
+  it("leaves a block in fenced code alone", async () => {
+    aliasApi("# aliastest\n\n```\n---\naliases: [kumbu]\n---\n```\n");
+    renderApp(`/notes${ALIAS}`);
+    expect(await screen.findByText(/aliases: \[kumbu\]/)).toBeInTheDocument();
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it("is a Read mode hint: Write mode has the text itself", async () => {
+    aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await hint();
+    const write = screen.getByRole("button", { name: "Write" });
+    await waitFor(() => expect(write).toBeEnabled());
+    await userEvent.click(write);
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+});
