@@ -145,7 +145,7 @@ export function Menu(props: {
         button.current?.focus();
         onSelect();
       }}
-      className="flex min-h-11 w-full items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] text-text hover:bg-surface disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
+      className="flex min-h-12 w-full items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] text-text hover:bg-surface disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="text-muted" />
       {label}

@@ -132,6 +132,17 @@ describe("Menu", () => {
     expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByRole("menuitem", { name: "Two" }));
   });
 
+  it("every item is at least 48 px high, in a section too", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(
+      <Menu label="Actions" placement="below" className="b" items={[{ label: "Rename", icon: Pencil, onSelect }]} sections={[{ heading: "Later", items: [{ label: "Postpone", icon: Pencil, onSelect }] }]}>
+        ⋯
+      </Menu>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const item of screen.getAllByRole("menuitem")) expect(item).toHaveClass("min-h-12");
+  });
+
   it("Escape, outside click and focus return as before", async () => {
     layout({ top: 100, bottom: 130, left: 900, right: 940 });
     render(<Clipped />);
