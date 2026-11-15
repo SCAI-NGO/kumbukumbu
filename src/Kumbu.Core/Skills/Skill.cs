@@ -17,6 +17,10 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
 
     public string? Vault => Folder?.Vault;
 
+    /// <summary>Whether the manifest marks it for the start of every session (<c>metadata</c> <c>kumbu-when: session-start</c>):
+    /// the handshake instructions name such a skill in both modes.</summary>
+    public bool AtStart { get; init; }
+
     /// <summary>Whether the frontmatter's origin disagrees with the sealed one (Decision 33); set by the server, never by the core.</summary>
     public bool OriginEdited { get; init; }
 

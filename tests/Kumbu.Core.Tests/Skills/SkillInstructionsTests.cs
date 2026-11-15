@@ -12,6 +12,8 @@ public class SkillInstructionsTests
 
     private static Skill System(string name, string description) => new(name, null, description, null, null, false, []);
 
+    private static Skill Start(string name, string description) => System(name, description) with { AtStart = true };
+
     private static Skill InVault(string folder, string description, string? editor = "Bob") =>
         new(folder[(folder.LastIndexOf('/') + 1)..], P(folder), description, null, editor, false, []);
 
@@ -43,16 +45,25 @@ public class SkillInstructionsTests
         SkillInstructions.Section(InstructionsMode.ListAndHint, [System("create-skill", CreateSkill), InVault("/Skills/write-as-alice", "Writes posts in Alice's voice.")]));
 
     [Fact]
-    public void Hint_only_lists_none()
+    public void List_mode_names_start_up_skills_first_under_their_own_head()
     {
-        var section = SkillInstructions.Section(InstructionsMode.HintOnly, [System("create-skill", CreateSkill), InVault("/Skills/write-as-alice", "Writes posts in Alice's voice.")]);
-
-        Assert.Equal(
-            "Skills: the user keeps skills, instructions for tasks they do again, in the vault Skills, in a vault's _skills/ folder, and built in (sh: help skills). Before a task, run sh `skills find \"<the user's request>\"` and follow a skill whose description matches; read it with `skills cat <name>`. New skills, sharing, moving between vaults and updates are the user's to do, in Kumbu²'s Skills screen.",
-            section);
-        Assert.Empty(Entries(section));
-        Assert.DoesNotContain("write-as-alice", section);
+        var section = SkillInstructions.Section(InstructionsMode.ListAndHint, [System("create-skill", "Write a skill."), Start("project-memory", "Read the memory.")]);
+        Assert.StartsWith(SkillInstructions.StartHead + "\n- project-memory (system): Read the memory.", section);
+        Assert.Contains("\n- create-skill (system): Write a skill.", section);
+        Assert.Single(Entries(section), e => e.StartsWith("- project-memory"));
     }
+
+    [Fact]
+    public void Hint_only_names_start_up_skills_and_nothing_else()
+    {
+        var section = SkillInstructions.Section(InstructionsMode.HintOnly, [System("create-skill", "Write a skill."), Start("project-memory", "Read the memory.")]);
+        Assert.Equal(["- project-memory (system): Read the memory."], Entries(section));
+        Assert.EndsWith(SkillInstructions.Hint, section);
+    }
+
+    [Fact]
+    public void Without_start_up_skills_hint_only_is_the_hint_alone() =>
+        Assert.Equal(SkillInstructions.Hint, SkillInstructions.Section(InstructionsMode.HintOnly, [System("create-skill", "Write a skill."), InVault("/Skills/write-as-alice", "Writes posts in Alice's voice.")]));
 
     [Fact]
     public void Fifty_entries_then_how_many_more()

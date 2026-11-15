@@ -88,7 +88,7 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
     private static Skill System(SystemSkill skill)
     {
         var manifest = SkillManifest.Read(skill.Name, skill.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Content);
-        return new Skill(skill.Name, null, manifest.Description ?? "", null, null, false, manifest.Problems);
+        return new Skill(skill.Name, null, manifest.Description ?? "", null, null, false, manifest.Problems) { AtStart = manifest.AtStart };
     }
 
     private async Task<IReadOnlyList<Skill>> InAsync(string vault, string? marked, CancellationToken ct)
@@ -113,7 +113,7 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
             var (editor, byOther) = await WritersAsync(vault, info, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
-            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner });
+            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner, AtStart = manifest.AtStart });
         }
 
         return skills;

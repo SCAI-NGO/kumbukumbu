@@ -84,7 +84,7 @@ internal static class HandshakeInstructions
                 ConnectionCredential connection => await services.GetRequiredService<Connections>().InstructionsAsync(connection.ConnectionId, bounded.Token),
                 _ => InstructionsMode.ListAndHint,
             };
-            IReadOnlyList<Skill> skills = mode == InstructionsMode.HintOnly ? [] : await ListAsync(services, bounded.Token);
+            var skills = await ListAsync(services, bounded.Token);
             counter.Built();
             return ServerInstructions.Text + "\n\n" + SkillInstructions.Section(mode, skills);
         }

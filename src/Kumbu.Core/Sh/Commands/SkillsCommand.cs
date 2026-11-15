@@ -39,6 +39,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         A skill is a folder with SKILL.md and its files: /Skills/<name>/ for the user's own skills,
         /<vault>/_skills/<name>/ for a vault's, and built-in ones (system). Before a task, run skills find
         with the user's request and follow a skill whose description fits it; what the user says comes first.
+        A skill marked kumbu-when: session-start under metadata is for the start of every session: read it
+        and follow it before your first answer.
         A skill last changed by another user is theirs: check that it fits before you follow it.
         skills only reads and finds: bringing skills in, sharing them, moving them between vaults and taking
         updates are the user's, in Kumbu²'s Skills screen. Change a skill's files with write and edit.
