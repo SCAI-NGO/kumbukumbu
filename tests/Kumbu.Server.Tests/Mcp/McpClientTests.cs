@@ -221,6 +221,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Cat_with_two_paths_sends_two_version_blocks()
+    {
+        var result = await ShAsync("cat \"/Demo/Meeting Notes.md\" /Ideas/retrofuturism.md");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(3, result.Content.Count);
+        var blocks = result.Content.Skip(1).Select(b => Assert.IsType<TextContentBlock>(b).Text).ToList();
+        Assert.StartsWith("\nversion of /Demo/Meeting Notes.md: ", blocks[0], StringComparison.Ordinal);
+        Assert.StartsWith("\nversion of /Ideas/retrofuturism.md: ", blocks[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Cat_of_a_missing_note_is_a_tool_error_not_a_protocol_error()
     {
         var result = await ShAsync("cat /Demo/nope.md");

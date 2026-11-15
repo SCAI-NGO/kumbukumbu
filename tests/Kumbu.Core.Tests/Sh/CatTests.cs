@@ -26,9 +26,71 @@ public class CatTests
     [Fact]
     public async Task MissingOperand() => Assert.Equal(ShellResult.Error("cat: missing operand"), await Run());
 
+    private static Task<ShellResult> RunOn(InMemoryNoteStore store, params string[] args) =>
+        new Cat(store).RunAsync(args, null, CancellationToken.None);
+
     [Fact]
-    public async Task TooManyArguments() =>
-        Assert.Equal(ShellResult.Error("cat: too many arguments (quote paths and sections that contain spaces: cat \"/Work/My Note.md#Next steps\")"), await Run("/Work/a.md", "/Work/a.md"));
+    public async Task Several_notes_print_under_headers_with_a_version_each()
+    {
+        var store = new InMemoryNoteStore(("/Demo/a.md", "one\n"), ("/Demo/b.md", "two\n"));
+
+        var result = await RunOn(store, "/Demo/a.md", "/Demo/b.md");
+
+        Assert.False(result.IsError);
+        Assert.Equal("==> /Demo/a.md <==\none\n\n==> /Demo/b.md <==\ntwo\n", result.Output);
+        Assert.Null(result.Version);
+        Assert.Equal(
+            [new NoteVersion("/Demo/a.md", VersionToken.Of("one\n")), new NoteVersion("/Demo/b.md", VersionToken.Of("two\n"))],
+            result.Versions);
+    }
+
+    [Fact]
+    public async Task A_missing_path_is_reported_in_place_and_the_rest_printed()
+    {
+        var store = new InMemoryNoteStore(("/Demo/a.md", "one\n"));
+
+        var result = await RunOn(store, "/Demo/a.md", "/Demo/nope.md");
+
+        Assert.False(result.IsError);
+        Assert.Contains("cat: /Demo/nope.md: No such file or directory", result.Output, StringComparison.Ordinal);
+        Assert.Contains("one", result.Output, StringComparison.Ordinal);
+        Assert.Single(result.Versions!);
+    }
+
+    [Fact]
+    public async Task All_paths_missing_is_an_error()
+    {
+        var store = new InMemoryNoteStore(("/Demo/a.md", "one\n"));
+
+        var result = await RunOn(store, "/Demo/x.md", "/Demo/y.md");
+
+        Assert.True(result.IsError);
+        Assert.Contains("cat: /Demo/x.md: No such file or directory", result.Output, StringComparison.Ordinal);
+        Assert.Contains("cat: /Demo/y.md: No such file or directory", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_note_past_the_budget_prints_its_outline()
+    {
+        var big = "# Big\n\n" + new string('x', 15_000) + "\n\n## Part\n\ntext\n";
+        var store = new InMemoryNoteStore(("/Demo/a.md", big), ("/Demo/b.md", big));
+
+        var result = await RunOn(store, "/Demo/a.md", "/Demo/b.md");
+
+        Assert.False(result.IsError);
+        Assert.Equal(1, Occurrences(result.Output, "[outline only: too long for this call; read it alone or by section]"));
+        Assert.True(result.Output.IndexOf("[outline only:", StringComparison.Ordinal) > result.Output.IndexOf("==> /Demo/b.md <==", StringComparison.Ordinal));
+        Assert.Contains("## Part", result.Output, StringComparison.Ordinal);
+        Assert.True(result.Output.Length <= OutputLimit.MaxChars);
+        Assert.Equal(2, result.Versions!.Count);
+    }
+
+    [Fact]
+    public async Task Version_takes_one_path() =>
+        Assert.Equal(ShellResult.Error("cat: --version takes one path"), await Run("--version", "abc", "/Work/a.md", "/Work/projects/x.md"));
+
+    private static int Occurrences(string text, string part) =>
+        (text.Length - text.Replace(part, "", StringComparison.Ordinal).Length) / part.Length;
 
     [Fact]
     public async Task NotFound() =>

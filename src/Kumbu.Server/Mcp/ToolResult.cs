@@ -18,9 +18,9 @@ internal static class ToolResult
         List<ContentBlock> content = result.Parts is { } parts
             ? [.. parts.Select(Block)]
             : [new TextContentBlock { Text = result.Output }];
-        if (result.Version is { } version)
+        // Each starts on its own line: some clients join the blocks without a separator.
+        foreach (var version in result.Versions ?? (result.Version is { } one ? [one] : []))
         {
-            // Starts on its own line: some clients join the blocks without a separator.
             content.Add(new TextContentBlock { Text = $"\nversion of {version.Path}: {version.Token}" });
         }
 
