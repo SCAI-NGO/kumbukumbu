@@ -44,6 +44,8 @@ export default function MonthGrid({ month, weeks, today, onDay }: { month: strin
                     <button
                       type="button"
                       aria-current={d.day === today ? "date" : undefined}
+                      // Named in one string: a browser puts a space before each hidden part's comma.
+                      aria-label={`${partsOf(d.day).day}${dayWord[level] ? `, ${dayWord[level]}` : ""}${has ? ", has entries" : ""}`}
                       onClick={() => onDay(d.day)}
                       className={`relative flex min-h-12 w-full items-center justify-center rounded-[8px] font-mono focus-visible:outline-2 focus-visible:outline-accent ${
                         d.day === today ? "bg-accent font-bold text-on-accent" : "text-text hover:bg-surface"
