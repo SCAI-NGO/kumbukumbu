@@ -237,4 +237,21 @@ public class FolderMoveTests
         Assert.NotNull(await Content("/W/Old/a.md"));
         Assert.Equal("[b](/b.md) [[a]]\n", await Content("/W/c.md"));
     }
+
+    [Fact]
+    public async Task A_target_in_another_vault_is_not_probed_for_collisions()
+    {
+        _store.AddVault("W");
+        _store.AddVault("Other");
+        await Seed("/W/A/a.md", "a\n");
+        await Seed("/W/B/b.md", "b\n");
+        await Seed("/Other/A/x.md", "x\n");
+
+        var result = await Run("mv /W/A/ /W/B/ /Other/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal("mv: notes can't move between vaults (W → Other); a vault is its own space", lines[0]);
+        Assert.DoesNotContain("already exists", result.Output);
+    }
 }

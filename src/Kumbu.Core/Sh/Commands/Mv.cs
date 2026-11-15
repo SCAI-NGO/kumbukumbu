@@ -98,7 +98,7 @@ public sealed class Mv(NoteMover mover) : ICommand
             if (!several) return await mover.MoveFolderAsync(source, target, rewriteLinks, ct);
             var inside = target.Child(source.Name);
             // exact: true would call this a race ("appeared meanwhile"); here it is a plain collision.
-            return await mover.OccupiedAsync(inside, ct)
+            return await mover.FolderTargetOccupiedAsync(source, inside, ct)
                 ? ShellResult.Error($"{Name}: {inside.Value} already exists; rm it first, or choose another name")
                 : await mover.MoveFolderAsync(source, inside, rewriteLinks, Name, exact: true, ct);
         }

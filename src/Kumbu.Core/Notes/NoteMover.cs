@@ -172,9 +172,16 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         return result;
     }
 
-    /// <summary>Whether a note, an attachment or a folder is at <paramref name="path"/>.</summary>
-    public async Task<bool> OccupiedAsync(VaultPath path, CancellationToken ct) =>
-        await ExistsAsync(path, ct) || await IsFolderAsync(path, ct);
+    /// <summary>Whether moving the folder <paramref name="source"/> to <paramref name="target"/> would meet something there.
+    /// False unless the caller may move the source, it exists and the target is in its vault, so that no answer
+    /// reveals what lies outside; <see cref="MoveFolderAsync(VaultPath, VaultPath, bool, string, bool, CancellationToken)"/> then gives the right error.</summary>
+    public async Task<bool> FolderTargetOccupiedAsync(VaultPath source, VaultPath target, CancellationToken ct)
+    {
+        if (target.Vault != source.Vault || source.Segments.Count < 2) return false;
+        if (caller.RefuseFolder("mv", source) is not null || caller.Refuse("mv", target) is not null) return false;
+        if (!await IsFolderAsync(source, ct)) return false;
+        return await ExistsAsync(target, ct) || await IsFolderAsync(target, ct);
+    }
 
     /// <summary>Whether a note or an attachment is at <paramref name="path"/>.</summary>
     private async Task<bool> ExistsAsync(VaultPath path, CancellationToken ct) =>
