@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
@@ -7,6 +8,9 @@ using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Notes;
+
+/// <summary>One replacement of <see cref="NoteWriter.EditManyAsync"/>; the names are those of the MCP tool's parameters.</summary>
+public sealed record TextEdit([property: JsonPropertyName("old_text")] string OldText, [property: JsonPropertyName("new_text")] string NewText);
 
 /// <summary>
 /// Every change to a note goes through here: validation, version tokens (optimistic concurrency),
@@ -198,20 +202,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         newText = Normalize(newText);
 
         // The part of the note the edit may touch: all of it, or one section without its trailing blank lines.
-        int scopeStart = 0, scopeEnd = current.Length;
-        string where = path.Value, inSection = "";
-        if (fragment is not null)
-        {
-            if (!SectionLookup.TryFind(path, current, fragment, out var match, out var sectionError))
-            {
-                return ShellResult.Error($"edit: {sectionError}");
-            }
-
-            scopeStart = match.Offset(match.Heading.Line, current);
-            scopeEnd = match.Offset(match.Heading.ContentEnd, current);
-            where = $"section {match.Heading.Address} of {path.Value}";
-            inSection = $" (in section {match.Heading.Address})";
-        }
+        if (!TryScope(path, current, fragment, out var scope, out var scopeError)) return scopeError!;
+        var (scopeStart, scopeEnd, where, inSection) = scope;
 
         string content, summary;
         if (replaceSection)
@@ -234,29 +226,15 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             oldText = Normalize(oldText);
             if (oldText.Length == 0) return ShellResult.Error("edit: old_text is empty; leave it out to append");
 
-            var scope = current[scopeStart..scopeEnd];
-            var at = scope.IndexOf(oldText, StringComparison.Ordinal);
-            if (at < 0)
-            {
-                return ShellResult.Error(
-                    $"edit: old_text not found in {where}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
-            }
-
-            var count = Occurrences(scope, oldText);
+            if (Locate(current, scope, fragment is not null, oldText, replaceAll, out var at, out var count) is { } notFound) return notFound;
             if (replaceAll)
             {
-                content = string.Concat(current.AsSpan(0, scopeStart), scope.Replace(oldText, newText, StringComparison.Ordinal), current.AsSpan(scopeEnd));
+                var text = current[scopeStart..scopeEnd];
+                content = string.Concat(current.AsSpan(0, scopeStart), text.Replace(oldText, newText, StringComparison.Ordinal), current.AsSpan(scopeEnd));
                 summary = $"replaced {count} {(count == 1 ? "occurrence" : "occurrences")} in {where}";
-            }
-            else if (count > 1)
-            {
-                return ShellResult.Error(
-                    $"edit: old_text occurs {count} times in {where}; include more of the surrounding text so it matches once"
-                    + (fragment is null ? ", or put the section in the path (note.md#Heading)" : ""));
             }
             else
             {
-                at += scopeStart;
                 content = string.Concat(current.AsSpan(0, at), newText, current.AsSpan(at + oldText.Length));
                 summary = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
             }
@@ -266,6 +244,101 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (content == current) return Written($"{path.Value} is unchanged", existing);
 
         return await ReplaceAsync(tool, existing, content, summary, message, ct);
+    }
+
+    /// <summary>The part of a note an edit may touch, and how errors and summaries name it.</summary>
+    private readonly record struct EditScope(int Start, int End, string Where, string InSection);
+
+    private static bool TryScope(VaultPath path, string current, string? fragment, out EditScope scope, out ShellResult? error)
+    {
+        error = null;
+        if (fragment is null)
+        {
+            scope = new EditScope(0, current.Length, path.Value, "");
+            return true;
+        }
+
+        scope = default;
+        if (!SectionLookup.TryFind(path, current, fragment, out var match, out var sectionError))
+        {
+            error = ShellResult.Error($"edit: {sectionError}");
+            return false;
+        }
+
+        scope = new EditScope(
+            match.Offset(match.Heading.Line, current), match.Offset(match.Heading.ContentEnd, current),
+            $"section {match.Heading.Address} of {path.Value}", $" (in section {match.Heading.Address})");
+        return true;
+    }
+
+    /// <summary>
+    /// Finds <paramref name="oldText"/> (normalised, not empty) in the scope: its offset in the note and how often it occurs.
+    /// Unless <paramref name="all"/>, it must occur exactly once. Null when found.
+    /// </summary>
+    private static ShellResult? Locate(string current, EditScope scope, bool inSection, string oldText, bool all, out int at, out int count)
+    {
+        var text = current[scope.Start..scope.End];
+        at = text.IndexOf(oldText, StringComparison.Ordinal);
+        count = 0;
+        if (at < 0)
+        {
+            return ShellResult.Error(
+                $"edit: old_text not found in {scope.Where}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
+        }
+
+        count = Occurrences(text, oldText);
+        if (!all && count > 1)
+        {
+            return ShellResult.Error(
+                $"edit: old_text occurs {count} times in {scope.Where}; include more of the surrounding text so it matches once"
+                + (inSection ? "" : ", or put the section in the path (note.md#Heading)"));
+        }
+
+        at += scope.Start;
+        return null;
+    }
+
+    public const int MaxEdits = 64;
+
+    /// <summary>
+    /// Several unique replacements on the same version, applied in order, all or none, as one version. Each
+    /// <c>OldText</c> must occur exactly once (in the section, if the path has one) when its turn comes.
+    /// </summary>
+    public async Task<ShellResult> EditManyAsync(string pathText, string version, IReadOnlyList<TextEdit> edits, CancellationToken ct, string? message = null)
+    {
+        const string tool = "edit";
+        if (!TryMessage(message, tool, out message, out var messageError)) return messageError!;
+        if (edits.Count == 0 || edits.Any(e => e is null)) return ShellResult.Error("edit: edits is empty or has an entry without old_text and new_text");
+        if (edits.Count > MaxEdits) return ShellResult.Error($"edit: at most {MaxEdits} edits in one call");
+
+        var (notePath, fragment) = SectionAddress.Split(pathText);
+        if (!TryParse(tool, notePath, out var path, out var error)) return error;
+        if (NotText(tool, path) is { } attachment) return attachment;
+        if (caller.Refuse(tool, path) is { } refused) return refused;
+
+        var existing = await store.GetAsync(path, ct);
+        if (existing is null) return await MissingAsync(tool, path, ct);
+        if (existing.Version != version) return Conflict(tool, path, version, existing);
+
+        var current = existing.Content;
+        for (var i = 0; i < edits.Count; i++)
+        {
+            var oldText = Normalize(edits[i].OldText ?? "");
+            var failed = oldText.Length == 0 ? ShellResult.Error("edit: old_text is empty") : null;
+            var at = 0;
+            if (failed is null && TryScope(path, current, fragment, out var scope, out failed))
+            {
+                failed = Locate(current, scope, fragment is not null, oldText, false, out at, out _);
+            }
+
+            if (failed is not null) return failed with { Output = $"edit: edit {i + 1} of {edits.Count}: {failed.Output["edit: ".Length..]}" };
+            current = string.Concat(current.AsSpan(0, at), Normalize(edits[i].NewText ?? ""), current.AsSpan(at + oldText.Length));
+        }
+
+        if (TooLarge(tool, current) is { } sizeError) return sizeError;
+        if (current == existing.Content) return Written($"{path.Value} is unchanged", existing);
+
+        return await ReplaceAsync(tool, existing, current, $"edited {path.Value}: {edits.Count} changes", message, ct);
     }
 
     /// <summary>

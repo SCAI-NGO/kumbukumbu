@@ -285,6 +285,44 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task Several_edits_apply_in_order_as_one_version()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- uno", "- eins")], Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("edited /Work/plan.md: 2 changes", result.Output);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("# Plan\n\n- eins\n- two\n", note.Content);
+        Assert.Equal([Plan], note.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task A_failing_edit_changes_nothing()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- absent", "x")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("edit: edit 2 of 2: old_text not found in /Work/plan.md", result.Output, StringComparison.Ordinal);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal(Plan, note.Content);
+        Assert.Equal(V(Plan), note.Version);
+        Assert.Empty(note.History);
+    }
+
+    [Fact]
+    public async Task Edits_stay_in_the_section()
+    {
+        const string content = "# A\n\nfoo\n\n# B\n\nbar\n";
+        await Seed("/Work/sec.md", content);
+
+        var result = await _writer.EditManyAsync("/Work/sec.md#A", V(content), [new("bar", "baz")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("edit: edit 1 of 1: old_text not found in section", result.Output, StringComparison.Ordinal);
+        Assert.Equal(content, (await Get("/Work/sec.md")).Content);
+    }
+
+    [Fact]
     public async Task A_write_message_reaches_history()
     {
         var v1 = (await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "consolidated")).Version!.Token;

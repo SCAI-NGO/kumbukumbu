@@ -87,6 +87,8 @@ public static class Manual
         included); it becomes new_text. Include enough surrounding text to make it unique.
         Append: leave out old_text; new_text is added at the end, on a new line.
         replace_all: every occurrence of old_text becomes new_text (in the section, if the path has one).
+        edits: instead of old_text and new_text, a list of {old_text, new_text} applied in order on the same version,
+        all or none, as one version; each old_text must occur exactly once when its turn comes.
         To replace text across many notes, use the replace tool.
 
         Sections: put a section in the path, /Work/plan.md#Goals (nested: #Architecture#Gates; sh 'outline'
