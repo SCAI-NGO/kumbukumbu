@@ -324,7 +324,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         for (var i = 0; i < edits.Count; i++)
         {
             var oldText = Normalize(edits[i].OldText ?? "");
-            var failed = oldText.Length == 0 ? ShellResult.Error("edit: old_text is empty") : null;
+            var failed = oldText.Length == 0 ? ShellResult.Error("edit: old_text is empty")
+                : edits[i].NewText is null ? ShellResult.Error("edit: new_text is missing; give \"\" to delete the text") : null;
             var at = 0;
             if (failed is null && TryScope(path, current, fragment, out var scope, out failed))
             {
@@ -332,7 +333,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             }
 
             if (failed is not null) return failed with { Output = $"edit: edit {i + 1} of {edits.Count}: {failed.Output["edit: ".Length..]}" };
-            current = string.Concat(current.AsSpan(0, at), Normalize(edits[i].NewText ?? ""), current.AsSpan(at + oldText.Length));
+            current = string.Concat(current.AsSpan(0, at), Normalize(edits[i].NewText), current.AsSpan(at + oldText.Length));
         }
 
         if (TooLarge(tool, current) is { } sizeError) return sizeError;

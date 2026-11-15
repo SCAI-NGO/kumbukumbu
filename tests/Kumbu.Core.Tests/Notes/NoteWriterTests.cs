@@ -297,6 +297,27 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task An_edit_without_new_text_is_refused_and_writes_nothing()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- two", null!)], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2: new_text is missing; give \"\" to delete the text", result.Output);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal(Plan, note.Content);
+        Assert.Empty(note.History);
+    }
+
+    [Fact]
+    public async Task An_empty_new_text_deletes()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- two\n", "")], Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("# Plan\n\n- one\n", (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
     public async Task A_failing_edit_changes_nothing()
     {
         var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- absent", "x")], Ct);
