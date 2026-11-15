@@ -8,13 +8,13 @@ import { useDialog } from "../hooks/useDialog";
 
 const rect = (r: Partial<DOMRect>) => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON() {}, ...r }) as DOMRect;
 
-/** jsdom has no layout: the button sits where the test says, and the menu is 120 high. */
-function layout(button: Partial<DOMRect>, viewportHeight = 800) {
+/** jsdom has no layout: the button sits where the test says, and the menu is 120 high unless the test says otherwise. */
+function layout(button: Partial<DOMRect>, viewportHeight = 800, menuHeight = 120) {
   vi.stubGlobal("innerHeight", viewportHeight);
   vi.stubGlobal("innerWidth", 1000);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.getAttribute("aria-haspopup") === "menu") return rect(button);
-    if (this.getAttribute("role") === "menu") return rect({ width: 192, height: 120 });
+    if (this.getAttribute("role") === "menu") return rect({ width: 192, height: menuHeight });
     return rect({});
   });
 }
@@ -87,6 +87,60 @@ describe("Menu", () => {
     render(<Clipped placement="above" />);
     await userEvent.click(screen.getByRole("button", { name: "Actions" }));
     expect(screen.getByRole("menu").style.top).toBe("372px");
+  });
+
+  it("a menu taller than the room on its side scrolls within that room", async () => {
+    layout({ top: 135, bottom: 165, left: 900, right: 940 }, 800, 900);
+    const { unmount } = render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    let items = screen.getByRole("menu");
+    expect(items).toHaveClass("overflow-y-auto");
+    expect(items.style.top).toBe("169px");
+    expect(items.style.maxHeight).toBe("623px"); // 800 - 169 - 8
+    unmount();
+
+    // Near the bottom it opens to the side with more room, and starts no higher than the screen's top.
+    layout({ top: 700, bottom: 730, left: 900, right: 940 }, 800, 900);
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    items = screen.getByRole("menu");
+    expect(items.style.maxHeight).toBe("684px"); // 700 - 8 - 8
+    expect(items.style.top).toBe("8px");
+  });
+
+  it("a menu that fits keeps its own height as its limit", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(<Clipped />);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.getByRole("menu").style.maxHeight).toBe("658px"); // 800 - 134 - 8
+  });
+
+  it("the arrow keys bring the item they reach into view", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(
+      <Menu label="Actions" placement="below" className="b" items={["One", "Two"].map((label) => ({ label, icon: Pencil, onSelect }))}>
+        ⋯
+      </Menu>,
+    );
+    screen.getByRole("button", { name: "Actions" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.tab();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Two" })).toHaveFocus();
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByRole("menuitem", { name: "Two" }));
+  });
+
+  it("every item is at least 48 px high, in a section too", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    render(
+      <Menu label="Actions" placement="below" className="b" items={[{ label: "Rename", icon: Pencil, onSelect }]} sections={[{ heading: "Later", items: [{ label: "Postpone", icon: Pencil, onSelect }] }]}>
+        ⋯
+      </Menu>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const item of screen.getAllByRole("menuitem")) expect(item).toHaveClass("min-h-12");
   });
 
   it("Escape, outside click and focus return as before", async () => {

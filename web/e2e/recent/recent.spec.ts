@@ -32,9 +32,25 @@ async function closeDrawer(page: Page) {
   await expect(drawer).toHaveCount(0);
 }
 
-/** From the tree's top row to the page, as a person does it (the page stays loaded: no reload). */
+/**
+ * From the tree's toolbar to the page, as a person does it (the page stays loaded: no reload): its Recent changes, or
+ * the item at the top of ⋯ where the row is too narrow for it (UI round spec §2.1).
+ */
 async function toRecent(page: Page, testInfo: TestInfo) {
-  await (await openTree(page, testInfo)).getByRole("link", { name: "Recent changes" }).click();
+  const tools = (await openTree(page, testInfo)).getByRole("group", { name: "Tools for this vault" });
+  await expect(tools.getByRole("button", { name: /^Actions for / })).toBeVisible();
+  // Laid out: until its width is known the row shows every tool, and overflows.
+  await expect.poll(() => tools.evaluate((row) => row.scrollWidth <= row.clientWidth)).toBe(true);
+  const link = tools.getByRole("link", { name: "Recent changes", exact: true });
+  if (await link.count()) await link.click();
+  else {
+    await tools.getByRole("button", { name: /^Actions for / }).click();
+    const items = page.getByRole("menu", { name: /^Actions for / }).getByRole("menuitem");
+    // At the top: after Upload and Sort, where they went into ⋯ too.
+    const top = await items.evaluateAll((els) => els.slice(0, 3).map((e) => e.textContent?.trim()));
+    expect(top, "Recent changes at the top of ⋯").toContain("Recent changes");
+    await items.filter({ hasText: /^Recent changes$/ }).click();
+  }
   await expect(page).toHaveURL(/\/recent$/);
   await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
 }

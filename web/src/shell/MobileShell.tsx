@@ -4,8 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
-import { Flag, FolderInput, History, TextSearch, Trash2 } from "lucide-react";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useNoteText, useTree, useVaults, type VaultView } from "../api/notes";
+import { Flag, FolderInput, History, ListPlus, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -21,6 +21,7 @@ import { NO_SUCH_NOTE, useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
+import { parseProperties, splitFrontmatter } from "../note/properties";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
@@ -41,7 +42,7 @@ import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./Tr
 import { publishingItems } from "./publishingItems";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
-import DateDialog, { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import DateDialog, { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
 import { flaggable, useFlagging } from "../flags/FlagMenu";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
@@ -164,6 +165,7 @@ export default function MobileShell() {
   // The last note of an ordinary vault is kept for the next start, once it has loaded; a discreet one never is, and
   // while one is open the kept path stays the last ordinary note.
   const loaded = useNoteLoaded(path);
+  const noteText = useNoteText(path);
   useEffect(() => {
     if (userId && path && loaded && ordinary(vaults.data, discreetNames, vaultOf(path))) keepLastNote(userId, path);
   }, [userId, path, loaded, vaults.data, discreetNames]);
@@ -341,6 +343,7 @@ export default function MobileShell() {
   // The note's header line asks the calendar about the note shown; its menu takes the same answer, asking nothing itself.
   const dated = useNoteEntry(path, false);
   const removeDate = useRemoveFromCalendar(copied.say);
+  const switchTask = useTaskSwitch(copied.say);
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
@@ -359,6 +362,10 @@ export default function MobileShell() {
   // Below `write` the dock makes nothing, and the note can't be changed; the board's definition wants `maintain`.
   const dockWrites = !!dockFolder && atLeast(dockLevel, "write");
   const noteChanges = !!path && mayChange(noteLevel, path);
+  // The note's properties show in a box with + Add property when it has keys to show; without (no frontmatter, an
+  // empty one, or one that can't be read) the note's ⋯ offers it.
+  const shownFrontmatter = noteText === undefined ? undefined : splitFrontmatter(noteText).frontmatter;
+  const boxless = noteText !== undefined && !(shownFrontmatter != null && parseProperties(shownFrontmatter)?.length);
   // On a phone the tree is a drawer: the frame and the pill go around and under the top bar instead (spec §3.7).
   const framed = discreetShown && !docked;
   const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating, onFlag: flagging.open };
@@ -416,6 +423,7 @@ export default function MobileShell() {
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
+              phone={!docked}
               newNote={dockFolder && dockWrites ? () => newNote(dockFolder) : null}
               newFolder={dockFolder && dockWrites ? () => setFolderDialog(dockFolder) : null}
               upload={dockFolder && dockWrites ? () => openUpload(dockFolder) : null}
@@ -432,7 +440,8 @@ export default function MobileShell() {
                             ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
                             { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
                             ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => flagging.open(path) }] : []),
-                            ...calendarItems(path, dated, setDating, removeDate),
+                            ...calendarItems(path, dated, setDating, removeDate, switchTask),
+                            ...(boxless ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
                           ]
                         : []),
                     ]

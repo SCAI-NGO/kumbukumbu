@@ -254,6 +254,13 @@ export function useNoteLoaded(path: string | null): boolean {
   });
 }
 
+/** The note's text as its read (`useNote`) last brought it, if it has. Only looks, as `useNoteMissing`. */
+export function useNoteText(path: string | null): string | undefined {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback((changed: () => void) => queryClient.getQueryCache().subscribe(notifyManager.batchCalls(changed)), [queryClient]);
+  return useSyncExternalStore(subscribe, () => (path === null ? undefined : queryClient.getQueryData<NoteView>(["note", path])?.content));
+}
+
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
 export const useLinks = (path: string, version: string | undefined) =>
   useQuery({

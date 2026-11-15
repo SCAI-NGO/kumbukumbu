@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { boardUrl, noteUrl, vaultOf } from "../api/paths";
 import type { CouldntReadView } from "./api";
+import { cameFromHere, withCameFrom } from "./backLink";
 import DateDialog, { readableFields } from "./DateDialog";
 
 /** "`when: tomorrow` – I need a date like 2026-11-20", the value as code. */
@@ -35,6 +36,7 @@ const actionClass = "flex min-h-12 flex-none items-center rounded-[10px] px-3 fo
  */
 export default function CouldntRead({ notes, canWrite }: { notes: CouldntReadView[]; canWrite: boolean }) {
   const [fixing, setFixing] = useState<CouldntReadView | null>(null);
+  const location = useLocation();
   if (notes.length === 0) return null;
   return (
     <section id="couldnt-read" aria-labelledby="couldnt-read-heading" className="mx-auto mt-8 flex max-w-3xl flex-col gap-2">
@@ -45,7 +47,7 @@ export default function CouldntRead({ notes, canWrite }: { notes: CouldntReadVie
         {notes.map((note) => (
           <li key={note.path} className="flex min-h-12 flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] bg-surface px-3 py-1.5 text-sm text-text-body">
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              <Link to={noteUrl(note.path)} className="inline-flex min-h-12 items-center font-medium text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent">
+              <Link to={noteUrl(note.path)} state={withCameFrom(undefined, cameFromHere(location))} className="inline-flex min-h-12 items-center font-medium text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent">
                 {note.title}
               </Link>
               {" — "}

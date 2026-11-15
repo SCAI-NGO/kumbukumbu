@@ -27,6 +27,38 @@ async function openTree(page: Page, testInfo: TestInfo): Promise<Locator> {
 /** A tree row of a folder (its name and count) or of a note (its title, a flag's name after it). */
 const folderRow = (tree: Locator, name: string) => tree.getByRole("button", { name: new RegExp(`^${name}\\b`) });
 
+/** What the Sort button says (UI round spec §2.1): the order shown, and what a tap does. */
+const SORTED = { name: "Sorted by name. Sort by last changed", changed: "Sorted by last changed. Sort by name" } as const;
+
+/**
+ * The tree's Sort: the toolbar's button, or its item at the top of ⋯ where the row is too narrow for it (the docked
+ * sidebar's default width and the phone's drawer). It says the order `shown` (with "either", whichever it is); with
+ * `then`, a tap switches to that one, unless it shows that one already.
+ */
+async function sort(page: Page, tree: Locator, shown: keyof typeof SORTED | "either", then?: keyof typeof SORTED) {
+  const tools = tree.getByRole("group", { name: "Tools for this vault" });
+  await expect(tools.getByRole("button", { name: /^Actions for / })).toBeVisible();
+  // Laid out: until its width is known the row shows every tool, and overflows.
+  await expect.poll(() => tools.evaluate((row) => row.scrollWidth <= row.clientWidth)).toBe(true);
+  let control = tools.getByRole("button", { name: /^Sorted by / });
+  const inMenu = (await control.count()) === 0;
+  if (inMenu) {
+    await tools.getByRole("button", { name: /^Actions for / }).click();
+    const menu = page.getByRole("menu", { name: /^Actions for / });
+    await expect(menu.getByRole("menuitem").first(), "Sort at the top of ⋯").toHaveAccessibleName(/^Upload$|^Sorted by /);
+    control = menu.getByRole("menuitem", { name: /^Sorted by / });
+  }
+  if (shown === "either") {
+    await expect(control).toHaveAccessibleName(new RegExp(`^(${SORTED.name}|${SORTED.changed})$`.replace(/\./g, "\\.")));
+    const label = (await control.getAttribute("aria-label")) ?? (await control.textContent())?.trim();
+    if (then && label === SORTED[then]) then = undefined;
+  } else await expect(control).toHaveAccessibleName(SORTED[shown]);
+  if (then) {
+    await control.click();
+    if (!inMenu) await expect(control).toHaveAccessibleName(SORTED[then]);
+  } else if (inMenu) await page.keyboard.press("Escape");
+}
+
 /** Opens the tree's search and types `words`. */
 async function find(tree: Locator, words: string) {
   await tree.getByRole("button", { name: "Find in this vault" }).click();
@@ -133,13 +165,11 @@ test("flags #13: Last changed puts the latest folder first, folders above files,
   const notNow = page.getByRole("button", { name: "Not now" });
   if (await notNow.isVisible()) await notNow.click();
   const tree = await openTree(page, testInfo);
-  const order = tree.getByRole("radiogroup", { name: "Order" });
 
   try {
-    await expect(order.getByRole("radio", { name: "Name" })).toBeChecked();
     // The test folder holds the latest change anywhere in Work, so it is first among Work's folders on Last changed.
-    await order.getByText("Last changed").click();
-    await expect(order.getByRole("radio", { name: "Last changed" })).toBeChecked();
+    await sort(page, tree, "name", "changed");
+    await sort(page, tree, "changed");
     const firstFolder = async () => (await tree.locator("[data-tree-row][aria-expanded]").first().textContent())?.trim() ?? "";
     await expect.poll(firstFolder).toMatch(new RegExp(`^${folder}`));
 
@@ -153,18 +183,18 @@ test("flags #13: Last changed puts the latest folder first, folders above files,
     await expect(page.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
     if (await page.getByRole("button", { name: "Not now" }).isVisible()) await page.getByRole("button", { name: "Not now" }).click();
     const again = await openTree(page, testInfo);
-    await expect(again.getByRole("radiogroup", { name: "Order" }).getByRole("radio", { name: "Last changed" })).toBeChecked();
+    await sort(page, again, "changed");
     await expect.poll(async () => (await again.locator("[data-tree-row][aria-expanded]").first().textContent())?.trim() ?? "").toMatch(new RegExp(`^${folder}`));
 
     await page.goto("/notes/Welcome");
     await expect(page.getByRole("complementary", { name: "File tree" }).or(page.getByRole("button", { name: "Open file tree" })).first()).toBeVisible();
     const other = await openTree(page, testInfo);
     await expect(other.getByRole("button", { name: /Switch vault: Welcome/ })).toBeVisible();
-    await expect(other.getByRole("radiogroup", { name: "Order" }).getByRole("radio", { name: "Last changed" })).toBeChecked();
+    await sort(page, other, "changed");
   } finally {
     // Back to Name: the choice is the device's, and the other tests expect the default.
     const reset = await openTree(page, testInfo);
-    await reset.getByRole("radiogroup", { name: "Order" }).getByText("Name", { exact: true }).click();
-    await expect(reset.getByRole("radiogroup", { name: "Order" }).getByRole("radio", { name: "Name" })).toBeChecked();
+    await sort(page, reset, "either", "name");
+    await sort(page, reset, "name");
   }
 });

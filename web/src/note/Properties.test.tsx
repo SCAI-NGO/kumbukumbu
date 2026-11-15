@@ -165,5 +165,40 @@ describe("the properties box", () => {
     );
     expect(box()).toHaveTextContent("when");
     expect(screen.queryByRole("button", { name: /^Properties ·/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add property" })).not.toBeInTheDocument();
+  });
+});
+
+describe("+ Add property in the box", () => {
+  const PLAN = "/Work/Plan.md";
+  const plain = ["---", "tags: [work]", "---", "# Plan", ""].join("\n");
+  const add = () => screen.queryByRole("button", { name: "Add property" });
+
+  it("sits at the bottom of the box on a note that doesn't fold, and opens the dialog", async () => {
+    noteWithEntry(PLAN, noteEntry(null), {}, "owner", plain);
+    renderApp(`/notes${PLAN}`);
+    const button = await screen.findByRole("button", { name: "Add property" });
+    expect(button).toHaveTextContent("+ Add property");
+    expect(button).toHaveClass("min-h-12");
+    expect(box()!.nextElementSibling).toBe(button);
+    await userEvent.click(button);
+    expect(await screen.findByRole("dialog", { name: "Add property" })).toBeInTheDocument();
+  });
+
+  it("on a note that folds, only while the box is open", async () => {
+    noteWithEntry(ZAHNARZT, dated, {}, "owner", calendarNote);
+    renderApp(`/notes${ZAHNARZT}`);
+    const button = await toggle();
+    expect(add()).not.toBeInTheDocument();
+    await userEvent.click(button);
+    expect(box()!.nextElementSibling).toBe(await screen.findByRole("button", { name: "Add property" }));
+  });
+
+  it("isn't offered without write", async () => {
+    noteWithEntry(PLAN, noteEntry(null), {}, "read", plain);
+    renderApp(`/notes${PLAN}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(box()).toBeInTheDocument();
+    expect(add()).not.toBeInTheDocument();
   });
 });

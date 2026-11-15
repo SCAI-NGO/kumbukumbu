@@ -162,7 +162,8 @@ test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, se
   await expect(tree.getByRole("button", { name: "Other", exact: true })).toBeVisible();
   await expect(tree.getByRole("button", { name: "Note", exact: true })).toHaveCount(0);
 
-  await tree.getByRole("button", { name: "Actions for Work" }).click();
+  // The vault's ⋯, in the toolbar above the folders (UI round spec §2.1).
+  await tree.getByRole("group", { name: "Tools for this vault" }).getByRole("button", { name: "Actions for Work" }).click();
   await page.getByRole("menuitem", { name: "Trash" }).click();
   const trash = page.getByRole("dialog", { name: "Trash" });
   // The dialog lists all of Work's trash, other tests' notes too, uncapped (newest first): this test's row by its

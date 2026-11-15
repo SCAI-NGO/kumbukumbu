@@ -570,7 +570,8 @@ describe("the shell", () => {
     expect(within(drawer()).getByRole("button", { name: "Sign out" })).toHaveFocus();
     await userEvent.tab();
     await userEvent.tab();
-    expect(within(drawer()).getByRole("button", { name: "Actions for Work" })).toHaveFocus();
+    // Round to the first stop: the toolbar's first, above the folders.
+    expect(within(drawer()).getByRole("button", { name: "New note" })).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
@@ -671,6 +672,68 @@ describe("the shell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/B%C3%BCro/inbox.md"));
     expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("textbox", { name: "Markdown source" })).toBeInTheDocument();
+  });
+});
+
+describe("the calendar in the phone's dock", () => {
+  const whatsOn = (count: number, overdue: boolean) => ({
+    "GET /api/calendar/whats-on": () => json(200, { items: [], count, overdue, vaults: [{ vault: "Work", count, overdue }], couldntRead: 0, couldntReadVaults: [] }),
+  });
+  const dock = () => screen.getByRole("navigation", { name: "Vault actions" });
+
+  it("sits between Files and Search, carries What's on's count, and opens What's on", async () => {
+    signedInApi(whatsOn(2, true));
+    const router = renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const names = within(dock()).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names.slice(0, 3)).toEqual(["Files", "Calendar", expect.stringMatching(/^Search/)]);
+    const calendar = within(dock()).getByRole("button", { name: "Calendar" });
+    expect(calendar).toHaveClass("size-12");
+    expect(calendar).toHaveAttribute("title", "What's on");
+    await waitFor(() => expect(calendar).toHaveAccessibleDescription("2 on, some overdue"));
+    const pill = within(calendar).getByText("2 on, some overdue").parentElement!;
+    expect(pill).toHaveTextContent(/^2/);
+    expect(pill).toHaveClass("absolute", "top-0", "right-0", "pointer-events-none");
+    // The tree's button keeps only its own job.
+    const tree = screen.getByRole("button", { name: "Open file tree" });
+    expect(tree).not.toHaveAttribute("aria-describedby");
+    expect(within(tree).queryByText(/on/)).not.toBeInTheDocument();
+    expect(tree).not.toHaveClass("mr-1.5");
+
+    await userEvent.click(calendar);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+  });
+
+  it("lets Search's mode give way before its word where the field is narrow", async () => {
+    signedInApi(whatsOn(0, false));
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const search = within(dock()).getByRole("button", { name: /^Search/ });
+    // A container query: below 11rem (the word, the icon and the chip need about 170 px) the chip hides.
+    expect(search).toHaveClass("@container");
+    expect(within(search).getByText("hybrid")).toHaveClass("@max-[11rem]:hidden");
+    expect(within(search).getByText("Search")).not.toHaveClass("@max-[11rem]:hidden");
+  });
+
+  it("closes the drawer on its way to What's on", async () => {
+    signedInApi(whatsOn(0, false));
+    const router = renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    const calendar = within(dock()).getByRole("button", { name: "Calendar" });
+    expect(calendar).not.toHaveAttribute("aria-describedby");
+    act(() => useEditor.getState().setOverlay("tree"));
+    act(() => calendar.click());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+
+  it("isn't in the dock at desktop widths", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+    signedInApi(whatsOn(2, true));
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    expect(within(dock()).getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(within(dock()).queryByRole("button", { name: "Calendar" })).not.toBeInTheDocument();
   });
 });
 
@@ -795,8 +858,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the calendar, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
+    // Reading, the trash, activity, checkpoints, the calendar, the gallery, recent changes, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Recent changes", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(await menuItems("Actions for soup")).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
   });
@@ -815,7 +878,9 @@ describe("vaults shared with the user", () => {
     await userEvent.keyboard("{Escape}");
 
     await openDrawer();
-    await within(drawer()).findByRole("button", { name: "Board" });
+    // The board's note in the tree, and the toolbar's Board.
+    expect(await within(drawer()).findAllByRole("button", { name: "Board" })).toHaveLength(2);
+    expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
     expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
@@ -894,7 +959,9 @@ describe("vaults shared with the user", () => {
     expect(await screen.findByRole("heading", { name: "Board" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
     await openDrawer();
-    await within(drawer()).findByRole("button", { name: "Board" });
+    // The board's note in the tree, and the toolbar's Board.
+    expect(await within(drawer()).findAllByRole("button", { name: "Board" })).toHaveLength(2);
+    expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // The folder's menu, then the note's.
     expect(await menuItems("Actions for Board")).toContain("Rename or move");
     expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
@@ -1118,6 +1185,22 @@ describe("the calendar in the note's menus", () => {
     expect(entryAsks(reading)).toEqual(["/Work/inbox.md"]);
   });
 
+  it("the tree's menu turns a note given a day into a to-do", async () => {
+    const fetch = calendarApi({
+      "POST /api/vaults/Work/calendar/set": () => json(200, { path: "/Work/inbox.md", version: "v2", note: { entry: null, couldntRead: null, canWrite: true } }),
+    });
+    renderApp("/notes/Work/readme.md");
+    await openDrawer();
+    expect(await treeItems("Actions for inbox")).toContain("Make it a to-do");
+    expect(await treeItems("Actions for readme")).not.toContain("Make it a to-do");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for inbox" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Make it a to-do" }));
+    const set = async () =>
+      Promise.all(fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/vaults/Work/calendar/set").map((r) => r.clone().json()));
+    await waitFor(async () => expect(await set()).toEqual([{ path: "/Work/inbox.md", task: true }]));
+    expect(await screen.findByText("It's a to-do now.")).toBeInTheDocument();
+  });
+
   it("Remove from calendar takes the note out at once and says so", async () => {
     const fetch = calendarApi({
       "POST /api/vaults/Work/calendar/unset": () => json(200, { path: "/Work/inbox.md", version: "v2", note: { entry: null, couldntRead: null, canWrite: true } }),
@@ -1129,5 +1212,92 @@ describe("the calendar in the note's menus", () => {
     expect(await screen.findByText("Removed from the calendar.")).toBeInTheDocument();
     const unset = fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/vaults/Work/calendar/unset");
     expect(await Promise.all(unset.map((r) => r.clone().json()))).toEqual([{ path: "/Work/inbox.md" }]);
+  });
+});
+
+describe("Add property… in the note's menu", () => {
+  const INBOX = "/Work/inbox.md";
+  /** The inbox as written, read again as the last write left it; every PUT's body is kept. */
+  function inboxApi(content: string, level = "owner", path = INBOX) {
+    let current = { path, content, version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" };
+    const puts: { content: string; version: string }[] = [];
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", canWrite: level !== "read", level, ...(level === "owner" ? {} : { owner: '"Alice"', shared: true, membership: "m1" }) }]),
+      [`GET /api/notes${path}`]: () => json(200, current),
+      [`PUT /api/notes${path}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = { ...current, content: body.content, version: `v${puts.length + 1}` };
+        return json(200, current);
+      },
+    });
+    return puts;
+  }
+  const noteMenu = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await userEvent.keyboard("{Escape}");
+    return items;
+  };
+  async function add(name: string, value: string) {
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add property…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), name);
+    await userEvent.type(within(dialog).getByLabelText("Value"), value);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    return dialog;
+  }
+
+  it("a note without properties offers it, and adding makes them at the very top", async () => {
+    const puts = inboxApi("# Inbox\n\nText.\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    await waitFor(async () => expect(await noteMenu()).toContain("Add property…"));
+    const dialog = await add("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: "---\nowner: Alice\n---\n# Inbox\n\nText.\n", version: "v1" }]));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(within(screen.getByLabelText("Properties")).getByRole("term")).toHaveTextContent("owner");
+    // The box has its own button now.
+    expect(await noteMenu()).not.toContain("Add property…");
+  });
+
+  it("an empty frontmatter has no box either: the property goes into it", async () => {
+    const puts = inboxApi("---\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    await add("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: "---\nowner: Alice\n---\n# Inbox\n", version: "v1" }]));
+  });
+
+  it("properties that can't be read are refused with the reason, and nothing is written", async () => {
+    const puts = inboxApi("---\nabout: |\n  more\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("heading", { name: "Inbox" });
+    const dialog = await add("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The properties at the top can't be read here; change them in Write mode.");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("isn't offered where the box shows, nor without write", async () => {
+    inboxApi("---\ntags: [work]\n---\n# Inbox\n");
+    renderApp(`/notes${INBOX}`);
+    await screen.findByRole("button", { name: "Add property" });
+    expect(await noteMenu()).not.toContain("Add property…");
+    cleanup();
+    useEditor.getState().reset();
+
+    inboxApi("# Inbox\n", "read");
+    renderApp(`/notes${INBOX}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await noteMenu()).not.toContain("Add property…");
+  });
+
+  it("isn't offered on the board's own note below maintain", async () => {
+    inboxApi("# Board\n", "write", "/Work/Board/Board.md");
+    renderApp("/notes/Work/Board/Board.md");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await noteMenu()).not.toContain("Add property…");
   });
 });

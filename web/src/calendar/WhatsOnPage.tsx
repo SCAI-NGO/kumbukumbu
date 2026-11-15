@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useMayChange } from "../api/notes";
 import { calendarUrl } from "../api/paths";
 import { FormError } from "../components/form";
 import { useDiscreet } from "../discreet/state";
 import { useWhatsOn, type EntryView, type WhatsOnView } from "./api";
+import { keptTagOf } from "./backLink";
 import { useClosing } from "./ClosedToast";
 import EntryItem, { type EntryActions } from "./EntryItem";
 import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
@@ -25,7 +26,7 @@ export default function WhatsOnPage() {
 }
 
 function WhatsOnFiltered({ inAddress }: { inAddress: boolean }) {
-  const [tag, choose] = useTagFilter(inAddress);
+  const [tag, choose] = useTagFilter(inAddress, keptTagOf(useLocation().state));
   const whatsOn = useWhatsOn(tag);
   return (
     <div className="relative flex h-dvh flex-col bg-bg">
@@ -39,13 +40,14 @@ function WhatsOnFiltered({ inAddress }: { inAddress: boolean }) {
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
         {whatsOn.isPending && <p className="text-sm text-muted">Loading …</p>}
         {whatsOn.isError && <p className="text-text">{errorText(whatsOn.error)}</p>}
-        {whatsOn.data && <WhatsOn view={whatsOn.data} />}
+        {whatsOn.data && <WhatsOn view={whatsOn.data} kept={inAddress ? undefined : tag} />}
       </main>
     </div>
   );
 }
 
-function WhatsOn({ view }: { view: WhatsOnView }) {
+/** `kept`: the tag the page keeps out of the address, which a note opened from here takes along on its way back. */
+function WhatsOn({ view, kept }: { view: WhatsOnView; kept?: string }) {
   const closing = useClosing();
   const moving = useMoved();
   const [problem, setProblem] = useState<string | null>(null);
@@ -74,7 +76,7 @@ function WhatsOn({ view }: { view: WhatsOnView }) {
       ) : (
         <ul className="flex flex-col gap-1.5">
           {view.items.map((entry) => (
-            <Item key={entry.path} entry={entry} actions={actions} />
+            <Item key={entry.path} entry={entry} actions={actions} kept={kept} />
           ))}
         </ul>
       )}
@@ -92,7 +94,7 @@ function WhatsOn({ view }: { view: WhatsOnView }) {
 }
 
 /** One item, with ✓ and Later only where the person may write: What's on spans vaults of different roles. */
-function Item({ entry, actions }: { entry: EntryView; actions: EntryActions }) {
+function Item({ entry, actions, kept }: { entry: EntryView; actions: EntryActions; kept?: string }) {
   const writable = useMayChange(entry.path);
-  return <EntryItem entry={entry} actions={writable ? actions : undefined} vault={entry.vault} />;
+  return <EntryItem entry={entry} actions={writable ? actions : undefined} vault={entry.vault} kept={kept} />;
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
@@ -38,12 +38,12 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import { publishingItems } from "./publishingItems";
-import { filterTree } from "./treeFilter";
+import { filterTree, usedFlags } from "./treeFilter";
 import { orderTree, useTreeOrder } from "./treeOrder";
 import TreeTools, { type TreeSearch } from "./TreeTools";
 import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
-import { calendarItems, useRemoveFromCalendar } from "../calendar/DateDialog";
+import { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
 import { flaggable } from "../flags/FlagMenu";
@@ -75,7 +75,13 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
   ];
 }
 
-const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
+const rowParts = "flex min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
+const rowClass = `${rowParts} min-h-11`;
+// The name of a folder that opens a view sits beside its own chevron button, 48 px like it. The button starts as an
+// ordinary folder row does (6 px, the chevron, 8 px, the folder icon: 46 px) and the name 6 px after its 48, so both
+// line up with the other folders'; selected, the two read as one row.
+const viewToggleClass = "flex size-12 flex-none items-center gap-2 rounded-l-[8px] pl-1.5 focus-visible:outline-2 focus-visible:outline-accent";
+const viewRowClass = `${rowParts.replace("rounded-[8px]", "rounded-r-[8px]")} min-h-12 pl-1.5`;
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
@@ -120,20 +126,20 @@ type FolderActions = {
 };
 
 /**
- * The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). An
- * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
- * keeps it.
+ * The items of a folder's menu (the vault's root too, which can't be moved; the toolbar's menu adds the vault's own
+ * entries to them). An empty folder shown in the tree is there only by its marker, so it can be removed: without
+ * asking, as the trash keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing }: FolderActions): MenuItem[] {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
-  const items: MenuItem[] = [
+  return [
     ...(writes
       ? [
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
           { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
-          { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+          { id: "upload", label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
           // Only where the browser opens a camera: on a desktop it would open the file chooser, as Upload here does.
           ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path) }] : []),
         ]
@@ -142,8 +148,11 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto,
     ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     // The vault itself is no folder to mark.
     ...(inner ? entriesOf(publishing, folder.path, false) : []),
-    ...extra,
   ];
+}
+
+function FolderMenu({ folder, ...actions }: FolderActions & { folder: TreeFolder }) {
+  const items = folderItems(folder, actions);
   if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
@@ -155,6 +164,9 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto,
 /**
  * A folder's entry; the selected one (just made, or found by its name) is marked, and the first time it is shown
  * after that, scrolled to and focused: once only, not again each time it is shown anew (its parent opened again).
+ *
+ * With `view` (the vault's Calendar and Board folders, spec §2.3.2), a tap on the name opens that view and the chevron
+ * is a button of its own that opens and closes the folder.
  */
 function FolderButton({
   folder,
@@ -162,6 +174,7 @@ function FolderButton({
   open,
   selected,
   unpublishable,
+  view,
   onToggle,
 }: {
   folder: TreeFolder;
@@ -169,6 +182,7 @@ function FolderButton({
   open: boolean;
   selected: boolean;
   unpublishable: boolean;
+  view?: { label: string; open(): void };
   onToggle(): void;
 }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
@@ -181,6 +195,49 @@ function FolderButton({
     const top = topDialog();
     if (!top || top.contains(button.current)) button.current?.focus();
   }, [selected]);
+  const described = useId();
+  const chevron = <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />;
+  if (view) {
+    return (
+      <>
+        <button
+          type="button"
+          aria-label={`${open ? "Hide" : "Show"} the folder ${folder.name}`}
+          aria-expanded={open}
+          onClick={onToggle}
+          className={`${viewToggleClass} ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+        >
+          {chevron}
+          <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+        </button>
+        <button
+          ref={button}
+          type="button"
+          data-tree-row
+          aria-label={view.label}
+          // The name says what the tap does; the mark and the count, which it hides, are its description, each as plain
+          // text of its own.
+          aria-describedby={unpublishable ? `${described}-mark ${described}-count` : `${described}-count`}
+          aria-current={selected ? "true" : undefined}
+          onClick={view.open}
+          {...truncated}
+          className={`${viewRowClass} font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+        >
+          <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
+          {unpublishable && (
+            <span id={`${described}-mark`} className="flex-none text-dim">
+              <EyeOff size={14} aria-hidden />
+              <span className="sr-only">Unpublishable</span>
+            </span>
+          )}
+          <span id={`${described}-count`} className="flex-none font-mono text-[11px] text-dim">
+            <span aria-hidden>{count}</span>
+            <span className="sr-only">{count === 1 ? "1 item" : `${count} items`}</span>
+          </span>
+        </button>
+      </>
+    );
+  }
   return (
     <button
       ref={button}
@@ -192,7 +249,7 @@ function FolderButton({
       {...truncated}
       className={`${rowClass} pl-1.5 font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
     >
-      <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />
+      {chevron}
       <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
       {unpublishable && <UnpublishableMark />}
@@ -228,6 +285,7 @@ function FileMenu({
   onDelete,
   onDate,
   onRemoveDate,
+  onTask,
   onFlag,
 }: {
   row: Extract<Row, { kind: "note" }>;
@@ -239,6 +297,7 @@ function FileMenu({
   onDelete(subject: DeleteSubject): void;
   onDate?: (path: string) => void;
   onRemoveDate(path: string): void;
+  onTask(path: string, task: boolean): void;
   onFlag?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
@@ -260,7 +319,7 @@ function FileMenu({
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
         : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
     ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path) }] : []),
-    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate) : []),
+    ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate, onTask) : []),
   ];
   return (
     <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass} onOpen={() => setAsked(true)}>
@@ -512,6 +571,7 @@ export default function TreeDrawer(props: {
   // Said here, not over the note: the drawer covers that on a phone.
   const copied = useCopied("mx-[18px] mb-2.5");
   const removeDate = useRemoveFromCalendar(copied.say);
+  const switchTask = useTaskSwitch(copied.say);
   // Counted once per tree, not once per row: what makes a bare name unique for Copy link.
   const names = useMemo(() => tree.data && noteNames(tree.data.root), [tree.data]);
   // The tree's search and order (spec §3): the rows of what the search finds, in the order chosen. While it finds,
@@ -528,6 +588,7 @@ export default function TreeDrawer(props: {
   const expanded = found ? Object.fromEntries([...found.open].filter((f) => !shut[f]).map((f) => [f, true])) : expandedFolders;
   const toggle = (folder: string) => (found ? setShut((s) => ({ ...s, [folder]: !s[folder] })) : toggleFolder(folder));
   const nothing = !!found && found.root.folders.length + found.root.notes.length === 0;
+  const flagsInUse = useMemo(() => (tree.data ? usedFlags(tree.data.root) : []), [tree.data]);
   const [publishing, setPublishing] = useState<string | null>(null);
   // A dialog about a vault hidden again goes with it, as the shell's sheets do: the docked sidebar stays mounted.
   useEffect(
@@ -602,6 +663,18 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(calendarUrl(vault));
   };
+  // The vault's own Calendar and Board folders open their views; any other folder of that name is a folder.
+  const folderView = (row: Extract<Row, { kind: "folder" }>, vault: string) => {
+    if (row.depth !== 0) return undefined;
+    if (row.folder.path === `/${vault}/Calendar`) return { label: "Calendar, open the calendar", open: () => openCalendar(vault) };
+    if (row.folder.path === `/${vault}/Board` && hasBoard) return { label: "Board, open the board", open: () => openBoard(vault) };
+    return undefined;
+  };
+  // Across the vaults, a page of its own as the calendar.
+  const openRecent = () => {
+    setOverlay("none");
+    navigate("/recent");
+  };
   const openGallery = (vault: string) => {
     setOverlay("none");
     navigate(galleryUrl(vault));
@@ -637,6 +710,7 @@ export default function TreeDrawer(props: {
               ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
               : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
+          { id: "recent", label: "Recent changes", icon: History, onSelect: openRecent },
           ...(owner
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
@@ -681,7 +755,6 @@ export default function TreeDrawer(props: {
           <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${ownerLabel(active)}` : "Vault"}</p>
           <h2 tabIndex={-1} data-autofocus={docked ? undefined : true} className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
-        {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
       </div>
       {createBoard.isError && (
         <div className="flex-none px-[18px] pb-2.5">
@@ -704,7 +777,24 @@ export default function TreeDrawer(props: {
         </div>
       )}
       {copied.status}
-      {tree.data && <TreeTools search={search} onSearch={setSearch} order={order} onOrder={setOrder} nothing={nothing} />}
+      {tree.data && activeVault && (
+        <TreeTools
+          vault={activeVault}
+          writes={atLeast(level, "write")}
+          onNewNote={() => onNewNote(tree.data.root.path)}
+          onUpload={() => useEditor.getState().openUpload(tree.data.root.path)}
+          onRecent={openRecent}
+          calendar={{ open: () => openCalendar(activeVault), share }}
+          board={hasBoard ? () => openBoard(activeVault) : null}
+          menu={[...folderItems(tree.data.root, folderActions), ...vaultItems]}
+          flags={flagsInUse}
+          search={search}
+          onSearch={setSearch}
+          order={order}
+          onOrder={setOrder}
+          nothing={nothing}
+        />
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -720,6 +810,7 @@ export default function TreeDrawer(props: {
                       open={row.open}
                       selected={row.folder.path === selectedFolder}
                       unpublishable={!!marks?.includes(row.folder.path)}
+                      view={activeVault ? folderView(row, activeVault) : undefined}
                       onToggle={() => toggle(row.folder.path)}
                     />
                     <FolderMenu folder={row.folder} {...folderActions} />
@@ -734,7 +825,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onFlag={onFlag} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} />
                   </>
                 )}
               </li>
@@ -742,7 +833,7 @@ export default function TreeDrawer(props: {
           </ul>
         )}
         {tree.data && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
-          <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
+          <p className="px-2.5 py-2 text-sm text-muted">{atLeast(level, "write") ? "No notes yet. Make the first with + New note above." : "No notes yet."}</p>
         )}
         {!!tree.data?.damaged && (
           <p className="px-2.5 py-2 text-sm text-muted">

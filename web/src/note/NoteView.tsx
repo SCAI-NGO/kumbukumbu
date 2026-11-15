@@ -30,17 +30,23 @@ import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { atxHeading, headingLine, outline } from "./outline";
 import { maskedBody } from "./comments";
+import AddPropertyDialog, { type AddRefusal, type AddSaid } from "./AddPropertyDialog";
+import { addProperty, findPropertyBlocks, frontmatterUnreadable, moveToProperties, type PropertyBlock } from "./frontmatterText";
 import { parseProperties, splitFrontmatter } from "./properties";
+import PropertyHint, { CHANGED_ELSEWHERE, type MoveSaid } from "./PropertyHint";
 import { useStoredOpen } from "./propertiesOpen";
 import { taskToggle } from "./taskToggle";
 import { createdPath } from "./wikiLinks";
 import { registerScrollTop, takeRestore } from "../update/apply";
 import BoardLine from "../board/BoardLine";
 import { boardCard } from "../board/cardLine";
-import { useNoteEntry } from "../calendar/api";
+import { afterEntryWrite, editorSettled, UNSAVED, useNoteEntry } from "../calendar/api";
 import EntryLine from "../calendar/EntryLine";
+import BackLink from "../calendar/BackLink";
+import { cameFromOf } from "../calendar/backLink";
 import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
+import { startWrite } from "../shell/ModeToggle";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -67,6 +73,9 @@ function EditorLoadFailed() {
 const versionKey = (v: { version: string; lastWriteAt: string }) => `${v.version}@${v.lastWriteAt}`;
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
+
+/** What a rewrite of the note's properties came to: written, refused by the change, or stopped with a sentence. */
+type Rewritten<R> = { written: true } | { refused: R; version: string } | { text: string; version: string };
 
 /**
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
@@ -120,6 +129,10 @@ export default function NoteView({ path }: { path: string }) {
   const vault = vaults.data?.find((v) => v.name === vaultOf(path));
   const unnamed = useUnnamedVault(path);
   const changes = !vaults.data || mayChange(levelOf(vault), path);
+  // Moving and adding properties rewrite the note's text: offered only once the vault list says it may be changed.
+  const mayWrite = !!vaults.data && mayChange(levelOf(vault), path);
+  // Where the top bar's Write is on: not while the note is renamed, nor while the server's refusal of a save holds.
+  const writeOn = useEditor((s) => mayWrite && !s.renaming.includes(path) && !(s.refused?.path === path && vaults.dataUpdatedAt <= s.refused.at));
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
@@ -353,6 +366,84 @@ export default function NoteView({ path }: { path: string }) {
     [note.data, save, errorFor],
   );
 
+  /**
+   * Rewrites the note's properties (spec §2.2): once the editor has settled, `change` makes the new text of the latest
+   * version, which goes as one save on that version; every view of the note is asked again after it, as a `when:`
+   * moved or added changes the calendar's. Gives `written`, or what stopped it with the version it speaks of: on a
+   * conflict the cache already holds the newer one, and nothing is written on top of it.
+   */
+  const saveAsync = save.mutateAsync;
+  const rewrite = useCallback(
+    async <R,>(change: (content: string) => { content: string } | { refused: R }): Promise<Rewritten<R>> => {
+      const before = queryClient.getQueryData<typeof note.data>(["note", path]);
+      if (!(await editorSettled(path))) return { text: UNSAVED, version: before?.version ?? "" };
+      // The text as it is now, not as the tap saw it; none left, it went or changed under the tap.
+      const latest = queryClient.getQueryData<typeof note.data>(["note", path]);
+      if (!latest) return { text: CHANGED_ELSEWHERE, version: "" };
+      const changed = change(latest.content);
+      if ("refused" in changed) return { refused: changed.refused, version: latest.version };
+      try {
+        const result = await saveAsync({ content: changed.content, version: latest.version });
+        if ("conflict" in result) return { text: CHANGED_ELSEWHERE, version: result.conflict.version };
+        void afterEntryWrite(queryClient, vaultOf(path), path);
+        return { written: true };
+      } catch (err) {
+        return { text: errorFor(err), version: latest.version };
+      }
+    },
+    [path, queryClient, saveAsync, errorFor],
+  );
+
+  // Blocks below the title that look like frontmatter, and what the last tap on Move to properties came to: for the
+  // block at that line, in the version it speaks of.
+  const blocks = useMemo(() => findPropertyBlocks(note.data?.content ?? ""), [note.data?.content]);
+  const [moveSaid, setMoveSaid] = useState<{ start: number; version: string; said: MoveSaid } | null>(null);
+  const moveBlock = useCallback(
+    async (block: PropertyBlock) => {
+      setMoveSaid(null);
+      const done = await rewrite((content) => {
+        const moved = moveToProperties(content, block);
+        // Either the properties there can't be read, or they can and the keys wouldn't read back once moved.
+        return "refused" in moved ? { refused: { ...moved, frontmatter: frontmatterUnreadable(content) } } : moved;
+      });
+      if ("written" in done) return;
+      const said: MoveSaid | null =
+        "text" in done
+          ? { text: done.text }
+          : done.refused.refused === "exists"
+            ? { exists: done.refused.key }
+            : done.refused.refused === "unreadable"
+              ? done.refused.frontmatter
+                ? { unreadable: true }
+                : { unwritable: true }
+              : null;
+      // Gone: the note changed under the tap, and the hints follow it as it is now.
+      if (said) setMoveSaid({ start: block.start, version: done.version, said });
+    },
+    [rewrite],
+  );
+  const addProp = useCallback(
+    async (name: string, value: string): Promise<AddSaid | null> => {
+      const done = await rewrite((content): { content: string } | { refused: AddRefusal } => {
+        const added = addProperty(content, name, value);
+        if (!("refused" in added) || added.refused !== "unreadable") return added;
+        // Either the properties there can't be read, or they can and the value wouldn't read back.
+        return { refused: frontmatterUnreadable(content) ? "frontmatter" : "value" };
+      });
+      return "written" in done ? null : "text" in done ? { text: done.text } : { refused: done.refused };
+    },
+    [rewrite],
+  );
+  const ruleNotice = useCallback(
+    (line: number) => {
+      const block = blocks.find((b) => b.start === line - 1);
+      if (!block) return null;
+      const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
+      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
+    },
+    [blocks, moveSaid, note.data?.version, path, mayWrite, writeOn, moveBlock],
+  );
+
   const createMissing = useCallback(
     (target: string) => {
       const created = createdPath(path, target);
@@ -418,6 +509,7 @@ export default function NoteView({ path }: { path: string }) {
 
   // The board's own note is mostly its frontmatter (and, below `maintain`, refused for writing): the board is what is wanted.
   const boardOfNote = path === `/${vaultOf(path)}/Board/Board.md` ? vaultOf(path) : null;
+  const cameFrom = cameFromOf(location.state, path);
 
   return (
     <>
@@ -428,6 +520,7 @@ export default function NoteView({ path }: { path: string }) {
           </Link>
         </nav>
       )}
+      {cameFrom && <BackLink from={cameFrom} />}
       {note.data && <FlagLine key="flag-line" path={path} version={note.data.version} />}
       {note.data && <EntryLine key="entry-line" path={path} version={note.data.version} />}
       {note.data && card && <BoardLine column={card.column} since={card.since} />}
@@ -479,7 +572,14 @@ export default function NoteView({ path }: { path: string }) {
         {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
-            {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} foldable={foldable} />}
+            {parts.frontmatter !== null && (
+              <Properties
+                yaml={parts.frontmatter}
+                changed={frontmatterChanged ? highlight!.writer : null}
+                foldable={foldable}
+                onAdd={mayWrite ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
+              />
+            )}
             <MarkdownView
               source={shown.body}
               mask={shown.mask}
@@ -490,12 +590,14 @@ export default function NoteView({ path }: { path: string }) {
               highlight={highlight}
               find={finding}
               path={path}
+              ruleNotice={ruleNotice}
             />
           </article>
         )}
         {note.data && <BacklinksList path={path} />}
       </div>
       {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
+      {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );
 }
@@ -504,9 +606,10 @@ export default function NoteView({ path }: { path: string }) {
  * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
  * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited. Where the
  * header already says it in words (`foldable`), the box folds to one line, as this device last chose; a change by
- * someone else, tinted, shows it open whatever the choice, with nothing to fold it that couldn't.
+ * someone else, tinted, shows it open whatever the choice, with nothing to fold it that couldn't. With `onAdd` (write),
+ * a box shown has + Add property at its bottom.
  */
-export function Properties({ yaml, changed, still = false, foldable = false }: { yaml: string; changed: string | null; still?: boolean; foldable?: boolean }) {
+export function Properties({ yaml, changed, still = false, foldable = false, onAdd }: { yaml: string; changed: string | null; still?: boolean; foldable?: boolean; onAdd?: () => void }) {
   const props = useMemo(() => parseProperties(yaml), [yaml]);
   const [open, setOpen] = useStoredOpen();
   const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
@@ -541,7 +644,7 @@ export function Properties({ yaml, changed, still = false, foldable = false }: {
       <dl
         aria-label="Properties"
         {...tint}
-        className="mb-4 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]"
+        className={`${onAdd ? "mb-1" : "mb-4"} grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]`}
       >
         {props.map(({ key, value }, i) => (
           <div key={`${i}${key}`} className="contents">
@@ -570,6 +673,15 @@ export function Properties({ yaml, changed, still = false, foldable = false }: {
           </div>
         ))}
       </dl>
+      {onAdd && (
+        <button
+          type="button"
+          onClick={onAdd}
+          className="mb-3 flex min-h-12 items-center gap-1.5 rounded-[8px] px-1 text-[13px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <span aria-hidden>+</span> Add property
+        </button>
+      )}
     </>
   );
 }

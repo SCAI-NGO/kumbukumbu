@@ -851,3 +851,27 @@ describe("Footnotes", () => {
     expect(embed).toContainElement(scrolled[0] as HTMLElement);
   });
 });
+
+describe("a notice before a rule", () => {
+  const notice = (line: number) => (line === 3 ? <p>Before the rule</p> : null);
+  const rendered = (nested: boolean) =>
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MarkdownView source={"One\n\n---\n\nTwo\n\n---\n"} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} ruleNotice={notice} nested={nested} />
+      </MemoryRouter>,
+    );
+
+  it("renders right before the rule at its line, and only there", () => {
+    rendered(false);
+    const rules = document.querySelectorAll("hr");
+    expect(rules).toHaveLength(2);
+    expect(screen.getAllByText("Before the rule")).toHaveLength(1);
+    expect(rules[0].previousElementSibling).toBe(screen.getByText("Before the rule"));
+  });
+
+  it("is never shown inside an embedded note, whose lines are its own", () => {
+    rendered(true);
+    expect(document.querySelectorAll("hr")).toHaveLength(2);
+    expect(screen.queryByText("Before the rule")).not.toBeInTheDocument();
+  });
+});

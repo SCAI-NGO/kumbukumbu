@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { AlertTriangle, Check, CircleDot, Clock, ListTodo, SquareKanban, StickyNote, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { noteUrl } from "../api/paths";
 import type { EntryKind, EntryState, EntryView } from "./api";
+import { cameFromHere, withCameFrom } from "./backLink";
 import TaskCheckbox from "./TaskCheckbox";
 
 /** How a state is shown: never by colour alone, always its icon and its word; overdue in the warning colour, calmly. */
@@ -43,17 +44,19 @@ const movable = (entry: EntryView) => closable(entry) || (entry.kind === "card" 
 /**
  * One entry in a calendar list: its time, its title (which opens the note), its state and a mark for its kind. A to-do
  * and a note given a day are told apart at a glance: only a to-do has its box and Later. Without `actions`, read only;
- * `vault` names the entry's vault, where a list spans several (What's on).
+ * `vault` names the entry's vault, where a list spans several (What's on); `kept`, the tag its page keeps out of the
+ * address, which the note's way back takes along.
  *
  * The title has the whole width of its column and wraps by words: in a narrow column (a day of the desktop's week) the
  * time stands above it and its box and Later on a line below; where there is room, beside it.
  */
-export default function EntryItem({ entry, actions, range, vault }: { entry: EntryView; actions?: EntryActions; range?: string; vault?: string }) {
+export default function EntryItem({ entry, actions, range, vault, kept }: { entry: EntryView; actions?: EntryActions; range?: string; vault?: string; kept?: string }) {
   const state = states[entry.state];
   const kind = kinds[entry.kind];
   const done = actions && closable(entry);
   const reopen = reopenable(entry) ? actions?.onReopen : undefined;
   const later = actions && movable(entry);
+  const location = useLocation();
   return (
     <li className="@container rounded-[10px] bg-surface px-1 py-1">
       <div className="flex flex-wrap items-start gap-x-1 @xs:flex-nowrap">
@@ -62,6 +65,7 @@ export default function EntryItem({ entry, actions, range, vault }: { entry: Ent
             {entry.time && <span className="pt-2 font-mono text-sm text-text-body @xs:flex-none @xs:pt-3.5">{entry.time}</span>}
             <Link
               to={noteUrl(entry.path)}
+              state={withCameFrom(undefined, cameFromHere(location, kept))}
               className="block min-h-12 min-w-0 py-3 font-medium break-words text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent @xs:flex-1"
             >
               {entry.title}

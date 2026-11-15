@@ -420,11 +420,122 @@ describe("a new note in the board's folder", () => {
   ])("in %s it stays a plain note", async (_, name, put, notes) => {
     const fetch = boardApi(null, { [`PUT ${put}`]: () => json(201, { path: decodeURIComponent(put.slice("/api/notes".length)), content: "", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" }) }, notes);
     await openDrawer();
-    if (name === "Archive") await userEvent.click(folderRow("Board"));
+    if (name === "Archive") await userEvent.click(within(drawer()).getByRole("button", { name: "Show the folder Board" }));
     await newNoteIn(name);
 
     await waitFor(() => expect(requests(fetch, "PUT").map((r) => new URL(r.url).pathname)).toEqual([put]));
     expect(await posts(fetch)).toEqual([]);
+  });
+});
+
+describe("the Calendar and Board folders", () => {
+  /** Work with its calendar's folder (a day note in it), a board, and a Calendar folder further down. */
+  function viewsApi(board = true, extra: Parameters<typeof fakeApi>[0] = {}) {
+    const fetch = api(extra);
+    root.folders.push(
+      folder("/Work/Calendar", [], [note("/Work/Calendar/2026-11-15.md")]),
+      folder("/Work/Board", [], board ? [note("/Work/Board/Board.md"), note("/Work/Board/Plan.md")] : [note("/Work/Board/Plan.md")]),
+      folder("/Work/Notes", [folder("/Work/Notes/Calendar", [], [note("/Work/Notes/Calendar/old.md")])]),
+    );
+    return fetch;
+  }
+  const button = (name: string) => within(drawer()).getByRole("button", { name });
+
+  it("a tap on the calendar's folder name opens the vault's calendar, and closes the drawer", async () => {
+    viewsApi();
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    const name = button("Calendar, open the calendar");
+    expect(name).not.toHaveAttribute("aria-expanded");
+    expect(name).toHaveAttribute("data-tree-row");
+    expect(name).toHaveClass("min-h-12");
+    expect(name).not.toHaveClass("min-h-11");
+    await userEvent.click(name);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/calendar/Work"));
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+
+  it("says the folder's count and its mark beside the name the tap's view gives it", async () => {
+    viewsApi(true, {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, publishEnabled: true }),
+      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: ["/Work/Calendar"] }),
+    });
+    await openDrawer();
+    const calendar = button("Calendar, open the calendar");
+    await waitFor(() => expect(calendar).toHaveAccessibleDescription("Unpublishable 1 item"));
+    expect(button("Board, open the board")).toHaveAccessibleDescription("2 items");
+  });
+
+  it("a tap on the board's folder name opens the board", async () => {
+    viewsApi();
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    await userEvent.click(button("Board, open the board"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/board/Work"));
+  });
+
+  it("the chevron opens and closes the folder, and goes nowhere", async () => {
+    viewsApi();
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    const chevron = button("Show the folder Calendar");
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+    expect(chevron).toHaveClass("size-12");
+    expect(within(drawer()).queryByRole("button", { name: "2026-11-15" })).not.toBeInTheDocument();
+    await userEvent.click(chevron);
+    expect(await within(drawer()).findByRole("button", { name: "2026-11-15" })).toBeInTheDocument();
+    expect(button("Hide the folder Calendar")).toHaveAttribute("aria-expanded", "true");
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
+    await userEvent.click(button("Hide the folder Calendar"));
+    expect(within(drawer()).queryByRole("button", { name: "2026-11-15" })).not.toBeInTheDocument();
+    expect(button("Show the folder Board")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("the chevron button holds the chevron and the folder icon as an ordinary folder row starts, so the names line up", async () => {
+    viewsApi();
+    await openDrawer();
+    const chevron = button("Show the folder Calendar");
+    const ordinary = folderRow("Notes");
+    // The same start: 6 px, the chevron (14), a gap of 8, the folder icon (18); no reach into the list's padding.
+    for (const row of [chevron, ordinary]) expect(row).toHaveClass("pl-1.5", "gap-2");
+    expect(chevron).not.toHaveClass("-ml-2");
+    expect(chevron).not.toHaveClass("justify-center");
+    const icons = (b: HTMLElement) => [...b.querySelectorAll("svg")].slice(0, 2).map((svg) => svg.getAttribute("class")?.match(/lucide-(chevron-right|folder)\b/)?.[1]);
+    expect(icons(chevron)).toEqual(["chevron-right", "folder"]);
+    expect(icons(ordinary)).toEqual(["chevron-right", "folder"]);
+    // The name starts where an ordinary row's name does: 48 + 6 = 6 + 14 + 8 + 18 + 8.
+    const name = button("Calendar, open the calendar");
+    expect(name.querySelector("svg.lucide-folder")).toBeNull();
+    expect(name).toHaveClass("pl-1.5");
+    expect(name).toHaveAttribute("data-tree-row");
+  });
+
+  it("a Calendar folder further down is an ordinary folder", async () => {
+    viewsApi();
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    await userEvent.click(folderRow("Notes"));
+    const inner = folderRow("Calendar");
+    expect(inner).toHaveAttribute("aria-expanded", "false");
+    expect(within(drawer()).getAllByRole("button", { name: /open the calendar/ })).toHaveLength(1);
+    await userEvent.click(inner);
+    expect(await within(drawer()).findByRole("button", { name: "old" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
+  });
+
+  it("a Board folder without a board is an ordinary folder", async () => {
+    viewsApi(false);
+    await openDrawer();
+    expect(within(drawer()).queryByRole("button", { name: /open the board/ })).not.toBeInTheDocument();
+    expect(within(drawer()).queryByRole("button", { name: "Show the folder Board" })).not.toBeInTheDocument();
+    await userEvent.click(folderRow("Board"));
+    expect(await within(drawer()).findByRole("button", { name: "Plan" })).toBeInTheDocument();
+    // The calendar's folder is still the vault's calendar.
+    expect(button("Calendar, open the calendar")).toBeInTheDocument();
   });
 });
 

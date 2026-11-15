@@ -68,6 +68,8 @@ function shell(answer: () => WhatsOnView, extra: Parameters<typeof fakeApi>[0] =
 /** The badge saying `label`: its pill, around the number and the words a screen reader hears. */
 const badge = (label: string) => screen.getByText(label).parentElement!;
 const treeButton = () => screen.findByRole("button", { name: "Open file tree" });
+/** The phone's dock's Calendar, which carries the count. */
+const dockCalendar = () => screen.findByRole("button", { name: "Calendar" });
 const drawer = () => screen.getByRole("dialog", { name: "File tree" });
 const asked = (fetch: ReturnType<typeof fakeApi>) => fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/api/calendar/whats-on").length;
 
@@ -100,13 +102,17 @@ describe("the badge", () => {
     shell(() => count(3, true, [{ vault: "Work", count: 2, overdue: true }, { vault: "Home", count: 1, overdue: false }]));
     useEditor.setState({ activeVault: "Work" });
     renderApp("/notes/Work/inbox.md");
-    // The phone's menu button carries the total, as its description: its name stays what it does.
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on, some overdue"));
-    // On the button's corner, within its box and the room it keeps beside it: never over where the note is.
-    const pill = within(await treeButton()).getByText("3 on, some overdue").parentElement!;
-    expect(pill).toHaveClass("absolute", "top-0", "right-0");
+    // The dock's Calendar carries the total, as its description: its name stays what it does.
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on, some overdue"));
+    expect(within(screen.getByRole("navigation", { name: "Vault actions" })).getByRole("button", { name: "Calendar" })).toBe(await dockCalendar());
+    // On the button's top corner, inside its top edge and only a little past its side, into the dock's gap: it covers none of
+    // its neighbours.
+    const pill = within(await dockCalendar()).getByText("3 on, some overdue").parentElement!;
+    expect(pill).toHaveClass("absolute", "top-0", "right-0", "pointer-events-none");
     expect(pill.className).not.toMatch(/-right-|-top-/);
-    expect(await treeButton()).toHaveClass("mr-1.5");
+    // The tree's button keeps only its own job.
+    expect(await treeButton()).not.toHaveAccessibleDescription(/on/);
+    expect(within(await treeButton()).queryByText("3 on, some overdue")).not.toBeInTheDocument();
     await userEvent.click(await treeButton());
 
     const account = within(drawer()).getByRole("navigation", { name: "Account" });
@@ -115,7 +121,10 @@ describe("the badge", () => {
     expect(links[0]).toHaveTextContent(/^What's on/);
     expect(within(links[0]).getByText("3 on, some overdue")).toBeInTheDocument();
 
-    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    // The toolbar's Calendar carries the vault's share, as its description: its name stays what it does.
+    const tools = within(drawer()).getByRole("group", { name: "Tools for this vault" });
+    expect(within(tools).getByRole("button", { name: "Calendar" })).toHaveAccessibleDescription("2 on, some overdue");
+    await userEvent.click(within(tools).getByRole("button", { name: "Actions for Work" }));
     expect(within(screen.getByRole("menuitem", { name: /^Calendar/ })).getByText("2 on, some overdue")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
 
@@ -133,6 +142,9 @@ describe("the badge", () => {
     expect(within(drawer()).getByRole("link", { name: "What's on" })).toBeInTheDocument();
     expect(screen.queryByText(/^\d+ on/)).not.toBeInTheDocument();
     expect(await treeButton()).not.toHaveAccessibleDescription(/on/);
+    await userEvent.keyboard("{Escape}");
+    // Without a count, its tooltip is all it says beside its name.
+    expect(await dockCalendar()).toHaveAccessibleDescription("What's on");
   });
 
   it("the app icon badge is set where supported", async () => {
@@ -175,7 +187,7 @@ describe("the badge", () => {
       "GET /api/vaults": () => json(200, [vault("Work"), { ...vault("Home"), discreet: true }]),
     });
     renderApp("/notes/Work/inbox.md");
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("2 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("2 on"));
     await waitFor(() => expect(clearAppBadge).toHaveBeenCalled());
     expect(setAppBadge).not.toHaveBeenCalled();
   });
@@ -184,7 +196,7 @@ describe("the badge", () => {
     badging();
     discreetHome(true, () => 2);
     renderApp("/notes/Work/inbox.md");
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on"));
     await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(1));
   });
 
@@ -195,7 +207,7 @@ describe("the badge", () => {
     renderApp("/notes/Work/inbox.md");
     // What's on is in, the vault list isn't: the icon waits for it.
     await waitFor(() => expect(asked(fetch)).toBeGreaterThan(0));
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on"));
     expect(setAppBadge).not.toHaveBeenCalled();
     expect(clearAppBadge).not.toHaveBeenCalled();
     await act(async () => listed(json(200, [vault("Work"), { ...vault("Home"), discreet: true }])));
@@ -221,7 +233,7 @@ describe("the badge", () => {
     await act(async () => {
       for (const queryKey of [["session"], ["vaults"], ["whats-on"]]) void queryClient.invalidateQueries({ queryKey });
     });
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on"));
     expect(setAppBadge).not.toHaveBeenCalledWith(3);
     await act(async () => listed(json(200, [vault("Work"), { ...vault("Home"), discreet: true }])));
     await waitFor(() => expect(queryClient.getQueryState(["vaults"])?.fetchStatus).toBe("idle"));
@@ -233,18 +245,18 @@ describe("the badge", () => {
     shell(() => count(3, false));
     renderApp("/notes/Work/inbox.md");
 
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("3 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("3 on"));
   });
 
   it("the count refreshes when the app comes back to the foreground", async () => {
     let n = 1;
     const fetch = shell(() => count(n, false));
     renderApp("/notes/Work/inbox.md");
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("1 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("1 on"));
     const before = asked(fetch);
     n = 2;
     await act(async () => void window.dispatchEvent(new Event("visibilitychange")));
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("2 on"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("2 on"));
     expect(asked(fetch)).toBe(before + 1);
   });
 
@@ -259,9 +271,9 @@ describe("the badge", () => {
       },
     });
     renderApp("/notes/Work/inbox.md");
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("2 on, some overdue"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("2 on, some overdue"));
     await userEvent.click(await screen.findByRole("checkbox", { name: "To do" }));
-    await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("1 on, overdue"));
+    await waitFor(async () => expect(await dockCalendar()).toHaveAccessibleDescription("1 on, overdue"));
   });
 
   it("signing out clears the app icon badge", async () => {

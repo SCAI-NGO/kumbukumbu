@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { onlineManager, QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { startsWithH1 } from "./NoteView";
+import PropertyHint from "./PropertyHint";
+import { keptTagOf, withCameFrom } from "../calendar/backLink";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -67,6 +69,8 @@ function noteApi(extra: Parameters<typeof fakeApi>[0] = {}, previousSignInAt: st
 }
 
 const view = () => screen.getByRole("article");
+const asked = (fetch: ReturnType<typeof fakeApi>, path: string) =>
+  fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === path).length;
 
 describe("the note view", () => {
   it("reads the note again by itself once its vault is no longer being re-encrypted", async () => {
@@ -516,6 +520,55 @@ describe("the note view", () => {
   });
 });
 
+describe("the way back", () => {
+  it("leads a note opened from What's on back to it", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on" }) });
+    const back = await screen.findByRole("link", { name: "Back to What's on" });
+    expect(back).toHaveAttribute("href", "/whats-on");
+    expect(back).toHaveTextContent("What's on");
+    expect(back).toHaveClass("min-h-12");
+    expect(screen.getByRole("navigation", { name: "Back" })).toContainElement(back);
+  });
+
+  it("leads back to the same week of the calendar, and still opens at the line it was opened at", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom({ line: 6 }, { label: "Calendar", to: "/calendar/Work?week=2026-W46&tag=x" }) });
+    expect(await screen.findByRole("link", { name: "Back to the calendar" })).toHaveAttribute("href", "/calendar/Work?week=2026-W46&tag=x");
+    const goals = screen.getByRole("heading", { level: 2, name: "Goals" });
+    await waitFor(() => expect(scrollIntoView.mock.contexts).toContain(goals));
+    expect(goals).toHaveClass("k-flash");
+  });
+
+  it("takes What's on's tag back with it, in the history's state and not the address", async () => {
+    noteApi({ "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }) });
+    const router = renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on", tag: "kumbu" }) });
+    await userEvent.click(await screen.findByRole("link", { name: "Back to What's on" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/whats-on"));
+    expect(router.state.location.search).toBe("");
+    expect(keptTagOf(router.state.location.state)).toBe("kumbu");
+  });
+
+  it("shows no way back for a note opened any other way", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: { line: 6 } });
+    await screen.findByRole("heading", { level: 2, name: "Goals" });
+    expect(screen.queryByRole("navigation", { name: "Back" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Back to (the calendar|What's on)$/ })).not.toBeInTheDocument();
+  });
+
+  it("shows no way back in Write mode", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on" }) });
+    await screen.findByRole("link", { name: "Back to What's on" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    expect(screen.queryByRole("link", { name: "Back to What's on" })).not.toBeInTheDocument();
+  });
+});
+
 describe("a note that isn't there in a vault the list doesn't name", () => {
   const HEUTE = "/Tagebuch/Heute.md";
   const missing = () => json(404, { error: `There is no note at ${HEUTE} (if it was removed, it is in the trash).` });
@@ -766,5 +819,317 @@ describe("the note's flag in its header", () => {
     version = "v2";
     await act(() => queryClient.invalidateQueries({ queryKey: ["note", PLAN] }));
     expect(await screen.findByRole("button", { name: "Green flag" })).toBeInTheDocument();
+  });
+});
+
+describe("properties at the top", () => {
+  const ALIAS = "/Work/aliastest.md";
+  // Chris's note (spec §2.2): a rule and a setext H2, not properties.
+  const chris = "# aliastest\n---\naliases: [kumbu]\n---\n";
+  const HINT = "Properties go at the very top of a note.";
+  const hint = async () => (await screen.findByText(HINT)).closest<HTMLElement>("[role=note]")!;
+
+  /** The note as written, read again as the last write left it; every PUT's body is kept. */
+  function aliasApi(content: string, extra: Parameters<typeof fakeApi>[0] = {}, path = ALIAS) {
+    let current = noteView(path, content);
+    const puts: { content: string; version: string }[] = [];
+    fetched = noteApi({
+      "GET /api/vaults/Work/calendar/entry": () => json(200, { entry: null, couldntRead: null, canWrite: true }),
+      [`GET /api/notes${path}`]: () => json(200, current),
+      [`PUT /api/notes${path}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = noteView(path, body.content, `v${puts.length + 1}`);
+        return json(200, current);
+      },
+      ...extra,
+    });
+    return puts;
+  }
+  let fetched: ReturnType<typeof fakeApi>;
+  const move = async () => userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+
+  it("asks the calendar again after the move: a `when:` moved changes its line", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(0));
+    const [entries, vaults] = [asked(fetched, "/api/vaults/Work/calendar/entry"), asked(fetched, "/api/vaults")];
+    await move();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(entries));
+    expect(asked(fetched, "/api/vaults")).toBeGreaterThan(vaults);
+  });
+
+  it("writes nothing while the editor's text isn't saved, and says so", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await hint();
+    act(() => useEditor.getState().setBeforeRead(async () => false));
+    await move();
+    expect(await within(await hint()).findByText("Your typing isn't saved yet; try again in a moment.")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("moves in the text as the editor's save left it, on that version", async () => {
+    const puts = aliasApi(chris);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp(`/notes${ALIAS}`, queryClient);
+    await hint();
+    // The save the tap waits for brings a newer version.
+    act(() =>
+      useEditor.getState().setBeforeRead(async () => {
+        queryClient.setQueryData(["note", ALIAS], noteView(ALIAS, `${chris}\nMore.\n`, "v9"));
+        return true;
+      }),
+    );
+    await move();
+    await waitFor(() => expect(puts).toEqual([{ content: "---\naliases: [kumbu]\n---\n# aliastest\n\nMore.\n", version: "v9" }]));
+  });
+
+  it("the board's own note, below maintain, offers neither the move nor + Add property", async () => {
+    const BOARD_NOTE = "/Work/Board/Board.md";
+    aliasApi(`---\nowner: Bob\n---\n${chris}`, { "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, canWrite: true, level: "write", owner: '"Ada"', shared: true }]) }, BOARD_NOTE);
+    renderApp(`/notes${BOARD_NOTE}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Properties")).toHaveTextContent("owner");
+    expect(screen.queryByRole("button", { name: "Add property" })).not.toBeInTheDocument();
+  });
+
+  it("says why when the moved keys wouldn't read back", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PropertyHint path={ALIAS} onMove={vi.fn()} said={{ unwritable: true }} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("That can't be written as properties here, so nothing was moved.");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("points out the block right above its rule, and moves it to the top on a tap, as one write with the note's version", async () => {
+    const puts = aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    const note = await hint();
+    expect(document.querySelector("article hr")!.previousElementSibling).toBe(note);
+    await userEvent.click(await within(note).findByRole("button", { name: "Move to properties" }));
+    await waitFor(() => expect(puts).toEqual([{ content: "---\naliases: [kumbu]\n---\n# aliastest\n", version: "v1" }]));
+    expect(within(await screen.findByLabelText("Properties")).getByRole("term")).toHaveTextContent("aliases");
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it("refuses a key the properties have already, naming it, and writes nothing", async () => {
+    const puts = aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("aliases", { selector: "code" })).toBeInTheDocument();
+    expect(await hint()).toHaveTextContent("aliases is already in the properties: change it there.Change it in Write mode");
+    // The way there, and nothing else: no Move to properties to meet the refusal again.
+    expect(within(await hint()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Change it in Write mode"]);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("after that refusal, Change it in Write mode opens the note in Write mode, as the top bar's Write does", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await move();
+    const change = await within(await hint()).findByRole("button", { name: "Change it in Write mode" });
+    expect(change).toHaveClass("min-h-12");
+    await userEvent.click(change);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(screen.getByRole("button", { name: "Write", pressed: true })).toBeInTheDocument();
+  });
+
+  it("offers no Change it in Write mode while the note is being renamed, as Write is off then", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await move();
+    expect(await within(await hint()).findByRole("button", { name: "Change it in Write mode" })).toBeInTheDocument();
+    act(() => useEditor.getState().setRenaming(ALIAS, true));
+    await waitFor(async () => expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Write" })).toBeDisabled();
+  });
+
+  it("moves nothing when the properties at the top can't be read, and says so", async () => {
+    const puts = aliasApi(`---\nabout: |\n  more\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("The properties at the top can't be read here, so nothing was moved.")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(puts).toEqual([]);
+  });
+
+  it("draws the hint's buttons with the accent's text colour as their edge, at least 3:1 on the hint in every scheme", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    // accent-text is held at 4.5:1 on surface-2, the hint's ground, by the schemes' contrast test; line is not.
+    const edged = (b: HTMLElement) => {
+      expect(b).toHaveClass("border", "border-accent-text", "text-accent-text");
+      expect(b).not.toHaveClass("border-line");
+    };
+    edged(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    await move();
+    edged(await within(await hint()).findByRole("button", { name: "Change it in Write mode" }));
+  });
+
+  it("without write, says where properties go and offers nothing", async () => {
+    aliasApi(chris, { "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, canWrite: false, level: "read", owner: '"Ada"', shared: true }]) });
+    renderApp(`/notes${ALIAS}`);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers the move only once the vault list says the note may be changed", async () => {
+    aliasApi(chris, { "GET /api/vaults": () => new Promise<Response>(() => {}) });
+    renderApp(`/notes${ALIAS}`);
+    expect(await hint()).toHaveTextContent(HINT);
+    expect(within(await hint()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("on a conflict writes nothing more, says so and shows the newer version", async () => {
+    const newer = `${chris}\nAdded elsewhere.\n`;
+    let puts = 0;
+    aliasApi(chris, {
+      [`PUT /api/notes${ALIAS}`]: () => {
+        puts++;
+        return json(409, { error: "changed", current: { content: newer, version: "v7" } });
+      },
+    });
+    renderApp(`/notes${ALIAS}`);
+    await userEvent.click(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    expect(await within(await hint()).findByText("This note changed elsewhere; try again.")).toBeInTheDocument();
+    expect(screen.getByText("Added elsewhere.")).toBeInTheDocument();
+    expect(puts).toBe(1);
+  });
+
+  it("leaves a block in fenced code alone", async () => {
+    aliasApi("# aliastest\n\n```\n---\naliases: [kumbu]\n---\n```\n");
+    renderApp(`/notes${ALIAS}`);
+    expect(await screen.findByText(/aliases: \[kumbu\]/)).toBeInTheDocument();
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it("is a Read mode hint: Write mode has the text itself", async () => {
+    aliasApi(chris);
+    renderApp(`/notes${ALIAS}`);
+    await hint();
+    const write = screen.getByRole("button", { name: "Write" });
+    await waitFor(() => expect(write).toBeEnabled());
+    await userEvent.click(write);
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+});
+
+describe("adding a property", () => {
+  /** The plan, read again as the last write left it; every PUT's body is kept. */
+  function planApi(extra: Parameters<typeof fakeApi>[0] = {}) {
+    let current = noteView(PLAN, source);
+    const puts: { content: string; version: string }[] = [];
+    fetched = noteApi({
+      "GET /api/vaults/Work/calendar/entry": () => json(200, { entry: null, couldntRead: null, canWrite: true }),
+      [`GET /api/notes${PLAN}`]: () => json(200, current),
+      [`PUT /api/notes${PLAN}`]: async (r) => {
+        const body = (await r.json()) as { content: string; version: string };
+        puts.push(body);
+        current = noteView(PLAN, body.content, `v${puts.length + 1}`);
+        return json(200, current);
+      },
+      ...extra,
+    });
+    return puts;
+  }
+  async function adding(name: string, value: string) {
+    renderApp(planUrl);
+    await userEvent.click(await screen.findByRole("button", { name: "Add property" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), name);
+    if (value) await userEvent.type(within(dialog).getByLabelText("Value"), value);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    return dialog;
+  }
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  let fetched: ReturnType<typeof fakeApi>;
+
+  it("asks the calendar again after the write: a `when:` added changes its line", async () => {
+    const puts = planApi();
+    await adding("owner", "Alice");
+    await waitFor(() => expect(puts).toHaveLength(1));
+    // Once on opening the note, and again after the write.
+    await waitFor(() => expect(asked(fetched, "/api/vaults/Work/calendar/entry")).toBeGreaterThan(1));
+    expect(asked(fetched, "/api/vaults")).toBeGreaterThan(1);
+  });
+
+  it("writes nothing while the editor's text isn't saved, says so and stays open", async () => {
+    const puts = planApi();
+    useEditor.getState().setBeforeRead(async () => false);
+    const dialog = await adding("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your typing isn't saved yet; try again in a moment.");
+    await settle();
+    expect(puts).toEqual([]);
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("writes name: value as the properties' last line with the note's version, every other byte as it was", async () => {
+    const puts = planApi();
+    const dialog = await adding("owner", "Alice");
+    await waitFor(() => expect(puts).toEqual([{ content: source.replace("tags: [work]\n", "tags: [work]\nowner: Alice\n"), version: "v1" }]));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(within(screen.getByLabelText("Properties")).getAllByRole("term").map((t) => t.textContent)).toEqual(["tags", "owner"]);
+  });
+
+  it("writes a value YAML would take for something else in quotes", async () => {
+    const puts = planApi();
+    await adding("done", "true");
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].content.split("\n").slice(0, 4)).toEqual(["---", "tags: [work]", 'done: "true"', "---"]);
+  });
+
+  it("refuses a name that is there already, naming it, and writes nothing", async () => {
+    const puts = planApi();
+    const dialog = await adding("tags", "more");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("tags is already in the properties: change it in the note.");
+    expect(within(within(dialog).getByRole("alert")).getByText("tags", { selector: "code" })).toBeInTheDocument();
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("refuses a name that isn't a plain key", async () => {
+    const puts = planApi();
+    const dialog = await adding("2nd", "x");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Use letters, digits, - and _, starting with a letter.");
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("refuses a value that wouldn't read back as given", async () => {
+    const puts = planApi();
+    renderApp(planUrl);
+    await userEvent.click(await screen.findByRole("button", { name: "Add property" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add property" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "bell");
+    fireEvent.change(within(dialog).getByLabelText("Value"), { target: { value: "ring\u0007" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("That value can't be written as a property here.");
+    await settle();
+    expect(puts).toEqual([]);
+  });
+
+  it("on a conflict says so in the dialog and shows the newer version", async () => {
+    const newer = source.replace("- [x] read", "- [x] read\n- [ ] added by liz");
+    let puts = 0;
+    planApi({
+      [`PUT /api/notes${PLAN}`]: () => {
+        puts++;
+        return json(409, { error: "changed", current: { content: newer, version: "v7" } });
+      },
+    });
+    const dialog = await adding("owner", "Alice");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This note changed elsewhere; try again.");
+    expect(screen.getByRole("checkbox", { name: "added by liz" })).toBeInTheDocument();
+    expect(puts).toBe(1);
   });
 });

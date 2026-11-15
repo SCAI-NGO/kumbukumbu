@@ -3,13 +3,18 @@
 /** One property of a note's front matter: a text, or a list (`tags: [a, b]` or one `- item` per line). */
 export type Property = { key: string; value: string | string[] };
 
+/** A value without its quotes; inside double quotes, YAML's `\\` and `\"` escapes undone. */
 const unquote = (v: string) => {
   const t = v.trim();
-  return (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")) ? t.slice(1, -1) : t;
+  if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  return t.startsWith("'") && t.endsWith("'") ? t.slice(1, -1) : t;
 };
 
+/** One whole quoted scalar (`"…"` with its escapes, `'…'` with `''`), where a `#` is text. */
+const quoted = (v: string) => /^"(?:[^"\\]|\\.)*"$/.test(v) || /^'(?:[^']|'')*'$/.test(v);
+
 /** A trailing comment (` # …`, as YAML has it: after a space) is YAML syntax this reading doesn't take apart. */
-const commented = (v: string) => /(^|\s)#/.test(v);
+const commented = (v: string) => !quoted(v.trim()) && /(^|\s)#/.test(v);
 
 /** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`). */
 const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));

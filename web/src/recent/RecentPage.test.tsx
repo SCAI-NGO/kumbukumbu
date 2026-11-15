@@ -143,6 +143,9 @@ describe("Recent changes", () => {
     await waitFor(() => expect(rows()).toHaveLength(2));
 
     const flags = screen.getByRole("group", { name: "Find by flag" });
+    // Here every flag, on one row that scrolls sideways: only the tree's Find by name shows the flags in use.
+    expect(within(flags).getAllByRole("button").map((b) => b.textContent)).toEqual(["Any flag", "Red", "Green", "Blue", "Purple", "Yellow", "White", "Done", "Important"]);
+    expect(flags).toHaveClass("flex-nowrap", "overflow-x-auto", "[&>button]:flex-none");
     await userEvent.click(within(flags).getByRole("button", { name: "Red" }));
     expect(within(flags).getByRole("button", { name: "Red" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(last().get("flag")).toBe("red"));

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { fileKindOfEntry, type TreeFolder, type TreeNote } from "../api/notes";
-import { isFlag, type FlagName } from "../flags/api";
+import { FLAGS, isFlag, type FlagName } from "../flags/api";
 
 /** The flag a search keeps: any flag at all, or one of the eight. */
 export type FlagFilter = "any" | FlagName;
@@ -32,4 +32,15 @@ export function filterTree(root: TreeFolder, typed: string, flag: FlagFilter | n
     return { ...folder, folders, notes: folder.notes.filter(matches) };
   };
   return { root: cut(root), open };
+}
+
+/** The flags some note of the tree carries, in any folder, in the flags' own order: the chips Find by name offers. */
+export function usedFlags(root: TreeFolder): FlagName[] {
+  const used = new Set<string>();
+  const walk = (folder: TreeFolder) => {
+    for (const n of folder.notes) if (isFlag(n.flag)) used.add(n.flag);
+    folder.folders.forEach(walk);
+  };
+  walk(root);
+  return FLAGS.filter((f) => used.has(f));
 }

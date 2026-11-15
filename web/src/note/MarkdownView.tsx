@@ -119,6 +119,8 @@ interface Props {
   /** Inside a checkpoint: where a note or attachment it holds is opened. Its links stay in it, an embed stays a
    * link, and a note it lacks cannot be created. Without it, the note is today's. */
   checkpointLink?: (path: string) => string;
+  /** Shown right before the rule at a line of the note (1-based), if it gives something: never in an embedded note. */
+  ruleNotice?: (line: number) => ReactNode;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
@@ -533,7 +535,16 @@ const components: Components = {
   },
   code: ({ node: _, ...props }) => <code className="rounded-[4px] bg-surface-2 px-[5px] py-px font-mono text-[0.85em]" {...props} />,
   strong: ({ node: _, ...props }) => <strong className="font-bold text-text" {...props} />,
-  hr: () => <hr className="my-6 border-line" />,
+  hr: ({ node }) => {
+    const line = useLine(node);
+    const { ruleNotice } = useContext(NoteContext);
+    return (
+      <>
+        {line !== undefined && ruleNotice?.(line)}
+        <hr className="my-6 border-line" />
+      </>
+    );
+  },
   table: ({ node, ...props }) => (
     <div data-line={useLine(node)} className="my-3 overflow-x-auto">
       <table className="border-collapse text-[15px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left" {...props} />
@@ -595,7 +606,7 @@ function useMath(wanted: boolean): MathPlugins | null {
   return wanted ? (math ?? mathLoaded) : null;
 }
 
-function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
+function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink, ruleNotice }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   // Comments masked as the server's fair copy reads them, so the view hides exactly what the copy leaves out.
@@ -626,8 +637,8 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
   const context = useMemo(
-    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink }),
-    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink],
+    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice }),
+    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice],
   );
 
   // Every view, an embedded note's and History's too, gets ids of its own: the same note shown twice repeats none.

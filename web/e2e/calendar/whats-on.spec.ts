@@ -182,9 +182,12 @@ test("calendar #7: What's on lists the open tasks with vault, icon and a calm sp
   const count = await whatsOnItems(page).count();
   expect(count).toBe(before.count);
 
-  // The badge: on What's on, on Work's Calendar, beside Work in the switcher, and on the phone's menu button.
+  // The badge: on What's on, on Work's Calendar, beside Work in the switcher, and on the phone dock's Calendar.
   await page.goto("/");
-  if (onPhone(testInfo)) await expect(page.getByRole("button", { name: "Open file tree" })).toHaveAccessibleDescription(badgeWords(count, true));
+  if (onPhone(testInfo)) {
+    await expect(page.getByRole("navigation", { name: "Vault actions" }).getByRole("button", { name: "Calendar" })).toHaveAccessibleDescription(badgeWords(count, true));
+    await expect(page.getByRole("button", { name: "Open file tree" })).not.toHaveAttribute("aria-describedby");
+  }
   const { panel, link } = await whatsOnLink(page, testInfo);
   await expect(link).toHaveAccessibleName(named("What's on", count, true));
   const badge = link.getByText(badgeWords(count, true)).locator("..");

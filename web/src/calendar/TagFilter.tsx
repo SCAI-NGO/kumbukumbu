@@ -5,12 +5,13 @@ import { useSearchParams } from "react-router-dom";
 /**
  * The tag filter's tag, without its #, and its setter. In the address (`?tag=kumbu`), so a filtered week can be kept
  * and shared; with `inAddress` false on the page only, as the browser's history can't be cleaned. A tag already in the
- * address shows until another is chosen; taking it away takes it from the address too.
+ * address shows until another is chosen; taking it away takes it from the address too. `initial` is the page's own
+ * tag to start with (one a note's way back brought along).
  */
-export function useTagFilter(inAddress = true): [string | undefined, (next: string | null) => void] {
+export function useTagFilter(inAddress = true, initial?: string): [string | undefined, (next: string | null) => void] {
   const [params, setParams] = useSearchParams();
   const address = params.get("tag")?.trim() || undefined;
-  const [kept, setKept] = useState<string | undefined>(undefined);
+  const [kept, setKept] = useState<string | undefined>(inAddress ? undefined : initial);
   const toAddress = (next: string | null, replace = false) =>
     setParams(
       (current) => {
