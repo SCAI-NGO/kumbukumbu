@@ -75,7 +75,10 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
   ];
 }
 
-const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
+const rowParts = "flex min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
+const rowClass = `${rowParts} min-h-11`;
+// The name of a folder that opens a view sits beside its own chevron button, 48 px like it.
+const viewRowClass = `${rowParts} min-h-12`;
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
@@ -212,7 +215,7 @@ function FolderButton({
           aria-current={selected ? "true" : undefined}
           onClick={view.open}
           {...truncated}
-          className={`${rowClass.replace("min-h-11", "min-h-12")} font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+          className={`${viewRowClass} font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
         >
           <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
           <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
