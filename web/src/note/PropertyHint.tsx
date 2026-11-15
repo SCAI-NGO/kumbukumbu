@@ -11,7 +11,9 @@ export const CHANGED_ELSEWHERE = "This note changed elsewhere; try again.";
  */
 export type MoveSaid = { exists: string } | { unreadable: true } | { unwritable: true } | { text: string };
 
-const actionClass = "min-h-12 rounded-[10px] border border-line bg-surface px-4 font-medium text-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent";
+// The accent's text colour as the edge: line is barely there on the hint's ground; accent itself falls under 3:1 in
+// some light schemes, accent-text never under 4.5:1.
+const actionClass = "min-h-12 rounded-[10px] border border-accent-text bg-surface px-4 font-medium text-accent-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
  * Above a block in the body that looks like frontmatter but renders as a rule and a heading (spec §2.2): where

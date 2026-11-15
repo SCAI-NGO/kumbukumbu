@@ -961,6 +961,19 @@ describe("properties at the top", () => {
     expect(puts).toEqual([]);
   });
 
+  it("draws the hint's buttons with the accent's text colour as their edge, at least 3:1 on the hint in every scheme", async () => {
+    aliasApi(`---\naliases: [old]\n---\n${chris}`);
+    renderApp(`/notes${ALIAS}`);
+    // accent-text is held at 4.5:1 on surface-2, the hint's ground, by the schemes' contrast test; line is not.
+    const edged = (b: HTMLElement) => {
+      expect(b).toHaveClass("border", "border-accent-text", "text-accent-text");
+      expect(b).not.toHaveClass("border-line");
+    };
+    edged(await within(await hint()).findByRole("button", { name: "Move to properties" }));
+    await move();
+    edged(await within(await hint()).findByRole("button", { name: "Change it in Write mode" }));
+  });
+
   it("without write, says where properties go and offers nothing", async () => {
     aliasApi(chris, { "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, canWrite: false, level: "read", owner: '"Ada"', shared: true }]) });
     renderApp(`/notes${ALIAS}`);
