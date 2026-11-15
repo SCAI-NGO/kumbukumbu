@@ -405,6 +405,10 @@ describe("the shell", () => {
     expect(router.state.location.pathname).toBe("/");
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
     expect(useEditor.getState().recentPaths).toContain("/Work/inbox.md");
+    // The vault you are in is marked, as in the switcher.
+    const list = screen.getByRole("list", { name: "Your vaults" });
+    expect(within(list).getByRole("button", { name: /^Work/ })).toHaveAttribute("aria-current", "true");
+    expect(within(list).getByRole("button", { name: /^Home/ })).not.toHaveAttribute("aria-current");
 
     // A vault chosen there opens its tree, as from the overview at the start.
     await userEvent.click(within(screen.getByRole("list", { name: "Your vaults" })).getByRole("button", { name: /^Home/ }));
@@ -652,6 +656,27 @@ describe("the shell", () => {
     expect(await screen.findByText("Couldn't copy. Copy it by hand.")).toBeInTheDocument();
   });
 
+  it("shows the open note's Rename or move and Delete above it, in Read and in Write mode", async () => {
+    signedInApi();
+    renderApp("/notes/Home/garden.md");
+    await screen.findByRole("heading", { name: "garden" });
+    const bar = () => screen.getByRole("group", { name: "This note" });
+    expect(within(bar()).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Rename or move", "Delete note"]);
+
+    // Delete asks first.
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete note" }));
+    expect(await screen.findByRole("dialog", { name: "Delete garden?" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete garden?" })).not.toBeInTheDocument());
+
+    await userEvent.click(within(bar()).getByRole("button", { name: "Rename or move" }));
+    expect(await screen.findByRole("dialog", { name: /Rename or move garden/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    expect(await screen.findByRole("group", { name: "This note" })).toBeInTheDocument();
+  });
+
   it("stays in Write mode when the open note's vault is renamed in another tab", async () => {
     // The vault list read again after the rename hangs: until it is in, the new name isn't in the list.
     let reads = 0;
@@ -847,6 +872,8 @@ describe("vaults shared with the user", () => {
     expect(await screen.findByRole("heading", { name: "soup" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
     expect(screen.getByText("You can only read Rezepte.")).toBeInTheDocument();
+    // Nothing to offer on a note she can't change, so no bar either.
+    expect(screen.queryByRole("group", { name: "This note" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     // Copying writes nothing: the three copy items stay.
