@@ -430,8 +430,8 @@ describe("a new note in the board's folder", () => {
 
 describe("the Calendar and Board folders", () => {
   /** Work with its calendar's folder (a day note in it), a board, and a Calendar folder further down. */
-  function viewsApi(board = true) {
-    const fetch = api();
+  function viewsApi(board = true, extra: Parameters<typeof fakeApi>[0] = {}) {
+    const fetch = api(extra);
     root.folders.push(
       folder("/Work/Calendar", [], [note("/Work/Calendar/2026-11-15.md")]),
       folder("/Work/Board", [], board ? [note("/Work/Board/Board.md"), note("/Work/Board/Plan.md")] : [note("/Work/Board/Plan.md")]),
@@ -454,6 +454,17 @@ describe("the Calendar and Board folders", () => {
     await userEvent.click(name);
     await waitFor(() => expect(router.state.location.pathname).toBe("/calendar/Work"));
     expect(useEditor.getState().overlay).toBe("none");
+  });
+
+  it("says the folder's count and its mark beside the name the tap's view gives it", async () => {
+    viewsApi(true, {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, publishEnabled: true }),
+      "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: ["/Work/Calendar"] }),
+    });
+    await openDrawer();
+    const calendar = button("Calendar, open the calendar");
+    await waitFor(() => expect(calendar).toHaveAccessibleDescription("Unpublishable 1 item"));
+    expect(button("Board, open the board")).toHaveAccessibleDescription("2 items");
   });
 
   it("a tap on the board's folder name opens the board", async () => {

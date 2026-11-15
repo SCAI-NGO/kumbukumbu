@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
@@ -186,6 +186,7 @@ function FolderButton({
     const top = topDialog();
     if (!top || top.contains(button.current)) button.current?.focus();
   }, [selected]);
+  const described = useId();
   const chevron = <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />;
   if (view) {
     return (
@@ -205,6 +206,9 @@ function FolderButton({
           type="button"
           data-tree-row
           aria-label={view.label}
+          // The name says what the tap does; the mark and the count, which it hides, are its description, each as plain
+          // text of its own.
+          aria-describedby={unpublishable ? `${described}-mark ${described}-count` : `${described}-count`}
           aria-current={selected ? "true" : undefined}
           onClick={view.open}
           {...truncated}
@@ -212,8 +216,16 @@ function FolderButton({
         >
           <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
           <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
-          {unpublishable && <UnpublishableMark />}
-          <span className="flex-none font-mono text-[11px] text-dim">{count}</span>
+          {unpublishable && (
+            <span id={`${described}-mark`} className="flex-none text-dim">
+              <EyeOff size={14} aria-hidden />
+              <span className="sr-only">Unpublishable</span>
+            </span>
+          )}
+          <span id={`${described}-count`} className="flex-none font-mono text-[11px] text-dim">
+            <span aria-hidden>{count}</span>
+            <span className="sr-only">{count === 1 ? "1 item" : `${count} items`}</span>
+          </span>
         </button>
       </>
     );
