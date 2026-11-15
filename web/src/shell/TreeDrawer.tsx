@@ -77,8 +77,11 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
 
 const rowParts = "flex min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const rowClass = `${rowParts} min-h-11`;
-// The name of a folder that opens a view sits beside its own chevron button, 48 px like it.
-const viewRowClass = `${rowParts} min-h-12`;
+// The name of a folder that opens a view sits beside its own chevron button, 48 px like it. The button starts as an
+// ordinary folder row does (6 px, the chevron, 8 px, the folder icon: 46 px) and the name 6 px after its 48, so both
+// line up with the other folders'; selected, the two read as one row.
+const viewToggleClass = "flex size-12 flex-none items-center gap-2 rounded-l-[8px] pl-1.5 focus-visible:outline-2 focus-visible:outline-accent";
+const viewRowClass = `${rowParts.replace("rounded-[8px]", "rounded-r-[8px]")} min-h-12 pl-1.5`;
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
@@ -197,15 +200,15 @@ function FolderButton({
   if (view) {
     return (
       <>
-        {/* Reaching into the list's padding, so the row's folder icon stays near the other rows'. */}
         <button
           type="button"
           aria-label={`${open ? "Hide" : "Show"} the folder ${folder.name}`}
           aria-expanded={open}
           onClick={onToggle}
-          className="-ml-2 flex size-12 flex-none items-center justify-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent"
+          className={`${viewToggleClass} ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
         >
           {chevron}
+          <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
         </button>
         <button
           ref={button}
@@ -220,7 +223,6 @@ function FolderButton({
           {...truncated}
           className={`${viewRowClass} font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
         >
-          <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
           <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
           {unpublishable && (
             <span id={`${described}-mark`} className="flex-none text-dim">

@@ -494,6 +494,25 @@ describe("the Calendar and Board folders", () => {
     expect(button("Show the folder Board")).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("the chevron button holds the chevron and the folder icon as an ordinary folder row starts, so the names line up", async () => {
+    viewsApi();
+    await openDrawer();
+    const chevron = button("Show the folder Calendar");
+    const ordinary = folderRow("Notes");
+    // The same start: 6 px, the chevron (14), a gap of 8, the folder icon (18); no reach into the list's padding.
+    for (const row of [chevron, ordinary]) expect(row).toHaveClass("pl-1.5", "gap-2");
+    expect(chevron).not.toHaveClass("-ml-2");
+    expect(chevron).not.toHaveClass("justify-center");
+    const icons = (b: HTMLElement) => [...b.querySelectorAll("svg")].slice(0, 2).map((svg) => svg.getAttribute("class")?.match(/lucide-(chevron-right|folder)\b/)?.[1]);
+    expect(icons(chevron)).toEqual(["chevron-right", "folder"]);
+    expect(icons(ordinary)).toEqual(["chevron-right", "folder"]);
+    // The name starts where an ordinary row's name does: 48 + 6 = 6 + 14 + 8 + 18 + 8.
+    const name = button("Calendar, open the calendar");
+    expect(name.querySelector("svg.lucide-folder")).toBeNull();
+    expect(name).toHaveClass("pl-1.5");
+    expect(name).toHaveAttribute("data-tree-row");
+  });
+
   it("a Calendar folder further down is an ordinary folder", async () => {
     viewsApi();
     const router = renderApp("/notes/Work/inbox.md");
