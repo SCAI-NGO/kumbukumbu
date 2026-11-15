@@ -7,6 +7,7 @@ import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
 import type { CalendarView, DayView, EntryView } from "./api";
+import { cameFromOf } from "./backLink";
 import { addDays } from "./dates";
 
 beforeEach(() => {
@@ -261,6 +262,33 @@ describe("the calendar's week", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Calendar/2026-11-13.md"));
     expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/today")).toHaveLength(1);
     expect(useEditor.getState().mode).toBe("write");
+  });
+
+  it("opens an entry's note with the way back to the same week and filter", async () => {
+    api(calendar({ "2026-11-12": [dentist] }));
+    const router = renderApp("/calendar/Work?week=2026-W46&tag=x");
+    await title();
+    await userEvent.click(screen.getByRole("link", { name: "Zahnarzt" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Zahnarzt.md"));
+    expect(cameFromOf(router.state.location.state, "/Work/Zahnarzt.md")).toEqual({ label: "Calendar", to: "/calendar/Work?week=2026-W46&tag=x" });
+  });
+
+  it("a note + Today made leads back to the calendar too", async () => {
+    api(calendar(), { "POST /api/vaults/Work/calendar/today": () => json(200, written("/Work/Calendar/2026-11-13.md")) });
+    const router = renderApp("/calendar/Work?week=2026-W46");
+    await title();
+    await userEvent.click(screen.getByRole("button", { name: "+ Today" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Calendar/2026-11-13.md"));
+    expect(cameFromOf(router.state.location.state, "/Work/Calendar/2026-11-13.md")).toEqual({ label: "Calendar", to: "/calendar/Work?week=2026-W46" });
+  });
+
+  it("a note opened from the dates it couldn't read leads back to them", async () => {
+    api(calendar({}, { couldntRead: [{ path: "/Work/Trip.md", title: "Trip", plain: "`when: tomorrow` – I need a date like 2026-11-20", readable: {} }] }));
+    const router = renderApp("/calendar/Work?week=2026-W46#couldnt-read");
+    await title();
+    await userEvent.click(await screen.findByRole("link", { name: "Trip" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Trip.md"));
+    expect(cameFromOf(router.state.location.state, "/Work/Trip.md")).toEqual({ label: "Calendar", to: "/calendar/Work?week=2026-W46#couldnt-read" });
   });
 
   it("+ This week opens or creates the week note", async () => {

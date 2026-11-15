@@ -8,6 +8,7 @@ import { fakeApi, json, renderApp, user } from "../test/app";
 import { bodiesOf, entryView, openTask, writtenView } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import type { EntryView, WhatsOnView } from "./api";
+import { cameFromOf } from "./backLink";
 
 beforeEach(() => {
   FakeSocket.all = [];
@@ -145,6 +146,15 @@ describe("What's on", () => {
     await page();
     await screen.findByRole("link", { name: "Zahnarzt" });
     expect(screen.queryByText(/couldn't read/)).not.toBeInTheDocument();
+  });
+
+  it("opens an entry's note with the way back to What's on", async () => {
+    api(whatsOn([certificate, trip]));
+    const router = renderApp("/whats-on");
+    await page();
+    await userEvent.click(await screen.findByRole("link", { name: "Trip" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Trip.md"));
+    expect(cameFromOf(router.state.location.state, "/Home/Trip.md")).toEqual({ label: "What's on", to: "/whats-on" });
   });
 
   it("says how Later gave more time, and Undo gives back the old end", async () => {

@@ -9,6 +9,7 @@ import { useDesktop } from "../hooks/useDesktop";
 import { topDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useCalendar, useCalendarAction, useCalendarViewState, useEntryAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
+import { cameFromHere, withCameFrom } from "./backLink";
 import { addDays, formatWeekTitle, monthId, monthName, monthTitle, weekId, weekOf } from "./dates";
 import { useClosing } from "./ClosedToast";
 import CouldntRead from "./CouldntRead";
@@ -83,7 +84,8 @@ export default function CalendarPage() {
 
 function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; chooseTag(next: string | null): void; grid: boolean }) {
   const navigate = useNavigate();
-  const { hash } = useLocation();
+  const location = useLocation();
+  const { hash } = location;
   const desktop = useDesktop();
   const action = useCalendarAction(vault);
   const setView = useSetCalendarView(vault);
@@ -95,7 +97,7 @@ function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string;
   /** Opens a note the calendar just made or found in Write mode, to write in at once. */
   const open = (path: string) => {
     useEditor.getState().openNote(path, "write");
-    navigate(noteUrl(path));
+    navigate(noteUrl(path), { state: withCameFrom(undefined, cameFromHere(location)) });
   };
   const make = (kind: "today" | "this-week") => {
     setProblem(null);

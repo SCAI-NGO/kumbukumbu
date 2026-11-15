@@ -39,6 +39,8 @@ import BoardLine from "../board/BoardLine";
 import { boardCard } from "../board/cardLine";
 import { useNoteEntry } from "../calendar/api";
 import EntryLine from "../calendar/EntryLine";
+import BackLink from "../calendar/BackLink";
+import { cameFromOf } from "../calendar/backLink";
 import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
 
@@ -418,6 +420,7 @@ export default function NoteView({ path }: { path: string }) {
 
   // The board's own note is mostly its frontmatter (and, below `maintain`, refused for writing): the board is what is wanted.
   const boardOfNote = path === `/${vaultOf(path)}/Board/Board.md` ? vaultOf(path) : null;
+  const cameFrom = cameFromOf(location.state, path);
 
   return (
     <>
@@ -428,6 +431,7 @@ export default function NoteView({ path }: { path: string }) {
           </Link>
         </nav>
       )}
+      {cameFrom && <BackLink from={cameFrom} />}
       {note.data && <FlagLine key="flag-line" path={path} version={note.data.version} />}
       {note.data && <EntryLine key="entry-line" path={path} version={note.data.version} />}
       {note.data && card && <BoardLine column={card.column} since={card.since} />}

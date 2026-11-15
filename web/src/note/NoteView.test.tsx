@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { startsWithH1 } from "./NoteView";
+import { withCameFrom } from "../calendar/backLink";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -513,6 +514,46 @@ describe("the note view", () => {
     noteApi({ [`GET /api/notes${PLAN}`]: () => json(404, { error: "There is no note at /Work/projects/plan.md." }) });
     renderApp(planUrl);
     expect(await screen.findByText("There is no note at /Work/projects/plan.md.")).toBeInTheDocument();
+  });
+});
+
+describe("the way back", () => {
+  it("leads a note opened from What's on back to it", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on" }) });
+    const back = await screen.findByRole("link", { name: "Back to What's on" });
+    expect(back).toHaveAttribute("href", "/whats-on");
+    expect(back).toHaveTextContent("What's on");
+    expect(back).toHaveClass("min-h-12");
+    expect(screen.getByRole("navigation", { name: "Back" })).toContainElement(back);
+  });
+
+  it("leads back to the same week of the calendar, and still opens at the line it was opened at", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom({ line: 6 }, { label: "Calendar", to: "/calendar/Work?week=2026-W46&tag=x" }) });
+    expect(await screen.findByRole("link", { name: "Back to the calendar" })).toHaveAttribute("href", "/calendar/Work?week=2026-W46&tag=x");
+    const goals = screen.getByRole("heading", { level: 2, name: "Goals" });
+    await waitFor(() => expect(scrollIntoView.mock.contexts).toContain(goals));
+    expect(goals).toHaveClass("k-flash");
+  });
+
+  it("shows no way back for a note opened any other way", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: { line: 6 } });
+    await screen.findByRole("heading", { level: 2, name: "Goals" });
+    expect(screen.queryByRole("navigation", { name: "Back" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Back to (the calendar|What's on)$/ })).not.toBeInTheDocument();
+  });
+
+  it("shows no way back in Write mode", async () => {
+    noteApi();
+    renderApp({ pathname: planUrl, state: withCameFrom(undefined, { label: "What's on", to: "/whats-on" }) });
+    await screen.findByRole("link", { name: "Back to What's on" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    expect(screen.queryByRole("link", { name: "Back to What's on" })).not.toBeInTheDocument();
   });
 });
 

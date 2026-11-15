@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { AlertTriangle, Check, CircleDot, Clock, ListTodo, SquareKanban, StickyNote, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { noteUrl } from "../api/paths";
 import type { EntryKind, EntryState, EntryView } from "./api";
+import { cameFromHere, withCameFrom } from "./backLink";
 import TaskCheckbox from "./TaskCheckbox";
 
 /** How a state is shown: never by colour alone, always its icon and its word; overdue in the warning colour, calmly. */
@@ -54,6 +55,7 @@ export default function EntryItem({ entry, actions, range, vault }: { entry: Ent
   const done = actions && closable(entry);
   const reopen = reopenable(entry) ? actions?.onReopen : undefined;
   const later = actions && movable(entry);
+  const location = useLocation();
   return (
     <li className="@container rounded-[10px] bg-surface px-1 py-1">
       <div className="flex flex-wrap items-start gap-x-1 @xs:flex-nowrap">
@@ -62,6 +64,7 @@ export default function EntryItem({ entry, actions, range, vault }: { entry: Ent
             {entry.time && <span className="pt-2 font-mono text-sm text-text-body @xs:flex-none @xs:pt-3.5">{entry.time}</span>}
             <Link
               to={noteUrl(entry.path)}
+              state={withCameFrom(undefined, cameFromHere(location))}
               className="block min-h-12 min-w-0 py-3 font-medium break-words text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent @xs:flex-1"
             >
               {entry.title}
