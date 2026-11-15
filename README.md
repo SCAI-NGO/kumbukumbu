@@ -531,7 +531,8 @@ Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know
 - Upgrading from before encryption: the server refuses plaintext data from earlier versions and says so. Wipe it with `docker compose down -v`.
 - Symlinked vault folders inside `./vaults` do not resolve inside the container. Point `KUMBU_VAULTS` in `.env` at the real folder instead, for example `KUMBU_VAULTS=/home/me/Notes`.
 - The container runs as an unprivileged user (UID 1654). Your files must be readable by it; unreadable files are skipped with a warning in the log.
-- If the `mongo` container exits with "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility", your kernel is in the range 6.19–7.0.13, where MongoDB 8.x refuses to start ([SERVER-125742](https://jira.mongodb.org/browse/SERVER-125742)). Set `KUMBU_MONGO_IMAGE=mongo:7.0` in `.env`. The tests use `mongo:7.0` for the same reason.
+- If the `mongo` container exits with "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility", your kernel is in the range 6.19–7.0.13, where MongoDB 8 and 9 refuse to start ([SERVER-125742](https://jira.mongodb.org/browse/SERVER-125742)). Set `KUMBU_MONGO_IMAGE=mongo:7.0` in `.env`. The tests use `mongo:7.0` for the same reason.
+- **Upgrading MongoDB.** `mongo:9` starts on the data of MongoDB 8 as it is, and leaves its feature compatibility version (FCV) at 8.x: going back to `mongo:8` keeps working until you raise it with `docker compose exec mongo mongosh --eval 'db.adminCommand({ setFeatureCompatibilityVersion: "9.0", confirm: true })'` (with a password, sign in first: `-u kumbu -p`). Data that is still at FCV 7.0 (`KUMBU_MONGO_IMAGE=mongo:7.0`) goes through `mongo:8.0` first, raised there to `"8.0"` the same way; neither `mongo:8` (now 8.3) nor `mongo:9` starts on it. `db.adminCommand({ getParameter: 1, featureCompatibilityVersion: 1 })` shows where yours is.
 
 Connect Claude Code:
 
