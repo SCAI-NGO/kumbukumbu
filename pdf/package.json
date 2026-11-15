@@ -17,7 +17,7 @@
     "eval:figures": "tsc -p tsconfig.eval.json && node eval-dist/eval/figures.js"
   },
   "dependencies": {
-    "@napi-rs/canvas": "1.1.0",
+    "@napi-rs/canvas": "1.1.1",
     "omggif": "1.0.10",
     "pdfjs-dist": "6.5.438"
   },
