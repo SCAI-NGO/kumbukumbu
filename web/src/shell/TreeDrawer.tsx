@@ -155,6 +155,9 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, onPhoto,
 /**
  * A folder's entry; the selected one (just made, or found by its name) is marked, and the first time it is shown
  * after that, scrolled to and focused: once only, not again each time it is shown anew (its parent opened again).
+ *
+ * With `view` (the vault's Calendar and Board folders, spec §2.3.2), a tap on the name opens that view and the chevron
+ * is a button of its own that opens and closes the folder.
  */
 function FolderButton({
   folder,
@@ -162,6 +165,7 @@ function FolderButton({
   open,
   selected,
   unpublishable,
+  view,
   onToggle,
 }: {
   folder: TreeFolder;
@@ -169,6 +173,7 @@ function FolderButton({
   open: boolean;
   selected: boolean;
   unpublishable: boolean;
+  view?: { label: string; open(): void };
   onToggle(): void;
 }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
@@ -181,6 +186,38 @@ function FolderButton({
     const top = topDialog();
     if (!top || top.contains(button.current)) button.current?.focus();
   }, [selected]);
+  const chevron = <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />;
+  if (view) {
+    return (
+      <>
+        {/* Reaching into the list's padding, so the row's folder icon stays near the other rows'. */}
+        <button
+          type="button"
+          aria-label={`${open ? "Hide" : "Show"} the folder ${folder.name}`}
+          aria-expanded={open}
+          onClick={onToggle}
+          className="-ml-2 flex size-12 flex-none items-center justify-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {chevron}
+        </button>
+        <button
+          ref={button}
+          type="button"
+          data-tree-row
+          aria-label={view.label}
+          aria-current={selected ? "true" : undefined}
+          onClick={view.open}
+          {...truncated}
+          className={`${rowClass.replace("min-h-11", "min-h-12")} font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+        >
+          <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+          <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
+          {unpublishable && <UnpublishableMark />}
+          <span className="flex-none font-mono text-[11px] text-dim">{count}</span>
+        </button>
+      </>
+    );
+  }
   return (
     <button
       ref={button}
@@ -192,7 +229,7 @@ function FolderButton({
       {...truncated}
       className={`${rowClass} pl-1.5 font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
     >
-      <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />
+      {chevron}
       <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
       {unpublishable && <UnpublishableMark />}
@@ -605,6 +642,13 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(calendarUrl(vault));
   };
+  // The vault's own Calendar and Board folders open their views; any other folder of that name is a folder.
+  const folderView = (row: Extract<Row, { kind: "folder" }>, vault: string) => {
+    if (row.depth !== 0) return undefined;
+    if (row.folder.path === `/${vault}/Calendar`) return { label: "Calendar, open the calendar", open: () => openCalendar(vault) };
+    if (row.folder.path === `/${vault}/Board` && hasBoard) return { label: "Board, open the board", open: () => openBoard(vault) };
+    return undefined;
+  };
   const openGallery = (vault: string) => {
     setOverlay("none");
     navigate(galleryUrl(vault));
@@ -723,6 +767,7 @@ export default function TreeDrawer(props: {
                       open={row.open}
                       selected={row.folder.path === selectedFolder}
                       unpublishable={!!marks?.includes(row.folder.path)}
+                      view={activeVault ? folderView(row, activeVault) : undefined}
                       onToggle={() => toggle(row.folder.path)}
                     />
                     <FolderMenu folder={row.folder} {...folderActions} />
