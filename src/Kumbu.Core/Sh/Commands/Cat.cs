@@ -66,58 +66,80 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
 
     private const string OutlineOnly = "[outline only: too long for this call; read it alone or by section]";
 
+    // Room kept free for the line that says how many paths were left out.
+    private const int MoreReserve = 100;
+
     private async Task<ShellResult> ReadSeveralAsync(IReadOnlyList<string> args, CancellationToken ct)
     {
-        // Room for the notice above the output, as for the embeds block.
+        // Room for the notice above the output, as for the embeds block. Every line is counted, so the shell's
+        // own limit never cuts inside a note.
         const int budget = OutputLimit.MaxChars - 200;
         var output = new StringBuilder();
         var versions = new List<NoteVersion>();
         var paths = new List<VaultPath>();
         var printed = 0;
-        foreach (var arg in args)
+        for (var i = 0; i < args.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
+            var arg = args[i];
             var read = await ReadOneAsync(arg, null, withNotice: false, ct);
-            if (output.Length > 0) output.Append('\n');
+            var limit = i + 1 < args.Count ? budget - MoreReserve : budget;
+            var separator = output.Length > 0 ? "\n" : "";
+            string entry;
+            var keepVersion = false;
             if (read.IsError)
             {
-                output.Append(read.Output).Append('\n');
-                continue;
+                entry = separator + read.Output + "\n";
             }
-
-            printed++;
-            var header = $"==> {SectionAddress.Split(arg).Path} <==\n";
-            var text = read.Output;
-            var remaining = budget - output.Length - header.Length;
-            if (text.Length + 1 > remaining)
+            else
             {
-                var (pathText, _) = SectionAddress.Split(arg);
-                if (read.Version is not null && VaultPath.TryParse(pathText, out var outlined))
+                var header = $"{separator}==> {arg} <==\n";
+                var text = read.Output.EndsWith('\n') ? read.Output : read.Output + "\n";
+                entry = header + text;
+                keepVersion = true;
+                if (output.Length + entry.Length > limit)
                 {
-                    var marker = OutlineOnly + "\n";
-                    text = OutputLimit.Apply(ShellResult.Ok(OutlineCommand.Render(outlined, text)), Math.Max(remaining - marker.Length - 300, 0)).Output;
-                    text = marker + text;
-                }
-                else
-                {
-                    text = OutputLimit.Apply(ShellResult.Ok(text), Math.Max(remaining - 300, 0)).Output;
+                    // A note is never cut in the middle: its outline if that fits, else only a marker.
+                    var (pathText, fragment) = SectionAddress.Split(arg);
+                    var outline = fragment is null && read.Version is not null && VaultPath.TryParse(pathText, out var whole)
+                        ? header + OutlineOnly + "\n" + OutlineCommand.Render(whole, read.Output) + "\n"
+                        : null;
+                    if (outline is not null && output.Length + outline.Length <= limit)
+                    {
+                        entry = outline;
+                    }
+                    else
+                    {
+                        entry = header + $"[too long for this call; read it alone: cat {Quoted(arg, pathText, fragment)}]\n";
+                        keepVersion = false;
+                    }
                 }
             }
 
-            output.Append(header).Append(text);
-            if (!text.EndsWith('\n')) output.Append('\n');
-            if (read.Version is { } v)
+            if (output.Length + entry.Length > limit)
+            {
+                output.Append($"\n[{args.Count - i} more paths not read: this call is full; read them in another call]\n");
+                break;
+            }
+
+            output.Append(entry);
+            if (read.IsError) continue;
+            printed++;
+            if (keepVersion && read.Version is { } v)
             {
                 versions.Add(v);
                 if (VaultPath.TryParse(v.Path, out var notePath)) paths.Add(notePath);
             }
         }
 
-        if (printed == 0) return ShellResult.Error(output.ToString().TrimEnd('\n'));
+        if (printed == 0) return ShellResult.Error(output.ToString().TrimEnd('\n') + CommandArgs.QuoteHint);
 
         var result = ShellResult.Ok(output.ToString()) with { Versions = versions };
         return marks is null || paths.Count == 0 ? result : result with { Notice = await marks.NoticeAsync(paths, ct) };
     }
+
+    private static string Quoted(string arg, string pathText, string? fragment) =>
+        fragment is null && VaultPath.TryParse(pathText, out var path) ? SectionLookup.Quote(path) : $"\"{arg}\"";
 
     private async Task<ShellResult> ReadOneAsync(string arg, string? version, bool withNotice, CancellationToken ct)
     {
