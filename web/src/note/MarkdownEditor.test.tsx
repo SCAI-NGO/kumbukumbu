@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { routerFuture, routes } from "../router";
+import { routes } from "../router";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { presenceKey, useSyncStatus } from "../state/sync";
@@ -1136,11 +1136,11 @@ describe("Named from its heading", () => {
   it("moves once under StrictMode, when Write mode really ends", async () => {
     const { moves } = gardenApi({ notes: { [UNTITLED]: "# Beet" } });
     const u = typist();
-    const router = createMemoryRouter(routes, { initialEntries: [untitledUrl], future: routerFuture });
+    const router = createMemoryRouter(routes, { initialEntries: [untitledUrl] });
     render(
       <StrictMode>
         <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          <RouterProvider router={router} />
         </QueryClientProvider>
       </StrictMode>,
     );

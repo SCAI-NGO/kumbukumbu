@@ -4,7 +4,6 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useVersionPoll } from "../api/history";
-import { routerFuture } from "../router";
 import { useEditor } from "../state/editor";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
@@ -54,11 +53,11 @@ function mount(queryClient = new QueryClient({ defaultOptions: { queries: { retr
       { path: "/", element },
       { path: "/notes/*", element },
     ],
-    { initialEntries: [at], future: routerFuture },
+    { initialEntries: [at] },
   );
   const view = render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
   return { queryClient, view, router };

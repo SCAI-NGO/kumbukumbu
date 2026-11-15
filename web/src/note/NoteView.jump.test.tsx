@@ -200,7 +200,7 @@ describe("opening a note at a block or a line", () => {
   it("nothing inside an embed carries data-line", () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter>
           <MarkdownView source={"# Title\n\nText.\n\n- item\n\n> quote\n\n```\ncode\n```\n\n| a |\n|---|\n| b |\n"} links={[]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} nested />
         </MemoryRouter>
       </QueryClientProvider>,

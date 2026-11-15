@@ -76,7 +76,7 @@ type Point = { x: number; y: number };
  * which keeps the browser's own zoom and scrolling out of it. `offset` is how far an unzoomed swipe has moved the
  * image so far, so it follows the finger.
  */
-export function useZoomPan(stage: RefObject<HTMLElement>, image: Size | null, onSwipe: (swipe: "next" | "previous" | "close") => void) {
+export function useZoomPan(stage: RefObject<HTMLElement | null>, image: Size | null, onSwipe: (swipe: "next" | "previous" | "close") => void) {
   const [view, setView] = useState<View>(fitted);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   const viewRef = useRef(view);

@@ -4,11 +4,11 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { HttpError } from "./api/client";
 import { forgetReload } from "./components/AppError";
 import { neutralWindow, wrapCreateHref } from "./discreet/neutralWindow";
-import { routerFuture, routes } from "./router";
+import { routes } from "./router";
 
 // A data router: useBlocker (the recovery key's "leave without it?") needs one. On a window of its own, which keeps
 // discreet paths out of the address bar, the history and every link (spec §3.5).
-const router = wrapCreateHref(createBrowserRouter(routes, { future: routerFuture, window: neutralWindow }));
+const router = wrapCreateHref(createBrowserRouter(routes, { window: neutralWindow }));
 // A navigation that worked: the next update may reload by itself once again.
 router.subscribe((state) => {
   if (state.navigation.state === "idle" && !state.errors) forgetReload();
@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>
   );
 }

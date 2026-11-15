@@ -2,9 +2,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { JSX } from "react";
 import { createBrowserRouter, Link, RouterProvider, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { routerFuture, routes } from "../router";
+import { routes } from "../router";
 import { safeNext } from "../routes/SignIn";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -167,11 +168,11 @@ describe("the neutral window", () => {
 /** A browser router at `path` on the neutral window, as App makes it. */
 function renderBrowser(path: string, element?: JSX.Element, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   window.history.replaceState(null, "", path);
-  const router = wrapCreateHref(createBrowserRouter(element ? [{ path: "*", element }] : routes, { future: routerFuture, window: neutralWindow }));
+  const router = wrapCreateHref(createBrowserRouter(element ? [{ path: "*", element }] : routes, { window: neutralWindow }));
   disposeRouter = () => router.dispose();
   render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
   return router;

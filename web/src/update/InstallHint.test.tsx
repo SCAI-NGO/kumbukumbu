@@ -2,7 +2,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { routerFuture } from "../router";
 import InstallHint from "./InstallHint";
 
 function device({ phone, standalone }: { phone: boolean; standalone: boolean }) {
@@ -19,9 +18,9 @@ function renderHint() {
       { path: "/", element: <InstallHint /> },
       { path: "/settings", element: <p>Settings page</p> },
     ],
-    { initialEntries: ["/"], future: routerFuture },
+    { initialEntries: ["/"] },
   );
-  render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+  render(<RouterProvider router={router} />);
   return router;
 }
 

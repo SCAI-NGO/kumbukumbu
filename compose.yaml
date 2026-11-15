@@ -1,6 +1,6 @@
 services:
   mongo:
-    image: ${KUMBU_MONGO_IMAGE:-mongo:8}
+    image: ${KUMBU_MONGO_IMAGE:-mongo:9}
     # A single-node replica set: MongoDB has transactions only on a replica set.
     # Optional authentication: with KUMBU_MONGO_PASSWORD set (or KUMBU_MONGO_PASSWORD_FILE naming a Docker secret
     # inside the container, see the README), MongoDB requires a login. A replica set with

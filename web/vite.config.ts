@@ -52,7 +52,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     // KaTeX's smallest font is under the 4 kB limit; inlined as `data:`, the CSP (default-src 'self') would refuse it.
     assetsInlineLimit: (file) => (/\.(woff2?|ttf)$/.test(file) ? false : undefined),
-    rollupOptions: {
+    rolldownOptions: {
       // The reader page (s.html) and the skill page (k.html) are entries of their own: strangers open them, and they
       // load none of the app.
       input: { main: "index.html", s: "s.html", k: "k.html" },

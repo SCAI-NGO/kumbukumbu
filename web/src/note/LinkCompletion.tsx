@@ -11,7 +11,7 @@ const keepFocus = (e: SyntheticEvent) => e.preventDefault();
  * `[[` completion for the editor: follows the caret, and answers the list to show (between the textarea and the
  * toolbar, so above the on-screen keyboard) and the keys the textarea hands it first.
  */
-export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextAreaElement>, onChange: (value: string) => void) {
+export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextAreaElement | null>, onChange: (value: string) => void) {
   const [at, setAt] = useState<LinkQuery | null>(null);
   // Asked for (or taken from the cache) only once a `[[` is typed.
   const tree = useTree(at ? vaultOf(path) : null);

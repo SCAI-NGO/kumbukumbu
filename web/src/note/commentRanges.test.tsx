@@ -24,7 +24,7 @@ afterEach(cleanup);
 
 function shown(note: string) {
   const { container } = render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView source={maskedBody(note).body} mask={maskedBody(note).mask} links={[]} tasksDisabled={false} onToggleTask={() => {}} onCreateMissing={() => {}} />
     </MemoryRouter>,
   );
@@ -40,7 +40,7 @@ describe("reads comments as the shared cases say", () => {
 
 it("hides a comment that opens in maths, its dollar left as written, as the fair copy does", async () => {
   const { container } = render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView source={"The rate is $a %% b$ today.\n\n%%\nShown"} links={[]} tasksDisabled={false} onToggleTask={() => {}} onCreateMissing={() => {}} />
     </MemoryRouter>,
   );
@@ -57,7 +57,7 @@ describe("hides nothing the fair copy publishes", () => {
   // Each text node and link address on its own: textContent runs a table's cells together.
   const visibleWords = (note: string) => {
     const { container } = render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <MarkdownView source={maskedBody(note).body} mask={maskedBody(note).mask} links={[]} tasksDisabled={false} onToggleTask={() => {}} onCreateMissing={() => {}} />
       </MemoryRouter>,
     );
@@ -76,7 +76,7 @@ describe("hides nothing the fair copy publishes", () => {
 
 it("keeps a link whose text a comment empties, as the fair copy does", () => {
   const { container } = render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView source="[%%secret%%](https://x.org/path) after" links={[]} tasksDisabled={false} onToggleTask={() => {}} onCreateMissing={() => {}} />
     </MemoryRouter>,
   );

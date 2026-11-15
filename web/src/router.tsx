@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type JSX, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { useZonePreset } from "./calendar/preferences";
@@ -17,15 +17,6 @@ import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
 import UpdateBar from "./update/UpdateBar";
-
-/** Opts into the v7 behaviour now, which also keeps React Router's warnings out of the console. */
-export const routerFuture = {
-  v7_relativeSplatPath: true,
-  v7_fetcherPersist: true,
-  v7_normalizeFormMethod: true,
-  v7_partialHydration: true,
-  v7_skipActionErrorRevalidation: true,
-};
 
 /**
  * Sends to sign-in, with the way back, as soon as any request found the session gone; and reloads into a new

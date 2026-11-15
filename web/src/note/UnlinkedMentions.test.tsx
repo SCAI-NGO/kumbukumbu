@@ -4,7 +4,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { routerFuture } from "../router";
 import { fakeApi, json } from "../test/app";
 import BacklinksList from "./BacklinksList";
 import UnlinkedMentions from "./UnlinkedMentions";
@@ -24,11 +23,11 @@ function show(element: React.ReactNode) {
       { path: "/notes/*", element: <p>a note</p> },
       { path: "*", element },
     ],
-    { initialEntries: ["/"], future: routerFuture },
+    { initialEntries: ["/"] },
   );
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
   return router;
@@ -102,7 +101,7 @@ describe("unlinked mentions", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const at = (path: string) => (
       <QueryClientProvider client={client}>
-        <MemoryRouter future={routerFuture}>
+        <MemoryRouter>
           <UnlinkedMentions path={path} />
         </MemoryRouter>
       </QueryClientProvider>

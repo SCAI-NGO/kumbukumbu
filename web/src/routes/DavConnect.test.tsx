@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../state/session";
-import { fakeApi, json, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, renderApp, user } from "../test/app";
 
 const share = {
   id: "k7qm",
@@ -96,7 +96,7 @@ describe("DavConnect", () => {
 
   it("asks once before leaving with the password unsaved", async () => {
     const router = await createShare();
-    await act(() => router.navigate("/settings"));
+    await navigateAway(router, "/settings");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved the password");
     await userEvent.click(screen.getByRole("button", { name: "Stay" }));
     await userEvent.click(screen.getByRole("button", { name: "Done" }));

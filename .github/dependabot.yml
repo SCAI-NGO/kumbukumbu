@@ -7,6 +7,11 @@
 #
 # Node only on its LTS lines, the even majors: an odd major is never LTS and is out of support within months.
 # A new even major is due each April and becomes LTS in October; move to it then, so no LTS line is skipped.
+#
+# .NET likewise only on its LTS lines, the even majors: an odd major is supported as long as the LTS before it (both
+# end in the same November), so taking it would only add a framework jump a year. A new even major comes each
+# November; move to it then (.NET 12 in November 2027). The ASP.NET Core packages and System.Numerics.Tensors follow
+# the framework's major and wait with it.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -21,6 +26,8 @@ updates:
     ignore:
       - dependency-name: node
         versions: ["27.x", "29.x", "31.x", "33.x"]
+      - dependency-name: dotnet/*
+        versions: ["11.x", "13.x", "15.x"]
 
   - package-ecosystem: docker-compose
     directory: /
@@ -31,6 +38,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: Microsoft.AspNetCore.*
+        versions: ["11.x", "13.x", "15.x"]
+      - dependency-name: System.Numerics.Tensors
+        versions: ["11.x", "13.x", "15.x"]
 
   # The web app has many packages: their minor and patch updates come as one pull request a week, a major one on its
   # own. pdfjs-dist stays out of the group: people and the model see the same pages (docs/security-architecture.md),

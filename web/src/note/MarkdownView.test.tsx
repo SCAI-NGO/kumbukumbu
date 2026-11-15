@@ -37,7 +37,7 @@ function show(
   find: { query: string; current: number } | null = null,
 ) {
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <MarkdownView
         source={source}
         links={links}
@@ -59,7 +59,7 @@ function Lightbox() {
 
 function showRouted(source: string, links: LinkView[], onCreateMissing = vi.fn()) {
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Routes>
         <Route
           path="/"
@@ -811,7 +811,7 @@ describe("Footnotes", () => {
 
   it("gives two views of the same footnotes ids of their own", () => {
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
         <MarkdownView source={"Text[^1]\n\n[^1]: The note."} links={[]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} />
       </MemoryRouter>,
@@ -829,7 +829,7 @@ describe("Footnotes", () => {
     });
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter>
           <MarkdownView
             source={"Sow the carrots[^1].\n\n![[roadmap]]\n\n[^1]: After the last frost."}
             links={[link(3, "![[roadmap]]", "note", ROADMAP)]}
@@ -856,7 +856,7 @@ describe("a notice before a rule", () => {
   const notice = (line: number) => (line === 3 ? <p>Before the rule</p> : null);
   const rendered = (nested: boolean) =>
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <MarkdownView source={"One\n\n---\n\nTwo\n\n---\n"} links={[]} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={vi.fn()} ruleNotice={notice} nested={nested} />
       </MemoryRouter>,
     );

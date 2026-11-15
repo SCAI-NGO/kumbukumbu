@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { act, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fakeApi, json, renderApp } from "../test/app";
+import { fakeApi, json, navigateAway, renderApp } from "../test/app";
 
 const newKey = "WXYZ-2345-6789-ABCD";
 
@@ -61,7 +61,7 @@ describe("ForgotPassword", () => {
     await userEvent.click(screen.getByLabelText(/I have stored my recovery key/));
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 
-    await act(() => router.navigate("/signin"));
+    await navigateAway(router, "/signin");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your recovery key");
     expect(router.state.location.pathname).toBe("/forgot");
   });
