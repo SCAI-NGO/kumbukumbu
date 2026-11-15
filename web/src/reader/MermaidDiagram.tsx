@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { drawing, lines } from "./diagramSize";
 
 type Render = typeof import("./mermaidRender");
 
@@ -14,13 +15,19 @@ const load = () =>
 type State = { kind: "drawing" } | { kind: "drawn"; url: string; alt: string } | { kind: "failed"; message: string } | { kind: "unavailable" };
 
 const buttonClass = "min-h-11 rounded-[8px] px-3 text-[14px] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent";
+// Draw diagram stands alone in its box: a 48 px target.
+const drawClass = "min-h-12 rounded-[8px] px-3 text-[14px] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
  * A Mermaid diagram as an image of the SVG Mermaid draws: its SVG never becomes markup of the page, so neither its
  * `<style>` nor anything else in it touches the page. Never inside a link: a blob SVG opened on its own would be a
- * document on the page's origin.
+ * document on the page's origin. A large diagram waits for Draw diagram, as does one the note leaves no place among
+ * those drawing by themselves (`auto`); the largest are not drawn here.
  */
-export default function MermaidDiagram({ source, dark }: { source: string; dark: boolean }) {
+export default function MermaidDiagram({ source, dark, auto = true }: { source: string; dark: boolean; auto?: boolean }) {
+  const how = useMemo(() => drawing(source), [source]);
+  const [asked, setAsked] = useState(false);
+  const draws = how !== "never" && (asked || (auto && how === "itself"));
   const [state, setState] = useState<State>({ kind: "drawing" });
   const [open, setOpen] = useState(false);
   const [wide, setWide] = useState(false);
@@ -30,10 +37,12 @@ export default function MermaidDiagram({ source, dark }: { source: string; dark:
   const codeId = `mermaid-${useId().replace(/[^a-zA-Z0-9-]/g, "")}`;
 
   useEffect(() => {
+    if (!draws) return;
     let cancelled = false;
+    const stop = new AbortController();
     load().then(
       (m) =>
-        m.renderDiagram(source, dark).then(
+        m.renderDiagram(source, dark, stop.signal).then(
           ({ svg, alt }) => {
             if (cancelled) return;
             setFull(false);
@@ -45,8 +54,9 @@ export default function MermaidDiagram({ source, dark }: { source: string; dark:
     );
     return () => {
       cancelled = true;
+      stop.abort();
     };
-  }, [source, dark]);
+  }, [source, dark, draws]);
 
   // The URL goes when the image goes, or when the next one has taken its place.
   const url = state.kind === "drawn" ? state.url : undefined;
@@ -69,6 +79,26 @@ export default function MermaidDiagram({ source, dark }: { source: string; dark:
     </pre>
   );
 
+  if (how === "never") {
+    return (
+      <div className="my-3">
+        <p role="note" className="text-[14px] text-muted">
+          This diagram is too large to draw here.
+        </p>
+        {code}
+      </div>
+    );
+  }
+  if (!draws) {
+    return (
+      <div className="my-3 rounded-[10px] border border-line bg-surface px-3.5 py-3">
+        <pre className="overflow-x-auto font-mono text-[12.5px] leading-[1.6] text-muted">{lines(source).slice(0, 3).join("\n")}</pre>
+        <button type="button" onClick={() => setAsked(true)} className={drawClass}>
+          Draw diagram
+        </button>
+      </div>
+    );
+  }
   if (state.kind === "drawing") return <p className="my-3 text-[14px] text-muted">Drawing the diagram …</p>;
   if (state.kind === "failed" || state.kind === "unavailable") {
     return (

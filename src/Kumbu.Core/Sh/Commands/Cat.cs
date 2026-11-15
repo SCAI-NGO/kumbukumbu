@@ -178,10 +178,12 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
         var output = new StringBuilder(shown.Output).Append(shown.Output.EndsWith('\n') ? "\n" : "\n\n").Append(EmbedsHeader);
         if (output.Length + CutLine(embeds[0]).Length > budget) return shown;
         var shownPaths = new List<VaultPath> { path };
+        var embedded = new Dictionary<VaultPath, Embedded?>();
         for (var i = 0; i < embeds.Count; i++)
         {
+            ct.ThrowIfCancellationRequested();
             var embed = embeds[i];
-            var (where, text) = await EmbeddedAsync(embed, outlined, ct);
+            var (where, text) = await EmbeddedAsync(embed, outlined, embedded, ct);
             var entry = $"\n[line {embed.Link.Line + 1}: {embed.Link.Raw} → {where}]" + (text is null ? "" : "\n" + text);
             var after = i + 1 < embeds.Count ? CutLine(embeds[i + 1]).Length : 0;
             if (output.Length + entry.Length + after > budget)
@@ -219,8 +221,10 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
     private static partial Regex BlockPrefix();
 
     /// <summary>Where an embed leads, as 'links' says it, and the text it shows: null when there is none, or
-    /// <paramref name="linesOnly"/>.</summary>
-    private async Task<(string Where, string? Text)> EmbeddedAsync(ResolvedLink embed, bool linesOnly, CancellationToken ct)
+    /// <paramref name="linesOnly"/>. Each embedded note is read once and kept in <paramref name="embedded"/> (null for a
+    /// note that isn't there).</summary>
+    private async Task<(string Where, string? Text)> EmbeddedAsync(
+        ResolvedLink embed, bool linesOnly, Dictionary<VaultPath, Embedded?> embedded, CancellationToken ct)
     {
         var r = embed.Resolution;
         var subpath = embed.Link.Subpath;
@@ -231,11 +235,12 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
                 return await StoreAttachments.GetAsync(notes, file, ct) is { } attachment
                     ? (file.Value, await AttachmentLineAsync(file, attachment.Current, ct))
                     : ("not found", null);
-            case LinkKind.Note when r.Target is { } target && await notes.ReadAsync(target, ct) is { } content:
+            case LinkKind.Note when r.Target is { } target && await ReadOnceAsync(target) is { } note:
+                var content = note.Content;
                 if (subpath.Length > 1 && Blocks.TryId(subpath[1..], out var id))
                 {
-                    return SectionLookup.TryFindBlock(target, content, id, out var block, out _)
-                        ? ($"{target.Value}#^{id}", linesOnly ? null : block)
+                    return note.Blocks.FirstOrDefault(b => string.Equals(b.Id, id, StringComparison.OrdinalIgnoreCase)) is { } block
+                        ? ($"{target.Value}#^{id}", linesOnly ? null : Lines.Join(note.Lines.Skip(block.Start).Take(block.End - block.Start)))
                         : ($"not found: no block ^{id} in {target.Value}", null);
                 }
 
@@ -256,6 +261,30 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
             default:
                 return (LinksCommand.Describe(r), null);
         }
+
+        async Task<Embedded?> ReadOnceAsync(VaultPath target)
+        {
+            if (!embedded.TryGetValue(target, out var note))
+            {
+                note = await notes.ReadAsync(target, ct) is { } text ? new Embedded(text) : null;
+                embedded[target] = note;
+            }
+
+            return note;
+        }
+    }
+
+    // An embedded note: its lines split and its blocks found once, however often it is embedded.
+    private sealed class Embedded(string content)
+    {
+        private IReadOnlyList<string>? _lines;
+        private IReadOnlyList<Block>? _blocks;
+
+        public string Content { get; } = content;
+
+        public IReadOnlyList<string> Lines => _lines ??= Sh.Lines.Split(Content);
+
+        public IReadOnlyList<Block> Blocks => _blocks ??= Sections.Blocks.Parse(Lines);
     }
 
     /// <summary>The one line cat prints for an image or a PDF; for an embedded text file too, whose content stays out.</summary>

@@ -154,6 +154,11 @@ public sealed class UserDocument
     [BsonElement("calendarZone"), BsonIgnoreIfNull]
     public string? CalendarZone { get; set; }
 
+    /// <summary>Her week (fixes spec §2.4): seven levels, Monday to Sunday, each <c>workday</c>, <c>lighter</c> or <c>off</c>;
+    /// null until she chooses (the web app then shades her browser's weekend). Plain, as the zone: it names no vault.</summary>
+    [BsonElement("calendarDays"), BsonIgnoreIfNull]
+    public string[]? CalendarDays { get; set; }
+
     /// <summary>Her last view per calendar (calendar spec §7.3), sealed under a key derived from the user key since it
     /// names vaults (CalendarSettings); null until she keeps one.</summary>
     [BsonElement("calendarViews"), BsonIgnoreIfNull]

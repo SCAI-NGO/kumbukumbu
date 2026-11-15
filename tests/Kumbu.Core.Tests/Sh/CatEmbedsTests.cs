@@ -317,5 +317,36 @@ public class CatEmbedsTests
         Assert.Contains(Header, (await TestShell.Of(store).RunAsync("cat /Skills/pump/SKILL.md", Ct)).Output);
     }
 
+    [Fact]
+    public async Task A_note_embedded_several_times_is_read_once()
+    {
+        const string blocks = "# Parts\n\nThe pump. ^pump\n\nThe valve. ^valve\n\nThe seal. ^seal\n";
+        const string plan = "# Plan\n\n![[Parts#^pump]]\n\n![[Parts#^valve]]\n\n![[Parts#^seal]]\n";
+        var store = Store(plan, ("/Work/Pump/Parts.md", blocks));
+        var reads = 0;
+        store.OnRead = p => { if (p.Value == "/Work/Pump/Parts.md") reads++; };
+
+        var result = await TestShell.Of(store).RunAsync("cat /Work/Pump/Plan.md", Ct);
+
+        Assert.Equal(
+            "\n" + Header + "\n[line 3: ![[Parts#^pump]] → /Work/Pump/Parts.md#^pump]\nThe pump. ^pump"
+            + "\n[line 5: ![[Parts#^valve]] → /Work/Pump/Parts.md#^valve]\nThe valve. ^valve"
+            + "\n[line 7: ![[Parts#^seal]] → /Work/Pump/Parts.md#^seal]\nThe seal. ^seal",
+            Appendix(result, plan));
+        Assert.Equal(1, reads);
+    }
+
+    [Fact]
+    public async Task Cat_stops_when_cancelled_between_embeds()
+    {
+        const string blocks = "# Parts\n\nThe pump. ^pump\n\nThe valve. ^valve\n";
+        const string plan = "# Plan\n\n![[Parts#^pump]]\n\n![[Parts#^valve]]\n";
+        var store = Store(plan, ("/Work/Pump/Parts.md", blocks));
+        using var cancel = new CancellationTokenSource();
+        store.OnRead = p => { if (p.Value == "/Work/Pump/Parts.md") cancel.Cancel(); };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => TestShell.Of(store).RunAsync("cat /Work/Pump/Plan.md", cancel.Token));
+    }
+
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
 }

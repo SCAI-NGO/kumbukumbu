@@ -130,6 +130,41 @@ describe("Block ids in the note view", () => {
     expect(await screen.findByText('state {"block":"controller"}')).toBeInTheDocument();
   });
 
+  function followed(raw: string, link: LinkView) {
+    function State() {
+      return <p>state {JSON.stringify(useLocation().state)}</p>;
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/here"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/notes/Work/Pump/Plan.md" element={<State />} />
+            <Route path="*" element={<MarkdownView source={`See ${raw}.`} links={[link]} tasksDisabled onToggleTask={vi.fn()} onCreateMissing={vi.fn()} path="/Work/Pump/Tasks.md" />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("a link to a heading carries the heading in its state", async () => {
+    followed("[[Plan#Roadmap|the roadmap]]", { line: 1, raw: "[[Plan#Roadmap|the roadmap]]", kind: "note", path: PLAN, target: "Plan", candidates: [] });
+    await userEvent.click(screen.getByRole("link", { name: "the roadmap" }));
+    expect(await screen.findByText('state {"heading":"Roadmap"}')).toBeInTheDocument();
+  });
+
+  it("a nested heading link carries the whole address", async () => {
+    followed("[[Plan#A#B]]", { line: 1, raw: "[[Plan#A#B]]", kind: "note", path: PLAN, target: "Plan", candidates: [] });
+    await userEvent.click(screen.getByRole("link"));
+    expect(await screen.findByText('state {"heading":"A#B"}')).toBeInTheDocument();
+  });
+
+  it("an ambiguous link to a heading carries the heading to the note chosen", async () => {
+    followed("[[Plan#Roadmap]]", { line: 1, raw: "[[Plan#Roadmap]]", kind: "ambiguous", path: null, target: "Plan", candidates: [PLAN, "/Work/Home/Plan.md"] });
+    await userEvent.click(screen.getByRole("button", { name: /2 notes/ }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("link", { name: /Work \/ Pump/ }));
+    expect(await screen.findByText('state {"heading":"Roadmap"}')).toBeInTheDocument();
+  });
+
   it("an embed of a missing block says so", async () => {
     planApi();
     show("![[Plan#^contoller]]", [embed("![[Plan#^contoller]]")]);

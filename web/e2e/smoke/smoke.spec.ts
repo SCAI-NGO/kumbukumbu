@@ -155,19 +155,15 @@ test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, se
   // The folder's next note opens; Note is not in the tree any more.
   let tree = await openTree(page, testInfo);
   const folderButton = folderRow(tree, folder);
-  // The tree has read the folder again (one item left) before a menu is opened: a scroll closes it.
+  // The tree has read the folder again (one item left) before a menu is opened.
   await expect(folderButton).toHaveAccessibleName(/ 1 item$/);
   // The next note, Other, is open, and the tree shows it: its folder is open and in view.
   await expect(folderButton).toHaveAttribute("aria-expanded", "true");
   await expect(tree.getByRole("button", { name: "Other", exact: true })).toBeVisible();
   await expect(tree.getByRole("button", { name: "Note", exact: true })).toHaveCount(0);
 
-  // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
-  await expect(async () => {
-    await page.keyboard.press("Escape");
-    await tree.getByRole("button", { name: "Actions for Work" }).click();
-    await page.getByRole("menuitem", { name: "Trash" }).click({ timeout: 2_000 });
-  }).toPass({ timeout: 10_000 });
+  await tree.getByRole("button", { name: "Actions for Work" }).click();
+  await page.getByRole("menuitem", { name: "Trash" }).click();
   const trash = page.getByRole("dialog", { name: "Trash" });
   // The dialog lists all of Work's trash, other tests' notes too, uncapped (newest first): this test's row by its
   // folder, scrolled to wherever the others put it.
@@ -189,12 +185,8 @@ test("smoke #7: an uploaded image opens @smoke", async ({ page, seedAs, folder }
   await openNote(page, `/Work/${folder}/Other.md`);
 
   const tree = await openTree(page, testInfo);
-  // F-02: the menu closes while the tree is still scrolling to the open note (any scroll closes it): opened again if so.
-  await expect(async () => {
-    await page.keyboard.press("Escape");
-    await tree.getByRole("button", { name: `Actions for ${folder}` }).click();
-    await page.getByRole("menuitem", { name: "Upload here" }).click({ timeout: 2_000 });
-  }).toPass({ timeout: 10_000 });
+  await tree.getByRole("button", { name: `Actions for ${folder}` }).click();
+  await page.getByRole("menuitem", { name: "Upload here" }).click();
   const sheet = page.getByRole("dialog", { name: "Upload" });
   await sheet.getByLabel("Choose files").setInputFiles(join(fixturesDir, "tags", "smoke", "upload.png"));
   await sheet.getByRole("button", { name: "Upload", exact: true }).click();

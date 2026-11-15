@@ -118,6 +118,47 @@ describe("opening a note at a block or a line", () => {
     expect(paragraph.closest("details")).toHaveAttribute("open");
   });
 
+  describe("at a heading", () => {
+    // Two sections of the same name, the second under another parent.
+    const roadmaps = ["# Plan", "", "Intro.", "", "## Roadmap", "", "First.", "", "# Later", "", "## Roadmap", "", "Second.", "", "Done."].join("\n");
+
+    it("a link to a heading scrolls to it and highlights it", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      planApi(["# Plan", "", "Intro.", "", "## Goals", "", "A pump.", "", "## Roadmap", "", "Next year."].join("\n"));
+      renderApp({ pathname: planUrl, state: { heading: "Roadmap" } satisfies NoteAt });
+      const heading = await screen.findByRole("heading", { name: "Roadmap", level: 2 });
+      await vi.waitFor(() => expect(scrolled()).toEqual([heading]));
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+      expect(heading).toHaveClass("k-flash");
+      act(() => vi.advanceTimersByTime(1600));
+      expect(heading).not.toHaveClass("k-flash");
+    });
+
+    it("of two headings of the same name, the first opens", async () => {
+      planApi(roadmaps);
+      renderApp({ pathname: planUrl, state: { heading: "Roadmap" } satisfies NoteAt });
+      await screen.findByText("Second.");
+      const [first] = screen.getAllByRole("heading", { name: "Roadmap", level: 2 });
+      await vi.waitFor(() => expect(scrolled()).toEqual([first]));
+    });
+
+    it("a nested address opens the child under its parent", async () => {
+      planApi(roadmaps);
+      renderApp({ pathname: planUrl, state: { heading: "Later#Roadmap" } satisfies NoteAt });
+      await screen.findByText("Second.");
+      const [, second] = screen.getAllByRole("heading", { name: "Roadmap", level: 2 });
+      await vi.waitFor(() => expect(scrolled()).toEqual([second]));
+      expect(second).toHaveClass("k-flash");
+    });
+
+    it("an unknown heading opens at the top with a notice", async () => {
+      planApi();
+      renderApp({ pathname: planUrl, state: { heading: "Roadmap" } satisfies NoteAt });
+      expect(await screen.findByRole("status")).toHaveTextContent("There is no heading Roadmap in this note.");
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+  });
+
   describe("while the block lights up", () => {
     // jsdom has no ResizeObserver: this one reports a change in size when asked.
     let resized: () => void;

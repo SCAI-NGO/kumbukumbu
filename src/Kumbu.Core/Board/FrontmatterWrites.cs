@@ -27,6 +27,21 @@ internal static class FrontmatterWrites
             return false;
         }
 
+        // A line that only looks like an owned key (inside another key's quoted value) must not take that value's text along.
+        var before = Frontmatter.Read(content);
+        if (before.Problem is null)
+        {
+            var owned = changes.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
+            var other = before.Values.Keys.Union(read.Values.Keys).Where(k => !owned.Contains(k))
+                .FirstOrDefault(k => !(before.Values.TryGetValue(k, out var a) && read.Values.TryGetValue(k, out var b) && Same(a, b)));
+            if (other is not null)
+            {
+                error = Error(tool, $"{path.Value}: changing {string.Join(", ", changes.Select(c => c.Key))} would also change {other}, so nothing was written; "
+                    + "fix the note's frontmatter with edit", ShellErrorKind.Conflict);
+                return false;
+            }
+        }
+
         foreach (var (key, yaml) in changes)
         {
             var wanted = yaml is null ? null : Frontmatter.Read($"---\n{key}: {yaml}\n---\n").Values.GetValueOrDefault(key);

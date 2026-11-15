@@ -7,7 +7,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 if [ "${E2E_STACK:-compose}" = dotnet ]; then exec "$STACK_DIR/dotnet.sh" up; fi
 
 "$STACK_DIR/down.sh"
-rm -rf "$E2E_VAULTS" && mkdir -p "$E2E_VAULTS"
+own_or_absent "$E2E_VAULTS"
+rm -rf "$E2E_VAULTS"
+mkdir "$E2E_VAULTS"
 if [ -n "${E2E_PROXY_CA:-}" ]; then
   ca="$(mktemp -d)"
   cp "$E2E_PROXY_CA" "$ca/proxy-ca.crt"

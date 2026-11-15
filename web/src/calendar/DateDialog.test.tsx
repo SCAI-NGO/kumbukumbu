@@ -2,9 +2,10 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { renderApp } from "../test/app";
+import { json, renderApp, user } from "../test/app";
 import { bodiesOf, entryView, noteEntry, noteWithEntry, openTask, writtenView } from "../test/calendar";
 
 afterEach(() => {
@@ -12,6 +13,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
 });
 
 const PLAN = "/Work/Plan.md";
@@ -98,6 +100,34 @@ describe("the date dialog", () => {
     const dialog = await openDialog("Edit date…");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(await within(dialog).findByText("--when 2026-02-30 is not a date")).toBeInTheDocument();
+  });
+
+  it("a date refused for a note of a discreet vault is said without the vault", async () => {
+    const home = "/Home/Plan.md";
+    const vault = (name: string, discreet: boolean) => ({ name, notes: 1, embeddings: "internal", canWrite: true, level: "owner", discreet });
+    noteWithEntry(home, noteEntry(null), {
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: true, until: null } }),
+      "GET /api/vaults": () => json(200, [vault("Work", false), vault("Home", true)]),
+      "GET /api/vaults/Home/tree": () => json(200, { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [{ name: "Plan.md", path: home, size: 10 }] } }),
+      "GET /api/vaults/Home/calendar/entry": () => json(200, noteEntry(null)),
+      "POST /api/vaults/Home/calendar/set": () => json(404, { error: "There is no vault 'Home'." }),
+    });
+    renderApp(`/notes${home}`);
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Home"]));
+    const dialog = await openDialog("Add to calendar…");
+    await userEvent.type(within(within(dialog).getByRole("group", { name: "When" })).getByLabelText("Day"), "2026-11-20");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText("There is no such note (if it was removed, it is in the trash).")).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Home");
+  });
+
+  it("a refused date in an ordinary vault keeps the server's sentence", async () => {
+    noteWithEntry(PLAN, noteEntry(null), { "POST /api/vaults/Work/calendar/set": () => json(404, { error: "There is no note /Work/Plan.md." }) });
+    renderApp(`/notes${PLAN}`);
+    const dialog = await openDialog("Add to calendar…");
+    await userEvent.type(within(within(dialog).getByRole("group", { name: "When" })).getByLabelText("Day"), "2026-11-20");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText("There is no note /Work/Plan.md.")).toBeInTheDocument();
   });
 });
 

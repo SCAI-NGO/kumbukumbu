@@ -6,6 +6,7 @@ import { api, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { goneVault, useDiscreet } from "../discreet/state";
+import { topDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
@@ -175,6 +176,18 @@ export default function MarkdownEditor({
       window.removeEventListener("beforeunload", warn);
     };
   }, [saveNow, unresolved]);
+
+  useEffect(() => {
+    // Ctrl+S (Cmd+S on a Mac) is Done, not the browser's Save page: a failed save or a conflict keeps Write mode, as
+    // Done does. With a dialog open over the editor it does nothing new.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "s" || topDialog()) return;
+      e.preventDefault();
+      void useEditor.getState().endWrite();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Opening another note: openNote() has already moved the store on (and to Read mode) when the navigation
   // comes here. While saves are pending the store goes back to this note, and on to the other once they are done.

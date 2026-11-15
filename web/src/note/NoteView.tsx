@@ -2,6 +2,7 @@
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
 import { errorText, isNotFound } from "../api/error-text";
@@ -27,13 +28,18 @@ import BacklinksList from "./BacklinksList";
 import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
-import { outline } from "./outline";
+import { atxHeading, headingLine, outline } from "./outline";
 import { maskedBody } from "./comments";
 import { parseProperties, splitFrontmatter } from "./properties";
+import { useStoredOpen } from "./propertiesOpen";
 import { taskToggle } from "./taskToggle";
 import { createdPath } from "./wikiLinks";
 import { registerScrollTop, takeRestore } from "../update/apply";
+import BoardLine from "../board/BoardLine";
+import { boardCard } from "../board/cardLine";
+import { useNoteEntry } from "../calendar/api";
 import EntryLine from "../calendar/EntryLine";
+import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
@@ -69,12 +75,12 @@ const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap ag
  */
 export const startsWithH1 = (body: string) => {
   const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
-  const atx = /^ {0,3}#(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(first.split("\n", 1)[0].replace(/\r$/, ""));
-  return (!!atx?.[1] && !/^#+$/.test(atx[1])) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
+  const atx = atxHeading(first.split("\n", 1)[0].replace(/\r$/, ""));
+  return (atx?.level === 1 && !!atx.text && !/^#+$/.test(atx.text)) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
 
-/** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block the note lacks. */
-type Notice = { kind: "conflict" } | { kind: "error"; text: string } | { kind: "block"; id: string };
+/** The notice under the title: a write that lost to a newer version, one that failed, or a link to a block or heading the note lacks. */
+type Notice = { kind: "conflict" } | { kind: "error"; text: string } | { kind: "block"; id: string } | { kind: "heading"; address: string };
 
 // Headings only: the note's other blocks carry `data-line` too.
 const headingLines = "h1[data-line], h2[data-line], h3[data-line], h4[data-line], h5[data-line], h6[data-line]";
@@ -123,6 +129,13 @@ export default function NoteView({ path }: { path: string }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  const props = useMemo(() => (parts.frontmatter === null ? null : parseProperties(parts.frontmatter)), [parts.frontmatter]);
+  const card = boardCard(path, props);
+  // Where the header says it in words (a calendar line, one of the flags as the flag line reads them, a board card), the box folds away. The entry is the
+  // calendar line's own query, asked once for both: from when the line is shown, or the line's mount would ask again.
+  const entry = useNoteEntry(path, !!note.data).data?.entry;
+  const flagged = !!props?.some((p) => p.key === "tags" && frontmatterTags(p.value).some((t) => t.toLowerCase().startsWith("flag/") && isFlag(t.slice(5).toLowerCase())));
+  const foldable = !!props && props.length > 0 && (!!entry || flagged || card !== null);
   const shown = useMemo(() => maskedBody(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
@@ -248,7 +261,7 @@ export default function NoteView({ path }: { path: string }) {
     useEditor.getState().setScrollTarget(null);
   }, [scrollTarget, path, mode, note.data]);
 
-  // Opened at a block (a `[[Plan#^id]]` link) or a line (an unlinked mention): the block holding it comes into view
+  // Opened at a block (a `[[Plan#^id]]` link), a heading (`[[Plan#Goals]]`) or a line (an unlinked mention): the block holding it comes into view
   // and lights up briefly. Once per navigation, when the note is shown.
   const flash = useRef<{ target: HTMLElement; timer: ReturnType<typeof setTimeout>; stop: () => void } | null>(null);
   const unflash = useCallback(() => {
@@ -262,9 +275,9 @@ export default function NoteView({ path }: { path: string }) {
   useEffect(() => {
     if (mode !== "read" || !note.data || !article.current || opened.current === location.key) return;
     opened.current = location.key;
-    setNotice((n) => (n?.kind === "block" ? null : n));
+    setNotice((n) => (n?.kind === "block" || n?.kind === "heading" ? null : n));
     // A `NoteAt`; any other state (or none) opens the note as usual.
-    const at = location.state as { block?: unknown; line?: unknown } | null;
+    const at = location.state as { block?: unknown; heading?: unknown; line?: unknown } | null;
     let line = typeof at?.line === "number" ? at.line : undefined;
     if (typeof at?.block === "string") {
       // On the stored text, as the Core finds it: a block a comment hides leads to the one shown above it.
@@ -274,6 +287,15 @@ export default function NoteView({ path }: { path: string }) {
         return;
       }
       line = found.start;
+    }
+    if (typeof at?.heading === "string") {
+      // The section address as cat reads it, but where cat calls two matches ambiguous, the first opens.
+      const found = headingLine(parts.body, at.heading);
+      if (found === null) {
+        setNotice({ kind: "heading", address: at.heading });
+        return;
+      }
+      line = found;
     }
     if (line === undefined) return;
     // The greatest line, not the last in the page: footnotes render at the end but keep their lines. On equal lines
@@ -289,7 +311,7 @@ export default function NoteView({ path }: { path: string }) {
     unflash();
     target.classList.add("k-flash");
     flash.current = { target, timer: setTimeout(unflash, FLASH_MS), stop: keepCentred(article.current, target) };
-  }, [mode, note.data, location.key, location.state, unflash]);
+  }, [mode, note.data, parts.body, location.key, location.state, unflash]);
 
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {
@@ -408,6 +430,7 @@ export default function NoteView({ path }: { path: string }) {
       )}
       {note.data && <FlagLine key="flag-line" path={path} version={note.data.version} />}
       {note.data && <EntryLine key="entry-line" path={path} version={note.data.version} />}
+      {note.data && card && <BoardLine column={card.column} since={card.since} />}
       {/* Once the vault list says whose vault it is: the owner's bar and a member's differ. */}
       {vault && <PublicationBar path={path} owner={vault.owner == null} />}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
@@ -444,13 +467,19 @@ export default function NoteView({ path }: { path: string }) {
             role={notice.kind === "error" ? "alert" : "status"}
             className="mt-3 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text"
           >
-            {notice.kind === "conflict" ? CONFLICT_NOTICE : notice.kind === "block" ? `There is no block ^${notice.id} in this note.` : notice.text}
+            {notice.kind === "conflict"
+              ? CONFLICT_NOTICE
+              : notice.kind === "block"
+                ? `There is no block ^${notice.id} in this note.`
+                : notice.kind === "heading"
+                  ? `There is no heading ${notice.address} in this note.`
+                  : notice.text}
           </p>
         )}
         {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
-            {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}
+            {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} foldable={foldable} />}
             <MarkdownView
               source={shown.body}
               mask={shown.mask}
@@ -473,10 +502,13 @@ export default function NoteView({ path }: { path: string }) {
 
 /**
  * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
- * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
+ * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited. Where the
+ * header already says it in words (`foldable`), the box folds to one line, as this device last chose; a change by
+ * someone else, tinted, shows it open whatever the choice, with nothing to fold it that couldn't.
  */
-export function Properties({ yaml, changed, still = false }: { yaml: string; changed: string | null; still?: boolean }) {
+export function Properties({ yaml, changed, still = false, foldable = false }: { yaml: string; changed: string | null; still?: boolean; foldable?: boolean }) {
   const props = useMemo(() => parseProperties(yaml), [yaml]);
+  const [open, setOpen] = useStoredOpen();
   const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
   if (!props) {
     return (
@@ -490,39 +522,55 @@ export function Properties({ yaml, changed, still = false }: { yaml: string; cha
     );
   }
   if (props.length === 0) return null;
-  return (
-    <dl
-      aria-label="Properties"
-      {...tint}
-      className="mb-4 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]"
+  const shown = !foldable || changed !== null || open;
+  const disclosure = foldable && changed === null && (
+    <button
+      type="button"
+      aria-expanded={shown}
+      onClick={() => setOpen(!open)}
+      className="mb-2 flex min-h-12 items-center gap-1.5 rounded-[8px] px-1 text-[13px] text-muted focus-visible:outline-2 focus-visible:outline-accent"
     >
-      {props.map(({ key, value }, i) => (
-        <div key={`${i}${key}`} className="contents">
-          <dt className="truncate font-mono text-[12px] leading-[21px] text-muted">{key}</dt>
-          <dd className="min-w-0 break-words text-text-body">
-            {key === "tags" && frontmatterTags(value).length > 0 ? (
-              <ul aria-label="Tags" className="flex flex-wrap gap-1">
-                {frontmatterTags(value).map((t, j) => (
-                  <li key={j} className="flex">
-                    <TagChip tag={t} still={still} />
-                  </li>
-                ))}
-              </ul>
-            ) : Array.isArray(value) ? (
-              <ul className="flex flex-wrap gap-1">
-                {value.map((v, j) => (
-                  <li key={j} className="rounded-full bg-surface-2 px-2 text-[13px] text-text-body">
-                    {v}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              value || <span className="text-dim">—</span>
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
+      <ChevronRight aria-hidden size={14} className={shown ? "rotate-90" : ""} />
+      Properties · {props.length}
+    </button>
+  );
+  if (!shown) return disclosure;
+  return (
+    <>
+      {disclosure}
+      <dl
+        aria-label="Properties"
+        {...tint}
+        className="mb-4 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]"
+      >
+        {props.map(({ key, value }, i) => (
+          <div key={`${i}${key}`} className="contents">
+            <dt className="truncate font-mono text-[12px] leading-[21px] text-muted">{key}</dt>
+            <dd className="min-w-0 break-words text-text-body">
+              {key === "tags" && frontmatterTags(value).length > 0 ? (
+                <ul aria-label="Tags" className="flex flex-wrap gap-1">
+                  {frontmatterTags(value).map((t, j) => (
+                    <li key={j} className="flex">
+                      <TagChip tag={t} still={still} />
+                    </li>
+                  ))}
+                </ul>
+              ) : Array.isArray(value) ? (
+                <ul className="flex flex-wrap gap-1">
+                  {value.map((v, j) => (
+                    <li key={j} className="rounded-full bg-surface-2 px-2 text-[13px] text-text-body">
+                      {v}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                value || <span className="text-dim">—</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }
 

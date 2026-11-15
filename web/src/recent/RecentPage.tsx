@@ -59,6 +59,10 @@ export default function RecentPage() {
   );
   const recent = useRecent({ words, flag, skip, limit });
   const view = recent.data;
+  // A vault switched off that the answer no longer lists (marked discreet elsewhere, or gone) isn't asked about again.
+  useEffect(() => {
+    if (view) setSkip((off) => (off.every((v) => view.vaults.includes(v)) ? off : off.filter((v) => view.vaults.includes(v))));
+  }, [view]);
 
   const onFlag = (next: FlagFilter | null) => {
     setFlag(next);

@@ -49,6 +49,7 @@ import { useBadge } from "../calendar/useBadge";
 import { flaggable } from "../flags/FlagMenu";
 import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
+import { forgetLastNote } from "./lastNote";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
 
@@ -374,6 +375,7 @@ function AccountRow() {
       return setFailed(true);
     }
     useEditor.getState().reset();
+    forgetLastNote(useSession.getState().user?.id);
     useSession.getState().signOut();
     // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.
     navigate("/signin", { replace: true });
@@ -516,6 +518,8 @@ export default function TreeDrawer(props: {
   // every folder on the way is open; one closed by hand stays closed until the words or the flag change.
   const [search, setSearch] = useState<TreeSearch | null>(null);
   const [order, setOrder] = useTreeOrder();
+  // Find by name looks in one vault: another one, or this one hidden, starts it closed.
+  useEffect(() => setSearch(null), [activeVault]);
   const finding = !!search && (search.words.trim() !== "" || search.flag !== null);
   const found = useMemo(() => (tree.data && finding ? filterTree(tree.data.root, search.words, search.flag) : null), [tree.data, finding, search?.words, search?.flag]);
   const shownRoot = useMemo(() => tree.data && orderTree(found?.root ?? tree.data.root, order), [tree.data, found, order]);

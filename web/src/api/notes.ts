@@ -244,6 +244,16 @@ export function useNoteMissing(path: string | null): boolean {
   return useSyncExternalStore(subscribe, () => path !== null && isNotFound(queryClient.getQueryState(["note", path])?.error));
 }
 
+/** Whether the note's read (`useNote`) has brought the note, and no 404 since. Only looks, as `useNoteMissing`. */
+export function useNoteLoaded(path: string | null): boolean {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback((changed: () => void) => queryClient.getQueryCache().subscribe(notifyManager.batchCalls(changed)), [queryClient]);
+  return useSyncExternalStore(subscribe, () => {
+    const state = path === null ? undefined : queryClient.getQueryState(["note", path]);
+    return state?.data !== undefined && !isNotFound(state.error);
+  });
+}
+
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
 export const useLinks = (path: string, version: string | undefined) =>
   useQuery({

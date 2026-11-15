@@ -73,6 +73,20 @@ public class EntryReaderTests
     }
 
     [Fact]
+    public void A_reason_is_read_up_to_2000_characters()
+    {
+        var entry = EntryOf("/Work/Pump.md", $"---\nwhen: 2026-11-20\ntask: closed\nclosed: 2026-11-20\nreason: {new string('r', 2_500)}\n---\n");
+        Assert.Equal(new string('r', 2_000), entry.Reason);
+
+        var emoji = EntryOf("/Work/Beds.md", $"---\nwhen: 2026-11-20\ntask: closed\nclosed: 2026-11-20\nreason: \"{new string('r', 1_999)}🌱 more\"\n---\n");
+        Assert.Equal(new string('r', 1_999), emoji.Reason);
+
+        var (_, problem) = Read("/Work/Seal.md", $"---\nwhen: soon\ntask: \"open{new string(' ', 2_500)}\"\nreason: {new string('r', 2_500)}\n---\n");
+        Assert.Equal(2_000, problem!.Readable["reason"].Length);
+        Assert.Equal(2_000, problem.Readable["task"].Length);
+    }
+
+    [Fact]
     public void A_day_note_by_name_anywhere()
     {
         var entry = EntryOf("/Work/Diary/Week 2026-46/2026-11-12.md", "Standup went well.\n");
@@ -262,6 +276,22 @@ public class EntryReaderTests
         ProblemOf("---\ntags: [a\n---\n", "/Work/2026-11-12.md");
         Assert.Equal((null, null), Read("/Work/Other.md", "---\ntags: [a\n---\n"));
     }
+
+    [Fact]
+    public void A_date_is_read_from_frontmatter_up_to_64_KiB()
+    {
+        var entry = EntryOf("/Work/Pump.md", $"---\nwhen: 2026-11-20\nsummary: {new string('x', 60_000)}\n---\nBody\n");
+        Assert.Equal("2026-11-20", entry.When.Write());
+
+        var (none, problem) = Read("/Work/Pump.md", $"---\nwhen: 2026-11-20\nsummary: {new string('x', 70_000)}\n---\nBody\n");
+        Assert.Null(none);
+        Assert.Equal("the frontmatter does not parse: The frontmatter is too large or nested too deeply.", problem?.What);
+        Assert.Equal("I can't read this note's properties; fix them in the note", problem?.Plain);
+    }
+
+    [Fact]
+    public void Frontmatter_over_64_KiB_without_a_calendar_key_is_no_entry_and_no_problem() =>
+        Assert.Equal((null, null), Read("/Work/Notes.md", $"---\nsummary: {new string('x', 70_000)}\n---\nBody\n"));
 
     [Fact]
     public void Archived_notes_are_left_out()

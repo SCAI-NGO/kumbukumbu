@@ -6,10 +6,11 @@ import { useDialog } from "../hooks/useDialog";
 
 /**
  * The board's small modal forms (a reason, a column's name, a card's due date and tags): Cancel sends nothing; a
- * refusal keeps the dialog open with the server's sentence. `onSubmit` closes it from outside once it succeeds.
+ * refusal keeps the dialog open with the server's sentence, or what `errorTextOf` makes of it. `onSubmit` closes it
+ * from outside once it succeeds.
  */
-export default function FormDialog(props: { title: string; submitLabel: string; ready: boolean; onCancel(): void; onSubmit(): Promise<unknown>; children: ReactNode }) {
-  const { title, submitLabel, ready, onCancel, onSubmit, children } = props;
+export default function FormDialog(props: { title: string; submitLabel: string; ready: boolean; onCancel(): void; onSubmit(): Promise<unknown>; errorTextOf?(error: unknown): string; children: ReactNode }) {
+  const { title, submitLabel, ready, onCancel, onSubmit, errorTextOf = errorText, children } = props;
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onCancel);
   const [pending, setPending] = useState(false);
@@ -23,7 +24,7 @@ export default function FormDialog(props: { title: string; submitLabel: string; 
     try {
       await onSubmit();
     } catch (err) {
-      setProblem(errorText(err));
+      setProblem(errorTextOf(err));
       setPending(false);
     }
   };

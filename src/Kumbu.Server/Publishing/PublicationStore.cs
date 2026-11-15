@@ -219,13 +219,31 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         await InsertFilesAsync(session, doc.Vault, doc.Id, l, key, files, ct);
     }
 
-    public async Task DeleteCopyAsync(IClientSessionHandle session, string code, CancellationToken ct)
+    /// <summary>The copy and its files; returns the publication's id (null if there was none) for
+    /// <see cref="DeleteAiLinksAsync"/> once the transaction is committed.</summary>
+    public async Task<ObjectId?> DeleteCopyAsync(IClientSessionHandle session, string code, CancellationToken ct)
     {
         var lookup = ShareCode.Lookup(code);
-        if (await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { } doc) return;
+        if (await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { } doc) return null;
         await catalog.PublicationFiles.DeleteManyAsync(session, Files.Eq(d => d.Publication, doc.Id), cancellationToken: ct);
-        await catalog.AiLinks.DeleteManyAsync(session, A.Eq(d => d.Publication, doc.Id), cancellationToken: ct);
         await catalog.Publications.DeleteOneAsync(session, P.Eq(d => d.Id, doc.Id), cancellationToken: ct);
+        return doc.Id;
+    }
+
+    /// <summary>The AI links of withdrawn publications, after the withdrawal's transaction: a link that opened a copy just
+    /// before the commit goes too, and the transaction carries none of them (as VaultCatalog deletes a vault's). One left
+    /// behind opens nothing without its publication's document, and expires within the hour.</summary>
+    public async Task DeleteAiLinksAsync(IReadOnlyCollection<ObjectId> publications, CancellationToken ct)
+    {
+        if (publications.Count == 0) return;
+        try
+        {
+            await catalog.AiLinks.DeleteManyAsync(A.In(d => d.Publication, publications), ct);
+        }
+        catch (Exception e) when (e is MongoException or TimeoutException)
+        {
+            // The withdrawal is committed and stands; what is left expires.
+        }
     }
 
     /// <summary>Every copy of the vaults with its files and AI links, without opening anything; returns how many documents
@@ -357,6 +375,15 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         {
             // Without the driver's exception: its message names the lookup id.
             throw new InvalidOperationException("An AI link's lookup id is taken.");
+        }
+
+        // The oldest give way beyond the cap (by id: made in order). Not cancelled by the reader leaving, so the cap holds.
+        var of = A.Eq(d => d.Publication, opened.Id);
+        if (await catalog.AiLinks.CountDocumentsAsync(of, cancellationToken: CancellationToken.None) > AiLinkToken.LivePerPublication)
+        {
+            var surplus = await catalog.AiLinks.Find(of).SortByDescending(d => d.Id).Skip(AiLinkToken.LivePerPublication)
+                .Project(d => d.Id).ToListAsync(CancellationToken.None);
+            await catalog.AiLinks.DeleteManyAsync(A.In(d => d.Id, surplus), CancellationToken.None);
         }
 
         return (token, expiresAt);

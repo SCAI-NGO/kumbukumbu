@@ -57,6 +57,18 @@ public class BlocksTests
     [InlineData("%5E")]
     public void Anything_else_is_not(string fragment) => Assert.False(Blocks.TryId(fragment, out _));
 
+    [Theory]
+    [InlineData("| a | b |\n| :-- | --: |\n| 1 | 2 |")]
+    [InlineData("a | b\n--- | ---\n1 | 2")]
+    [InlineData("|\ta\t|\tb\t|\n|\t:-:\t|\t-\t|\n|\t1\t|\t2\t|")]
+    [InlineData("| a |\n|---|   \n| 1 |")]
+    public void A_table_is_named_by_an_id_after_a_blank_line_and_not_by_one_right_below(string table)
+    {
+        var block = Blocks.Find(Lines.Split(table + "\n\n^tab\n"), "tab");
+        Assert.Equal((0, 5), (block?.Start, block?.End));
+        Assert.Null(Blocks.Find(Lines.Split(table + "\n^tab\n"), "tab"));
+    }
+
     [Fact]
     public void A_block_is_found_with_its_marker()
     {

@@ -24,9 +24,9 @@ describe("the note's header line", () => {
     noteWithEntry(CERT, noteEntry(openTask()));
     renderApp(`/notes${CERT}`);
     const header = await line();
-    expect(header).toHaveTextContent(/^📅 Tue 15 Dec · To do · ✓ · Later$/);
+    expect(header).toHaveTextContent(/^📅 Tue 15 Dec To do Later$/);
     expect(within(header).getByRole("link", { name: "Tue 15 Dec" })).toHaveAttribute("href", "/calendar/Work?week=2026-W51");
-    expect(within(header).getByRole("button", { name: "Done: Certificate" })).toBeInTheDocument();
+    expect(within(header).getByRole("checkbox", { name: "To do" })).toHaveAttribute("aria-checked", "false");
     expect(within(header).getByRole("button", { name: "Later: Certificate" })).toBeInTheDocument();
   });
 
@@ -59,18 +59,19 @@ describe("the note's header line", () => {
       },
     });
     renderApp(`/notes${CERT}`);
-    await userEvent.click(within(await line()).getByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(within(await line()).getByRole("checkbox", { name: "To do" }));
     // No dialog: closing is the most frequent action.
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const toast = await screen.findByRole("status", { name: "Closed" });
     expect(toast).toHaveTextContent("Closed · Undo · Add a reason");
     expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([{ path: CERT }]);
-    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec · Closed 16 Dec · Reopen · Add a reason$/));
+    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec Done Closed 16 Dec Add a reason$/));
+    expect(within(await line()).getByRole("checkbox", { name: "Done" })).toHaveAttribute("aria-checked", "true");
 
     await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
     await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/reopen")).toEqual([{ path: CERT }]));
     await waitFor(() => expect(screen.queryByRole("status", { name: "Closed" })).not.toBeInTheDocument());
-    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec · To do · ✓ · Later$/));
+    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec To do Later$/));
   });
 
   it("the toast's Add a reason opens a one-line field that Enter saves", async () => {
@@ -79,7 +80,7 @@ describe("the note's header line", () => {
       "POST /api/vaults/Work/calendar/set": () => json(200, writtenView(CERT, closedTask("not needed any more"), "v3")),
     });
     renderApp(`/notes${CERT}`);
-    await userEvent.click(within(await line()).getByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(within(await line()).getByRole("checkbox", { name: "To do" }));
     const toast = await screen.findByRole("status", { name: "Closed" });
     await userEvent.click(within(toast).getByRole("button", { name: "Add a reason" }));
     const field = within(toast).getByRole("textbox", { name: "Reason" });
@@ -95,7 +96,7 @@ describe("the note's header line", () => {
     });
     renderApp(`/notes${CERT}`);
     const header = await line();
-    expect(header).toHaveTextContent(/^📅 Tue 15 Dec · Closed 16 Dec · Reopen · Add a reason$/);
+    expect(header).toHaveTextContent(/^📅 Tue 15 Dec Done Closed 16 Dec Add a reason$/);
     await userEvent.click(within(header).getByRole("button", { name: "Add a reason" }));
     await userEvent.type(within(header).getByRole("textbox", { name: "Reason" }), "renewed until 2027{Enter}");
     await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([{ path: CERT, reason: "renewed until 2027" }]));
@@ -105,9 +106,22 @@ describe("the note's header line", () => {
     noteWithEntry(CERT, noteEntry(closedTask("renewed until 2027")));
     renderApp(`/notes${CERT}`);
     const header = await line();
-    expect(header).toHaveTextContent(/^📅 Tue 15 Dec · Closed 16 Dec · renewed until 2027 · Reopen · Edit reason$/);
+    expect(header).toHaveTextContent(/^📅 Tue 15 Dec Done Closed 16 Dec · renewed until 2027 Edit reason$/);
     await userEvent.click(within(header).getByRole("button", { name: "Edit reason" }));
     expect(within(header).getByRole("textbox", { name: "Reason" })).toHaveValue("renewed until 2027");
+  });
+
+  it("a reason too long to show in full is edited in the note, not in a field that would save it shortened", async () => {
+    const fetch = noteWithEntry(CERT, noteEntry(closedTask("a".repeat(2000))));
+    renderApp(`/notes${CERT}`);
+    const header = await line();
+    expect(within(header).queryByRole("button", { name: "Edit reason" })).not.toBeInTheDocument();
+    const inNote = within(header).getByRole("button", { name: "Edit reason in the note" });
+    expect(inNote).toHaveClass("min-h-12");
+    await userEvent.click(inNote);
+    expect(within(header).queryByRole("textbox", { name: "Reason" })).not.toBeInTheDocument();
+    expect(useEditor.getState().mode).toBe("write");
+    expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([]);
   });
 
   it("a day note by name says so and has no Remove", async () => {
@@ -128,7 +142,7 @@ describe("the note's header line", () => {
     });
     renderApp(`/notes${card}`);
     const header = await line();
-    expect(header).toHaveTextContent(/^📅 Fri 20 Nov · In progress · Move to Done · Later$/);
+    expect(header).toHaveTextContent(/^📅 Fri 20 Nov · In progress Move to Done Later$/);
     await userEvent.click(within(header).getByRole("button", { name: "Move to Done" }));
     await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/board/move")).toEqual([{ card: "Release", column: "Done" }]));
   });
@@ -140,6 +154,7 @@ describe("the note's header line", () => {
     const header = await line();
     expect(within(header).queryByRole("button", { name: /^Move to/ })).not.toBeInTheDocument();
     expect(within(header).getByRole("link", { name: "Open the board" })).toHaveAttribute("href", "/board/Work");
+    expect(header).toHaveTextContent(/^📅 Fri 20 Nov · In progress Open the board Later$/);
   });
 
   it("a read-only member sees the line without tick, Later, Reopen or reason, and no calendar items", async () => {
@@ -148,6 +163,7 @@ describe("the note's header line", () => {
     const header = await line();
     expect(header).toHaveTextContent(/^📅 Tue 15 Dec · To do$/);
     expect(within(header).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(header).queryByRole("checkbox")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     expect(screen.queryByRole("menuitem", { name: /calendar|Edit date/ })).not.toBeInTheDocument();
     cleanup();
@@ -156,6 +172,7 @@ describe("the note's header line", () => {
     renderApp(`/notes${CERT}`);
     expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec · Closed 16 Dec$/);
     expect(within(await line()).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(await line()).queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("the tick waits for the editor's save and sends nothing when it fails", async () => {
@@ -164,7 +181,7 @@ describe("the note's header line", () => {
     const header = await line();
     const save = vi.fn(async () => false);
     useEditor.setState({ beforeRead: save });
-    await userEvent.click(within(header).getByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(within(header).getByRole("checkbox", { name: "To do" }));
     expect(await within(header).findByText("Your typing isn't saved yet; try again in a moment.")).toBeInTheDocument();
     expect(save).toHaveBeenCalled();
     expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([]);
@@ -203,7 +220,7 @@ describe("the note's header line", () => {
     await userEvent.click(screen.getByRole("button", { name: "Write" }));
     const editor = await screen.findByRole("textbox", { name: "Markdown source" });
     await userEvent.type(editor, "Ordered.");
-    await userEvent.click(within(await line()).getByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(within(await line()).getByRole("checkbox", { name: "To do" }));
 
     await screen.findByRole("status", { name: "Closed" });
     expect(order).toEqual(["save", "close"]);
@@ -233,11 +250,12 @@ describe("the note's header line", () => {
       },
     });
     renderApp(`/notes${CERT}`);
-    await userEvent.click(within(await line()).getByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(within(await line()).getByRole("checkbox", { name: "To do" }));
     const toast = await screen.findByRole("status", { name: "Closed" });
     // "Closed · Undo": the dot keeps its spaces in the flex row.
     for (const dot of within(toast).getAllByText("·", { selector: "span", normalizer: (t) => t.trim() })) expect(dot).toHaveClass("whitespace-pre");
-    await waitFor(async () => expect(await line()).toHaveTextContent(/Closed 16 Dec · Reopen · Add a reason$/));
+    expect(within(toast).getByRole("button", { name: "Undo" })).toHaveClass("min-h-12", "min-w-12", "text-center");
+    await waitFor(async () => expect(await line()).toHaveTextContent(/Done Closed 16 Dec Add a reason$/));
     await userEvent.click(within(await line()).getByRole("button", { name: "Add a reason" }));
     // One field, in the message, not at the top of the note.
     expect(within(await line()).queryByRole("textbox")).not.toBeInTheDocument();
@@ -248,7 +266,7 @@ describe("the note's header line", () => {
     await userEvent.click(within(toast).getByRole("button", { name: "Save" }));
     await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/set")).toEqual([{ path: CERT, reason: "not needed any more" }]));
     await waitFor(() => expect(screen.queryByRole("status", { name: "Closed" })).not.toBeInTheDocument());
-    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec · Closed 16 Dec · not needed any more · Reopen · Edit reason$/));
+    await waitFor(async () => expect(await line()).toHaveTextContent(/^📅 Tue 15 Dec Done Closed 16 Dec · not needed any more Edit reason$/));
   });
 
   it("the header's field has Save too, and its controls are 48 px tall", async () => {
@@ -258,7 +276,7 @@ describe("the note's header line", () => {
     renderApp(`/notes${CERT}`);
     const header = await line();
     expect(within(header).getByRole("link", { name: "Tue 15 Dec" })).toHaveClass("min-h-12");
-    expect(within(header).getByRole("button", { name: "Reopen" })).toHaveClass("min-h-12");
+    expect(within(header).getByRole("checkbox", { name: "Done" })).toHaveClass("min-h-12", "min-w-12");
     expect(within(header).getByRole("button", { name: "Add a reason" })).toHaveClass("min-h-12");
     await userEvent.click(within(header).getByRole("button", { name: "Add a reason" }));
     expect(within(header).getByRole("textbox", { name: "Reason" })).toHaveAttribute("placeholder", "Reason");
@@ -272,11 +290,36 @@ describe("the note's header line", () => {
     noteWithEntry(CERT, noteEntry(openTask()), { "POST /api/vaults/Work/calendar/later": () => json(200, writtenView(CERT, moved)) });
     renderApp(`/notes${CERT}`);
     const header = await line();
-    expect(within(header).getByRole("button", { name: "Done: Certificate" })).toHaveClass("min-h-12");
-    expect(within(header).getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12");
+    expect(within(header).getByRole("checkbox", { name: "To do" })).toHaveClass("min-h-12", "min-w-12");
+    expect(within(header).getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12", "min-w-12", "justify-center");
     await userEvent.click(within(header).getByRole("button", { name: "Later: Certificate" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "+1 day" }));
-    expect(await screen.findByRole("status", { name: "Moved" })).toHaveTextContent("Moved to Wed 16 Dec · Undo");
+    const toast = await screen.findByRole("status", { name: "Moved" });
+    expect(toast).toHaveTextContent("Moved to Wed 16 Dec · Undo");
+    expect(within(toast).getByRole("button", { name: "Undo" })).toHaveClass("min-h-12", "min-w-12", "text-center");
+  });
+
+  it("unticking a closed to-do reopens it, and there is no Reopen button", async () => {
+    const fetch = noteWithEntry(CERT, noteEntry(closedTask(null)), {
+      "POST /api/vaults/Work/calendar/reopen": () => json(200, writtenView(CERT, openTask(), "v3")),
+    });
+    renderApp(`/notes${CERT}`);
+    const header = await line();
+    expect(within(header).queryByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
+    await userEvent.click(within(header).getByRole("checkbox", { name: "Done" }));
+    await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/reopen")).toEqual([{ path: CERT }]));
+    expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([]);
+  });
+
+  it("the date and time keep their dots; the controls follow after a gap, without dots", async () => {
+    noteWithEntry(CERT, noteEntry(openTask("Certificate", { when: "2026-12-15T11:30", time: "11:30" })));
+    renderApp(`/notes${CERT}`);
+    const header = await line();
+    expect(header).toHaveTextContent(/^📅 Tue 15 Dec · 11:30 To do Later$/);
+    const controls = within(header).getByRole("checkbox", { name: "To do" }).parentElement!;
+    expect(controls).toContainElement(within(header).getByRole("button", { name: "Later: Certificate" }));
+    expect(controls).not.toHaveTextContent("·");
+    expect(controls).not.toContainElement(within(header).getByRole("link", { name: "Tue 15 Dec" }));
   });
 
   it("a card whose date couldn't be read leads to its board instead of Fix…", async () => {

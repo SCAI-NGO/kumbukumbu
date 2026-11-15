@@ -303,6 +303,75 @@ describe("Write mode", () => {
     expect(puts).toHaveLength(1);
   });
 
+  it("Ctrl+S saves and leaves Write mode, as Done does, without the browser's Save page", async () => {
+    const puts = editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "!");
+    expect(fireEvent.keyDown(editorBox(), { key: "s", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    expect(puts).toEqual([{ content: `${source}!`, version: "v1" }]);
+  });
+
+  it("Cmd+S does the same", async () => {
+    const puts = editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "!");
+    expect(fireEvent.keyDown(editorBox(), { key: "s", metaKey: true })).toBe(false);
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    expect(puts).toHaveLength(1);
+  });
+
+  it("with an open conflict, Ctrl+S keeps Write mode and the toast", async () => {
+    editorApi([conflict(theirs, "v7")]);
+    const { u } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await screen.findByRole("alert", { name: "Changed elsewhere" });
+
+    expect(fireEvent.keyDown(editorBox(), { key: "s", ctrlKey: true })).toBe(false);
+    await wait(0);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(toast()).toBeInTheDocument();
+    expect(editorBox()).toHaveValue(`${source} mine`);
+  });
+
+  it("a save that fails keeps Write mode on Ctrl+S", async () => {
+    editorApi([() => json(500, {})]);
+    const { u } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    fireEvent.keyDown(editorBox(), { key: "s", ctrlKey: true });
+    expect(await screen.findByRole("alert", { name: "Not saved" })).toBeInTheDocument();
+    await wait(0);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(editorBox()).toHaveValue(`${source} mine`);
+  });
+
+  it("while a dialog is open, Ctrl+S does nothing new", async () => {
+    const puts = editorApi([conflict(theirs, "v7"), ok]);
+    const { u } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await u.click(within(await screen.findByRole("alert", { name: "Changed elsewhere" })).getByRole("button", { name: "view diff" }));
+    screen.getByRole("dialog", { name: "Changed elsewhere" });
+
+    expect(fireEvent.keyDown(document.activeElement!, { key: "s", ctrlKey: true })).toBe(true);
+    await wait(0);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(puts).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Changed elsewhere" })).toBeInTheDocument();
+  });
+
+  it("Ctrl+Shift+S and Alt+S are left alone", async () => {
+    const puts = editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "!");
+    expect(fireEvent.keyDown(editorBox(), { key: "S", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(editorBox(), { key: "s", ctrlKey: true, altKey: true })).toBe(true);
+    await wait(0);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(puts).toHaveLength(0);
+  });
+
   it("keeps another note from opening while a conflict is open", async () => {
     editorApi([conflict(theirs, "v7"), ok]);
     const { u, router } = await openInWrite();
@@ -446,7 +515,13 @@ describe("A session that ends mid-edit", () => {
   });
 
   it("drops the text, the note and the recent notes when someone else signs in", async () => {
-    const puts = editorApi([sessionGone, ok], undefined, signInAs({ ...user, id: "u2", username: "liz", display: "Liz" }));
+    // From the sign-in on, the session is hers.
+    let who = user;
+    const liz = { ...user, id: "u2", username: "liz", display: "Liz" };
+    const puts = editorApi([sessionGone, ok], undefined, {
+      "GET /api/session": () => json(200, { user: who, previousSignInAt: null }),
+      "POST /api/session": () => ((who = liz), json(200, { user: liz, previousSignInAt: null })),
+    });
     const { u, router } = await openInWrite();
     await u.type(editorBox(), " mine");
     await wait(800);

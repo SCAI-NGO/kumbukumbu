@@ -28,6 +28,13 @@ public class NoteAliasesTests
     public void Reads_the_aliases(string content, string[] expected) => Assert.Equal(expected, NoteAliases.Of(content));
 
     [Fact]
+    public void An_alias_is_at_most_200_characters()
+    {
+        var longest = new string('k', 200);
+        Assert.Equal([longest, "Kumbu"], NoteAliases.Of($"---\naliases: [{longest}, {new string('k', 201)}, Kumbu]\n---\n"));
+    }
+
+    [Fact]
     public void An_alias_is_normalised_to_nfc()
     {
         var nfd = "Überlegung".Normalize(NormalizationForm.FormD);

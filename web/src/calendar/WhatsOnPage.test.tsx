@@ -70,7 +70,7 @@ describe("What's on", () => {
     expect(second).toHaveTextContent("ongoing · until Fri");
     expect(third).toHaveTextContent("upcoming · in 7 days");
     // An open to-do has ✓ and Later; a note given a day only its title.
-    expect(within(first).getByRole("button", { name: "Done: Certificate" })).toBeInTheDocument();
+    expect(within(first).getByRole("checkbox", { name: "To do: Certificate" })).toBeInTheDocument();
     expect(within(first).getByRole("button", { name: "Later: Certificate" })).toBeInTheDocument();
     expect(within(third).queryByRole("button")).toBeNull();
     expect(document.body.textContent).not.toMatch(/problem/i);
@@ -99,7 +99,7 @@ describe("What's on", () => {
     });
     renderApp("/whats-on");
     await page();
-    await userEvent.click(await screen.findByRole("button", { name: "Done: Certificate" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "To do: Certificate" }));
     expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([{ path: certificate.path }]);
     expect(await screen.findByRole("status", { name: "Closed" })).toHaveTextContent("Closed · Undo · Add a reason");
     await waitFor(() => expect(screen.queryByRole("link", { name: "Certificate" })).not.toBeInTheDocument());
@@ -110,7 +110,7 @@ describe("What's on", () => {
     renderApp("/whats-on");
     await page();
     await screen.findByRole("link", { name: "Certificate" });
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Done: Certificate" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "To do: Certificate" })).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Later: Certificate" })).not.toBeInTheDocument();
   });
 

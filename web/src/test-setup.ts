@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom/vitest";
+import { afterEach } from "vitest";
+import { startOver } from "./shell/lastNote";
 
 // React Router builds a Request with an AbortSignal for every navigation. Under jsdom that signal is jsdom's,
 // which Node's own Request refuses; tests never abort a request, so the signal is dropped.
@@ -20,3 +22,9 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
 // poll runs, as in a browser that lost its socket. Tests of the socket stub a fake with vi.stubGlobal, which their
 // vi.unstubAllGlobals() takes away again.
 Object.defineProperty(globalThis, "WebSocket", { value: undefined, configurable: true, writable: true });
+
+// The last note a test opened would open on start in the next one, and each test is a new page load.
+afterEach(() => {
+  startOver();
+  for (const key of Object.keys(localStorage)) if (key.startsWith("kumbu.lastNote.")) localStorage.removeItem(key);
+});

@@ -11,11 +11,34 @@ const unquote = (v: string) => {
 /** A trailing comment (` # …`, as YAML has it: after a space) is YAML syntax this reading doesn't take apart. */
 const commented = (v: string) => /(^|\s)#/.test(v);
 
-/** An inline list's items, or null where a comma sits inside quotes (`["a, b"]`): splitting on it would be wrong. */
+/** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`). */
+const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));
+
+/** An inline list's items, or null where a comma sits inside quotes: splitting on it would be wrong. */
 function inlineItems(inner: string): string[] | null {
   const parts = inner.split(",").map((p) => p.trim());
-  const open = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));
-  return parts.some(open) ? null : parts.map(unquote);
+  return parts.some(unclosed) ? null : parts.map(unquote);
+}
+
+/**
+ * A flat flow map (`{ Running: 2026-11-14, "In progress": 2026-11-12 }`) as its keys and texts; null for anything
+ * else: no braces, nested ones, a comma inside quotes, a pair without its `:`.
+ */
+export function flowMap(value: string): Record<string, string> | null {
+  const t = value.trim();
+  if (!t.startsWith("{") || !t.endsWith("}")) return null;
+  const inner = t.slice(1, -1).trim();
+  if (/[{}[\]]/.test(inner)) return null;
+  const map: Record<string, string> = {};
+  if (inner === "") return map;
+  for (const part of inner.split(",").map((p) => p.trim())) {
+    // A comma inside a quoted key leaves a part without its `:`; one inside a quoted value, an unclosed value.
+    const pair = /^("[^"]*"|'[^']*'|[^:"']+):(?:\s+(.*))?$/.exec(part);
+    const text = pair?.[2]?.trim() ?? "";
+    if (!pair || unclosed(text)) return null;
+    map[unquote(pair[1])] = unquote(text);
+  }
+  return map;
 }
 
 /**

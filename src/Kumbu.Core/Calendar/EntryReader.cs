@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -16,13 +17,41 @@ namespace Kumbu.Core.Calendar;
 /// </summary>
 public static partial class EntryReader
 {
-    // Keyed by the content string, as TagReader's: an entry lives as long as that version of the note is held.
-    private static readonly ConditionalWeakTable<string, FrontmatterValues> Cache = new();
+    /// <summary>A note's frontmatter as the calendar reads it; the key lines are looked for only when the values can't be read.</summary>
+    private sealed record ReadFrontmatter(FrontmatterValues Values, bool CalendarKeyLine, bool DueKeyLine);
+
+    // Keyed by the content string, as TagReader's: a read lives as long as that version of the note is held. Readers at the
+    // same time share one.
+    private static readonly ConditionalWeakTable<string, Lazy<ReadFrontmatter>> Cache = new();
+
+    private static readonly FrontmatterValues TooLargeValues = new(new Dictionary<string, object?>(), Frontmatter.TooLargeProblem);
 
     private const string DateHint = "write 2026-11-20, 2026-11-20T14:00 or 2026-W47";
 
     /// <summary>The parsed frontmatter of <paramref name="content"/>, remembered for as long as that text is held.</summary>
-    internal static FrontmatterValues Parsed(string content) => Cache.GetValue(content, Frontmatter.Read);
+    internal static FrontmatterValues Parsed(string content) => ReadOf(content).Values;
+
+    private static ReadFrontmatter ReadOf(string content) =>
+        Cache.GetValue(content, c => new Lazy<ReadFrontmatter>(() => Compute(c), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    // Frontmatter longer than aliases are read from is too large for the calendar too.
+    private static ReadFrontmatter Compute(string content)
+    {
+        var lines = Lines.Split(content);
+        var end = Outline.FrontmatterEnd(lines);
+        var values = lines.Take(end).Sum(l => l.Length + 1) > NoteAliases.MaxFrontmatterLength ? TooLargeValues : Frontmatter.Read(content);
+        if (values.Problem is null) return new ReadFrontmatter(values, false, false);
+
+        bool calendar = false, due = false;
+        for (var i = 1; i < end - 1; i++)
+        {
+            if (CalendarKeyLine().Match(lines[i]) is not { Success: true } match) continue;
+            if (match.Groups["key"].Value == "due") due = true;
+            else calendar = true;
+        }
+
+        return new ReadFrontmatter(values, calendar, due);
+    }
 
     /// <summary>Exactly one of Entry and Problem is set, or neither (not an entry). A card's task key gives both: the entry, and the problem.</summary>
     public static (Entry? Entry, CalendarProblem? Problem) Read(Note note, BoardDefinition? board)
@@ -34,10 +63,11 @@ public static partial class EntryReader
         var named = IsDayOrWeekName(path.Name, out var byName);
         var cardPlace = board is not null && IsCardPlace(path);
 
-        var read = Parsed(note.Content);
+        var frontmatter = ReadOf(note.Content);
+        var read = frontmatter.Values;
         if (read.Problem is not null)
         {
-            return named || HasCalendarKeyLine(note.Content, cardPlace)
+            return named || frontmatter.CalendarKeyLine || (cardPlace && frontmatter.DueKeyLine)
                 ? (null, new CalendarProblem(path, title, $"the frontmatter does not parse: {read.Problem}",
                     "I can't read this note's properties; fix them in the note", new Dictionary<string, string>()))
                 : (null, null);
@@ -227,7 +257,17 @@ public static partial class EntryReader
     {
         if (Given(values, "reason") is not string reason) return null;
         problems.Readable("reason", reason);
-        return reason;
+        return Cut(reason);
+    }
+
+    /// <summary>The longest value the calendar answers with, as long as a write may make a reason (CalendarService's MaxReason);
+    /// a longer hand-written one is cut, never at half a character.</summary>
+    private const int MaxShown = 2000;
+
+    private static string Cut(string text)
+    {
+        if (text.Length <= MaxShown) return text;
+        return text[..(char.IsHighSurrogate(text[MaxShown - 1]) ? MaxShown - 1 : MaxShown)];
     }
 
     private static Upcoming? ReadUpcoming(IReadOnlyDictionary<string, object?> values, Problems problems)
@@ -287,20 +327,6 @@ public static partial class EntryReader
         : until.Offset is null && when.Offset is null ? until.Date.ToDateTime(until.Clock) < when.Date.ToDateTime(when.Clock)
         : until.StartUtc(zone) < when.StartUtc(zone);
 
-    /// <summary>Whether a frontmatter block that doesn't parse holds a calendar key, so that its note is a problem rather than nothing.</summary>
-    private static bool HasCalendarKeyLine(string content, bool cardPlace)
-    {
-        var lines = Lines.Split(content);
-        var end = Outline.FrontmatterEnd(lines);
-        for (var i = 1; i < end - 1; i++)
-        {
-            if (CalendarKeyLine().Match(lines[i]) is { Success: true } match && (match.Groups["key"].Value != "due" || cardPlace))
-                return true;
-        }
-
-        return false;
-    }
-
     // The calendar's keys in any case; due, the board's, only as written.
     [GeneratedRegex(@"^(?<q>[""']?)(?<key>(?i:when|until|task)|due)\k<q>[ \t]*:")]
     private static partial Regex CalendarKeyLine();
@@ -341,7 +367,7 @@ public static partial class EntryReader
 
         public void Readable(string key, object value)
         {
-            if (value is string written && !twice.Contains(key)) readable[key] = written;
+            if (value is string written && !twice.Contains(key)) readable[key] = Cut(written);
         }
 
         public CalendarProblem Problem() =>

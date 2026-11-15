@@ -23,7 +23,9 @@ export interface MenuSection {
  * A button that opens a short list of actions; a tap outside or Escape closes it. The list is `position: fixed` at the
  * button's position, in `document.body` or, for a button inside an `aria-modal` dialog, in that dialog (so assistive
  * technology that keeps to the dialog still reaches it), so no scrolling or clipping container around the button can
- * cut it off; it turns upward where there is no room below. Any scroll on the page closes it, a resize repositions it.
+ * cut it off; it turns upward where there is no room below. A scroll the person makes (the wheel, a drag, a key, a
+ * scrollbar) closes it; a scroll the page makes by itself (the tree bringing the open note into view) moves it with its
+ * button; a resize repositions it.
  */
 export function Menu(props: {
   label: string;
@@ -59,14 +61,38 @@ export function Menu(props: {
       return;
     }
     place();
+    const outside = (e: Event) => !list.current?.contains(e.target as Node);
+    // The person's own scrolling: the wheel, a finger, or a press (a scrollbar) or key held while the page scrolls. A key
+    // only marks the press: Space on the button would otherwise close the list for its click to open it again.
+    let pressed = false;
+    const onPerson = (e: Event) => outside(e) && setOpen(false);
+    const onDown = (e: Event) => (pressed = outside(e));
+    const onUp = () => (pressed = false);
     const onScroll = (e: Event) => {
-      if (!list.current?.contains(e.target as Node)) setOpen(false);
+      if (!outside(e)) return;
+      if (pressed) setOpen(false);
+      else place();
     };
+    const passive = { capture: true, passive: true };
     window.addEventListener("resize", place);
     window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("wheel", onPerson, passive);
+    window.addEventListener("touchmove", onPerson, passive);
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+    window.addEventListener("keydown", onDown, true);
+    window.addEventListener("keyup", onUp, true);
     return () => {
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("wheel", onPerson, true);
+      window.removeEventListener("touchmove", onPerson, true);
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      window.removeEventListener("keydown", onDown, true);
+      window.removeEventListener("keyup", onUp, true);
     };
   }, [open]);
 

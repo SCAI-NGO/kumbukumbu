@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -7,6 +7,7 @@ import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
 import type { CalendarView, DayView, EntryView } from "./api";
+import { addDays } from "./dates";
 
 beforeEach(() => {
   FakeSocket.all = [];
@@ -160,17 +161,31 @@ describe("the calendar's week", () => {
     await title();
     expect(screen.getByRole("link", { name: "Certificate" })).toHaveAttribute("href", "/notes/Work/Certificate.md");
     expect(screen.getByRole("link", { name: "Zahnarzt" })).toHaveAttribute("href", "/notes/Work/Zahnarzt.md");
-    expect(screen.getByRole("button", { name: "Later: Certificate" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Done: Zahnarzt" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Later: Certificate" })).toHaveClass("min-h-12", "min-w-12", "justify-center");
+    expect(screen.queryByRole("checkbox", { name: /Zahnarzt/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Later: Zahnarzt" })).not.toBeInTheDocument();
     const zahnarzt = screen.getByRole("link", { name: "Zahnarzt" }).closest("li")!;
     expect(zahnarzt).toHaveTextContent("14:00");
     expect(zahnarzt).toHaveTextContent("upcoming · in 1 day");
 
-    await userEvent.click(screen.getByRole("button", { name: "Done: Certificate" }));
+    expect(screen.getByRole("checkbox", { name: "To do: Certificate" })).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(screen.getByRole("checkbox", { name: "To do: Certificate" }));
     await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/close")).toEqual([{ path: "/Work/Certificate.md" }]));
     // The same short message as the note's header.
     expect(await screen.findByRole("status", { name: "Closed" })).toHaveTextContent("Closed · Undo · Add a reason");
+  });
+
+  it("a closed to-do's card shows ☑, and unticking it reopens the to-do", async () => {
+    const report = entry("Report", { kind: "task", task: "closed", state: "done", closed: "2026-11-12", when: "2026-11-11", firstDay: "2026-11-11", lastDay: "2026-11-11" });
+    const fetch = api(calendar({ "2026-11-11": [report] }), {
+      "POST /api/vaults/Work/calendar/reopen": () => json(200, written("/Work/Report.md")),
+    });
+    renderApp("/calendar/Work");
+    await title();
+    const box = screen.getByRole("checkbox", { name: "Done: Report" });
+    expect(box).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(box);
+    await waitFor(async () => expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/reopen")).toEqual([{ path: "/Work/Report.md" }]));
   });
 
   it("Later in the week moves a to-do on", async () => {
@@ -236,27 +251,152 @@ describe("the calendar's week", () => {
     );
   });
 
-  it("Today opens or creates the day note", async () => {
+  it("+ Today opens or creates the day note", async () => {
     const fetch = api(calendar(), {
       "POST /api/vaults/Work/calendar/today": () => json(200, written("/Work/Calendar/2026-11-13.md")),
     });
     const router = renderApp("/calendar/Work");
     await title();
-    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await userEvent.click(screen.getByRole("button", { name: "+ Today" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Calendar/2026-11-13.md"));
     expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/today")).toHaveLength(1);
     expect(useEditor.getState().mode).toBe("write");
   });
 
-  it("This week opens or creates the week note", async () => {
+  it("+ This week opens or creates the week note", async () => {
     const fetch = api(calendar(), {
       "POST /api/vaults/Work/calendar/this-week": () => json(200, written("/Work/Calendar/2026-W46.md")),
     });
     const router = renderApp("/calendar/Work");
     await title();
-    await userEvent.click(screen.getByRole("button", { name: "This week" }));
+    await userEvent.click(screen.getByRole("button", { name: "+ This week" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Calendar/2026-W46.md"));
     expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/this-week")).toHaveLength(1);
+  });
+
+  it("+ Today and + This week are 48 px high", async () => {
+    api(calendar());
+    renderApp("/calendar/Work");
+    await title();
+    for (const name of ["+ Today", "+ This week"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveClass("min-h-12");
+      expect(button).not.toHaveClass("min-h-11");
+    }
+  });
+
+  it("below the week, ‹ Week 45 and Week 47 › lead to the weeks before and after, centred", async () => {
+    api(calendar());
+    renderApp("/calendar/Work");
+    await title();
+    const main = screen.getByRole("main");
+    const before = within(main).getByRole("link", { name: "Week 45" });
+    const after = within(main).getByRole("link", { name: "Week 47" });
+    expect(before).toHaveAttribute("href", "/calendar/Work?week=2026-W45");
+    expect(after).toHaveAttribute("href", "/calendar/Work?week=2026-W47");
+    expect(before).toHaveTextContent("‹ Week 45");
+    expect(after).toHaveTextContent("Week 47 ›");
+    expect(screen.getByRole("navigation", { name: "Weeks before and after" })).toHaveClass("justify-center");
+    const week = screen.getByRole("region", { name: "Week 46" });
+    for (const link of [before, after]) {
+      expect(week.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(link).toHaveClass("min-h-12");
+    }
+  });
+
+  it("below the month, ‹ October and December ›", async () => {
+    api(calendar());
+    renderApp("/calendar/Work?month=2026-11");
+    await screen.findByRole("heading", { level: 1, name: "November 2026" });
+    const months = screen.getByRole("navigation", { name: "Months before and after" });
+    expect(within(months).getByRole("link", { name: "October" })).toHaveAttribute("href", "/calendar/Work?month=2026-10");
+    expect(within(months).getByRole("link", { name: "December" })).toHaveAttribute("href", "/calendar/Work?month=2026-12");
+  });
+
+  describe("the arrow keys", () => {
+    const desktop = () => vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(min-width: 64rem)", addEventListener() {}, removeEventListener() {} }));
+
+    it("→ and ← go to the next and previous week where the tree is docked", async () => {
+      desktop();
+      api(calendar());
+      let router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      await waitFor(() => expect(router.state.location.search).toBe("?week=2026-W47"));
+      cleanup();
+
+      router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+      await waitFor(() => expect(router.state.location.search).toBe("?week=2026-W45"));
+    });
+
+    it("go to the months around in the month", async () => {
+      desktop();
+      api(calendar());
+      const router = renderApp("/calendar/Work?month=2026-11");
+      await screen.findByRole("heading", { level: 1, name: "November 2026" });
+      fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+      await waitFor(() => expect(router.state.location.search).toBe("?month=2026-10"));
+    });
+
+    it("do nothing on the phone, in a text field, in a dialog or with a modifier", async () => {
+      api(calendar());
+      let router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      expect(router.state.location.search).toBe("?week=2026-W46");
+      cleanup();
+
+      desktop();
+      router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Tag" }), { key: "ArrowRight" });
+      expect(router.state.location.search).toBe("?week=2026-W46");
+      cleanup();
+
+      router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      await userEvent.click(screen.getByRole("button", { name: "Add something on Friday, 13 November" }));
+      await screen.findByRole("dialog");
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      expect(router.state.location.search).toBe("?week=2026-W46");
+      cleanup();
+
+      router = renderApp("/calendar/Work?week=2026-W46");
+      await title();
+      fireEvent.keyDown(document.body, { key: "ArrowRight", altKey: true });
+      expect(router.state.location.search).toBe("?week=2026-W46");
+    });
+  });
+
+  it("Back to this week shows only away from this week, and goes there", async () => {
+    const week47 = calendar();
+    week47.weeks = [{ ...week47.weeks[0], week: 47, monday: "2026-11-16", current: false, days: week47.weeks[0].days.map((d) => ({ ...d, day: addDays(d.day, 7) })) }];
+    api(week47);
+    renderApp("/calendar/Work?week=2026-W47");
+    await screen.findByRole("heading", { level: 1, name: /^Week 47/ });
+    const toolbar = screen.getByRole("navigation", { name: "Calendar" });
+    expect(within(toolbar).getByRole("link", { name: "Back to this week" })).toHaveAttribute("href", "/calendar/Work?week=2026-W46");
+    cleanup();
+
+    api(calendar());
+    renderApp("/calendar/Work?week=2026-W46");
+    await title();
+    expect(screen.queryByRole("link", { name: "Back to this week" })).not.toBeInTheDocument();
+  });
+
+  it("Back to this month shows only away from this month, and goes there", async () => {
+    api(calendar());
+    renderApp("/calendar/Work?month=2026-12");
+    await screen.findByRole("heading", { level: 1, name: "December 2026" });
+    expect(screen.getByRole("link", { name: "Back to this month" })).toHaveAttribute("href", "/calendar/Work?month=2026-11");
+    cleanup();
+
+    api(calendar());
+    renderApp("/calendar/Work?month=2026-11");
+    await screen.findByRole("heading", { level: 1, name: "November 2026" });
+    expect(screen.queryByRole("link", { name: "Back to this month" })).not.toBeInTheDocument();
   });
 
   it("the view switch keeps the person's choice", async () => {
@@ -277,7 +417,7 @@ describe("the calendar's week", () => {
     renderApp("/calendar/Work");
     await title();
     expect(screen.getByRole("link", { name: "Certificate" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Done: Certificate" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
     expect(screen.queryByRole("button", { name: "Later: Certificate" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Add something on/ })).not.toBeInTheDocument();
   });
@@ -343,7 +483,7 @@ describe("the calendar's week", () => {
     // The title's block takes a line of its own unless the entry is wide enough (a container query).
     const block = link.closest(".basis-full")!;
     expect(block).not.toBeNull();
-    expect(block).not.toContainElement(screen.getByRole("button", { name: "Done: Report" }));
+    expect(block).not.toContainElement(screen.getByRole("checkbox", { name: "To do: Report" }));
     expect(block).not.toContainElement(screen.getByRole("button", { name: "Later: Report" }));
     expect(link.closest("li")).toHaveClass("@container");
   });

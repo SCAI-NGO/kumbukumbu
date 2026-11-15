@@ -144,4 +144,17 @@ public class AliasLinkCommandsTests
             (await Run("backlinks /Work/Projects/Kumbukumbu.md")).Output);
         Assert.Contains("/Work/Diary/md.md:1: [talk](Kumbu) → not found", (await Run("links /Work")).Output);
     }
+
+    [Fact]
+    public async Task Links_on_a_note_says_when_an_alias_is_too_long()
+    {
+        await Add("/Work/Projects/Garden.md", $"---\naliases: [Beds, {new string('g', 201)}]\n---\n# Garden\n");
+
+        var result = await Run("links /Work/Projects/Garden.md");
+
+        const string Notice = "an alias of this note is over 200 characters, so no link finds the note by it; shorten it in the note's properties";
+        Assert.Equal(Notice, result.Notice);
+        Assert.Equal($"{Notice}\n(no links)", result.Output);
+        Assert.Null((await Run("links /Work/Projects/Kumbukumbu.md")).Notice);
+    }
 }

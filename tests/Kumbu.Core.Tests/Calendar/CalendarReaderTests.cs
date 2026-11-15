@@ -81,4 +81,14 @@ public class CalendarReaderTests
         Assert.Empty(all.Single(c => c.Vault == "Tagebuch").Entries);
         Assert.Equal("Zahnarzt", Assert.Single(all.Single(c => c.Vault == "Home").Entries).Title);
     }
+
+    [Fact]
+    public async Task Reading_a_vault_stops_when_cancelled()
+    {
+        var store = new InMemoryNoteStore(("/Work/Pump.md", "---\nwhen: 2026-11-20\n---\n"), ("/Work/Beds.md", "---\nwhen: 2026-11-21\n---\n"));
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CalendarReader.ReadAsync(store, "Work", null, cancel.Token));
+    }
 }

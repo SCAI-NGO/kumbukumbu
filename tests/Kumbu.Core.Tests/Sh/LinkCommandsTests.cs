@@ -512,6 +512,30 @@ public class LinkCommandsTests
         Assert.Contains("2: [[Plan#^contoller]] → /Work/Pump/Plan.md#^contoller", output);
     }
 
+    [Fact]
+    public async Task Links_stops_when_cancelled()
+    {
+        var store = new InMemoryNoteStore(("/Work/Pump/Plan.md", BlockPlan), ("/Work/Pump/Tasks.md", BlockTasks));
+        using var cancel = new CancellationTokenSource();
+        // Cancelled while the first link's note is read: the next link is not looked at.
+        store.OnRead = p => { if (p.Value == "/Work/Pump/Plan.md") cancel.Cancel(); };
+        var links = new Kumbu.Core.Sh.Commands.LinksCommand(store);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => links.RunAsync(["/Work/Pump/Tasks.md"], null, cancel.Token));
+    }
+
+    [Fact]
+    public async Task Many_block_links_to_one_note_each_find_their_block()
+    {
+        var tasks = string.Concat(Enumerable.Range(0, 50).Select(i => i % 2 == 0 ? "[[Plan#^controller]]\n" : "[[Plan#^REFS]]\n")) + "[[Plan#^gone]]\n";
+        var store = new InMemoryNoteStore(("/Work/Pump/Plan.md", BlockPlan), ("/Work/Pump/Tasks.md", tasks));
+        var output = (await TestShell.Of(store).RunAsync("links /Work/Pump/Tasks.md", CancellationToken.None)).Output.Split('\n');
+
+        Assert.Equal(25, output.Count(l => l.EndsWith("→ /Work/Pump/Plan.md#^controller", StringComparison.Ordinal)));
+        Assert.Equal(25, output.Count(l => l.EndsWith("→ /Work/Pump/Plan.md#^REFS", StringComparison.Ordinal)));
+        Assert.Equal("51: [[Plan#^gone]] → not found: no block ^gone in /Work/Pump/Plan.md", output[^1]);
+    }
+
     // The spec's vault, with a vault beside it and the given notes: the shell.
     private static Func<string, Task<ShellResult>> WithSpecVault(params (string Path, string Content)[] notes)
     {

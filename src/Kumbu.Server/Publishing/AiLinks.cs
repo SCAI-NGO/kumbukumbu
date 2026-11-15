@@ -21,6 +21,10 @@ public static class AiLinkToken
     public const int BaseRequests = 50;
     public const int RequestsPerImage = 5;
 
+    /// <summary>At most this many links live per publication: a new one beyond it replaces the oldest, so a reader never
+    /// meets a refusal, and storage and withdrawal stay bounded.</summary>
+    public const int LivePerPublication = 2000;
+
     /// <summary>As <see cref="ShareCode.New"/>: the generation is the same, the derivations are not.</summary>
     public static string New() => ShareCode.New();
 

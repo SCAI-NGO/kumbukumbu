@@ -170,6 +170,14 @@ describe("the note view", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "plan" })).toBeInTheDocument();
   });
 
+  it("a note opening with a closed-hash H1 shows it as its title", () => {
+    expect(startsWithH1("# Plan #\n\ntext")).toBe(true);
+    expect(startsWithH1("#\tPlan\r\n")).toBe(true);
+    expect(startsWithH1("## Plan\n")).toBe(false);
+    expect(startsWithH1("####### Plan\n")).toBe(false);
+    expect(startsWithH1("# \n")).toBe(false);
+  });
+
   it("keeps the file name's title when the first line is an indented code block, not a heading", async () => {
     noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "    # x\n\n## Goals\n")) });
     renderApp(planUrl);

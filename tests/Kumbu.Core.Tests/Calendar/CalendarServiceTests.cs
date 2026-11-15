@@ -206,6 +206,41 @@ public class CalendarServiceTests
         Assert.Equal("---\nwhen: 2026-12-15\ntask: open\ntags: [a]\n---\nBody\n", await Content(store, "/Work/x.md"));
     }
 
+    [Theory]
+    [InlineData("reopen")]
+    [InlineData("unset")]
+    [InlineData("no task")]
+    public async Task A_calendar_write_leaves_every_other_keys_value_as_it_was(string write)
+    {
+        const string note = "---\nwhen: 2026-12-15\nsummary: 'first line\nreason: this line belongs to summary\nlast line'\ntask: closed\nclosed: 2026-12-16\n---\nBody\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", note));
+        var service = Service(store);
+
+        var result = write switch
+        {
+            "reopen" => await service.ReopenAsync("/Work/x.md", Ct),
+            "unset" => await service.UnsetAsync("/Work/x.md", Ct),
+            _ => await service.SetAsync("/Work/x.md", new CalendarChange(Task: false), Ct),
+        };
+
+        Assert.True(result.IsError, result.Output);
+        Assert.Contains("would also change summary", result.Output, StringComparison.Ordinal);
+        Assert.Equal(note, await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task A_calendar_write_adds_no_key_of_its_own_making()
+    {
+        const string note = "---\nwhen: 2026-12-15\ntask: closed\nclosed: 2026-12-16\nreason: 'done early\nnote: see the log'\n---\nBody\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", note));
+
+        var result = await Service(store).ReopenAsync("/Work/x.md", Ct);
+
+        Assert.True(result.IsError, result.Output);
+        Assert.Contains("would also change note", result.Output, StringComparison.Ordinal);
+        Assert.Equal(note, await Content(store, "/Work/x.md"));
+    }
+
     [Fact]
     public async Task A_reason_can_be_added_later()
     {
@@ -287,6 +322,17 @@ public class CalendarServiceTests
 
         Assert.Equal("calendar: took /Work/x.md out of the calendar; the note stays", result.Output);
         Assert.Equal("---\ntitle: x\ntags: [a]\n---\nBody\n", await Content(store, "/Work/x.md"));
+    }
+
+    [Fact]
+    public async Task Unset_takes_a_note_whose_properties_are_too_large_to_read_out_of_the_calendar()
+    {
+        var summary = $"summary: {new string('x', 70_000)}\n";
+        var store = new InMemoryNoteStore(("/Work/x.md", $"---\ntitle: x\nwhen: 2026-12-15\n{summary}---\nBody\n"));
+
+        Ok(await Service(store).UnsetAsync("/Work/x.md", Ct));
+
+        Assert.Equal($"---\ntitle: x\n{summary}---\nBody\n", await Content(store, "/Work/x.md"));
     }
 
     [Fact]

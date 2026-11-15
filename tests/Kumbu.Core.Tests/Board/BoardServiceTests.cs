@@ -247,6 +247,18 @@ public class BoardServiceTests
     }
 
     [Fact]
+    public async Task Removing_a_cards_due_leaves_every_other_keys_value_as_it_was()
+    {
+        const string card = "---\ncolumn: Ideas\nsummary: 'first line\ndue: this line belongs to summary\nlast line'\n---\nText\n";
+        var store = Store(("/Work/Board/X.md", card));
+
+        var result = await Service(store).UpdateAsync("Work", "X", new((DateOnly?)null), default, Ct);
+
+        Assert.True(result.IsError, result.Output);
+        Assert.Equal(card, await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
     public async Task Create_writes_the_template_once()
     {
         var store = new InMemoryNoteStore(("/Work/plan.md", "Plan\n"));

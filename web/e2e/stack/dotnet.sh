@@ -17,7 +17,9 @@ server_env() {
 case "${1:-}" in
   up)
     "$0" down
-    mkdir -p "$WORK/recovery" "$WORK/deletions" "$WORK/models" "$E2E_VAULTS"
+    # Without -p: a folder someone else made after down stops the run.
+    mkdir -m 700 "$WORK"
+    mkdir "$WORK/recovery" "$WORK/deletions" "$WORK/models" "$E2E_VAULTS"
     docker run -d --name "$MONGO" --ulimit nofile=20000:20000 -p 127.0.0.1:27019:27017 mongo:7.0 --replSet rs0 --bind_ip_all >/dev/null
     until docker exec "$MONGO" mongosh --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] }) }; quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1; do sleep 1; done
     pnpm -C "$REPO_DIR/web" build >/dev/null
@@ -34,6 +36,8 @@ case "${1:-}" in
     exit 1
     ;;
   down)
+    own_or_absent "$WORK"
+    own_or_absent "$E2E_VAULTS"
     if [ -f "$WORK/server.pid" ]; then kill "$(cat "$WORK/server.pid")" 2>/dev/null || true; fi
     docker rm -f -v "$MONGO" >/dev/null 2>&1 || true
     rm -rf "$WORK" "$E2E_VAULTS"

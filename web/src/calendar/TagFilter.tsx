@@ -2,32 +2,44 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-/** The tag in the address, `?tag=kumbu`, without its #; none when absent or empty. */
-export function useTag(): string | undefined {
-  const [params] = useSearchParams();
-  return params.get("tag")?.trim() || undefined;
+/**
+ * The tag filter's tag, without its #, and its setter. In the address (`?tag=kumbu`), so a filtered week can be kept
+ * and shared; with `inAddress` false on the page only, as the browser's history can't be cleaned. A tag already in the
+ * address shows until another is chosen; taking it away takes it from the address too.
+ */
+export function useTagFilter(inAddress = true): [string | undefined, (next: string | null) => void] {
+  const [params, setParams] = useSearchParams();
+  const address = params.get("tag")?.trim() || undefined;
+  const [kept, setKept] = useState<string | undefined>(undefined);
+  const toAddress = (next: string | null, replace = false) =>
+    setParams(
+      (current) => {
+        const changed = new URLSearchParams(current);
+        if (next) changed.set("tag", next);
+        else changed.delete("tag");
+        return changed;
+      },
+      { replace },
+    );
+  if (inAddress) return [address, (next) => toAddress(next)];
+  return [
+    kept ?? address,
+    (next) => {
+      setKept(next ?? undefined);
+      if (!next && address) toAddress(null, true);
+    },
+  ];
 }
 
 /** `url` with the tag filter kept, so moving to another week or month stays on the tag. */
 export const withTag = (url: string, tag?: string) => (tag ? `${url}${url.includes("?") ? "&" : "?"}tag=${encodeURIComponent(tag)}` : url);
 
 /**
- * The tag filter of the calendar and What's on (spec §7.10): the notes with a tag, or one nested below it. It lives in
- * the address (`?tag=`), so a filtered week can be kept and shared; set, it shows as the board's does, `#tag ×`, which
- * takes it away again.
+ * The tag filter of the calendar and What's on (spec §7.10): the notes with a tag, or one nested below it, kept by
+ * `useTagFilter`; set, it shows as the board's does, `#tag ×`, which takes it away again.
  */
-export default function TagFilter() {
-  const [, setParams] = useSearchParams();
-  const tag = useTag();
+export default function TagFilter({ tag, choose }: { tag: string | undefined; choose(next: string | null): void }) {
   const [typed, setTyped] = useState("");
-
-  const choose = (next: string | null) =>
-    setParams((current) => {
-      const changed = new URLSearchParams(current);
-      if (next) changed.set("tag", next);
-      else changed.delete("tag");
-      return changed;
-    });
 
   if (tag)
     return (

@@ -3,7 +3,9 @@ import { Plus } from "lucide-react";
 import { useId } from "react";
 import type { EntryView, WeekView } from "./api";
 import { dayHeading, dayLabel, partsOf, shortDay } from "./dates";
+import { dayLevelOf, dayShade, dayWord } from "./dayLevels";
 import EntryItem, { type EntryActions } from "./EntryItem";
+import { useDays } from "./preferences";
 
 /** The days an entry over more than one day covers: "Tue 3 – Sat 14", a week entry as "Week 47". */
 export function rangeOf(entry: EntryView): string {
@@ -44,6 +46,7 @@ export const emptyWeek = (week: WeekView) => week.spanning.length === 0 && week.
 export default function WeekList(props: { week: WeekView; today: string; actions?: EntryActions; onAdd?: (day: string) => void }) {
   const { week, today, actions, onAdd } = props;
   const id = useId();
+  const days = useDays();
   return (
     <section aria-label={`Week ${week.week}`} className="flex flex-col gap-3">
       {week.spanning.length > 0 && (
@@ -57,8 +60,13 @@ export default function WeekList(props: { week: WeekView; today: string; actions
         {week.days.map((d, i) => {
           const heading = dayHeading(d.day);
           const isToday = d.day === today;
+          const level = dayLevelOf(days, d.day);
           return (
-            <section key={d.day} aria-labelledby={`${id}-${i}`} className="flex min-w-0 flex-col gap-1 rounded-[12px] border border-line p-2">
+            <section
+              key={d.day}
+              aria-labelledby={`${id}-${i}`}
+              className={`flex min-w-0 flex-col gap-1 rounded-[12px] border border-line p-2 ${dayShade[level]}`}
+            >
               <div className="flex items-center gap-1">
                 <h2
                   id={`${id}-${i}`}
@@ -79,6 +87,7 @@ export default function WeekList(props: { week: WeekView; today: string; actions
                   </button>
                 )}
               </div>
+              {dayWord[level] && <span className="sr-only">{dayWord[level]}</span>}
               <ul aria-label={heading} className="flex flex-col gap-1">
                 {d.entries.map((e) => (
                   <EntryItem key={e.path} entry={e} actions={actions} />

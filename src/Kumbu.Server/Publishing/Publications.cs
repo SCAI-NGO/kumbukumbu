@@ -14,6 +14,7 @@ using Kumbu.Server.OAuth;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Publishing;
@@ -169,13 +170,16 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                 Publications = [.. record.Publications.Where(p => p.Id != entry.Id)],
                 Log = Appended(record.Log, LogEntry(PublishingKinds.Withdrawn, stored, Now, by, byRef, WithdrawalReasons.ByRight)),
             };
+            ObjectId? copy = null;
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.DeleteCopyAsync(session, entry.Code, ct);
+                copy = await store.DeleteCopyAsync(session, entry.Code, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
-            if (written) return;
+            if (!written) continue;
+            if (copy is { } withdrawn) await store.DeleteAiLinksAsync([withdrawn], CancellationToken.None);
+            return;
         }
     }
 
@@ -263,17 +267,21 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                 Withdrawn = WithdrawnWith(record.Withdrawn, withdrawn.Where(p => p.Kind == PublicationKinds.Skill).Select(p => p.Note)),
                 Log = Appended(record.Log, [.. logged]),
             };
+            var copies = new List<ObjectId>();
             var written = await WriteAsync(access, attempt, async session =>
             {
+                copies.Clear();
                 foreach (var (entry, log) in withdrawn.Zip(logged))
                 {
-                    await store.DeleteCopyAsync(session, entry.Code, ct);
+                    if (await store.DeleteCopyAsync(session, entry.Code, ct) is { } id) copies.Add(id);
                     await EventAsync(session, access, log, ct);
                 }
 
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
-            if (written) return;
+            if (!written) continue;
+            await store.DeleteAiLinksAsync(copies, CancellationToken.None);
+            return;
         }
     }
 
@@ -288,17 +296,18 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// anyone else gets <see cref="PublishedNoteException"/>, which aborts the batch. A skill's link follows its folder to
     /// another skill folder of the vault and is withdrawn by any writer's batch that trashes its <c>SKILL.md</c> or takes
     /// it out of a skill folder (<c>removed</c>), or lands any of its files under a mark (Decision 31); the record's sealed
-    /// skill state follows and goes with the folder the same way (<see cref="SkillFolderAfter"/>).
+    /// skill state follows and goes with the folder the same way (<see cref="SkillFolderAfter"/>). Returns the ids of the
+    /// publications withdrawn, whose AI links go once the batch is committed (<see cref="DeleteAiLinksAsync"/>).
     /// </summary>
-    internal async Task FollowAsync(
+    internal async Task<IReadOnlyList<ObjectId>> FollowAsync(
         IClientSessionHandle session, VaultAccess access, bool device, bool bySession, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
-        if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
+        if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return [];
         var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
         if (record.Publications.Count == 0 && record.Unpublishable.Count == 0 && record.SkillCodes.Count == 0 && record.Origins.Count == 0
             && record.Updates.Count == 0 && record.Skipped.Count == 0 && record.Withdrawn.Count == 0)
         {
-            return;
+            return [];
         }
 
         var moved = batch.Moves.Select(m => (From: m.Current.Path.Value, To: m.Target.Path.Value))
@@ -365,19 +374,24 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             && next.SkillCodes.SequenceEqual(record.SkillCodes) && next.Origins.SequenceEqual(record.Origins)
             && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped) && next.Withdrawn.SequenceEqual(record.Withdrawn))
         {
-            return;
+            return [];
         }
 
         // Each withdrawal is logged under the path its note had before the batch.
         var logged = withdrawn.Select(w => LogEntry(PublishingKinds.Withdrawn, Parse(w.Entry.Note), at, by, byRef, w.Reason)).ToList();
+        var copies = new List<ObjectId>();
         foreach (var ((entry, _), log) in withdrawn.Zip(logged))
         {
-            await store.DeleteCopyAsync(session, entry.Code, ct);
+            if (await store.DeleteCopyAsync(session, entry.Code, ct) is { } id) copies.Add(id);
             await EventAsync(session, access, log, ct);
         }
 
         await store.WriteAsync(session, access.Vault, doc, next with { Log = Appended(record.Log, [.. logged]) }, ct);
+        return copies;
     }
+
+    /// <summary>The AI links of the publications <see cref="FollowAsync"/> withdrew, once the batch is committed.</summary>
+    internal Task DeleteAiLinksAsync(IReadOnlyCollection<ObjectId> publications) => store.DeleteAiLinksAsync(publications, CancellationToken.None);
 
     /// <summary>
     /// Where the skill folder <paramref name="folder"/> (stored) is after the batch, by its <c>SKILL.md</c>: where it was
@@ -599,13 +613,16 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                 Withdrawn = WithdrawnWith(record.Withdrawn, [entry.Note]),
                 Log = Appended(record.Log, LogEntry(PublishingKinds.Withdrawn, Parse(entry.Note), Now, by, byRef, WithdrawalReasons.ByRight)),
             };
+            ObjectId? copy = null;
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.DeleteCopyAsync(session, entry.Code, ct);
+                copy = await store.DeleteCopyAsync(session, entry.Code, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
-            if (written) return;
+            if (!written) continue;
+            if (copy is { } withdrawn) await store.DeleteAiLinksAsync([withdrawn], CancellationToken.None);
+            return;
         }
     }
 

@@ -14,6 +14,8 @@ public static class Frontmatter
 {
     private static readonly IReadOnlyDictionary<string, object?> NoValues = new Dictionary<string, object?>();
 
+    internal const string TooLargeProblem = "The frontmatter is too large or nested too deeply.";
+
     public static FrontmatterValues Read(string content)
     {
         var lines = Lines.Split(content);
@@ -37,7 +39,7 @@ public static class Frontmatter
         }
         catch (TooLarge)
         {
-            return new FrontmatterValues(NoValues, "The frontmatter is too large or nested too deeply.");
+            return new FrontmatterValues(NoValues, TooLargeProblem);
         }
         catch (KeyTwice e)
         {

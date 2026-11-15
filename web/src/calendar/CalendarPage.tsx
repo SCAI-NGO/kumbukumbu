@@ -5,9 +5,11 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { errorText } from "../api/error-text";
 import { calendarUrl, noteUrl } from "../api/paths";
 import { FormError, secondaryButtonClass } from "../components/form";
+import { useDesktop } from "../hooks/useDesktop";
+import { topDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
-import { useCalendar, useCalendarAction, useCalendarViewState, useSetCalendarView, type CalendarView, type EntryView } from "./api";
-import { addDays, formatWeekTitle, monthId, monthTitle, weekId, weekOf } from "./dates";
+import { useCalendar, useCalendarAction, useCalendarViewState, useEntryAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
+import { addDays, formatWeekTitle, monthId, monthName, monthTitle, weekId, weekOf } from "./dates";
 import { useClosing } from "./ClosedToast";
 import CouldntRead from "./CouldntRead";
 import type { EntryActions } from "./EntryItem";
@@ -15,13 +17,17 @@ import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
 import MonthGrid from "./MonthGrid";
 import MonthList, { dayAnchor, weekAnchor } from "./MonthList";
 import NewEntryDialog from "./NewEntryDialog";
-import TagFilter, { useTag, withTag } from "./TagFilter";
+import TagFilter, { useTagFilter, withTag } from "./TagFilter";
 import WeekList, { emptyWeek } from "./WeekList";
 
 const EMPTY_WEEK = 'Nothing this week yet. Tap a day to add something, or give any note a day from its ⋯ menu. Your AI can do it too: "put this on Friday".';
 
 const navClass =
   "flex size-12 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent";
+// The calendar's controls are 48 px; secondaryButtonClass is 44.
+const makeClass = secondaryButtonClass.replace("min-h-11", "min-h-12");
+const pageClass =
+  "flex min-h-12 items-center rounded-[10px] border border-line px-4 font-medium text-text focus-visible:outline-2 focus-visible:outline-accent";
 const switchClass = (on: boolean) =>
   `min-h-12 px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-surface-2 text-text" : "text-muted"}`;
 
@@ -45,7 +51,7 @@ export default function CalendarPage() {
   const { hash } = useLocation();
   const week = params.get("week") ?? undefined;
   const month = week ? undefined : (params.get("month") ?? undefined);
-  const tag = useTag();
+  const [tag, chooseTag] = useTagFilter();
   const remembered = useCalendarViewState(vault);
   // Asked at once, the month too: this week is also what gives today, and the month's address needs it.
   const calendar = useCalendar(vault, { week, month }, tag);
@@ -70,14 +76,15 @@ export default function CalendarPage() {
       </header>
       {waiting && <p className="p-4 text-sm text-muted">Loading …</p>}
       {calendar.isError && <p className="p-4 text-text">{errorText(calendar.error)}</p>}
-      {view && !waiting && <Calendar vault={vault} view={view} month={month} tag={tag} grid={remembered.data?.grid ?? false} />}
+      {view && !waiting && <Calendar vault={vault} view={view} month={month} tag={tag} chooseTag={chooseTag} grid={remembered.data?.grid ?? false} />}
     </div>
   );
 }
 
-function Calendar({ vault, view, month, tag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; grid: boolean }) {
+function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; chooseTag(next: string | null): void; grid: boolean }) {
   const navigate = useNavigate();
   const { hash } = useLocation();
+  const desktop = useDesktop();
   const action = useCalendarAction(vault);
   const setView = useSetCalendarView(vault);
   const [adding, setAdding] = useState<string | null>(null);
@@ -118,6 +125,7 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
 
   const closing = useClosing();
   const moving = useMoved();
+  const reopen = useEntryAction();
   const say = (text: string | null) => {
     closing.setProblem(null);
     setProblem(text);
@@ -133,11 +141,38 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
           moving.dismiss();
           closing.close(entry);
         },
+        onReopen: (entry: EntryView) => {
+          say(null);
+          moving.dismiss();
+          closing.dismiss();
+          reopen.mutate({ kind: "reopen", path: entry.path }, { onError: (err) => setProblem(errorText(err)) });
+        },
         renderLater: (entry: EntryView) => <LaterMenu entry={entry} onProblem={say} onMoved={onMoved} />,
       }
     : undefined;
   const previous = month ? monthUrl(vault, shiftMonth(month, -1)) : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, -7))));
   const next = month ? monthUrl(vault, shiftMonth(month, 1)) : shown && calendarUrl(vault, weekId(weekOf(addDays(shown.monday, 7))));
+  const previousLabel = month ? monthName(shiftMonth(month, -1)) : shown && `Week ${weekOf(addDays(shown.monday, -7)).week}`;
+  const nextLabel = month ? monthName(shiftMonth(month, 1)) : shown && `Week ${weekOf(addDays(shown.monday, 7)).week}`;
+  const away = month ? month !== monthId(view.today) : !!shown && !shown.current;
+  const here = month ? monthUrl(vault, monthId(view.today)) : calendarUrl(vault, weekId(weekOf(view.today)));
+
+  // ← and → turn the page where the tree is docked; not in a text field or a menu, which use the keys themselves,
+  // nor under a dialog or with a modifier.
+  useEffect(() => {
+    if (!desktop || !previous || !next) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="menu"]')) return;
+      if (topDialog()) return;
+      e.preventDefault();
+      navigate(withTag(e.key === "ArrowLeft" ? previous : next, tag));
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [desktop, previous, next, tag, navigate]);
 
   return (
     <>
@@ -152,13 +187,18 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
             <ChevronRight size={20} aria-hidden />
           </Link>
         )}
+        {away && (
+          <Link to={withTag(here, tag)} className="flex min-h-12 items-center rounded-[10px] px-3 text-sm font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent">
+            {month ? "Back to this month" : "Back to this week"}
+          </Link>
+        )}
         {view.canWrite && (
           <>
-            <button type="button" disabled={action.isPending} onClick={() => make("today")} className={secondaryButtonClass}>
-              Today
+            <button type="button" disabled={action.isPending} onClick={() => make("today")} className={makeClass}>
+              + Today
             </button>
-            <button type="button" disabled={action.isPending} onClick={() => make("this-week")} className={secondaryButtonClass}>
-              This week
+            <button type="button" disabled={action.isPending} onClick={() => make("this-week")} className={makeClass}>
+              + This week
             </button>
           </>
         )}
@@ -174,7 +214,7 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
           <button type="button" aria-pressed={grid} onClick={toggleGrid} className={`min-h-12 rounded-[10px] border border-line px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${grid ? "bg-surface-2 text-text" : "text-muted"}`}>
             Show grid
           </button>
-          <TagFilter />
+          <TagFilter tag={tag} choose={chooseTag} />
         </div>
       </nav>
       <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
@@ -194,6 +234,18 @@ function Calendar({ vault, view, month, tag, grid }: { vault: string; view: Cale
           </div>
         )}
         {!month && view.weeks.every(emptyWeek) && <p className="mt-4 max-w-prose text-text-body">{view.canWrite ? EMPTY_WEEK : "Nothing this week yet."}</p>}
+        {previous && next && (
+          <nav aria-label={month ? "Months before and after" : "Weeks before and after"} className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <Link to={withTag(previous, tag)} className={pageClass}>
+              <span aria-hidden>‹&nbsp;</span>
+              {previousLabel}
+            </Link>
+            <Link to={withTag(next, tag)} className={pageClass}>
+              {nextLabel}
+              <span aria-hidden>&nbsp;›</span>
+            </Link>
+          </nav>
+        )}
         <CouldntRead notes={view.couldntRead} canWrite={view.canWrite} />
       </main>
       {closing.toast}

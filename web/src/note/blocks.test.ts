@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { blockSource, findBlock } from "./blocks";
+import { blockSource, findBlock, isDelimiterRow } from "./blocks";
 
 type Case = { name: string; note: string; id: string; lines: [number, number] | null };
 
@@ -13,6 +13,30 @@ describe("findBlock", () => {
   it.each(cases.map((c) => [c.name, c] as const))("every shared case: %s", (_, c) => {
     const found = findBlock(c.note, c.id);
     expect(found === null ? null : [found.start, found.end]).toEqual(c.lines);
+  });
+});
+
+describe("table rows", () => {
+  it("a delimiter row reads with or without outer pipes, with alignment and spaces", () => {
+    expect(findBlock("a | b\n--- | ---\n1 | 2\n\n^tab\n", "tab")).toEqual({ start: 1, end: 5 });
+    expect(findBlock("  | a | b |\n  |  :--- | ---: |  \n  | 1 | 2 |\n\n^tab\n", "tab")).toEqual({ start: 1, end: 5 });
+    expect(findBlock("a | b\nx | y\n^p", "p")).toEqual({ start: 1, end: 3 });
+    expect(isDelimiterRow("|:-:|")).toBe(true);
+    expect(isDelimiterRow("| --- | :-- |")).toBe(true);
+    expect(isDelimiterRow("| --- | |")).toBe(false);
+    expect(isDelimiterRow("| :: |")).toBe(false);
+    expect(isDelimiterRow("\v| --- |\v")).toBe(true);
+    expect(isDelimiterRow("|\v:--\v|\f")).toBe(true);
+  });
+
+  it("reads every short line as a delimiter row exactly as before", () => {
+    const before = /^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$/;
+    const chars = [" ", "\t", "\f", "\r", "|", "-", ":", "x"];
+    let lines = [""];
+    for (let length = 0; length <= 6; length++) {
+      for (const line of lines) if (isDelimiterRow(line) !== before.test(line)) expect([line, isDelimiterRow(line)]).toEqual([line, before.test(line)]);
+      lines = lines.flatMap((line) => chars.map((c) => line + c));
+    }
   });
 });
 

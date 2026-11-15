@@ -184,6 +184,7 @@ describe("publishing in the tree", () => {
     api({ publishEnabled: false, marks: ["/Work/Private"] });
     useEditor.getState().reset();
     useEditor.getState().setActiveVault("Work");
+    localStorage.removeItem("kumbu.lastNote.u1");
     const router = renderApp("/");
     await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
     await within(drawer()).findByText("Private");

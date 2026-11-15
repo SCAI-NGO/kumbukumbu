@@ -166,11 +166,8 @@ export function embedHeading(raw: string): string | null {
   return heading && !heading.startsWith("^") ? heading : null;
 }
 
-/**
- * The block id of a link's subpath (`[[Plan#^controller|x]]`, `[c](Plan.md#%5Econtroller)` → `controller`); null
- * without one, or for a heading.
- */
-export function subpathBlock(raw: string): string | null {
+/** What follows the first `#` of a link's target (a wiki link's, or a Markdown link's destination, decoded); null without one. */
+function subpath(raw: string): string | null {
   // A Markdown destination in angle brackets may hold spaces: `[x](<My Plan.md#^id>)`.
   const destination = /\]\(\s*(?:<([^>]*)>|([^)\s]*))/.exec(raw);
   const target = /^!?\[\[/.test(raw) ? wikiTarget(raw) : (destination?.[1] ?? destination?.[2] ?? "");
@@ -182,5 +179,22 @@ export function subpathBlock(raw: string): string | null {
   } catch {
     // A stray `%` is no escape: the fragment is read as it stands.
   }
-  return /^\^([A-Za-z0-9-]+)$/.exec(fragment)?.[1] ?? null;
+  return fragment;
+}
+
+/**
+ * The block id of a link's subpath (`[[Plan#^controller|x]]`, `[c](Plan.md#%5Econtroller)` → `controller`); null
+ * without one, or for a heading.
+ */
+export function subpathBlock(raw: string): string | null {
+  return /^\^([A-Za-z0-9-]+)$/.exec(subpath(raw) ?? "")?.[1] ?? null;
+}
+
+/**
+ * The section address of a link's subpath (`[[K²#Roadmap|roadmap]]` → `Roadmap`, `[[Note#A#B]]` → `A#B`,
+ * `[x](Plan.md#Goals)` → `Goals`); null without one, or for a block.
+ */
+export function subpathHeading(raw: string): string | null {
+  const fragment = subpath(raw)?.trim();
+  return fragment && !fragment.startsWith("^") ? fragment : null;
 }

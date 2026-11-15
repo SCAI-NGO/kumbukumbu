@@ -7,7 +7,7 @@ import { folderOf, inVault, vaultOf } from "../api/paths";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { presenceKey, useSyncStatus } from "../state/sync";
-import { headingText } from "./outline";
+import { atxHeading, headingText } from "./outline";
 import { splitFrontmatter } from "./properties";
 
 /** A name that carries no intention: `Untitled.md` as the app and Obsidian make them, `Untitled 2.md`, `Untitled 1.md` …, any case. */
@@ -64,9 +64,9 @@ export function headingName(content: string): string | null {
       comment = !comment;
       rest = rest.slice(at + 2);
     }
-    const m = /^ {0,3}#(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
+    const m = atxHeading(line);
     // Highlight and maths marks are no part of the name.
-    if (m) return m[1] ? cleanName(headingText(m[1]).replace(/==|\$/g, "")) : null;
+    if (m?.level === 1) return m.text ? cleanName(headingText(m.text).replace(/==|\$/g, "")) : null;
   }
   return null;
 }

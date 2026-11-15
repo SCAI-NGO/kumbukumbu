@@ -4,8 +4,14 @@ import { useEffect } from "react";
 import { api, call } from "../api/client";
 import { useSession } from "../state/session";
 
-/** `GET /api/account/calendar`: the person's zone, null until one is stored (the calendar then uses another). */
-export type CalendarPreferences = { zone: string | null; serverZone: string };
+/** How a weekday is for someone: shaded in the calendar when lighter or off. */
+export type DayLevel = "workday" | "lighter" | "off";
+
+/**
+ * `GET /api/account/calendar`: the person's zone, null until one is stored (the calendar then uses another), and the
+ * person's week, Monday first, null or absent until one is chosen.
+ */
+export type CalendarPreferences = { zone: string | null; serverZone: string; days?: DayLevel[] | null };
 
 type Answer<T> = Promise<{ data?: T; error?: unknown; response: Response }>;
 
@@ -28,6 +34,40 @@ function zoneChanged(queryClient: QueryClient, view: CalendarPreferences) {
 export function useSetZone() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: putZone, onSuccess: (view) => zoneChanged(queryClient, view) });
+}
+
+const putDays = (days: DayLevel[] | null) => call(untyped.PUT<CalendarPreferences>("/api/account/calendar", { body: { days } }));
+
+/** The week is shaded by the client: no calendar view is asked again. */
+export function useSetDays() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: putDays, onSuccess: (view) => queryClient.setQueryData(queryKey, view) });
+}
+
+type WeekInfo = { weekend?: number[] };
+
+/** The browser locale's weekend as ISO weekdays (7 is Sunday); Saturday and Sunday where it can't say. */
+export function browserWeekend(language = navigator.language): number[] {
+  try {
+    const locale = new Intl.Locale(language) as Intl.Locale & { getWeekInfo?(): WeekInfo; weekInfo?: WeekInfo };
+    const weekend = (locale.getWeekInfo?.() ?? locale.weekInfo)?.weekend;
+    if (weekend?.length) return weekend;
+  } catch {
+    // An odd language tag: the default below.
+  }
+  return [6, 7];
+}
+
+/** Until someone chooses: the weekend off, no lighter days. Monday first. */
+export function defaultDays(language?: string): DayLevel[] {
+  const weekend = browserWeekend(language);
+  return [1, 2, 3, 4, 5, 6, 7].map((d) => (weekend.includes(d) ? "off" : "workday"));
+}
+
+/** The person's week: as chosen, or the browser's weekend. */
+export function useDays(): DayLevel[] {
+  const days = useCalendarPreferences().data?.days;
+  return days ?? defaultDays();
 }
 
 /** Every IANA zone the browser knows, or null where it can't list them. */

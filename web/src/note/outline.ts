@@ -38,6 +38,36 @@ export const headingText = (md: string) =>
 /** A line that can be (part of) a paragraph's text, and so a setext heading's: no other block starts with it. */
 const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3}([-*+>|#]|\d+[.)]\s|`{3}|~{3})/.test(line);
 
+const blank = (c: string) => c === " " || c === "\t";
+
+/**
+ * An ATX heading line's level and text (`text` undefined: none; "" after a lone blank), as CommonMark's pattern
+ * `^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$` reads it. `anyChar`: the text may hold a "\r", as the
+ * Core's `.` takes it (the block finder's lines).
+ */
+export function atxHeading(line: string, anyChar = false): { level: number; text?: string } | null {
+  let i = 0;
+  while (i < 3 && line[i] === " ") i++;
+  let h = i;
+  while (line[h] === "#") h++;
+  const level = h - i;
+  if (level < 1 || level > 6) return null;
+  if (h === line.length) return { level };
+  if (!blank(line[h])) return null;
+  if (!anyChar && /[\r\u2028\u2029]/.test(line.slice(h))) return null;
+  // The text starts after the blanks that follow the hashes, and ends before the trailing blanks and before a closing
+  // hash run that has a blank before it and something before that.
+  let t = h;
+  while (t < line.length && blank(line[t])) t++;
+  let e = line.length;
+  while (e > t && blank(line[e - 1])) e--;
+  let k = e;
+  while (k > t && line[k - 1] === "#") k--;
+  let q = k;
+  while (q > t && blank(line[q - 1])) q--;
+  return { level, text: line.slice(t, k < e && q < k ? q : e) };
+}
+
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
  * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
@@ -70,8 +100,8 @@ export function outline(body: string): Heading[] {
       para = null;
       return;
     }
-    const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
-    if (m && m[2]) headings.push({ level: m[1].length, text: headingText(m[2]), line: i + 1 });
+    const m = atxHeading(line);
+    if (m?.text) headings.push({ level: m.level, text: headingText(m.text), line: i + 1 });
     if (m || !paragraphLine(line)) para = null;
     else if (para) para.text.push(line.trim());
     else para = { start: i, text: [line.trim()] };
@@ -94,4 +124,73 @@ export function section(body: string, heading: string): string | null {
     .split("\n")
     .map((l, i) => (i + 1 >= start && i + 1 < end ? l : ""))
     .join("\n");
+}
+
+/** A section address's segments, as the Core reads one: `#` goes one level down, `\#` is a `#`, a trailing `[n]` an index. */
+function addressSegments(address: string): { text: string; index?: number }[] | null {
+  const segments: { text: string; index?: number }[] = [];
+  let text = "";
+  let escapedEnd = -1;
+  for (let i = 0; i <= address.length; i++) {
+    if (i === address.length || address[i] === "#") {
+      // A trailing [n] is an index unless its `[` was escaped.
+      const m = /\[(\d+)\]$/.exec(text);
+      const index = m && m.index >= escapedEnd ? Number(m[1]) : undefined;
+      const own = (index === undefined ? text : text.slice(0, m!.index)).trim();
+      if (!own) return null;
+      segments.push({ text: own, index });
+      text = "";
+      escapedEnd = -1;
+    } else if (address[i] === "\\" && i + 1 < address.length) {
+      text += address[++i];
+      escapedEnd = text.length;
+    } else text += address[i];
+  }
+  return segments;
+}
+
+/**
+ * The 1-based source line of the heading a section address names (`Roadmap`, `A#B`, `Notes[2]`), as `cat note#…`
+ * resolves it: its own text and the parents above it match the segments, exactly or else ignoring case. Of several
+ * matches the first in the note wins; null when none does.
+ */
+export function headingLine(body: string, address: string): number | null {
+  const segments = addressSegments(address);
+  if (!segments) return null;
+  // Each heading's parent (the nearest earlier one of a lower level) and its place among siblings of the same text.
+  // A heading answers to its text as written, as the Core keeps it (`The **road**map`), and as shown (`The roadmap`);
+  // both with Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`).
+  type Node = { written: string; shown: string; line: number; parent: Node | null; index: number };
+  const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+  const lines = body.split("\n");
+  const nodes: Node[] = [];
+  const open: (Node & { level: number })[] = [];
+  // Per parent (null: the top), how many headings of each written text it has so far: duplicates are numbered by it.
+  const seen = new Map<Node | null, Map<string, number>>();
+  for (const h of outline(body)) {
+    while (open.length && open[open.length - 1].level >= h.level) open.pop();
+    const parent = open[open.length - 1] ?? null;
+    const shown = unescaped(h.text);
+    // A setext heading has no ATX line: its text as written is the one shown.
+    const written = unescaped(atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text);
+    const siblings = seen.get(parent) ?? new Map<string, number>();
+    seen.set(parent, siblings);
+    const index = (siblings.get(written) ?? 0) + 1;
+    siblings.set(written, index);
+    const node = { written, shown, line: h.line, parent, index, level: h.level };
+    nodes.push(node);
+    open.push(node);
+  }
+  for (const same of [(a: string, b: string) => a === b, (a: string, b: string) => a.toLowerCase() === b.toLowerCase()]) {
+    const found = nodes.find((n) => {
+      let h: Node | null = n;
+      for (let i = segments.length - 1; i >= 0; i--, h = h.parent) {
+        const { text, index } = segments[i];
+        if (!h || !(same(text, h.written) || same(text, h.shown)) || (index !== undefined && index !== h.index)) return false;
+      }
+      return true;
+    });
+    if (found) return found.line;
+  }
+  return null;
 }

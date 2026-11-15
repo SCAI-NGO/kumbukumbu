@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import mermaid from "mermaid";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { diagramLimits, textLimits } from "./diagramSize";
 import MermaidDiagram from "./MermaidDiagram";
 
 vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), parse: vi.fn(), render: vi.fn() } }));
@@ -9,6 +10,8 @@ vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), parse: vi.fn(), rend
 const m = vi.mocked(mermaid);
 
 const flowchart = "flowchart LR\n  Sensor --> Controller --> Pump";
+/** A flowchart chain of `size` statements and links, by `diagramSize`'s count. */
+const chain = (size: number) => ["flowchart LR", ...Array.from({ length: size >> 1 }, (_, i) => `  n${i} --> n${i + 1}`)].join("\n");
 const svg = '<svg viewBox="0 0 640 120" width="100%" style="max-width: 640px;"><g/></svg>';
 
 /** jsdom has no blob URLs: they are stubbed, and spied on. */
@@ -79,6 +82,22 @@ describe("MermaidDiagram", () => {
     expect(parsed.documentElement.hasAttribute("style")).toBe(false);
     expect(parsed.documentElement.textContent).toContain("Pump A");
     expect(text).not.toContain("&nbsp;");
+  });
+
+  it("the image keeps a linked node's text, but no link", async () => {
+    m.render.mockResolvedValue(
+      drawn(
+        '<svg viewBox="0 0 10 10"><a href="https://example.org/pump"><g><text>Pump</text></g></a>' +
+          '<foreignObject width="10" height="10"><div><a href="https://example.org/home">Home</a></div></foreignObject></svg>',
+      ),
+    );
+    render(<MermaidDiagram source={flowchart} dark={false} />);
+    await screen.findByRole("img");
+    const text = await (urls.create.mock.calls[0][0] as Blob).text();
+    expect(text).toContain("Pump");
+    expect(text).not.toMatch(/<a[\s>]/);
+    expect(text).toContain("Home");
+    expect(text).not.toMatch(/href=/);
   });
 
   it("an image that can't be shown shows the source and says so", async () => {
@@ -233,6 +252,85 @@ describe("MermaidDiagram", () => {
     expect(urls.create).not.toHaveBeenCalled();
   });
 
+  it("a large diagram waits for Draw diagram, showing its first lines", async () => {
+    const big = chain(diagramLimits.flowchart.auto + 2);
+    render(<MermaidDiagram source={big} dark={false} />);
+    expect(screen.getByRole("button", { name: "Draw diagram" })).toBeInTheDocument();
+    expect(screen.getByText(/^flowchart LR\s+n0 --> n1\s+n1 --> n2$/)).toBeInTheDocument();
+    expect(screen.queryByText("Drawing the diagram …")).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("Draw diagram draws it", async () => {
+    render(<MermaidDiagram source={chain(diagramLimits.flowchart.auto + 2)} dark={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Draw diagram" }));
+    expect(await screen.findByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
+    expect(m.render).toHaveBeenCalledTimes(1);
+  });
+
+  it("a diagram too large to draw here says so and shows its source", async () => {
+    const huge = chain(diagramLimits.flowchart.cap + 2);
+    render(<MermaidDiagram source={huge} dark={false} />);
+    expect(screen.getByRole("note")).toHaveTextContent(/^This diagram is too large to draw here\.$/);
+    expect(document.querySelector("pre > code.language-mermaid")!.textContent).toBe(huge);
+    expect(screen.queryByRole("button", { name: "Draw diagram" })).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.parse).not.toHaveBeenCalled();
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it("a short diagram with a very long label waits for Draw diagram, a longer one is too large", async () => {
+    const label = (length: number) => `flowchart LR\n  A["${"x".repeat(length)}"] --> B`;
+    const { unmount } = render(<MermaidDiagram source={label(textLimits.word.auto + 1)} dark={false} />);
+    expect(screen.getByRole("button", { name: "Draw diagram" })).toBeInTheDocument();
+    unmount();
+    render(<MermaidDiagram source={label(textLimits.word.cap + 1)} dark={false} />);
+    expect(screen.getByRole("note")).toHaveTextContent(/^This diagram is too large to draw here\.$/);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it("a mindmap on lines ended by carriage returns waits for Draw diagram past its size", async () => {
+    const nodes = Array.from({ length: diagramLimits.mindmap.auto }, (_, i) => `    n${i}`).join("\r");
+    render(<MermaidDiagram source={`mindmap\r  root\r${nodes}`} dark={false} />);
+    expect(screen.getByRole("button", { name: "Draw diagram" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it("a gantt with excluded days says it can't be drawn here, and shows its source", async () => {
+    render(<MermaidDiagram source={"gantt\n  dateFormat DD.MM.YYYY\n  excludes weekends\n  a : 01.01.2026, 01.01.2626"} dark={false} />);
+    expect(screen.getByText("This diagram is too large to draw here.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Draw diagram" })).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).not.toHaveBeenCalled();
+  });
+
+  it("a diagram the note doesn't leave a place for waits for Draw diagram", async () => {
+    render(<MermaidDiagram source={flowchart} dark={false} auto={false} />);
+    expect(screen.getByRole("button", { name: "Draw diagram" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Draw diagram" }));
+    expect(await screen.findByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
+  });
+
+  it("a diagram taken off the page before its turn is never drawn", async () => {
+    const held = deferred<Rendered>();
+    m.render.mockReturnValueOnce(held.promise);
+    render(<MermaidDiagram source={flowchart} dark={false} />);
+    const second = render(<MermaidDiagram source={"sequenceDiagram\n Alice->>Bob: Hi"} dark={false} />);
+    await waitFor(() => expect(m.render).toHaveBeenCalledTimes(1));
+    second.unmount();
+    held.resolve(drawn());
+    expect(await screen.findByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.render).toHaveBeenCalledTimes(1);
+    expect(m.parse).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["an image shape", 'flowchart LR\n  A@{ img: "/api/x", label: "x" }'],
     ["a quoted key over lines", 'flowchart LR\n  A@{\n    shape: image\n    "img": "/api/x"\n  }'],
@@ -247,6 +345,9 @@ describe("MermaidDiagram", () => {
     ["an escaped url()", "stateDiagram-v2\n [*] --> S\n style S fill:u\\72l(/x)"],
     ["an image-set()", 'stateDiagram-v2\n [*] --> S\n style S background-image:image-set("x.png")'],
     ["a url() behind a character reference", "stateDiagram-v2\n [*] --> S\n style S fill:url&#40;/x)"],
+    ["actor details on lines ended by carriage returns", "sequenceDiagram\r  participant A\r  details A: some-id"],
+    ["actor details behind a directive over lines", "%%{init: {\n}}%%\nsequenceDiagram\n  participant A; details A: some-id\n  A->>A: Hi"],
+    ["actor details behind front matter whose type isn't read", `---\n${"\n".repeat(70)}title: Work\n---\nsequenceDiagram\n  participant A; details A: some-id`],
     ["a url() in HTML behind a reference without its semicolon", 'sequenceDiagram\n  A->>B: <span style="background:url&#40/api/x)">x</span>'],
   ])("a diagram that would load an image isn't drawn: %s", async (_, source) => {
     render(<MermaidDiagram source={source} dark={false} />);

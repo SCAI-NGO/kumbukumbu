@@ -13,7 +13,7 @@ type Part = LaterRequest["part"];
 const isWeek = (value: string) => /^\d{4}-W\d{2}$/.test(value);
 
 export const laterButtonClass =
-  "flex min-h-12 flex-none items-center rounded-[10px] px-3 text-sm font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
+  "flex min-h-12 min-w-12 flex-none items-center justify-center rounded-[10px] px-3 text-sm font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
 
 /**
  * Later beside ✓ (spec §7.13): +1 day, +1 week or a picked day, each counted from the later of today and the entry's
@@ -157,7 +157,7 @@ function MovedToast({ moved, onDone }: { moved: Moved; onDone(): void }) {
           type="button"
           onClick={undo}
           disabled={action.isPending}
-          className="min-h-12 px-1.5 font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-12 min-w-12 px-1.5 text-center font-medium text-accent-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
         >
           Undo
         </button>

@@ -6,6 +6,7 @@
  * line, naming the paragraph, list, table or quote above it. Never inside front matter or code. Both check themselves
  * against blocks.cases.json; a change here goes there too.
  */
+import { atxHeading } from "./outline";
 
 type Kind = "heading" | "paragraph" | "list" | "table" | "quote";
 
@@ -17,12 +18,26 @@ const inline = /[ \t]\^([A-Za-z0-9-]+)[ \t\v\f\r]*$/;
 const ownLine = /^\^([A-Za-z0-9-]+)[ \t\v\f\r]*$/;
 const item = /^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)/;
 const quote = /^ {0,3}>/;
-const delimiterRow = /^[ \t\v\f\r]*\|?[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*(?:\|[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*)*\|?[ \t\v\f\r]*$/;
-// `[^\n]` where .NET's `.` stands: it matches a "\r", which JS's doesn't.
-const heading = /^ {0,3}(#{1,6})(?:[ \t]+([^\n]*?))?(?:[ \t]+#+)?[ \t]*$/;
 const fenceLine = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;
 
 const blank = (line: string) => line.trim() === "";
+
+const space = (c: string) => c === " " || c === "\t" || c === "\v" || c === "\f" || c === "\r";
+const cell = /^[ \t\v\f\r]*:?-+:?[ \t\v\f\r]*$/;
+
+/** A table's delimiter row (`| :-- | --: |`), as the Core's `DelimiterRowRegex` reads it, taken cell by cell. */
+export function isDelimiterRow(line: string) {
+  let s = 0;
+  let e = line.length;
+  while (s < e && space(line[s])) s++;
+  while (e > s && space(line[e - 1])) e--;
+  if (line[s] === "|") s++;
+  if (e > s && line[e - 1] === "|") e--;
+  return line.slice(s, e).split("|").every((c) => cell.test(c));
+}
+
+// The Core's `.` takes a "\r", which JS's doesn't: the block finder's lines keep theirs.
+const heading = (line: string) => atxHeading(line, true) !== null;
 
 // A tab takes the column to the next multiple of four.
 function indent(line: string) {
@@ -73,7 +88,7 @@ function chunks(lines: string[]): Chunk[] {
       while (i < lines.length && !code[i] && (blank(lines[i]) || indent(lines[i]) >= 4)) i++;
       continue;
     }
-    if (heading.test(lines[i])) {
+    if (heading(lines[i])) {
       found.push({ kind: "heading", start: i, end: i + 1 });
       i++;
       continue;
@@ -82,7 +97,7 @@ function chunks(lines: string[]): Chunk[] {
       ? "list"
       : quote.test(lines[i])
         ? "quote"
-        : i + 1 < lines.length && lines[i].includes("|") && delimiterRow.test(lines[i + 1])
+        : i + 1 < lines.length && lines[i].includes("|") && isDelimiterRow(lines[i + 1])
           ? "table"
           : "paragraph";
     const start = i++;
@@ -90,7 +105,7 @@ function chunks(lines: string[]): Chunk[] {
       i < lines.length &&
       !code[i] &&
       !blank(lines[i]) &&
-      !heading.test(lines[i]) &&
+      !heading(lines[i]) &&
       !(kind === "paragraph" && (item.test(lines[i]) || quote.test(lines[i])))
     ) {
       i++;

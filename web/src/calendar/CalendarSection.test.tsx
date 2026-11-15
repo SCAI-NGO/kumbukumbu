@@ -10,8 +10,9 @@ import { forgetZonePreset } from "./preferences";
 
 const ZONES = ["America/New_York", "Asia/Tokyo", "Europe/London", "Europe/Vienna", "Pacific/Auckland"];
 
-function api(zone: string | null, overrides: Parameters<typeof fakeApi>[0] = {}) {
+function api(zone: string | null, overrides: Parameters<typeof fakeApi>[0] = {}, days: string[] | null = null) {
   let stored = zone;
+  let storedDays = days;
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }]),
@@ -19,13 +20,15 @@ function api(zone: string | null, overrides: Parameters<typeof fakeApi>[0] = {})
     "GET /api/vault-events": () => json(200, []),
     "GET /api/account/storage": () => json(200, { used: 4096, limit: null }),
     "GET /api/embeddings": () => json(200, []),
-    "GET /api/account/calendar": () => json(200, { zone: stored, serverZone: "UTC" }),
+    "GET /api/account/calendar": () => json(200, { zone: stored, serverZone: "UTC", days: storedDays }),
     "PUT /api/account/calendar": async (r) => {
-      const body = (await r.clone().json()) as { zone: string | null };
+      const body = (await r.clone().json()) as { zone?: string | null; days?: string[] | null };
       if (body.zone && !ZONES.includes(body.zone))
         return json(400, { error: `${body.zone} is not a time zone; choose one from the list (an IANA name such as Europe/Vienna).` });
-      stored = body.zone;
-      return json(200, { zone: stored, serverZone: "UTC" });
+      // A field left out stays as it is.
+      if ("zone" in body) stored = body.zone ?? null;
+      if ("days" in body) storedDays = body.days ?? null;
+      return json(200, { zone: stored, serverZone: "UTC", days: storedDays });
     },
     ...overrides,
   });
@@ -157,6 +160,100 @@ describe("the calendar's time zone", () => {
     await userEvent.clear(field);
     await userEvent.type(field, "Asia/Tokyo");
     expect(within(calendar).queryByRole("list", { name: "Matching time zones" })).not.toBeInTheDocument();
+    await userEvent.click(within(calendar).getByRole("button", { name: "Save" }));
+    await waitFor(async () => expect(await bodiesOf(fetch, "PUT", "/api/account/calendar")).toEqual([{ zone: "Asia/Tokyo" }]));
+  });
+});
+
+const WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const RESET = "Use my browser's weekend";
+
+/** The level pressed on each day of the section's week, Monday first. */
+const pressed = (calendar: HTMLElement) =>
+  WEEK.map((day) => {
+    const on = within(within(calendar).getByRole("group", { name: day })).getAllByRole("button", { pressed: true });
+    return on.map((b) => b.textContent).join();
+  });
+
+const level = (calendar: HTMLElement, day: string, name: string) => within(within(calendar).getByRole("group", { name: day })).getByRole("button", { name });
+
+/** The section once the week can be chosen. */
+async function weekSection() {
+  const calendar = await section();
+  await waitFor(() => expect(level(calendar, "Monday", "Day off")).toBeEnabled());
+  return calendar;
+}
+
+describe("the person's week", () => {
+  it("shows the browser's weekend as days off until someone chooses", async () => {
+    api("Europe/Vienna");
+    renderApp("/settings");
+    const calendar = await weekSection();
+    expect(within(calendar).getByRole("group", { name: "Your week" })).toBeInTheDocument();
+    expect(pressed(calendar)).toEqual(["Workday", "Workday", "Workday", "Workday", "Workday", "Day off", "Day off"]);
+    expect(within(calendar).queryByRole("button", { name: RESET })).not.toBeInTheDocument();
+  });
+
+  it("a tap saves at once, all seven days as shown", async () => {
+    const fetch = api("Europe/Vienna");
+    renderApp("/settings");
+    const calendar = await weekSection();
+    await userEvent.click(level(calendar, "Monday", "Day off"));
+    await waitFor(async () =>
+      expect(await bodiesOf(fetch, "PUT", "/api/account/calendar")).toEqual([{ days: ["off", "workday", "workday", "workday", "workday", "off", "off"] }]),
+    );
+    await waitFor(() => expect(pressed(calendar)).toEqual(["Day off", "Workday", "Workday", "Workday", "Workday", "Day off", "Day off"]));
+    // A second tap sends the week as it now is.
+    await userEvent.click(level(calendar, "Friday", "Lighter day"));
+    await waitFor(async () =>
+      expect((await bodiesOf(fetch, "PUT", "/api/account/calendar")).at(-1)).toEqual({ days: ["off", "workday", "workday", "workday", "lighter", "off", "off"] }),
+    );
+  });
+
+  it("Use my browser's weekend shows only while a choice is stored, and returns to not chosen", async () => {
+    const fetch = api("Europe/Vienna");
+    renderApp("/settings");
+    const calendar = await weekSection();
+    expect(within(calendar).queryByRole("button", { name: RESET })).not.toBeInTheDocument();
+    await userEvent.click(level(calendar, "Sunday", "Workday"));
+    const reset = await within(calendar).findByRole("button", { name: RESET });
+    await waitFor(() => expect(reset).toBeEnabled());
+    await userEvent.click(reset);
+    await waitFor(async () => expect((await bodiesOf(fetch, "PUT", "/api/account/calendar")).at(-1)).toEqual({ days: null }));
+    await waitFor(() => expect(within(calendar).queryByRole("button", { name: RESET })).not.toBeInTheDocument());
+    expect(pressed(calendar)).toEqual(["Workday", "Workday", "Workday", "Workday", "Workday", "Day off", "Day off"]);
+  });
+
+  it("the chosen level stands out, and every day is laid out alike", async () => {
+    api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
+    renderApp("/settings");
+    const calendar = await weekSection();
+    expect(level(calendar, "Monday", "Day off")).toHaveClass("bg-accent", "text-on-accent", "font-bold");
+    expect(level(calendar, "Monday", "Workday")).not.toHaveClass("bg-accent");
+    expect(level(calendar, "Monday", "Workday")).not.toHaveClass("font-bold");
+    // The name above the switch on a narrow screen, beside it on a wide one: never one way for some days, the other for the rest.
+    for (const day of WEEK) {
+      const row = within(calendar).getByRole("group", { name: day });
+      expect(row).toHaveClass("flex-col", "sm:flex-row");
+      expect(row).not.toHaveClass("flex-wrap");
+    }
+  });
+
+  it("shows a stored week", async () => {
+    api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
+    renderApp("/settings");
+    const calendar = await weekSection();
+    expect(pressed(calendar)).toEqual(["Day off", "Workday", "Workday", "Workday", "Lighter day", "Workday", "Workday"]);
+    expect(within(calendar).getByRole("button", { name: RESET })).toBeInTheDocument();
+  });
+
+  it("saving the zone sends no days", async () => {
+    const fetch = api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "workday", "off", "off"]);
+    renderApp("/settings");
+    const calendar = await section();
+    const field = within(calendar).getByLabelText("Your time zone");
+    await userEvent.clear(field);
+    await userEvent.type(field, "Asia/Tokyo");
     await userEvent.click(within(calendar).getByRole("button", { name: "Save" }));
     await waitFor(async () => expect(await bodiesOf(fetch, "PUT", "/api/account/calendar")).toEqual([{ zone: "Asia/Tokyo" }]));
   });

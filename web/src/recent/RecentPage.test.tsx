@@ -235,6 +235,23 @@ describe("Recent changes", () => {
     expect(document.body).not.toHaveTextContent("Tagebuch");
   });
 
+  it("stops leaving out a vault the answer no longer lists", async () => {
+    let listed = ["Home", "Skills", "Work"];
+    const { last } = api(() => view([certificate, sketch], { vaults: listed }));
+    renderApp("/recent");
+    await page();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await userEvent.click(chip("Home"));
+    await waitFor(() => expect(last().getAll("skip")).toEqual(["Home"]));
+
+    listed = ["Skills", "Work"];
+    await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "report");
+    await waitFor(() => expect(last().get("words")).toBe("report"));
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "Vaults" })).getAllByRole("button").map((b) => b.textContent)).toEqual(["Skills", "Work"]));
+    await waitFor(() => expect(last().getAll("skip")).toEqual([]));
+    expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
+  });
+
   it("hiding or showing the discreet vaults clears the filters, which may name one", async () => {
     for (const change of [() => useDiscreet.setState({ revealed: true }), () => useDiscreet.setState({ names: new Set(["Home"]) })]) {
       const { last } = api(() => view([certificate, sketch, garden]));

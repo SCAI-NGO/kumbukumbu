@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { noteUrl } from "../api/paths";
 import type { EntryKind, EntryState, EntryView } from "./api";
+import TaskCheckbox from "./TaskCheckbox";
 
 /** How a state is shown: never by colour alone, always its icon and its word; overdue in the warning colour, calmly. */
 const states: Partial<Record<EntryState, { icon: LucideIcon; word: string; className: string }>> = {
@@ -25,29 +26,33 @@ const kinds: Record<EntryKind, { icon: LucideIcon; word: string }> = {
   dated: { icon: StickyNote, word: "Note" },
 };
 
-/** What a person who may write can do with an entry: close a to-do at once, or move it on with Later. */
+/** What a person who may write can do with an entry: close a to-do at once, open it again, or move it on with Later. */
 export interface EntryActions {
   onDone(entry: EntryView): void;
-  /** The control beside ✓ that moves the entry on; without it, a plain Later button that opens nothing. */
+  /** Unticks a closed to-do: it opens again. Without it, a closed to-do shows no box. */
+  onReopen?(entry: EntryView): void;
+  /** The control beside its box that moves the entry on; without it, a plain Later button that opens nothing. */
   renderLater?: (entry: EntryView) => ReactNode;
 }
 
-/** An open to-do has ✓; Later is on every open to-do and on a board card that isn't done. */
+/** An open to-do has its box, a closed one its ticked box; Later is on every open to-do and on a board card that isn't done. */
 const closable = (entry: EntryView) => entry.kind === "task" && entry.task === "open";
+const reopenable = (entry: EntryView) => entry.kind === "task" && entry.task === "closed";
 const movable = (entry: EntryView) => closable(entry) || (entry.kind === "card" && entry.state !== "done" && entry.state !== "past");
 
 /**
  * One entry in a calendar list: its time, its title (which opens the note), its state and a mark for its kind. A to-do
- * and a note given a day are told apart at a glance: only a to-do has ✓ and Later. Without `actions`, read only;
+ * and a note given a day are told apart at a glance: only a to-do has its box and Later. Without `actions`, read only;
  * `vault` names the entry's vault, where a list spans several (What's on).
  *
  * The title has the whole width of its column and wraps by words: in a narrow column (a day of the desktop's week) the
- * time stands above it and ✓ and Later on a line below; where there is room, beside it.
+ * time stands above it and its box and Later on a line below; where there is room, beside it.
  */
 export default function EntryItem({ entry, actions, range, vault }: { entry: EntryView; actions?: EntryActions; range?: string; vault?: string }) {
   const state = states[entry.state];
   const kind = kinds[entry.kind];
   const done = actions && closable(entry);
+  const reopen = reopenable(entry) ? actions?.onReopen : undefined;
   const later = actions && movable(entry);
   return (
     <li className="@container rounded-[10px] bg-surface px-1 py-1">
@@ -77,15 +82,14 @@ export default function EntryItem({ entry, actions, range, vault }: { entry: Ent
             )}
           </p>
         </div>
-        {done && (
-          <button
-            type="button"
-            aria-label={`Done: ${entry.title}`}
-            onClick={() => actions.onDone(entry)}
-            className="flex size-12 flex-none items-center justify-center rounded-[10px] text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent @xs:order-1"
-          >
-            <span aria-hidden className="flex size-5 items-center justify-center rounded-[5px] border-2 border-current" />
-          </button>
+        {(done || reopen) && (
+          <div className="flex-none text-sm @xs:order-1">
+            {done ? (
+              <TaskCheckbox closed={false} title={entry.title} onChange={() => actions.onDone(entry)} />
+            ) : (
+              <TaskCheckbox closed title={entry.title} onChange={() => reopen!(entry)} />
+            )}
+          </div>
         )}
         {later && (
           <div className="ml-auto flex-none @xs:order-3">

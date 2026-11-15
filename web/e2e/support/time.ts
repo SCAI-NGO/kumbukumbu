@@ -28,6 +28,18 @@ export const nowTime = (at = new Date()) => {
 const toUtc = (day: Day) => new Date(`${day}T12:00:00Z`);
 const fromUtc = (d: Date): Day => d.toISOString().slice(0, 10);
 
+/**
+ * For a test that compares days across several steps: in the last minute before midnight in Vienna, waits until a few
+ * seconds past it, so that every step sees the same day.
+ */
+export async function awayFromMidnight() {
+  const p = parts(new Date());
+  if (`${p.hour}:${p.minute}` < "23:59") return;
+  const left = 60 - new Date().getUTCSeconds() + 5;
+  // The clock's own minute, not a wait for the page.
+  await new Promise((r) => setTimeout(r, left * 1000));
+}
+
 export const addDays = (day: Day, n: number): Day => {
   const d = toUtc(day);
   d.setUTCDate(d.getUTCDate() + n);

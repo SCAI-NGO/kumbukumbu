@@ -19,8 +19,22 @@ public sealed record CalendarViewState(string View, bool Grid)
     public static bool IsView(string? view) => view is Week or Month;
 }
 
+/// <summary>The levels of a day in her week (fixes spec §2.4).</summary>
+public static class DayLevels
+{
+    public const string Workday = "workday";
+
+    public const string Lighter = "lighter";
+
+    public const string Off = "off";
+
+    /// <summary>Seven levels, Monday to Sunday, each one of the three.</summary>
+    public static bool IsWeek(IReadOnlyList<string?>? days) => days is { Count: 7 } && days.All(d => d is Workday or Lighter or Off);
+}
+
 /// <summary>
-/// The user's calendar settings on her user document: her time zone (calendar spec §3), plain, as it names no vault; and
+/// The user's calendar settings on her user document: her time zone (calendar spec §3) and her week (fixes spec §2.4),
+/// plain, as they name no vault; and
 /// her last view per calendar (§7.3), a map from vault id to view, sealed under a key derived from the user key as the
 /// discreet list is (<see cref="DiscreetVaults"/>), so it tells nothing of her vaults to whoever reads the database. After
 /// a rotation of the user key the views no longer open and every calendar opens in the default view again.
@@ -39,12 +53,42 @@ public sealed class CalendarSettings(IMongoDatabase db, ILogger<CalendarSettings
     public async Task<string?> ZoneAsync(string userId, CancellationToken ct) =>
         await Users.Find(u => u.Id == userId).Project(u => u.CalendarZone).FirstOrDefaultAsync(ct);
 
-    /// <summary>Sets her zone, an id the caller has checked (<see cref="Kumbu.Core.Calendar.Zones.Find"/>); null clears it.</summary>
-    public async Task SetZoneAsync(string userId, string? zone, CancellationToken ct)
+    /// <summary>Her zone and her week, as stored; nulls for none, or for a user who is gone.</summary>
+    public async Task<(string? Zone, string[]? Days)> PreferencesAsync(string userId, CancellationToken ct)
     {
-        var update = zone is null ? Builders<UserDocument>.Update.Unset(u => u.CalendarZone) : Builders<UserDocument>.Update.Set(u => u.CalendarZone, zone);
-        var written = await Users.UpdateOneAsync(u => u.Id == userId, update, cancellationToken: ct);
-        if (written.MatchedCount == 0) throw new CredentialsChangedException();
+        var stored = await Users.Find(u => u.Id == userId).Project(u => new { u.CalendarZone, u.CalendarDays }).FirstOrDefaultAsync(ct);
+        return (stored?.CalendarZone, stored?.CalendarDays);
+    }
+
+    /// <summary>Sets what is given and leaves what isn't: a zone the caller has checked
+    /// (<see cref="Kumbu.Core.Calendar.Zones.Find"/>), null clearing it; a week (<see cref="DayLevels.IsWeek"/>), null clearing
+    /// it. Answers both as stored afterwards.</summary>
+    public async Task<(string? Zone, string[]? Days)> SetAsync(
+        string userId, Kumbu.Core.Board.Optional<string?> zone, Kumbu.Core.Board.Optional<string[]?> days, CancellationToken ct)
+    {
+        if (days is { IsGiven: true, Value: { } week } && !DayLevels.IsWeek(week)) throw new ArgumentException("A week is seven known levels.", nameof(days));
+        var u = Builders<UserDocument>.Update;
+        var updates = new List<UpdateDefinition<UserDocument>>();
+        if (zone.IsGiven) updates.Add(zone.Value is null ? u.Unset(d => d.CalendarZone) : u.Set(d => d.CalendarZone, zone.Value));
+        if (days.IsGiven) updates.Add(days.Value is null ? u.Unset(d => d.CalendarDays) : u.Set(d => d.CalendarDays, days.Value));
+        if (updates.Count == 0)
+        {
+            var user = await Users.Find(d => d.Id == userId).Project(d => new { d.CalendarZone, d.CalendarDays }).FirstOrDefaultAsync(ct);
+            if (user is null) throw new CredentialsChangedException();
+            return (user.CalendarZone, user.CalendarDays);
+        }
+
+        var written = await Users.FindOneAndUpdateAsync<UserDocument, UserDocument>(
+            d => d.Id == userId,
+            u.Combine(updates),
+            new FindOneAndUpdateOptions<UserDocument, UserDocument>
+            {
+                ReturnDocument = ReturnDocument.After,
+                Projection = Builders<UserDocument>.Projection.Include(d => d.CalendarZone).Include(d => d.CalendarDays),
+            },
+            ct);
+        if (written is null) throw new CredentialsChangedException();
+        return (written.CalendarZone, written.CalendarDays);
     }
 
     /// <summary>Her view of the calendar of <paramref name="vaultId"/>; the default (week, no grid) when she kept none or

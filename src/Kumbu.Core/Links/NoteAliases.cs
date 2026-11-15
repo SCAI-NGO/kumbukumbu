@@ -23,14 +23,23 @@ public static class NoteAliases
     /// YAML reader builds the whole document before its budget can stop it.</summary>
     internal const int MaxFrontmatterLength = 64 * 1024;
 
-    public static IReadOnlyList<string> Of(string content)
+    /// <summary>The longest alias (in characters) a note can have, as a file name has a limit; a longer one is ignored, and
+    /// <c>links</c> on the note says so.</summary>
+    internal const int MaxLength = 200;
+
+    public static IReadOnlyList<string> Of(string content) => Read(content).Aliases;
+
+    /// <summary>How many of the note's aliases are ignored for being longer than <see cref="MaxLength"/>.</summary>
+    public static int TooLong(string content) => Read(content).TooLong;
+
+    private static (IReadOnlyList<string> Aliases, int TooLong) Read(string content)
     {
-        if (!content.StartsWith("---", StringComparison.Ordinal)) return [];
+        if (!content.StartsWith("---", StringComparison.Ordinal)) return ([], 0);
         var lines = Lines.Split(content);
         var end = Outline.FrontmatterEnd(lines);
         // Most notes have no aliases; skip parsing their front matter.
-        if (end == 0 || !lines.Take(end).Any(l => l.Contains("aliases", StringComparison.Ordinal))) return [];
-        if (lines.Take(end).Sum(l => l.Length + 1) > MaxFrontmatterLength) return [];
+        if (end == 0 || !lines.Take(end).Any(l => l.Contains("aliases", StringComparison.Ordinal))) return ([], 0);
+        if (lines.Take(end).Sum(l => l.Length + 1) > MaxFrontmatterLength) return ([], 0);
 
         object? value;
         try
@@ -41,7 +50,7 @@ public static class NoteAliases
         {
             // Frontmatter.Read turns the failures it knows into a Problem; any other one still means no aliases, never an
             // exception reaching a request (spec §1).
-            return [];
+            return ([], 0);
         }
 
         IEnumerable<string> texts = value switch
@@ -53,15 +62,22 @@ public static class NoteAliases
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var aliases = new List<string>();
+        var tooLong = 0;
         foreach (var text in texts)
         {
             var alias = text.Trim().Normalize(NormalizationForm.FormC);
             if (alias.Length == 0 || alias.IndexOfAny(Forbidden) >= 0) continue;
+            if (alias.Length > MaxLength)
+            {
+                tooLong++;
+                continue;
+            }
+
             if (seen.Add(alias)) aliases.Add(alias);
             if (aliases.Count == MaxPerNote) break;
         }
 
-        return aliases;
+        return (aliases, tooLong);
     }
 
     /// <summary>The aliases of each of <paramref name="notes"/> that has any.</summary>

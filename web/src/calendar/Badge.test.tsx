@@ -260,7 +260,7 @@ describe("the badge", () => {
     });
     renderApp("/notes/Work/inbox.md");
     await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("2 on, some overdue"));
-    await userEvent.click(await screen.findByRole("button", { name: "Done: inbox" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "To do" }));
     await waitFor(async () => expect(await treeButton()).toHaveAccessibleDescription("1 on, overdue"));
   });
 
