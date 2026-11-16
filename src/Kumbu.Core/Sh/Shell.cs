@@ -82,7 +82,7 @@ public sealed class Shell
     private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, ICallerZone zone, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
     [
         new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes), new Rg(notes, live ? pixels : null, marks),
-        new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
+        new LinksCommand(notes), new Backlinks(notes), new GraphCommand(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new CalendarCommand(notes, now, zone),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];

@@ -18,6 +18,7 @@ public static class Manual
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead; [[note#^id]] to a block
           backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
+          graph <note> [--depth N]        how notes link: a note's neighbourhood (--out, --in, --cap); graph --path a b: how two notes connect; --orphans, --hubs, --unresolved [path]
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
           calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
