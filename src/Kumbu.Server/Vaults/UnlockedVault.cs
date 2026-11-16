@@ -603,13 +603,16 @@ internal sealed record NotePayload(
     [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
     [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Restored = null,
-    [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null)
+    [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
+    [property: JsonPropertyName("created"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? CreatedAt = null,
+    [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new HistoryEntry(
             h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref), h.Message))],
-        SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true, Message);
+        SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true, Message,
+        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true);
 }
 
 /// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
@@ -715,7 +718,8 @@ internal static class Payload
         n.Path.Value, n.Content, n.LastWriter, n.LastWriteAt,
         [.. n.History.Select(h => new HistoryPayload(
             h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref), h.Message))],
-        n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null, n.Message);
+        n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null, n.Message,
+        n.CreatedAt, n.CreatedAtLeast ? true : null);
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");

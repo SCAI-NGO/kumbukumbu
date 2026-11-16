@@ -443,6 +443,24 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public void The_creation_of_a_note_survives_sealing_and_is_absent_when_not_carried()
+    {
+        var created = T0.AddDays(-3);
+        var note = New("/Work/a.md", "a") with { CreatedAt = created, CreatedAtLeast = true };
+        var back = JsonSerializer.Deserialize<NotePayload>(JsonSerializer.SerializeToUtf8Bytes(Payload.From(note)))!.ToNote(1);
+        Assert.Equal(created, back.CreatedAt);
+        Assert.Equal(DateTimeKind.Utc, back.CreatedAt!.Value.Kind);
+        Assert.True(back.CreatedAtLeast);
+
+        var plain = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        Assert.DoesNotContain("created", plain, StringComparison.Ordinal);
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[],"SeedContent":null}""";
+        var old = JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1);
+        Assert.Null(old.CreatedAt);
+        Assert.False(old.CreatedAtLeast);
+    }
+
+    [Fact]
     public async Task Trash_fails_and_leaves_no_copy_if_the_note_changed()
     {
         var (world, _, store) = await WorldAsync();

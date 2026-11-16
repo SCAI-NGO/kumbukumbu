@@ -42,8 +42,11 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var history = HistoryAfterWrite(
             current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref, current.Message),
             current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
+        var (createdAt, createdAtLeast) = NoteCreation.Of(current);
         return current with
         {
+            CreatedAt = createdAt,
+            CreatedAtLeast = createdAtLeast,
             Content = content,
             Revision = current.Revision + 1,
             LastWriter = writer,
