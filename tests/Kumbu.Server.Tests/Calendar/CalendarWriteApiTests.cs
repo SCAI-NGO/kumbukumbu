@@ -266,6 +266,24 @@ public sealed class CalendarWriteApiTests(KumbuAppFactory app) : IAsyncDisposabl
     }
 
     [Fact]
+    public async Task A_days_plus_writes_an_until_and_refuses_one_that_does_not_fit()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+
+        var made = await PostOkAsync(alice, "Work", "entries", new { day = "2037-11-12", title = "Market", time = "12:00", until = "21:00" }, HttpStatusCode.Created);
+        Assert.Equal("2037-11-12T21:00", S(made["note"]!["entry"], "until"));
+        Assert.Equal("---\nwhen: 2037-11-12T12:00\nuntil: 2037-11-12T21:00\n---\n# Market\n", await ContentAsync(alice, "Calendar/Market.md"));
+
+        foreach (var body in new object[]
+        {
+            new { day = "2037-11-12", title = "X", until = "21:00" },
+            new { day = "2037-11-12", title = "X", time = "12:00", until = "12:00" },
+            new { day = "2037-11-12", title = "X", time = "12:00", until = "9pm" },
+        })
+            Assert.Equal(HttpStatusCode.BadRequest, (await PostRefusedAsync(alice, "Work", "entries", body)).Status);
+    }
+
+    [Fact]
     public async Task On_a_card_close_is_400_naming_the_board()
     {
         var alice = await NewAsync(Api, vault: "Work");

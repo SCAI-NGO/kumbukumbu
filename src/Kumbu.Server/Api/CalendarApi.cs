@@ -89,8 +89,8 @@ public sealed record MoveEntryRequest(string Path, string When);
 public sealed record LaterRequest(string Path, string Part, string? Step = null, string? Date = null);
 
 /// <summary>A day's + (spec §7.5): <c>/&lt;vault&gt;/Calendar/&lt;title&gt;.md</c> on <c>day</c> (<c>2026-11-20</c>), at
-/// <c>time</c> (<c>14:00</c>); <c>task</c> makes it a to-do, shown <c>upcoming</c> (<c>7d</c>) early.</summary>
-public sealed record NewEntryRequest(string Day, string Title, string? Time = null, bool Task = false, string? Upcoming = null);
+/// <c>time</c> (<c>14:00</c>), and once there is a time <c>until</c> (<c>17:00</c>, the same day); <c>task</c> makes it a to-do, shown <c>upcoming</c> (<c>7d</c>) early.</summary>
+public sealed record NewEntryRequest(string Day, string Title, string? Time = null, bool Task = false, string? Upcoming = null, string? Until = null);
 
 /// <summary>The note a write changed, opened or made, with its new version and its place in the calendar.</summary>
 public sealed record WrittenView(string Path, string Version, NoteEntryView Note);
@@ -338,7 +338,7 @@ public static partial class CalendarApi
     {
         var name = await VaultNameAsync(vault, store, ct);
         var written = await WrittenAsync(
-            await calendar.AddAsync(name, body.Title, body.Day, body.Time, body.Task, body.Upcoming, ct), store, caller, zone, time, ct);
+            await calendar.AddAsync(name, body.Title, body.Day, body.Time, body.Until, body.Task, body.Upcoming, ct), store, caller, zone, time, ct);
         return TypedResults.Created(ApiPaths.Url("notes", Written(written.Path)), written);
     }
 

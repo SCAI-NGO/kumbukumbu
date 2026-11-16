@@ -233,6 +233,7 @@ The view (week or month) is remembered **per user and per calendar** on the serv
 
 - **Today** opens the day note of today (`YYYY-MM-DD.md`, anywhere in the vault; several: the last changed) or creates `/<vault>/Calendar/YYYY-MM-DD.md`; **This week** the same for `YYYY-Www.md`. A new day note starts with `# Thursday, 12 November 2026`, a week note with `# Week 46, 9–15 November 2026`, the cursor on the line below. *Maintainer:* an empty page puts people off; he sees himself writing what's on today under the date. The 0.4.0 rule that names a new note from its first heading doesn't apply (it is for "Untitled …" only).
 - **A day's +**: a small dialog asks for a **title** and an optional **time**, then creates `/<vault>/Calendar/<title>.md` with `when` that day (and time) and opens it. *Maintainer, 2026-11-13:* the appointment with a time ("Zahnarzt 14:00") is the most common entry, so the time is there for every entry, not only for to-dos. **☐ To do** in the same dialog adds `task: open`, and then **Show early: … before** appears. Nothing more; the rest is the note's frontmatter.
+- Until, once a time is given: `2026-11-16-calendar-until-on-add-design.md`.
 - Names follow the existing rules for new notes (cleaning, "Title 2" on a clash).
 
 ### 7.6 What's on

@@ -250,9 +250,9 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
         return await DayOrWeekNoteAsync(vault, week.Write() + ".md", $"# Week {week.IsoWeek}, {range}\n\n", "this week's week note", ct);
     }
 
-    /// <summary>A new entry <c>/&lt;vault&gt;/Calendar/&lt;title&gt;.md</c> on <paramref name="day"/> (at <paramref name="time"/>), a to-do
-    /// when <paramref name="task"/>; a title taken gives "Title 2", "Title 3" (spec §7.5).</summary>
-    public async Task<ShellResult> AddAsync(string vault, string title, string day, string? time, bool task, string? upcoming, CancellationToken ct)
+    /// <summary>A new entry <c>/&lt;vault&gt;/Calendar/&lt;title&gt;.md</c> on <paramref name="day"/> (at <paramref name="time"/>, until <paramref name="until"/>
+    /// the same day), a to-do when <paramref name="task"/>; a title taken gives "Title 2", "Title 3" (spec §7.5).</summary>
+    public async Task<ShellResult> AddAsync(string vault, string title, string day, string? time, string? until, bool task, string? upcoming, CancellationToken ct)
     {
         title = (title ?? "").Trim().Normalize(NormalizationForm.FormC);
         if (title.Length == 0) return Error("an entry needs a title (it becomes the note's name)");
@@ -262,6 +262,15 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
         {
             if (!TimeOnly.TryParseExact(time.Trim(), ["HH:mm", "H:mm"], Invariant, DateTimeStyles.None, out var clock)) return Error($"{time} is not a time; give 14:00");
             when = new CalendarTime(TimeKind.Time, when.Date, clock);
+        }
+
+        CalendarTime? end = null;
+        if (!string.IsNullOrWhiteSpace(until))
+        {
+            if (when.Kind != TimeKind.Time) return Error("an until needs a time");
+            if (!TimeOnly.TryParseExact(until.Trim(), ["HH:mm", "H:mm"], Invariant, DateTimeStyles.None, out var finish)) return Error($"{until} is not a time; give 17:00");
+            if (finish <= when.Clock) return Error($"until {until.Trim()} is not after {when.Clock:HH:mm}");
+            end = new CalendarTime(TimeKind.Time, when.Date, finish);
         }
 
         Upcoming? early = null;
@@ -279,6 +288,7 @@ public sealed class CalendarService(INoteStore store, NoteWriter writer, BoardSe
         for (var n = 2; taken.Contains(path.Name) || await store.IsDamagedAsync(path, ct); n++) path = folder.Child($"{title} {n}.md");
 
         List<(string Key, string? Yaml)> keys = [("when", when.Write())];
+        if (end is not null) keys.Add(("until", end.Write()));
         if (task) keys.Add(("task", "open"));
         if (early is not null) keys.Add(("upcoming", early.ToString()));
         var result = await writer.WriteAsync(path.Value, Frontmatter.Set($"# {title}\n", keys), null, ct);

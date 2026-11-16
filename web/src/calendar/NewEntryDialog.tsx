@@ -1,36 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState } from "react";
 import FormDialog from "../board/FormDialog";
-import { narrowInputClass, inputClass, labelClass } from "../components/form";
+import { narrowInputClass, inputClass, labelClass, FormError } from "../components/form";
 import type { NewEntryRequest } from "./api";
 import { dayHeading } from "./dates";
 
-/** What the dialog sends: a time and Show early only when given, Show early only for a to-do. */
-export function newEntryOf(day: string, title: string, time: string, task: boolean, early: string): NewEntryRequest {
+/** What the dialog sends: a time and Show early only when given, Until only with a time, Show early only for a to-do. */
+export function newEntryOf(day: string, title: string, time: string, until: string, task: boolean, early: string): NewEntryRequest {
   const days = Number.parseInt(early, 10);
   return {
     day,
     title: title.trim(),
     ...(time ? { time } : {}),
+    ...(time && until ? { until } : {}),
     task,
     ...(task && days > 0 ? { upcoming: `${days}d` } : {}),
   };
 }
 
-/** A day's +: a title and an optional time, ☐ To do, and for a to-do how early to show it. Nothing more. */
+/** A day's +: a title and an optional time (with an optional Until), ☐ To do, and for a to-do how early to show it. Nothing more. */
 export default function NewEntryDialog({ day, onCancel, onAdd }: { day: string; onCancel(): void; onAdd(entry: NewEntryRequest): Promise<unknown> }) {
   const id = useId();
   const [title, setTitle] = useState("");
   const [time, setTime] = useState("");
+  const [until, setUntil] = useState("");
   const [task, setTask] = useState(false);
   const [early, setEarly] = useState("");
+  // "HH:mm" strings compare in clock order.
+  const untilBeforeTime = time !== "" && until !== "" && until <= time;
   return (
     <FormDialog
       title={`Add something on ${dayHeading(day)}`}
       submitLabel="Add"
-      ready={title.trim() !== ""}
+      ready={title.trim() !== "" && !untilBeforeTime}
       onCancel={onCancel}
-      onSubmit={() => onAdd(newEntryOf(day, title, time, task, early))}
+      onSubmit={() => onAdd(newEntryOf(day, title, time, until, task, early))}
     >
       <div className="flex flex-col gap-1.5">
         <label htmlFor={`${id}-title`} className={labelClass}>
@@ -44,6 +48,18 @@ export default function NewEntryDialog({ day, onCancel, onAdd }: { day: string; 
         </label>
         <input id={`${id}-time`} type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputClass} />
       </div>
+      {time && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-baseline gap-1.5">
+            <label htmlFor={`${id}-until`} className={labelClass}>
+              Until
+            </label>
+            <span className="text-sm text-muted">(optional)</span>
+          </div>
+          <input id={`${id}-until`} type="time" value={until} onChange={(e) => setUntil(e.target.value)} className={inputClass} />
+          {untilBeforeTime && <FormError>Until is before the time</FormError>}
+        </div>
+      )}
       <label className="flex min-h-12 items-center gap-3 text-text">
         <input type="checkbox" checked={task} onChange={(e) => setTask(e.target.checked)} className="size-5 accent-accent" />
         To do

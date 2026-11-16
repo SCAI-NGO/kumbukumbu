@@ -252,6 +252,42 @@ describe("the calendar's week", () => {
     );
   });
 
+  it("the day's plus offers Until only once there is a time, and sends it only when filled", async () => {
+    const fetch = api(calendar(), {
+      "POST /api/vaults/Work/calendar/entries": () => json(201, written("/Work/Calendar/Market.md")),
+    });
+    renderApp("/calendar/Work");
+    await title();
+    await userEvent.click(screen.getByRole("button", { name: "Add something on Thursday, 12 November" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByLabelText("Until")).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Title"), "Market");
+    await userEvent.type(within(dialog).getByLabelText("Time"), "12:00");
+    await userEvent.type(within(dialog).getByLabelText("Until"), "21:00");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(async () =>
+      expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/entries")).toEqual([{ day: "2026-11-12", title: "Market", time: "12:00", until: "21:00", task: false }]),
+    );
+  });
+
+  it("the day's plus refuses an Until that is not after the time", async () => {
+    const fetch = api(calendar(), {});
+    renderApp("/calendar/Work");
+    await title();
+    await userEvent.click(screen.getByRole("button", { name: "Add something on Thursday, 12 November" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Title"), "Market");
+    await userEvent.type(within(dialog).getByLabelText("Time"), "12:00");
+    await userEvent.type(within(dialog).getByLabelText("Until"), "12:00");
+    expect(within(dialog).getByText("Until is before the time")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    await userEvent.clear(within(dialog).getByLabelText("Time"));
+    expect(within(dialog).queryByLabelText("Until")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeEnabled();
+    expect(await bodies(fetch, "POST", "/api/vaults/Work/calendar/entries")).toEqual([]);
+  });
+
   it("+ Today opens or creates the day note", async () => {
     const fetch = api(calendar(), {
       "POST /api/vaults/Work/calendar/today": () => json(200, written("/Work/Calendar/2026-11-13.md")),
