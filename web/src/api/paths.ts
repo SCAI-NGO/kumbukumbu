@@ -48,8 +48,8 @@ export const markerOf = (folder: string) => `${folder.split("/").slice(2).join("
 /** A marker's path as its folder (`/Work/Drafts/`); any other path as it is. */
 export const shownPath = (path: string) => (isMarker(path) ? path.slice(0, path.length - MARKER.length) : path);
 
-/** The formats Kumbu² keeps besides notes, as the server accepts them (any case). */
-const attachmentKinds: Record<string, FileKind> = { ".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image" };
+/** The formats Kumbu² keeps besides notes, as the server accepts them (any case); in a skill's folder an `.svg` is text. */
+const attachmentKinds: Record<string, FileKind> = { ".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image", ".svg": "image" };
 
 /** The extensions of the text files a skill's folder keeps (`AttachmentFormat.TextExtensions`), any case. */
 export const textExtensions = [".py", ".sh", ".js", ".mjs", ".ts", ".json", ".yaml", ".yml", ".toml", ".txt", ".csv", ".xml", ".html", ".css", ".svg"];

@@ -21,7 +21,7 @@ describe("planUpload", () => {
     ]);
   });
 
-  it("accepts the six formats and refuses docx with the formats named", () => {
+  it("accepts the seven formats and refuses docx with the formats named", () => {
     const { notes, files, skipped } = planUpload([
       entry("a.pdf"),
       entry("b.PNG"),
@@ -29,14 +29,15 @@ describe("planUpload", () => {
       entry("d.Jpeg"),
       entry("e.gif"),
       entry("f.webp"),
+      entry("h.Svg"),
       entry("g.md"),
       entry("report.docx"),
       entry(".png"),
     ]);
-    expect(files.map((f) => f.path)).toEqual(["a.pdf", "b.PNG", "c.jpg", "d.Jpeg", "e.gif", "f.webp"]);
+    expect(files.map((f) => f.path)).toEqual(["a.pdf", "b.PNG", "c.jpg", "d.Jpeg", "e.gif", "f.webp", "h.Svg"]);
     expect(notes.map((f) => f.path)).toEqual(["g.md"]);
     expect(skipped).toEqual([
-      { path: "report.docx", reason: "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp)" },
+      { path: "report.docx", reason: "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)" },
       { path: ".png", reason: NOT_SUPPORTED },
     ]);
   });
@@ -45,7 +46,7 @@ describe("planUpload", () => {
     // iOS converts HEIC on pick when the input lists concrete types; one that still arrives (a folder, a drop) is refused.
     expect(planUpload([entry("IMG_0001.HEIC")]).skipped).toEqual([{ path: "IMG_0001.HEIC", reason: NOT_SUPPORTED }]);
     expect(NOT_SUPPORTED).toContain("(.pdf)");
-    expect(NOT_SUPPORTED).toContain("(.png, .jpg, .jpeg, .gif, .webp)");
+    expect(NOT_SUPPORTED).toContain("(.png, .jpg, .jpeg, .gif, .webp, .svg)");
   });
 
   it("an image over 15 MB is offered for shrinking, a PDF over 15 MB is refused naming 15 MB", () => {
@@ -53,16 +54,21 @@ describe("planUpload", () => {
       entry("fits.png", MAX_ATTACHMENT_BYTES),
       entry("photo.jpg", MAX_ATTACHMENT_BYTES + 1),
       entry("scan.pdf", MAX_ATTACHMENT_BYTES + 1),
+      entry("map.svg", MAX_ATTACHMENT_BYTES + 1),
     ]);
     expect(MAX_ATTACHMENT_BYTES).toBe(15 * 1024 * 1024);
     expect(files.map((f) => f.path)).toEqual(["fits.png"]);
     expect(tooLarge.map((f) => f.path)).toEqual(["photo.jpg"]);
-    expect(skipped).toEqual([{ path: "scan.pdf", reason: "larger than 15 MB, the limit for a file" }]);
+    // An SVG is never shrunk or converted.
+    expect(skipped).toEqual([
+      { path: "scan.pdf", reason: "larger than 15 MB, the limit for a file" },
+      { path: "map.svg", reason: "larger than 15 MB, the limit for a file" },
+    ]);
   });
 
   it("the file input lists concrete types, not image/*", () => {
     const types = ACCEPT.split(",");
-    expect(types).toEqual(expect.arrayContaining(".pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp".split(",")));
+    expect(types).toEqual(expect.arrayContaining(".pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,application/pdf,image/png,image/jpeg,image/gif,image/webp,image/svg+xml".split(",")));
     expect(types).toEqual(expect.arrayContaining([".md", ".markdown"]));
     expect(types).toEqual(expect.arrayContaining([".py", ".sh", ".json", ".svg", ".html"]));
     expect(types.filter((t) => t.endsWith("/*"))).toEqual([]);
