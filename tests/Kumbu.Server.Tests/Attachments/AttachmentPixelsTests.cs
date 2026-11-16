@@ -76,6 +76,24 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_svg_claiming_a_huge_canvas_goes_to_the_sidecar_with_its_stored_size()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("huge.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100000\" height=\"50000\"/>"u8.ToArray());
+        await user.CreateFileAsync("plain.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"u8.ToArray());
+        var pixels = Pixels(host, user);
+
+        var huge = await pixels.ImageAsync(At(user, "huge.svg"), await StateAsync(host, user, "huge.svg"), SizeStep.Small, null, 0, null, Ct);
+        await pixels.ImageAsync(At(user, "plain.svg"), await StateAsync(host, user, "plain.svg"), SizeStep.Small, null, 0, null, Ct);
+
+        Assert.Equal([(100000, 50000), null], sidecar.SvgSizes);
+        Assert.Equal((100000d, 50000d), (huge.OriginalWidth, huge.OriginalHeight));
+        Assert.True(Math.Max(huge.Width, huge.Height) <= 768);
+    }
+
+    [Fact]
     public async Task With_the_sidecar_down_rendering_says_it_is_unavailable()
     {
         await using var host = Host(app, new FakePdfSidecar { Down = true });
@@ -240,6 +258,8 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) => throw new SidecarException(Code, Message);
 
         public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<Picture> RenderSvgAsync(ReadOnlyMemory<byte> svg, (int Width, int Height)? size, StepLimits target, Crop? crop, int rotate, CancellationToken ct) => throw new SidecarException(Code, Message);
 
         public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct) => throw new SidecarException(Code, Message);
 

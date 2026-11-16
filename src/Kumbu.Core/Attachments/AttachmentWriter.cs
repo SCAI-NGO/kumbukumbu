@@ -48,7 +48,8 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     /// <summary>
     /// Creates an attachment (no version) or overwrites it (the version the writer last read). The bytes are stored
     /// before the record: if the record then can't be written, the blob is left unreferenced, and the blob sweep
-    /// releases it. <paramref name="dimensions"/> are an image's displayed width and height, read by the caller.
+    /// releases it. <paramref name="dimensions"/> are an image's displayed width and height, read by the caller; an
+    /// SVG's are read here, from its root (<see cref="SvgImage.Size"/>), as <c>write</c> stores one too.
     /// </summary>
     public async Task<WriteResult> WriteAsync(
         string pathText, ReadOnlyMemory<byte> bytes, (int W, int H)? dimensions, string? version, CancellationToken ct)
@@ -78,7 +79,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
         if (AttachmentFormat.Problem(path, bytes.Span) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
 
-        var image = format.Kind == AttachmentKind.Image ? dimensions : null;
+        var image = format == AttachmentFormat.Svg ? SvgImage.Size(bytes.Span) : format.Kind == AttachmentKind.Image ? dimensions : null;
         var existing = await store.GetAttachmentAsync(path, ct);
         if (version is null)
         {
