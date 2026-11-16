@@ -109,9 +109,9 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
 
 // An SVG is drawn, not scaled: at the size step whatever canvas it claims, enlarged too. Its size
 // is the one the server stored from its root (width and height, else its viewBox); without one it
-// is drawn as if square, around Skia's own size (300 × 150 for a file that names none). Skia's own
-// size can differ from the stored one (for a viewBox alone it is 150 px high), so the image is drawn
-// into the stored box with its own aspect, from the top left. Skia loads nothing an SVG refers to:
+// is drawn as if square, 300 × 300 (300 the width a browser gives an SVG that names none). Skia's
+// own size can differ from that box (for a viewBox alone it is 150 px high, for mm it converts), so
+// the image is drawn into the box with its own aspect, from the top left. Skia loads nothing an SVG refers to:
 // no <image href>, no file, no @import (pdf/test/svg.test.ts keeps it that way).
 export async function renderSvg(svg: Uint8Array, t: Target, size?: { width: number; height: number }, crop?: Crop, rotate = 0): Promise<RenderedImage> {
   if (imageHeader(svg)) throw notImage();
@@ -122,8 +122,7 @@ export async function renderSvg(svg: Uint8Array, t: Target, size?: { width: numb
     throw notImage();
   }
   if (!(image.width > 0 && image.height > 0)) throw notImage();
-  const side = Math.max(image.width, image.height);
-  const { width: ow, height: oh } = size ?? { width: side, height: side };
+  const { width: ow, height: oh } = size ?? { width: 300, height: 300 };
   const k = Math.min(ow / image.width, oh / image.height);
   const [tw, th] = rotate === 90 || rotate === 270 ? [oh, ow] : [ow, oh];
   const region = crop ?? { x: 0, y: 0, w: tw, h: th };
