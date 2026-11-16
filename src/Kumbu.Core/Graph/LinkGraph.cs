@@ -106,7 +106,7 @@ public sealed class LinkGraph
             {
                 if (Ghost(resolution))
                 {
-                    ghosts.TryAdd(GhostKey.Of(link.Target), link.Target.Trim().Normalize(NormalizationForm.FormC));
+                    ghosts.TryAdd(GhostKeyOf(source, link.Target), link.Target.Trim().Normalize(NormalizationForm.FormC));
                     continue;
                 }
 
@@ -137,7 +137,7 @@ public sealed class LinkGraph
                     | (resolution.ViaAlias ? EdgeFlags.Alias : 0)
                     | (resolution.Kind == LinkKind.Ambiguous ? EdgeFlags.Ambiguous : 0);
                 IEnumerable<int> targets = Ghost(resolution)
-                    ? [index["?" + GhostKey.Of(link.Target)]]
+                    ? [index["?" + GhostKeyOf(source, link.Target)]]
                     : Targets(resolution).Select(t => index[t.Value]);
                 foreach (var to in targets)
                 {
@@ -156,6 +156,21 @@ public sealed class LinkGraph
     // Links to a heading of the note itself name no target and make no edge, as backlinks skip them today.
     private static IEnumerable<ResolvedLink> Edged(IEnumerable<ResolvedLink> links) =>
         links.Where(l => l.Link.Target.Trim().Length > 0 && l.Resolution.Kind != LinkKind.Self);
+
+    /// <summary>A "./" or "../" target names a path relative to the source's folder, so its ghost is that path from the
+    /// vault's root, as the resolver reads it; one that leaves the vault keeps its text.</summary>
+    private static string GhostKeyOf(VaultPath source, string target)
+    {
+        var text = target.Trim();
+        if ((text.StartsWith("./", StringComparison.Ordinal) || text.StartsWith("../", StringComparison.Ordinal))
+            && VaultPath.TryParse($"/{string.Join('/', source.Segments.SkipLast(1))}/{text}", out var relative)
+            && relative.Vault == source.Vault && relative.Segments.Count >= 2)
+        {
+            text = "/" + string.Join('/', relative.Segments.Skip(1));
+        }
+
+        return GhostKey.Of(text);
+    }
 
     private static bool Ghost(LinkResolution resolution) =>
         resolution.Kind == LinkKind.NotFound || resolution is { Kind: LinkKind.Attachment, Target: null };

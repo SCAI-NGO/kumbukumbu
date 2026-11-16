@@ -92,6 +92,18 @@ public class LinkGraphTests
     }
 
     [Fact]
+    public void Relative_ghosts_belong_to_their_folder()
+    {
+        var graph = Build(
+            ("/W/a/X.md", "[[./Anna]]\n[[../../Anna]]\n"), ("/W/b/Y.md", "[[./Anna]]"), ("/W/a/Z.md", "[[../Anna]]"),
+            ("/W/Q.md", "[[a/Anna]] [x](/a/Anna.md)"));
+
+        Assert.Equal(["?../../ANNA", "?/A/ANNA", "?/ANNA", "?/B/ANNA", "?A/ANNA"],
+            graph.Nodes.Where(n => n.Kind == NodeKind.Ghost).Select(n => n.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(2, graph.InEdges(Index(graph, "?/A/ANNA")).Count);
+    }
+
+    [Fact]
     public void Ghost_becomes_note_when_it_exists()
     {
         var graph = Build(("/W/A.md", "[[Anna]]"), ("/W/B.md", "[[anna]]"), ("/W/Anna.md", ""));
