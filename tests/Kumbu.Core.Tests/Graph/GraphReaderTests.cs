@@ -29,6 +29,18 @@ public class GraphReaderTests
     }
 
     [Fact]
+    public async Task Backlinks_leave_out_what_the_content_no_longer_has()
+    {
+        // Written between the graph and the read of the line texts: C is gone, A got shorter.
+        var store = new InMemoryNoteStore(("/W/A.md", "[[B]]\n"), ("/W/B.md", ""));
+        var reader = Reader(store, ("/W/A.md", "[[B]]\nx\n[[B]]\n"), ("/W/B.md", ""), ("/W/C.md", "[[B]]\n"));
+
+        var backlinks = await NoteLinks.ToAsync(reader, P("/W/B.md"), CancellationToken.None);
+
+        Assert.Equal([new Backlink(P("/W/A.md"), 0, "[[B]]", Ambiguous: false)], backlinks);
+    }
+
+    [Fact]
     public async Task Links_of_the_current_content_come_from_the_graph()
     {
         var store = new InMemoryNoteStore(("/W/A.md", "nothing\n"), ("/W/B.md", ""));

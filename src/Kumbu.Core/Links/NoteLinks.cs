@@ -39,13 +39,14 @@ public static class NoteLinks
         var graph = await notes.GraphAsync(vault, ct);
         if (graph.IndexOf(path) is not { } node || graph.InEdges(node).Count == 0) return [];
         var contents = (await notes.ReadNotesUnderAsync(vault, ct)).ToDictionary(n => n.Path, n => n.Content);
-        return To(graph, p => contents[p], path);
+        return To(graph, contents.GetValueOrDefault, path);
     }
 
     /// <summary><see cref="ToAsync"/> from <paramref name="graph"/>, each line's text from <paramref name="content"/>:
     /// per in-edge, the lines of its source where a link leads to <paramref name="target"/>, then those where one is
-    /// ambiguous with it among the candidates.</summary>
-    public static IReadOnlyList<Backlink> To(LinkGraph graph, Func<VaultPath, string> content, VaultPath target)
+    /// ambiguous with it among the candidates. The content is read after the graph, so a write in between may have
+    /// removed a source (null) or shortened it: what it no longer has is left out.</summary>
+    public static IReadOnlyList<Backlink> To(LinkGraph graph, Func<VaultPath, string?> content, VaultPath target)
     {
         if (graph.IndexOf(target) is not { } node) return [];
         var exact = new List<Backlink>();
@@ -53,8 +54,9 @@ public static class NoteLinks
         foreach (var edge in graph.InEdges(node))
         {
             var source = graph.Nodes[graph.Edges[edge].From].Path!;
-            var lines = Lines.Split(content(source));
-            var links = graph.LinksOf(source).Where(l => l.Link.Target.Trim().Length > 0).ToList();
+            if (content(source) is not { } text) continue;
+            var lines = Lines.Split(text);
+            var links = graph.LinksOf(source).Where(l => l.Link.Target.Trim().Length > 0 && l.Link.Line < lines.Count).ToList();
             exact.AddRange(links.Where(l => l.Resolution.Target == target).Select(l => l.Link.Line).Distinct()
                 .Select(line => new Backlink(source, line, lines[line], Ambiguous: false)));
             maybe.AddRange(links
