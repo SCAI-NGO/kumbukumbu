@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Text;
+using System.Xml;
+using System.Xml.Linq;
+using Kumbu.Core.Attachments;
 
 namespace Kumbu.Server.Attachments;
 
@@ -9,21 +13,65 @@ namespace Kumbu.Server.Attachments;
 /// comments, text and thumbnails. What is kept is listed, not what goes, so anything unknown goes too. An orientation
 /// other than 1 is kept as a minimal EXIF, so the image doesn't turn; an ICC profile is kept for its colours, with the
 /// header fields that say who made it, on what and when zeroed. The pixels are never decoded: the walk copies the
-/// segments, chunks or blocks it keeps byte for byte.
+/// segments, chunks or blocks it keeps byte for byte. An SVG keeps the elements and attributes of its drawing.
 /// </summary>
 public static class ImageMetadata
 {
     /// <summary>The image without EXIF, XMP, IPTC, comments and text; an orientation other than 1 kept as a minimal
-    /// EXIF. Null if the bytes don't parse as <paramref name="mediaType"/> (image/jpeg, image/png, image/gif,
-    /// image/webp) or it is another type. Never throws for malformed content.</summary>
+    /// EXIF; an SVG as <see cref="Svg"/> keeps it. Null if the bytes don't parse as <paramref name="mediaType"/>
+    /// (image/jpeg, image/png, image/gif, image/webp, image/svg+xml) or it is another type. Never throws for malformed content.</summary>
     public static byte[]? Strip(ReadOnlySpan<byte> file, string mediaType) => mediaType.ToLowerInvariant() switch
     {
         "image/jpeg" => Jpeg(file),
         "image/png" => Png(file),
         "image/gif" => Gif(file),
         "image/webp" => WebP(file),
+        "image/svg+xml" => Svg(file),
         _ => null,
     };
+
+    /// <summary>The namespaces an SVG's drawing is in; an editor's own (Inkscape's, Sodipodi's, Illustrator's, RDF and
+    /// Dublin Core in <c>metadata</c>) hold names, paths on the author's disk and settings, and go.</summary>
+    private static readonly HashSet<string> SvgNamespaces = ["", SvgImage.Namespace, "http://www.w3.org/1999/xlink", XNamespace.Xml.NamespaceName];
+
+    private static readonly XmlReaderSettings SvgReading = new() { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null };
+
+    /// <summary>
+    /// An SVG with the elements and attributes of <see cref="SvgNamespaces"/> only, without <c>metadata</c>, comments,
+    /// processing instructions and the DTD; the drawing's text, styles and whitespace as they were.
+    /// </summary>
+    private static byte[]? Svg(ReadOnlySpan<byte> file)
+    {
+        if (SvgImage.Problem("", file) is not null) return null;
+        XDocument document;
+        try
+        {
+            using var reader = XmlReader.Create(new MemoryStream(file.ToArray(), writable: false), SvgReading);
+            document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+
+        var root = document.Root!;
+        var drawing = root.Name.Namespace;
+        root.DescendantNodes().Where(n => n is XComment or XProcessingInstruction).Remove();
+        root.Descendants().Where(e => e.Name.Namespace != drawing || e.Name.LocalName == "metadata").Remove();
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            element.Attributes().Where(a => a.IsNamespaceDeclaration ? !SvgNamespaces.Contains(a.Value) : !SvgNamespaces.Contains(a.Name.NamespaceName)).Remove();
+        }
+
+        // The root alone: what lies around it (the DTD, comments, processing instructions) stays behind.
+        using var stripped = new MemoryStream();
+        using (var writer = XmlWriter.Create(stripped, new XmlWriterSettings { Encoding = new UTF8Encoding(false), OmitXmlDeclaration = true }))
+        {
+            root.Save(writer);
+        }
+
+        return stripped.ToArray();
+    }
 
     /// <summary>A big-endian TIFF block whose IFD0 holds the orientation alone.</summary>
     private static byte[] MinimalExif(int orientation) =>

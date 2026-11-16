@@ -544,4 +544,59 @@ public class ImageMetadataTests
         Assert.Null(ImageMetadata.Strip(Png(Ihdr, text, idat, PngChunk("IEND", [])), "image/png"));
         Assert.Null(ImageMetadata.Strip(Png(Ihdr, Ihdr, idat, PngChunk("IEND", [])), "image/png"));
     }
+
+    /// <summary>An SVG as Inkscape saves it: a DTD, comments, its own namespaces with the file's name and the
+    /// export folder on the author's disk, and RDF metadata naming the author.</summary>
+    internal const string InkscapeSvg = """
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+        <!-- Created with Inkscape by Alice -->
+        <?xml-stylesheet href="style.css"?>
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+             xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+             xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"
+             width="200" height="100" viewBox="0 0 200 100" sodipodi:docname="plan-alice.svg" inkscape:export-filename="/home/alice/plans/plan.png">
+          <sodipodi:namedview id="view" inkscape:zoom="2"/>
+          <metadata><rdf:RDF><dc:creator>Alice Example</dc:creator></rdf:RDF></metadata>
+          <title>Pump plan</title>
+          <style>rect { fill: #36c; }</style>
+          <defs><linearGradient id="g"><stop offset="0" stop-color="red"/></linearGradient></defs>
+          <g inkscape:label="Layer 1" inkscape:groupmode="layer"><rect width="200" height="100" xml:space="preserve"/><use xlink:href="#g"/></g>
+          <text x="10" y="50">Pump <tspan>A</tspan></text>
+        </svg>
+        """;
+
+    [Fact]
+    public void Svg_keeps_its_drawing_and_loses_comments_metadata_and_foreign_namespaces()
+    {
+        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml")!);
+
+        foreach (var gone in new[] { "Alice", "alice", "DOCTYPE", "<!--", "xml-stylesheet", "inkscape", "sodipodi", "rdf", "metadata", "purl.org" })
+        {
+            Assert.DoesNotContain(gone, stripped, StringComparison.Ordinal);
+        }
+
+        foreach (var kept in new[] { "<title>Pump plan</title>", "rect { fill: #36c; }", "viewBox=\"0 0 200 100\"", "xlink:href=\"#g\"", "stop-color=\"red\"", "xml:space=\"preserve\"", "Pump <tspan>A</tspan>" })
+        {
+            Assert.Contains(kept, stripped, StringComparison.Ordinal);
+        }
+
+        Assert.Null(Kumbu.Core.Attachments.SvgImage.Problem("x.svg", Encoding.UTF8.GetBytes(stripped)));
+        Assert.Equal((200, 100), Kumbu.Core.Attachments.SvgImage.Size(Encoding.UTF8.GetBytes(stripped)));
+    }
+
+    [Fact]
+    public void Svg_without_a_namespace_keeps_its_elements()
+    {
+        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip("<svg width=\"4\" height=\"4\"><!-- x --><rect width=\"4\" height=\"4\"/></svg>"u8, "image/svg+xml")!);
+
+        Assert.Equal("<svg width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" /></svg>", stripped);
+    }
+
+    [Fact]
+    public void What_isnt_an_svg_strips_to_nothing()
+    {
+        Assert.Null(ImageMetadata.Strip("<html/>"u8, "image/svg+xml"));
+        Assert.Null(ImageMetadata.Strip("<svg"u8, "image/svg+xml"));
+    }
 }
