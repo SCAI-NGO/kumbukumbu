@@ -149,8 +149,10 @@ public sealed class UnlockedVault
             var extracts = ImmutableDictionary.CreateBuilder<VaultPath, (string Content, LinkExtract Extract)>();
             foreach (var (path, (_, note)) in notes) extracts[path] = Extract(path, note.Content);
 
-            Extracts = extracts.ToImmutable();
-            var graph = LinkGraph.Build(Name, Extracts.ToImmutableDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
+            // Built from what this build holds: a writer's ExtractOf may replace the field meanwhile.
+            var held = extracts.ToImmutable();
+            Extracts = held;
+            var graph = LinkGraph.Build(Name, held.ToImmutableDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
             if (_graph is not { } previous || !graph.SameAs(previous.Graph)) _graphCounter++;
             graph = graph.WithVersion($"{_graphEpoch}.{_graphCounter}");
             _graph = (graph, notes, attachments);
