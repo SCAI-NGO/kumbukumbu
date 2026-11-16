@@ -85,6 +85,24 @@ public sealed class GraphApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task One_vault_named_in_two_spellings_is_drawn_once()
+    {
+        var user = await RestClient.NewAsync(app.PublicApi, "Caf\u00e9");
+        await user.CreateAsync("a.md", "# A\n\n[[b]]\n");
+        await user.CreateAsync("b.md", "# B\n");
+        var decomposed = "Cafe\u0301";
+
+        using var once = await user.GetAsync("/api/graph?vault=Caf%C3%A9");
+        using var twice = await user.GetAsync($"/api/graph?vault=Caf%C3%A9&vault={Uri.EscapeDataString(decomposed)}");
+
+        Assert.Equal(HttpStatusCode.OK, twice.StatusCode);
+        Assert.Equal(once.Headers.ETag!.Tag, twice.Headers.ETag!.Tag);
+        var graph = await RestClient.JsonAsync(twice);
+        Assert.Equal(["a", "b"], Titles(graph));
+        Assert.Single(graph["edges"]!.AsArray());
+    }
+
+    [Fact]
     public async Task Prose_edit_keeps_the_etag()
     {
         var user = await WorkAsync();

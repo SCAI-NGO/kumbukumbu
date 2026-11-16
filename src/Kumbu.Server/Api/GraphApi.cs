@@ -59,10 +59,14 @@ public static class GraphApi
         HttpContext http, INoteStore store, CancellationToken ct)
     {
         var have = await store.ListVaultsAsync(ct);
-        var names = vault is { Length: > 0 } ? vault.Distinct(StringComparer.Ordinal).ToList() : [.. have.Order(TextOrder.Default)];
+        // Names are normalised (NFC) before they are compared: two spellings of one vault are one vault.
+        var names = vault is { Length: > 0 }
+            ? vault.Select(v => ApiPaths.Parse(v, null, note: false).Segments[0]).Distinct(StringComparer.Ordinal).ToList()
+            : [.. have.Order(TextOrder.Default)];
+        if (names.Count > have.Count) throw ApiErrors.BadRequest($"You have {have.Count} vaults; name each at most once.");
         foreach (var name in names)
         {
-            await NoteApi.RequireVaultAsync(store, ApiPaths.Parse(name, null, note: false), ct);
+            await NoteApi.RequireVaultAsync(store, VaultPath.Root.Child(name), ct);
         }
 
         var filter = Filter(path, tag, days, attachments, ghosts, archive, scope: null);
