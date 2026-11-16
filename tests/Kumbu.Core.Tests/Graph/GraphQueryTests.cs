@@ -181,6 +181,23 @@ public class GraphQueryTests
         Assert.Empty(GraphQueries.Unresolved(graph, With(f => f with { Ghosts = false })));
     }
 
+    // Below a path, a ghost counts only the notes there that link to it, and is ordered by them: Wide has more sources in
+    // all, Near more below /W/In.
+    [Fact]
+    public void Unresolved_below_a_path_counts_the_notes_there()
+    {
+        var graph = Build(
+            ("/W/In/A.md", "[[Near]] [[Wide]]"), ("/W/In/B.md", "[[Near]]"),
+            ("/W/Out/C.md", "[[Wide]]"), ("/W/Out/D.md", "[[Wide]]"), ("/W/Out/E.md", "[[Wide]] [[Far]]"));
+
+        var unresolved = GraphQueries.Unresolved(graph, With(f => f with { Paths = [P("/W/In")] }));
+
+        Assert.Equal(["Near", "Wide"], unresolved.Select(u => graph.Nodes[u.Ghost].Title));
+        Assert.Equal([("/W/In/A.md", 0), ("/W/In/B.md", 0)], unresolved[0].From.Select(f => (f.Source.Value, f.Line)));
+        Assert.Equal([("/W/In/A.md", 0)], unresolved[1].From.Select(f => (f.Source.Value, f.Line)));
+        Assert.Equal(["Wide", "Near", "Far"], GraphQueries.Unresolved(graph, GraphFilter.All).Select(u => graph.Nodes[u.Ghost].Title));
+    }
+
     [Fact]
     public void Bundle_stops_at_depth_and_at_refused_notes()
     {

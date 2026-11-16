@@ -282,4 +282,78 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         var shown = await RestClient.JsonAsync(await world.Alice.GetAsync("/api/graph"));
         Assert.Contains("geheim", Titles(shown));
     }
+
+    // One node and the paths answer a hidden vault, its notes and its attachment as they answer a vault Alice never had.
+    [Fact]
+    public async Task Discreet_vault_hidden_from_node_and_paths()
+    {
+        var world = await HiddenWorld.NewAsync(app.PublicApi);
+        await world.HideAsync();
+
+        foreach (var vault in new[] { "Tagebuch", "Familie" })
+        {
+            await world.AsNowhereAsync(vault, HttpMethod.Get, "/api/graph/node?path=/{v}/geheim.md");
+            await world.AsNowhereAsync(vault, HttpMethod.Get, "/api/graph/node?path=/{v}/bild.png");
+            await world.AsNowhereAsync(vault, HttpMethod.Get, "/api/graph/paths?from=/{v}/geheim.md&to=/{v}/alt.md");
+        }
+
+        using var hidden = await world.Alice.GetAsync("/api/graph/paths?from=/Tagebuch/geheim.md&to=/Tagebuch/alt.md");
+        Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+
+        await world.RevealAsync();
+        using var node = await world.Alice.GetAsync("/api/graph/node?path=/Tagebuch/geheim.md");
+        Assert.Equal(HttpStatusCode.OK, node.StatusCode);
+        var paths = await RestClient.JsonAsync(await world.Alice.GetAsync("/api/graph/paths?from=/Tagebuch/geheim.md&to=/Tagebuch/alt.md"));
+        Assert.Equal("none", paths["why"]!.GetValue<string>());
+    }
+
+    // A links one node of each kind a flag hides, and reaches Z through a day note, an archived note and a tagged note.
+    private async Task<RestClient> KindsAsync()
+    {
+        var user = await RestClient.NewAsync(app.PublicApi, "Work");
+        await user.CreateAsync("a.md", "# A\n\n#t [[2026-11-12]] [[old]] [[tagged]] [[Nobody]] ![[pic.png]]\n");
+        await user.CreateAsync("2026-11-12.md", "[[z]]\n");
+        await user.CreateAsync("_archive/old.md", "[[z]]\n");
+        await user.CreateAsync("tagged.md", "#t [[z]]\n");
+        await user.CreateAsync("z.md", "# Z\n");
+        await user.CreateAsync("sub/deep.md", "[[a]]\n");
+        await user.CreateFileAsync("pic.png", FileApiTests.Png(4, 4));
+        return user;
+    }
+
+    [Theory]
+    [InlineData("", "2026-11-12|Nobody|a|deep|pic.png|tagged|z")]
+    [InlineData("days=false", "Nobody|a|deep|pic.png|tagged|z")]
+    [InlineData("attachments=false", "2026-11-12|Nobody|a|deep|tagged|z")]
+    [InlineData("ghosts=false", "2026-11-12|a|deep|pic.png|tagged|z")]
+    [InlineData("archive=true", "2026-11-12|Nobody|a|deep|old|pic.png|tagged|z")]
+    [InlineData("tag=t", "Nobody|a|pic.png|tagged")]
+    [InlineData("path=/Work/sub", "deep")]
+    public async Task Global_graph_takes_each_filter(string query, string titles)
+    {
+        var user = await KindsAsync();
+
+        using var response = await user.GetAsync($"/api/graph?{query}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(titles.Split('|'), Sorted(await RestClient.JsonAsync(response)));
+    }
+
+    [Theory]
+    [InlineData("", 2)]
+    [InlineData("days=false", 1)]
+    [InlineData("attachments=false", 2)]
+    [InlineData("ghosts=false", 2)]
+    [InlineData("archive=true", 3)]
+    [InlineData("tag=t", 1)]
+    public async Task Paths_take_each_filter(string query, int count)
+    {
+        var user = await KindsAsync();
+
+        var found = await RestClient.JsonAsync(await user.GetAsync($"/api/graph/paths?from=/Work/a.md&to=/Work/z.md&{query}"));
+
+        Assert.Equal(count, found["paths"]!.AsArray().Count);
+        Assert.All(found["paths"]!.AsArray(), p => Assert.Equal(2, p!.AsArray().Count));
+        Assert.DoesNotContain("pic.png", Titles(found));
+    }
 }
