@@ -30,3 +30,15 @@ Docs: `README.md` (formats), `docs/security-architecture.md` (SVG: why `<img>` a
 ## Out
 
 Inline SVG and a sanitiser (backlog, towards 1.0); ` ```svg ` code blocks (not native in Obsidian); `edit` on an SVG; searching SVG text.
+
+## Decided while building
+
+Details the decisions above left open, each with its reason; one touch point moved.
+
+- **The check and the size live in `src/Kumbu.Core/Attachments/SvgImage.cs`, not in `ImageHeader.cs`.** Why: `write` (in Core) stores an SVG, and the size is stored with it, so the attachment writer reads it itself for every way in (`write`, `/api/files`, `/dav`, a skill's copy); the server's `ImageHeader` stays the raster images' header guard, which an SVG skips.
+- **One side and a viewBox:** `width="800"` with `viewBox="0 0 100 50"` is 800 × 400, as a browser shows it. Sizes are rounded to whole pixels, at least 1; a side beyond what an `int` holds counts as none.
+- **A file whose DTD declares entities and whose document uses one is refused** as not well-formed (the entity is undeclared once the DTD is ignored). Older Illustrator exports do that; they are rare, and resolving entities is what decision 2 rules out.
+- **The sidecar draws an SVG on a route of its own, `POST /render/svg`,** with the stored size as `width` and `height`, so that a crop counts in the size `cat` reports and the server's and the sidecar's sizes can't drift apart. Without a stored size it draws a square of 300 × 300 (300 the width a browser gives an SVG that names none). It draws at the size step, enlarged too, never limited by the canvas the file claims.
+- **Publishing strips an SVG** as it strips a photo's EXIF (`ImageMetadata.Strip`): it keeps the elements and attributes of the SVG, XLink and XML namespaces (and none), and drops comments, processing instructions, the DTD, `metadata` and an editor's own namespaces. Why: an Inkscape file names its author and paths on their disk (`sodipodi:docname`, `inkscape:export-filename`), and without a strip a published SVG would have become plain text, against decision 3. XHTML inside a `foreignObject` goes too.
+- **An SVG image isn't moved or renamed into a skill's folder,** where `.svg` is a text file: it is refused with a sentence that says so, as other format changes are.
+- **The Obsidian plugin** lives in its own repository and wasn't checked from here: the sync's version list now names SVGs, with kind `image`, to a client that asks with `attachments=1`. Whether the plugin 0.2 keeps, ignores or mistakes an `.svg` entry is to be checked there before the release.
