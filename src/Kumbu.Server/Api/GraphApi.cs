@@ -39,8 +39,8 @@ public sealed record GraphPathsView(
     IReadOnlyList<GraphNodeView> Nodes, IReadOnlyList<int[]> Edges, IReadOnlyList<int[]> Paths, bool More, string Why);
 
 /// <summary>The graph of links between notes (graph backend spec §7.2), over the vaults the caller has: a hidden discreet vault
-/// answers 404 like an unknown one. The global and the local graph carry the vault's <c>ETag</c> (several vaults: theirs joined
-/// with <c>,</c> in the order asked), which changes with a link and not with prose.</summary>
+/// answers 404 like an unknown one. The global and the local graph carry an <c>ETag</c> of the vaults' names and their graphs'
+/// versions (several vaults: in the order asked), which changes with a link or a rename and not with prose.</summary>
 public static class GraphApi
 {
     public static void MapGraphApi(this IEndpointRouteBuilder app)
@@ -142,12 +142,15 @@ public static class GraphApi
     }
 
     /// <summary><c>from</c> and <c>to</c>: two notes of one vault; <c>dir</c> <c>out</c> follows links as written, <c>in</c> against them,
-    /// <c>both</c> (default) either way.</summary>
-    private static async Task<Ok<GraphPathsView>> PathsAsync(string? from, string? to, string? dir, INoteStore store, CancellationToken ct)
+    /// <c>both</c> (default) either way; the filter as for the local graph, which the walk keeps to (the two notes always count).</summary>
+    private static async Task<Ok<GraphPathsView>> PathsAsync(
+        string? from, string? to, string? dir, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
+        INoteStore store, CancellationToken ct)
     {
         var start = Target(from, "from", PathKind.Note);
         var end = Target(to, "to", PathKind.Note);
         var direction = Direction(dir);
+        var filter = Filter(null, tag, days, attachments, ghosts, archive, scope: start);
         if (start.Segments[0] != end.Segments[0]) throw ApiErrors.BadRequest("from and to are in different vaults, and links never cross vaults.");
 
         var g = await GraphOfAsync(store, start, ct);
@@ -157,7 +160,7 @@ public static class GraphApi
             throw await NotInGraphAsync(store, note, ct);
         }
 
-        var result = GraphQueries.Paths(g, start, end, direction);
+        var result = GraphQueries.Paths(g, start, end, direction, filter);
         var shown = new Dictionary<int, int>();
         var nodes = new List<GraphNodeView>();
         int Show(int node)
@@ -203,7 +206,9 @@ public static class GraphApi
         }));
     }
 
-    private static string ETag(IEnumerable<LinkGraph> graphs) => $"\"{string.Join(',', graphs.Select(g => g.Version))}\"";
+    // A rename keeps the graph and its version but changes every path in it, so the caller's names are part of the tag.
+    private static string ETag(IReadOnlyList<LinkGraph> graphs) =>
+        $"\"{VersionToken.Of(string.Join('/', graphs.Select(g => g.Vault)))}.{string.Join(',', graphs.Select(g => g.Version))}\"";
 
     private static int[] Edge(GraphEdge edge, Dictionary<int, int> shown) => [shown[edge.From], shown[edge.To], (int)edge.Flags];
 

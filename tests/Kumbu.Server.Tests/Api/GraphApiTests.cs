@@ -116,6 +116,29 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         Assert.Equal(etag, after.Headers.ETag!.Tag);
     }
 
+    // A renamed vault keeps its graph and the graph's version, but every path in it changes: a client that held the
+    // old ETag must get the new paths, not 304.
+    [Fact]
+    public async Task Rename_changes_the_etag()
+    {
+        var user = await WorkAsync();
+        using var before = await user.GetAsync("/api/graph?vault=Work");
+        var etag = before.Headers.ETag!.Tag;
+
+        using (var renamed = await user.SendAsync(HttpMethod.Put, "/api/vaults/Work/name", new { name = "Arbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        using var after = await user.SendAsync(HttpMethod.Get, "/api/graph?vault=Arbeit", headers: new Dictionary<string, string> { ["If-None-Match"] = etag });
+        Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+        Assert.NotEqual(etag, after.Headers.ETag!.Tag);
+        Assert.Equal("/Arbeit/plan.md", NodeOf(await RestClient.JsonAsync(after), "plan")["path"]!.GetValue<string>());
+        using var local = await user.SendAsync(HttpMethod.Get, $"/api/graph/local?path={Uri.EscapeDataString("/Arbeit/plan.md")}",
+            headers: new Dictionary<string, string> { ["If-None-Match"] = etag });
+        Assert.Equal(HttpStatusCode.OK, local.StatusCode);
+    }
+
     [Fact]
     public async Task Global_graph_takes_the_filter()
     {
@@ -204,6 +227,13 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         var backwards = await RestClient.JsonAsync(await user.GetAsync(Url("/Work/audit.md", "/Work/plan.md", "&dir=out")));
         Assert.Empty(backwards["paths"]!.AsArray());
         Assert.Equal("not_connected", backwards["why"]!.GetValue<string>());
+
+        // The filter applies as on the local graph: with only the notes tagged project, budget is not walked through.
+        var tagged = await RestClient.JsonAsync(await user.GetAsync(Url("/Work/plan.md", "/Work/audit.md", "&tag=project")));
+        Assert.Empty(tagged["paths"]!.AsArray());
+        Assert.Equal("not_connected", tagged["why"]!.GetValue<string>());
+        var untagged = await RestClient.JsonAsync(await user.GetAsync(Url("/Work/plan.md", "/Work/audit.md", "&days=false&archive=false")));
+        Assert.Equal(2, untagged["paths"]!.AsArray().Count);
 
         using var bad = await user.GetAsync(Url("/Work/plan.md", "/Work/audit.md", "&dir=sideways"));
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
