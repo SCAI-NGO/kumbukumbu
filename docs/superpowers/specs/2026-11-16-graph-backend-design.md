@@ -1,6 +1,6 @@
 # The graph backend
 
-Date: 2026-11-16. Status: approved by the maintainer in conversation; the spec awaits his review.
+Date: 2026-11-16. Status: decisions approved by the maintainer in conversation; builder check done (its answers marked *(Claude's call, builder check)*); the spec awaits his review.
 
 The graph of a vault's notes: a sealed, persisted index of what each note links to, resolved in memory into a graph, and the queries on it. It serves Publish 2.0 now (its own spec, built on the bundle query, §6.7) and the graph view in 0.7.0, which is then a front-end topic on a backend whose schema is settled. `links`, `backlinks`, the link rewrite on `mv` and the backlink count on `rm` move onto it in this version.
 
@@ -95,7 +95,7 @@ Built from the extracts and the vault's attachment records, held in the working 
 
 | Kind | What | Attributes |
 |---|---|---|
-| `note` | a note | path, title (the name without `.md`), tags, `when`, changed (last write), created (§5), archived (below `_archive/`) |
+| `note` | a note | path, title (the name without `.md`), tags, `when`, archived (below `_archive/`); changed (last write) and created (§5) are read from the working set by the node query only (§6.3) |
 | `day` | a note whose name is a day or a week (`EntryReader.IsDayOrWeekName`, as the calendar recognises them) | as `note` |
 | `attachment` | an attachment that a note links to or embeds | path, title (the name with its extension) |
 | `ghost` | a link target that resolves to nothing | its key (below), title |
@@ -122,7 +122,7 @@ One rule, correct by construction *(Claude's call)*:
 
 Both from the extracts, never from parsing other notes. Resolving happens inside `apply()`, after the commit, where the working set is updated today. No cleverness about which other notes a new name might affect: that is exactly the invalidation logic decision 1 rejects.
 
-**The graph version.** A counter per vault in the snapshot, raised only when the nodes, edges or their attributes differ from the previous snapshot; a typo in prose leaves it unchanged. It is published together with an epoch drawn at random when the vault is loaded, so a version never repeats across restarts or evictions: ETag `"{epoch}.{version}"`; several vaults combine their pairs in the order of the request.
+**The graph version.** A counter per vault in the snapshot, raised only when the nodes, edges or their attributes differ from the previous snapshot; a typo in prose leaves it unchanged. Times are not attributes of the snapshot: every write changes `changed`, so with them in it the version would rise on every save and the ETag would guarantee nothing. They come with the node query instead *(Claude's call, builder check)*. It is published together with an epoch drawn at random when the vault is loaded, so a version never repeats across restarts or evictions: ETag `"{epoch}.{version}"`; several vaults combine their pairs in the order of the request.
 
 ### 4.5 The scheme version
 
@@ -134,7 +134,7 @@ A new field on `StoredNote`: `CreatedAt`, with a flag `CreatedAtLeast`.
 
 - Set at revision 1 to the write's time, for every way a note comes into being (create, write of a new path, sync, WebDAV, seeder, checkpoint restore of a note that no longer exists).
 - Kept through every later write, `mv` (`NoteMover` uses `with`, which keeps it), archive, restore of a version, and restore from the trash.
-- Notes written before this version get, at the first write after the upgrade, or when their extract is first made, the oldest state their history still knows (`History` is newest first; the last entry's `WrittenAt`, or `LastWriteAt` if the history is empty), with `CreatedAtLeast` set: "at the latest", honestly. *(Claude's call: when the value is first filled, as long as it happens once and is then kept.)*
+- Notes written before this version have no `CreatedAt`. Until their next real write, readers derive it in memory from the oldest state their history still knows (`History` is newest first; the last entry's `WrittenAt`, or `LastWriteAt` if the history is empty), with "at the latest" set; that write stores the value derived just before it, with `CreatedAtLeast`, and it is kept from then on. No background rewrite of note documents: it would raise every note's revision, race with the user's writes ("changed meanwhile"), make every extract stale and count as a change for sync and history *(Claude's call, builder check)*.
 - Shown nowhere new in this version except as the node attribute `created`, with its "at the latest" mark.
 
 Why in the note and not in the extract: the extract is derived and may be thrown away and rebuilt; the creation time can't be derived from anything.
@@ -152,15 +152,15 @@ Pure functions on the snapshot, in `Kumbu.Core` (a `Graph` namespace) so they ar
 | `ghosts` | shown | hide `ghost` nodes |
 | `archive` | hidden | show notes below `_archive/`, as `--archive` elsewhere |
 
-A filter removes nodes and their edges; it never changes resolution. The start note of a local graph is always shown, whatever the filter.
+A filter removes nodes and their edges; it never changes resolution. The start note of a local graph is always shown, whatever the filter. `path` and `tag` select **notes** (day notes are notes); an attachment or ghost stays when a note that stays links to it, wherever the attachment lies, so `graph --unresolved /Work` lists the ghosts that notes below `/Work` link to *(Claude's call, builder check)*.
 
 1. **Local graph.** A note, a depth (1 to 3, default 1), a direction (`out`, `in`, `both`, default `both`), a hub cap (default 20). Breadth-first from the note; each node appears once, at its first depth. A node with more neighbours than the cap shows the cap's worth, ordered by degree, then by path, and a count of the rest. Returns nodes, edges between returned nodes, and for each capped node the number left out.
 2. **Global graph.** One or more vaults, the filter. Every node and edge, uncapped. Compact: nodes as a list; edges as pairs of indices into it with their flags.
-3. **Node.** One node: its attributes, degree in and out, and for a note the first paragraph (the first block after the front matter that isn't a heading, cut at about 300 characters on a word boundary) for the hover preview.
+3. **Node.** One node: its attributes, degree in and out, for a note its `changed`, `created` and "at the latest" mark (§5), and the first paragraph (the first block after the front matter that isn't a heading, cut at about 300 characters on a word boundary) for the hover preview.
 4. **Orphans.** Notes with no edge in either direction, below a path; attachments and ghosts never are orphans.
 5. **Hubs.** The notes with the highest degree (in plus out), top N (default 20), with their degrees.
 6. **Unresolved.** The ghost nodes with the notes and lines that link to each, ordered by how many notes link to them.
-7. **Bundle.** A note, a depth, and a predicate on notes: outgoing breadth-first, following only into notes the predicate admits, never crossing a vault. Returns the notes reached and the edges between them. For Publish 2.0 and the SPA export; the predicate (unpublishable notes, what the publisher may publish) belongs to Publish 2.0's spec. Not exposed over `sh` or REST in this version.
+7. **Bundle.** A note, a depth, and a predicate on notes: outgoing breadth-first, following only into notes the predicate admits, never crossing a vault. Returns the notes reached, the attachments they link to or embed (the images a publication needs), and the edges between them *(answered from the purpose, builder check)*. For Publish 2.0 and the SPA export; the predicate (unpublishable notes, what the publisher may publish) belongs to Publish 2.0's spec. Not exposed over `sh` or REST in this version.
 8. **Paths.** Two notes, a direction (`both` by default, `out` follows links as written). The shortest paths between them, at most 5, of length at most 6; says whether there are more of the same length. If none: whether the two are **not connected at all** (no path of any length: separate islands) or **farther than 6 steps**. Breadth-first from both ends; linear in nodes and edges.
 
 Ghost nodes are passed through but never walked beyond (they have no outgoing edges anyway). Attachments neither.
@@ -202,7 +202,7 @@ For the web app, in 0.7.0; built and tested now, under `/api/graph` beside `/api
 - `GET /api/graph/node?path=…`: one node.
 - `GET /api/graph/paths?from=…&to=…&dir=…`: paths.
 
-JSON shapes are the builder's, with this constraint: nodes as a list of objects (`path`, `title`, `kind`, `tags`, `when`, `changed`, `created`, `createdAtLeast`, `archived`, `in`, `out`), edges as `[from, to, flags]` with indices into that list, so that 1,600 notes and 20,000 edges stay around 200 to 300 KB before compression. Parameters are validated at the boundary: depth 1 to 3, cap 1 to 100, at most as many vaults as the caller has, paths parsed with `VaultPath.TryParse`; anything else is a `400`.
+JSON shapes are the builder's, with this constraint: nodes as a list of objects (`path`, `title`, `kind`, `tags`, `when`, `archived`, `in`, `out`; the times only in `/api/graph/node`, §4.4), edges as `[from, to, flags]` with indices into that list, so that 1,600 notes and 20,000 edges stay around 200 to 300 KB before compression. Parameters are validated at the boundary: depth 1 to 3, cap 1 to 100, at most as many vaults as the caller has, paths parsed with `VaultPath.TryParse`; anything else is a `400`.
 
 ### 7.3 Live
 
@@ -221,7 +221,7 @@ No new message. The sync socket's existing `changed` nudge (`SyncHub.cs:17`) is 
 - `NoteLinks.ToAsync` (`backlinks`) reads the in-edges, lines included, in the same order and with the same "maybe" lines as today.
 - `NoteMover`'s rewrite, `NoteWriter.RemoveAsync`'s count and `LinkHintsAsync` take the edges from the snapshot instead of scanning.
 - `INoteReader` gains one method that returns the snapshot of a vault *(Claude's call: one seam, so `Kumbu.Core` stays free of the server; `InMemoryNoteStore` in the tests builds its snapshot the same way)*.
-- Outputs of `links`, `backlinks`, `mv` and `rm` don't change by a character; the existing tests stay as they are and must pass unchanged.
+- Outputs of `links`, `backlinks`, `mv` and `rm` don't change by a character; the existing tests stay as they are and must pass unchanged. One exception, where one truth wins: `rm`'s count and the hints on create resolve today without the vault's attachments (`NoteWriter.cs:410`, `:488`) while the rest resolves with them; on the snapshot all resolve with them, so in rare cases (a missing `x.png` beside a note `x.png.md`) those two may answer differently, and a test that pins the old answer changes *(Claude's call, builder check)*.
 
 ## 10. Tests
 
