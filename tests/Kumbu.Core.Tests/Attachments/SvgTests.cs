@@ -129,4 +129,12 @@ public sealed class SvgTests
     [InlineData("width=\"NaN\" height=\"Infinity\"")]
     public void Neither_gives_no_size(string attributes) =>
         Assert.Null(SvgImage.Size(Encoding.UTF8.GetBytes($"<svg {Ns} {attributes}/>")));
+
+    [Fact]
+    public void An_svg_image_isnt_renamed_into_a_skills_folder_where_svg_is_text()
+    {
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Work/a.svg"), P("/Work/Icons/b.SVG")));
+        Assert.Equal("a.svg is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead",
+            AttachmentFormat.RenameProblem(P("/Work/a.svg"), P("/Work/_skills/x/a.svg")));
+    }
 }

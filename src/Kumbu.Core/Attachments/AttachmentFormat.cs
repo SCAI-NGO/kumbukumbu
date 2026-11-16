@@ -107,6 +107,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         }
 
         if (ForPath(target)?.MediaType == format.MediaType) return null;
+        if (format == Svg && ForPath(target) == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
