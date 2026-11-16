@@ -47,6 +47,15 @@ export const commandTable: Record<string, CommandEntry> = {
   outline: oneNote(["--version"]),
   links: oneNote(["--version"]),
   backlinks: oneNote(),
+  // GraphCommand.cs: --path takes two notes; the lists take an optional scope, every vault without one; else the note.
+  graph: {
+    values: ["--depth", "--cap", "-n", "--top", "--tag"],
+    find: (o, options) => {
+      if (options.has("--path")) return { paths: all(o) };
+      if (options.has("--orphans") || options.has("--hubs") || options.has("--unresolved")) return { paths: first(o), missing: "cwd" };
+      return { paths: first(o) };
+    },
+  },
   img: oneNote(["--size", "--crop"]),
   rg: {
     values: [
