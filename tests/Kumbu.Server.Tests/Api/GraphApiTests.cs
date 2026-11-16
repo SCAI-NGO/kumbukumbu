@@ -84,6 +84,29 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         Assert.NotEqual(etag, changed.Headers.ETag!.Tag);
     }
 
+    // A proxy that compresses the answer marks the ETag weak; If-None-Match compares weakly (RFC 9110 §13.1.2), so the
+    // client that sends it back still gets 304, as it does with the tag in a list.
+    [Theory]
+    [InlineData("W/{0}")]
+    [InlineData("\"other\", W/{0}")]
+    [InlineData("*")]
+    public async Task Weak_or_listed_etag_answers_304(string header)
+    {
+        var user = await WorkAsync();
+        var plan = Uri.EscapeDataString("/Work/plan.md");
+
+        foreach (var url in new[] { "/api/graph", $"/api/graph/local?path={plan}" })
+        {
+            using var first = await user.GetAsync(url);
+            var ifNoneMatch = string.Format(System.Globalization.CultureInfo.InvariantCulture, header, first.Headers.ETag!.Tag);
+            using var again = await user.SendAsync(HttpMethod.Get, url, headers: new Dictionary<string, string> { ["If-None-Match"] = ifNoneMatch });
+            Assert.Equal(HttpStatusCode.NotModified, again.StatusCode);
+        }
+
+        using var other = await user.SendAsync(HttpMethod.Get, "/api/graph", headers: new Dictionary<string, string> { ["If-None-Match"] = "W/\"other\"" });
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+    }
+
     [Fact]
     public async Task One_vault_named_in_two_spellings_is_drawn_once()
     {

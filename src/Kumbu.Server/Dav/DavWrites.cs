@@ -631,9 +631,7 @@ internal sealed partial class DavWrites(
             if (!holds) throw new DavException(StatusCodes.Status412PreconditionFailed, "The file isn't at the version If-Match names.");
         }
 
-        var ifNoneMatch = Request.Headers.IfNoneMatch;
-        if (ifNoneMatch.Count > 0 && etag is not null && EntityTagHeaderValue.TryParseList(ifNoneMatch, out var none)
-            && none.Any(t => t.Equals(EntityTagHeaderValue.Any) || t.Compare(etag, useStrongComparison: false)))
+        if (etag is not null && Api.EntityTags.NoneMatchNames(Request, etag))
         {
             throw new DavException(StatusCodes.Status412PreconditionFailed, "Something is there already, and If-None-Match says it may not be.");
         }

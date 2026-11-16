@@ -548,6 +548,10 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         using var again = await user.GetAsync(user.Url("shot.png", "files")).WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+
+        // As a compressing proxy hands it back: weak, which If-None-Match compares weakly (RFC 9110 §13.1.2).
+        using var weak = await user.SendAsync(HttpMethod.Get, user.Url("shot.png", "files"), headers: new Dictionary<string, string> { ["If-None-Match"] = "W/" + tag });
+        Assert.Equal(HttpStatusCode.NotModified, weak.StatusCode);
     }
 
     [Fact]

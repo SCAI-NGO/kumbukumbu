@@ -192,7 +192,7 @@ Paths print each path on one line (`/Work/A.md -> /Work/C.md <- /Work/B.md`, the
 
 For the web app, in 0.7.0; built and tested now, under `/api/graph` beside `/api/links` (`NoteApi.cs:252`):
 
-- `GET /api/graph?vault=…&vault=…&<filter>`: the global graph. `ETag` and `If-None-Match` → `304` as `SyncApi` does (`SyncApi.cs:152`).
+- `GET /api/graph?vault=…&vault=…&<filter>`: the global graph. `ETag` and `If-None-Match` → `304` as `SyncApi` does (`SyncApi.cs:152`). `If-None-Match` is compared weakly (RFC 9110 §8.8.3.2, §13.1.2), a list and `*` included, through one rule the sync versions and WebDAV share (`EntityTags.cs`); the ETag stays strong, since the same version always serialises to the same bytes *(amended 2026-11-17: behind a proxy that compresses the answer the tag comes back as `W/"…"`, which an exact string comparison never matched, so `304` never fired)*.
 - `GET /api/graph/local?path=…&depth=…&dir=…&cap=…&<filter>`: the local graph, with the same ETag (the vault's).
 - `GET /api/graph/node?path=…`: one node.
 - `GET /api/graph/paths?from=…&to=…&dir=…&<filter>`: paths, walking only the notes the filter keeps (the two ends always), as `graph --path` does.
