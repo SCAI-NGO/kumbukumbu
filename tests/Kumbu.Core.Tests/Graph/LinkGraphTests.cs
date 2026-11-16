@@ -182,4 +182,17 @@ public class LinkGraphTests
             rebased.LinksOf(P("/Shared/A.md")).Select(l => l.Resolution.Target));
         Assert.Equal(graph.Edges.Count, rebased.Edges.Count);
     }
+
+    [Fact]
+    public void A_version_is_kept_by_a_rebase()
+    {
+        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[B]]"), ("/W/B.md", "")), []);
+
+        var versioned = graph.WithVersion("ab.3");
+
+        Assert.Equal("ab.3", versioned.Version);
+        Assert.True(versioned.SameAs(graph));
+        Assert.Equal([P("/W/B.md")], versioned.LinksOf(P("/W/A.md")).Select(l => l.Resolution.Target));
+        Assert.Equal("ab.3", versioned.Rebased(p => p.WithVault("Shared")).Version);
+    }
 }

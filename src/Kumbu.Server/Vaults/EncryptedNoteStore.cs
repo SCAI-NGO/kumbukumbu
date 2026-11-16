@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Skills;
@@ -67,6 +68,15 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => new Note(n.Path, n.Content))];
+
+    /// <summary>The vault's graph from its working set (graph backend spec §4.4), in the caller's names; a vault the
+    /// caller doesn't have is an empty graph, as the reader's default has it.</summary>
+    public async Task<LinkGraph> GraphAsync(VaultPath vault, CancellationToken ct)
+    {
+        if (await VaultAsync(vault, ct) is not { } a) return LinkGraph.Build(vault.Segments[0], new Dictionary<VaultPath, LinkExtract>(), []);
+        var graph = a.Vault.Graph();
+        return a.Renamed ? graph.Rebased(a.ToCaller) : graph;
+    }
 
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct)
     {

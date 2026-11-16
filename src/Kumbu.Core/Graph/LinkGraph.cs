@@ -62,6 +62,20 @@ public sealed class LinkGraph
         _in = [.. ins.Select(l => l.ToArray())];
     }
 
+    private LinkGraph(LinkGraph graph, string? version)
+    {
+        Vault = graph.Vault;
+        Nodes = graph.Nodes;
+        Edges = graph.Edges;
+        Extracts = graph.Extracts;
+        Attachments = graph.Attachments;
+        _links = graph._links;
+        _byPath = graph._byPath;
+        _out = graph._out;
+        _in = graph._in;
+        Version = version;
+    }
+
     public string Vault { get; }
 
     public IReadOnlyList<GraphNode> Nodes { get; }
@@ -191,10 +205,13 @@ public sealed class LinkGraph
         && Edges.Count == other.Edges.Count
         && Edges.Zip(other.Edges).All(p => p.First with { Lines = p.Second.Lines } == p.Second && p.First.Lines.SequenceEqual(p.Second.Lines));
 
-    /// <summary>The graph with every path through <paramref name="map"/>, for a renamed vault. Built anew: resolution
-    /// reads paths within the vault only, so a rename leads every link where it led before.</summary>
+    /// <summary>The same graph under another version; it shares everything else.</summary>
+    public LinkGraph WithVersion(string? version) => new(this, version);
+
+    /// <summary>The graph with every path through <paramref name="map"/>, for a renamed vault, its version kept. Built
+    /// anew: resolution reads paths within the vault only, so a rename leads every link where it led before.</summary>
     public LinkGraph Rebased(Func<VaultPath, VaultPath> map) => Build(
         map(VaultPath.Root.Child(Vault)).Segments[0],
         Extracts.ToDictionary(e => map(e.Key), e => e.Value),
-        [.. Attachments.Select(map)]);
+        [.. Attachments.Select(map)]).WithVersion(Version);
 }

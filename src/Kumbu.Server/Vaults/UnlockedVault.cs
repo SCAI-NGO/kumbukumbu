@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Publishing;
@@ -25,6 +27,13 @@ public sealed class UnlockedVault
     private readonly byte[] _blobKey;
     private readonly IReadOnlyDictionary<string, byte[]> _membershipKeys;
     private long _lastUsed;
+    private readonly Lock _graphLock = new();
+
+    /// <summary>Drawn when the vault is loaded, so a graph version never repeats across restarts or evictions (graph
+    /// backend spec §4.4).</summary>
+    private readonly string _graphEpoch = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+    private long _graphCounter;
+    private (LinkGraph Graph, object Notes, object Attachments)? _graph;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
     {
@@ -101,6 +110,49 @@ public sealed class UnlockedVault
         ImmutableDictionary<VaultPath, (ObjectId, StoredAttachment)>.Empty;
 
     public ImmutableList<(ObjectId Id, TrashedAttachment Trashed)> AttachmentTrash { get; set; } = [];
+
+    /// <summary>Each note's links, tags and dates as <see cref="Graph"/> last parsed them, with the content they were
+    /// parsed from: a note made again at its path starts at revision 1 again, so the revision alone can't tell.</summary>
+    internal ImmutableDictionary<VaultPath, (string Content, LinkExtract Extract)> Extracts { get; private set; } =
+        ImmutableDictionary<VaultPath, (string, LinkExtract)>.Empty;
+
+    /// <summary>How many notes <see cref="Graph"/> has parsed, for the tests.</summary>
+    internal int Parses { get; private set; }
+
+    /// <summary>
+    /// The resolved links of the vault under its stored name, for the state of <see cref="Notes"/> and
+    /// <see cref="Attachments"/> as they are now (graph backend spec §4.4): kept while both are the objects it was built
+    /// from (every change replaces them), else built again, parsing only the notes whose content changed. Its version
+    /// rises only when the graph differs from the one before.
+    /// </summary>
+    public LinkGraph Graph()
+    {
+        // Readers call this outside the gate and at once: one builds, the others wait for its graph.
+        lock (_graphLock)
+        {
+            var (notes, attachments) = (Notes, Attachments);
+            if (_graph is { } cached && ReferenceEquals(cached.Notes, notes) && ReferenceEquals(cached.Attachments, attachments)) return cached.Graph;
+
+            var extracts = ImmutableDictionary.CreateBuilder<VaultPath, (string Content, LinkExtract Extract)>();
+            foreach (var (path, (_, note)) in notes)
+            {
+                if (!Extracts.TryGetValue(path, out var known) || !string.Equals(known.Content, note.Content, StringComparison.Ordinal))
+                {
+                    known = (note.Content, LinkExtract.Of(path, note.Content));
+                    Parses++;
+                }
+
+                extracts[path] = known;
+            }
+
+            Extracts = extracts.ToImmutable();
+            var graph = LinkGraph.Build(Name, Extracts.ToDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
+            if (_graph is not { } previous || !graph.SameAs(previous.Graph)) _graphCounter++;
+            graph = graph.WithVersion($"{_graphEpoch}.{_graphCounter}");
+            _graph = (graph, notes, attachments);
+            return graph;
+        }
+    }
 
     /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
