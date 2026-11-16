@@ -1,0 +1,32 @@
+# SVG as an image
+
+**Status:** approved by Chris on 2026-11-17. Version 0.6.0. Idea note: `/SWE/Kumbu/Ideas/Charts and SVG 2026-11-09.md`.
+
+## Goal
+
+A vault keeps SVG files beside its notes and shows them as images, embedded with `![[diagram.svg]]` as in Obsidian. Agents write SVG with `write`, read its source with `cat` and look at the rendered result with `img`, so they can correct what they drew instead of placing coordinates blind.
+
+Why (decided 2026-11-15, roadmap): SVG is text, agents write it well, and it diffs and versions like a note. For sketches, schematics and icons it often beats Mermaid, because no layout engine gets in the way. As an image only, the feature stays small: inline SVG needs a sanitiser everywhere it is shown and waits in the backlog, towards 1.0.
+
+## Decisions
+
+1. **A format among the images.** `.svg`, `image/svg+xml`, kind `Image`, in `AttachmentFormat.All`; up to 15 MB like every attachment. Inside a skill's folder `.svg` stays a text file, as today (`AttachmentFormat.ForPath` checks the skill folder first).
+2. **Checked as XML, not by magic bytes.** An SVG is accepted when it is well-formed XML whose root element is `svg` (the SVG namespace or none, as hand-written files often leave it out). The DTD is ignored, never resolved: files from Inkscape and Illustrator often carry one, and with `DtdProcessing.Ignore` and no resolver there is no XXE and no entity expansion. A leading BOM, XML declaration, comments and whitespace are allowed.
+3. **Shown through `<img>` only.** The web app, publish pages and the SPA export show an SVG like every other image: fetched and shown through an object URL in an `<img>`, where no script runs and nothing external loads. Never `innerHTML`, never an `<object>` or `<iframe>`. Opened directly (a link, "open original", WebDAV), the response carries `Security.FileContentPolicy` (`sandbox; default-src 'none'`) and `nosniff`, as every attachment response does today (`/api/files`, `/dav`, the reader's files), so nothing runs and nothing loads there either. A test asserts that header on an SVG from each of those endpoints.
+4. **Rendered by the sidecar.** `img` and thumbnails go through the sidecar's `@napi-rs/canvas` (Skia), which decodes SVG today. Checked on 2026-11-17: an `<image href="http://…">`, an `xlink:href="file:///…"` and a `@import` in `<style>` fetch nothing (a local server saw no request). A sidecar test keeps it that way: an SVG referring to a local server renders and the server sees no request. Why it matters: an external reference resolved on the server would be SSRF.
+5. **Size from the file, render at our size.** Width and height come from the root's `width` and `height` (in px, or unitless), else from its `viewBox`; neither gives none, and the image is rendered as if square. The render is always at the requested size step, so a file claiming a huge canvas costs nothing: the header guard that refuses raster images over a pixel count doesn't apply to SVG.
+6. **Agents write it with `write`, whole.** `write` takes an `.svg` path outside a skill's folder, as it takes a skill's text files today (`NoteWriter.cs:127`), with the same version rules: no version creates, a version replaces. The content goes through the check of decision 2; a refusal says what is wrong ("not an SVG: the root element is html"). `edit` and `replace` refuse with "replace it whole with write", as for a skill's text files. Why `write` and not an upload: the agent's loop (write, look with `img`, correct) is the point of the feature, decided by Chris on 2026-11-17.
+7. **`cat` prints the source.** `cat diagram.svg` prints the SVG text after the attachment's one-line description, so an agent can read and change it. `rg` doesn't search it: SVG text is mostly coordinates.
+8. **No shrinking on upload.** The web app shrinks large photos before upload; an SVG is never shrunk or converted.
+9. **No sanitiser in 0.6.0.** Every path Kumbu² controls shows SVG as an image or under the sandbox policy. For the paths it doesn't control (export ZIP, Obsidian, WebDAV clients): Obsidian embeds SVG as an image too, and a file the user opens locally is their own file, like any HTML they downloaded. The sanitiser comes with inline SVG, where it is a must. Why: what we don't need now, we don't build now.
+
+## Touch points
+
+Server: `src/Kumbu.Core/Attachments/AttachmentFormat.cs` (format, check, `UnsupportedMessage`), `src/Kumbu.Server/Attachments/ImageMetadata.cs` and `ImageHeader.cs` (size), `src/Kumbu.Core/Notes/NoteWriter.cs` (write, edit, replace), `src/Kumbu.Core/Sh/Commands/Cat.cs` and `src/Kumbu.Core/Sh/AttachmentText.cs` (cat, "SVG"), `src/Kumbu.Core/Sh/Commands/Help.cs` and `Manual.cs` (the formats named), the WebDAV and import paths that check formats.
+Sidecar: `pdf/src/image.ts` (decode SVG, the no-fetch test).
+Web app: `web/src/api/paths.ts`, `web/src/console/run.ts`, `web/src/upload/planUpload.ts`, `UploadSheet.tsx`, `shrinkImage.ts`, `web/src/data/ImportDialog.tsx` (the formats named and accepted).
+Docs: `README.md` (formats), `docs/security-architecture.md` (SVG: why `<img>` and the sandbox policy suffice, and where the sanitiser will be needed).
+
+## Out
+
+Inline SVG and a sanitiser (backlog, towards 1.0); ` ```svg ` code blocks (not native in Obsidian); `edit` on an SVG; searching SVG text.
