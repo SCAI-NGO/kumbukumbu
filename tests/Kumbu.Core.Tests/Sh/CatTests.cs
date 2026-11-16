@@ -146,6 +146,20 @@ public class CatTests
     }
 
     [Fact]
+    public async Task One_path_left_out_is_counted_in_the_singular()
+    {
+        // a.md fills the call up to the room kept for the count; b.md, with its long name, fits not even as a marker.
+        var header = "==> /Demo/a.md <==\n";
+        var b = "/Demo/" + new string('b', 120) + ".md";
+        var store = new InMemoryNoteStore(("/Demo/a.md", new string('x', Budget - 100 - header.Length - 1) + "\n"), (b, new string('y', 5000) + "\n"));
+
+        var result = await RunOn(store, "/Demo/a.md", b);
+
+        Assert.False(result.IsError);
+        Assert.EndsWith("\n[1 more path not read: this call is full; read it in another call]\n", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Two_sections_of_one_note_get_distinct_headers()
     {
         var store = new InMemoryNoteStore(("/Demo/a.md", "# T\n\n## X\n\nxx\n\n## Y\n\nyy\n"));

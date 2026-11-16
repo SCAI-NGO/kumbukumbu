@@ -344,6 +344,55 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task One_edit_is_one_change()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno")], Ct);
+
+        Assert.Equal("edited /Work/plan.md: 1 change", result.Output);
+    }
+
+    [Fact]
+    public async Task An_empty_old_text_in_the_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("", "x")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2: old_text is empty", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task An_empty_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edits is empty; give at least one {old_text, new_text}", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_null_entry_in_the_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), null!], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2 is empty; give old_text and new_text", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_list_on_a_missing_section_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md#Absent", V(Plan), [new("- one", "- uno")], Ct);
+        var single = await _writer.EditAsync("/Work/plan.md#Absent", V(Plan), "- one", "- uno", Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 1 of 1: " + single.Output["edit: ".Length..], result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
     public async Task A_write_message_reaches_history()
     {
         var v1 = (await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "consolidated")).Version!.Token;

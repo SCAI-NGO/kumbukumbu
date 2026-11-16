@@ -47,7 +47,15 @@ public static class WriteTools
                 : writer.EditAsync(path, version, old_text, new_text, ct, replace_section, replace_all, message);
         }
 
-        var refused = new_text is not null || old_text is not null ? "edit: give new_text or edits, not both"
+        // Name what was sent alongside edits, so the agent knows which to drop.
+        var sent = (old_text, new_text) switch
+        {
+            (not null, not null) => "old_text and new_text",
+            (not null, null) => "old_text",
+            (null, not null) => "new_text",
+            _ => null,
+        };
+        var refused = sent is not null ? $"edit: give edits, or {sent}, not both"
             : replace_section || replace_all ? "edit: edits takes no replace_section or replace_all"
             : null;
         return refused is not null ? Task.FromResult(ShellResult.Error(refused)) : writer.EditManyAsync(path, version, edits, ct, message);

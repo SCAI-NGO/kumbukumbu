@@ -118,7 +118,10 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
 
             if (output.Length + entry.Length > limit)
             {
-                output.Append($"\n[{args.Count - i} more paths not read: this call is full; read them in another call]\n");
+                var left = args.Count - i;
+                output.Append(left == 1
+                    ? "\n[1 more path not read: this call is full; read it in another call]\n"
+                    : $"\n[{left} more paths not read: this call is full; read them in another call]\n");
                 break;
             }
 

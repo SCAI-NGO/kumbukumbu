@@ -156,11 +156,20 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         var v = Token(edited);
         var both = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["new_text"] = "z" });
-        Assert.Equal("edit: give new_text or edits, not both", Text(both));
+        Assert.Equal("edit: give edits, or new_text, not both", Text(both));
+        // The error names what was sent, so the agent knows which to drop.
+        var withOld = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["old_text"] = "y" });
+        Assert.Equal("edit: give edits, or old_text, not both", Text(withOld));
+        var withPair = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["old_text"] = "y", ["new_text"] = "z" });
+        Assert.Equal("edit: give edits, or old_text and new_text, not both", Text(withPair));
+        Assert.True(withPair.IsError);
+        Assert.Equal("y c\n", Text(await ShAsync($"cat {path}")));
         var neither = await CallAsync("edit", new() { ["path"] = path, ["version"] = v });
         Assert.Equal("edit: new_text or edits is needed", Text(neither));
         var all = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["replace_all"] = true });
         Assert.Equal("edit: edits takes no replace_section or replace_all", Text(all));
+        var section = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["replace_section"] = true });
+        Assert.Equal("edit: edits takes no replace_section or replace_all", Text(section));
         var many = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = Enumerable.Repeat(edits[0], 65).ToArray() });
         Assert.Equal("edit: at most 64 edits in one call", Text(many));
     }

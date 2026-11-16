@@ -308,8 +308,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     {
         const string tool = "edit";
         if (!TryMessage(message, tool, out message, out var messageError)) return messageError!;
-        if (edits.Count == 0 || edits.Any(e => e is null)) return ShellResult.Error("edit: edits is empty or has an entry without old_text and new_text");
+        if (edits.Count == 0) return ShellResult.Error("edit: edits is empty; give at least one {old_text, new_text}");
         if (edits.Count > MaxEdits) return ShellResult.Error($"edit: at most {MaxEdits} edits in one call");
+        for (var i = 0; i < edits.Count; i++)
+        {
+            if (edits[i] is null) return ShellResult.Error($"edit: edit {i + 1} of {edits.Count} is empty; give old_text and new_text");
+        }
 
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
@@ -339,7 +343,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (TooLarge(tool, current) is { } sizeError) return sizeError;
         if (current == existing.Content) return Written($"{path.Value} is unchanged", existing);
 
-        return await ReplaceAsync(tool, existing, current, $"edited {path.Value}: {edits.Count} changes", message, ct);
+        return await ReplaceAsync(tool, existing, current, $"edited {path.Value}: {edits.Count} change{(edits.Count == 1 ? "" : "s")}", message, ct);
     }
 
     /// <summary>
