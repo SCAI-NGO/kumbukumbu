@@ -1,6 +1,6 @@
 # The graph backend
 
-Date: 2026-11-16. Status: decisions approved by the maintainer in conversation; builder check done (its answers marked *(Claude's call, builder check)*); the spec awaits his review.
+Date: 2026-11-16. Status: approved by the maintainer on 2026-11-16; builder check done (its answers marked *(Claude's call, builder check)*).
 
 The graph of a vault's notes: a sealed, persisted index of what each note links to, resolved in memory into a graph, and the queries on it. It serves Publish 2.0 now (its own spec, built on the bundle query, §6.7) and the graph view in 0.7.0, which is then a front-end topic on a backend whose schema is settled. `links`, `backlinks`, the link rewrite on `mv` and the backlink count on `rm` move onto it in this version.
 
