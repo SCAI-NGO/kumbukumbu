@@ -19,10 +19,11 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
 
     public string Help => $"""
         img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]
-          Show an image attachment (png, jpg, gif, webp): the result is a line of text naming the file,
+          Show an image attachment (png, jpg, gif, webp, svg): the result is a line of text naming the file,
           its version, the original size and what was delivered, followed by the image itself. The image
           is scaled down to the size step, never enlarged, and sent as PNG, or as JPEG if the PNG would
-          be larger than the file size aim.
+          be larger than the file size aim. An SVG is drawn at the size step, enlarged too, and --crop
+          counts in its size as cat reports it (as a square of 300 if it gives none).
           --size S          the step, medium if omitted:
         {SizeSteps.Table}
           --crop x,y,w,h    look at a part at full resolution instead: x and y from the top left, all four in
