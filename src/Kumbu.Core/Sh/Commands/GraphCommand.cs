@@ -20,8 +20,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
     ];
 
     private static readonly string[] Modes = ["path", "orphans", "hubs", "unresolved"];
-    private static readonly string[] FilterOptions = ["tag", "archive", "no-days", "no-attachments", "no-ghosts"];
-
+    
     // What the last line may take on top of the budget: the line that names how to narrow it.
     private const int TailReserve = 1_500;
 
@@ -42,7 +41,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         graph --path <a> <b> [--out]
           The shortest paths between two notes (at most 5, at most 6 links), one per line, each arrow in its
           link's own direction: /W/A.md -> /W/C.md <- /W/B.md. --out follows links as written. Says whether the
-          notes are not connected at all or farther apart than 6 steps. Takes no filters.
+          notes are not connected at all or farther apart than 6 steps. Takes the filters: --no-days finds connections that don't run through day notes.
         graph --orphans [path]
           The notes below a path (default: every vault) that no note links to and that link to nothing.
         graph --hubs [path] [-n N]
@@ -108,7 +107,6 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         if (mode == "path")
         {
             foreach (var local in new[] { "depth", "cap", "in" }) if (options.Has(local)) return $"graph: --{local} applies to a local graph only";
-            foreach (var filter in FilterOptions) if (options.Has(filter)) return $"graph: --{filter} doesn't apply to --path";
         }
 
         return null;
@@ -164,7 +162,8 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         if (lines.Count == 0) lines.Add(new Line("(no links shown)", null));
         var asked = direction switch { GraphDirection.Out => " --out", GraphDirection.In => " --in", _ => "" };
         return Render(heading.ToString(), lines, from => Tail(lines.Count - from, depth > 1 ? $"a smaller --depth (now {depth}), " : "",
-            "--cap or --tag", lines[from].Node is { } n ? $"go on from {n.Value}: graph {SectionLookup.Quote(n)}{asked}" : null));
+            "--cap or --tag", lines.Skip(from).Select(l => l.Node).FirstOrDefault(n => n is not null && n != note) is { } n
+                ? $"go on from {n.Value}: graph {SectionLookup.Quote(n)}{asked}" : null));
     }
 
     private static string DirectionText(GraphDirection d) => d switch
@@ -224,7 +223,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         }
 
         var asWritten = options.Has("out");
-        var result = GraphQueries.Paths(graph, from, to, asWritten ? GraphDirection.Out : GraphDirection.Both);
+        var result = GraphQueries.Paths(graph, from, to, asWritten ? GraphDirection.Out : GraphDirection.Both, Filter(options, [], from));
         if (result.Paths.Count == 0)
         {
             return ShellResult.Ok((result.Why, asWritten) switch
@@ -286,7 +285,11 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
             }
         }
 
-        var narrow = scope.IsRoot ? "a path (graph --orphans /Work) or --tag" : "a deeper path or --tag";
+        var narrow = mode switch
+        {
+            "hubs" => $"a smaller -n (now {top}) or a path (graph --hubs /Work){(scope.IsRoot ? "" : " below this one")}",
+            _ => $"{(scope.IsRoot ? "a path" : "a deeper path")} (graph --{mode} /Work) or --tag",
+        };
         List<Line> lines;
         switch (mode)
         {

@@ -122,7 +122,33 @@ public class GraphCommandTests
         Assert.Contains("--depth", last);
         Assert.Contains("--tag", last);
         Assert.Contains("go on from /Hub/", last);
+        Assert.DoesNotContain("go on from /Hub/Hub.md", last);
         Assert.Equal(result.Output, OutputLimit.Apply(result).Output);
+    }
+
+    [Fact]
+    public async Task Path_takes_the_filters()
+    {
+        var sh = TestShell.Of(("/W/A.md", "[[2026-11-12]]\n"), ("/W/2026-11-12.md", "[[B]]\n"), ("/W/B.md", "x\n"));
+        Assert.Equal(
+            "/W/A.md to /W/B.md, 2 steps, in either direction: 1 path\n/W/A.md -> /W/2026-11-12.md -> /W/B.md",
+            (await Run(sh, "graph --path /W/A.md /W/B.md")).Output);
+        Assert.Equal("/W/A.md and /W/B.md are not connected at all (no path of any length)", (await Run(sh, "graph --path /W/A.md /W/B.md --no-days")).Output);
+    }
+
+    [Fact]
+    public async Task Hubs_and_unresolved_name_their_own_way_to_narrow()
+    {
+        var pad = new string('x', 90);
+        var notes = Enumerable.Range(0, 400).Select(i => ($"/L/{pad}{i:D3}.md", $"[[{pad}ghost{i:D3}]]\n")).ToArray();
+        var sh = TestShell.Of(notes);
+
+        var hubs = (await Run(sh, "graph --hubs -n 500")).Output.Split('\n')[^1];
+        Assert.Contains("a smaller -n (now 500)", hubs);
+        Assert.Contains("graph --hubs /Work", hubs);
+        var unresolved = (await Run(sh, "graph --unresolved")).Output.Split('\n')[^1];
+        Assert.Contains("graph --unresolved /Work", unresolved);
+        Assert.DoesNotContain("--orphans", unresolved);
     }
 
     [Theory]

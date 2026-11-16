@@ -130,4 +130,19 @@ public class GraphPathsTests
         Assert.Empty(Assert.Single(result.Paths));
         Assert.Equal(Disconnection.None, result.Why);
     }
+
+    [Fact]
+    public void A_filter_keeps_the_walk_off_the_notes_it_drops_but_not_the_ends()
+    {
+        var g = Build(("/W/A.md", "[[2026-11-12]]"), ("/W/2026-11-12.md", "[[B]]"), ("/W/B.md", ""));
+        var noDays = GraphFilter.All with { Days = false };
+
+        Assert.Equal(["/W/A.md -> /W/2026-11-12.md -> /W/B.md"],
+            GraphQueries.Paths(g, P("/W/A.md"), P("/W/B.md"), GraphDirection.Both).Paths.Select(p => Walk(g, "/W/A.md", p)));
+        Assert.Empty(GraphQueries.Paths(g, P("/W/A.md"), P("/W/B.md"), GraphDirection.Both, noDays).Paths);
+
+        // A day note named as an end is still reached.
+        Assert.Equal(["/W/2026-11-12.md -> /W/B.md"],
+            GraphQueries.Paths(g, P("/W/2026-11-12.md"), P("/W/B.md"), GraphDirection.Both, noDays).Paths.Select(p => Walk(g, "/W/2026-11-12.md", p)));
+    }
 }

@@ -17,9 +17,9 @@ public static partial class GraphQueries
 
     /// <summary>
     /// The shortest paths between two notes, at most five, of at most six links, walking notes only: attachments and
-    /// ghosts are never passed through. <paramref name="dir"/> <see cref="GraphDirection.Out"/> follows links as written.
+    /// ghosts are never passed through, nor are notes the filter drops (the two ends are always allowed). <paramref name="dir"/> <see cref="GraphDirection.Out"/> follows links as written.
     /// </summary>
-    public static PathsResult Paths(LinkGraph g, VaultPath from, VaultPath to, GraphDirection dir)
+    public static PathsResult Paths(LinkGraph g, VaultPath from, VaultPath to, GraphDirection dir, GraphFilter? filter = null)
     {
         if (g.IndexOf(from) is not { } start || g.IndexOf(to) is not { } end || !IsNote(g, start) || !IsNote(g, end))
         {
@@ -28,12 +28,16 @@ public static partial class GraphQueries
 
         if (start == end) return new PathsResult([[]], false, Disconnection.None);
 
+        var kept = Kept(g, filter ?? GraphFilter.All);
+        kept[start] = true;
+        kept[end] = true;
+
         // Distances from both ends, so the walk below only enters nodes that lie on a shortest path.
-        var fromStart = Distances(g, start, dir);
+        var fromStart = Distances(g, start, dir, kept);
         if (!fromStart.TryGetValue(end, out var length)) return new PathsResult([], false, Disconnection.NotConnected);
         if (length > MaxLength) return new PathsResult([], false, Disconnection.FartherThanLimit);
 
-        var toEnd = Distances(g, end, Flip(dir));
+        var toEnd = Distances(g, end, Flip(dir), kept);
         var found = new List<IReadOnlyList<int>>();
         var walked = new List<int>();
 
@@ -46,7 +50,7 @@ public static partial class GraphQueries
                 return;
             }
 
-            foreach (var (edge, next) in Steps(g, node, dir))
+            foreach (var (edge, next) in Steps(g, node, dir, kept))
             {
                 if (!fromStart.TryGetValue(next, out var a) || a != fromStart[node] + 1
                     || !toEnd.TryGetValue(next, out var b) || a + b != length) continue;
@@ -67,14 +71,14 @@ public static partial class GraphQueries
         _ => GraphDirection.Both,
     };
 
-    private static Dictionary<int, int> Distances(LinkGraph g, int origin, GraphDirection dir)
+    private static Dictionary<int, int> Distances(LinkGraph g, int origin, GraphDirection dir, bool[] kept)
     {
         var distance = new Dictionary<int, int> { [origin] = 0 };
         var queue = new Queue<int>([origin]);
         while (queue.Count > 0)
         {
             var node = queue.Dequeue();
-            foreach (var (_, next) in Steps(g, node, dir))
+            foreach (var (_, next) in Steps(g, node, dir, kept))
             {
                 if (distance.TryAdd(next, distance[node] + 1)) queue.Enqueue(next);
             }
@@ -84,13 +88,13 @@ public static partial class GraphQueries
     }
 
     // Each edge leading from the node to another note, with that note.
-    private static IEnumerable<(int Edge, int Next)> Steps(LinkGraph g, int node, GraphDirection dir)
+    private static IEnumerable<(int Edge, int Next)> Steps(LinkGraph g, int node, GraphDirection dir, bool[] kept)
     {
         if (dir is GraphDirection.Out or GraphDirection.Both)
         {
             foreach (var e in g.OutEdges(node))
             {
-                if (g.Edges[e].To != node && IsNote(g, g.Edges[e].To)) yield return (e, g.Edges[e].To);
+                if (g.Edges[e].To != node && IsNote(g, g.Edges[e].To) && kept[g.Edges[e].To]) yield return (e, g.Edges[e].To);
             }
         }
 
@@ -98,7 +102,7 @@ public static partial class GraphQueries
         {
             foreach (var e in g.InEdges(node))
             {
-                if (g.Edges[e].From != node && IsNote(g, g.Edges[e].From)) yield return (e, g.Edges[e].From);
+                if (g.Edges[e].From != node && IsNote(g, g.Edges[e].From) && kept[g.Edges[e].From]) yield return (e, g.Edges[e].From);
             }
         }
     }
