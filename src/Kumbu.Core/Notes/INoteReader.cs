@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Notes;
@@ -49,6 +51,16 @@ public interface INoteReader
     /// <summary>How many stored notes don't open, in all vaults (root) or in one vault (its root).
     /// Damaged notes can't be placed in a directory, since their paths are what doesn't open.</summary>
     Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct);
+
+    /// <summary>The resolved links of <paramref name="vault"/> (a vault's root), over its notes and attachments as the
+    /// reader has them: the one truth of where links lead (graph backend spec §9).</summary>
+    async Task<LinkGraph> GraphAsync(VaultPath vault, CancellationToken ct)
+    {
+        var notes = await ReadNotesUnderAsync(vault, ct);
+        return LinkGraph.Build(
+            vault.Segments[0], notes.ToDictionary(n => n.Path, n => LinkExtract.Of(n.Path, n.Content)),
+            await StoreAttachments.PathsUnderAsync(this, vault, ct) ?? []);
+    }
 
     /// <summary>What the caller is to <paramref name="vault"/> (named as the store names it to her); null if the store
     /// doesn't say (an own vault nobody else reaches), or there is no such vault.</summary>

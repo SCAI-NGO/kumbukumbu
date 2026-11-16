@@ -58,6 +58,11 @@ public class OracleTests
     /// backlinks line for line.</summary>
     private static void Matches(GeneratedVault vault, LinkGraph graph, string context)
     {
+        var nodes = Enumerable.Range(0, graph.Nodes.Count).ToList();
+        var outPairs = nodes.SelectMany(graph.OutEdges).Select(e => (graph.Edges[e].From, graph.Edges[e].To)).ToHashSet();
+        var inPairs = nodes.SelectMany(graph.InEdges).Select(e => (graph.Edges[e].From, graph.Edges[e].To)).ToHashSet();
+        Assert.True(outPairs.SetEquals(inPairs), $"{context}: the out-edges and in-edges name different (source, target) pairs");
+
         var contents = vault.Notes.ToDictionary(n => n.Path, n => n.Content);
         var scan = new ScanOracle(VaultGenerator.VaultName, vault.Notes, vault.Attachments);
         foreach (var note in vault.Notes)
@@ -79,7 +84,7 @@ public class OracleTests
         foreach (var target in vault.Notes.Select(n => n.Path).Concat(vault.Attachments))
         {
             var expected = scan.Backlinks(target);
-            var actual = GraphBacklinks.To(graph, p => contents[p], target);
+            var actual = NoteLinks.To(graph, p => contents[p], target);
             Assert.True(expected.SequenceEqual(actual), $"{context}: backlinks of {target}\n  graph: {string.Join("\n         ", actual)}" +
                 $"\n  scan:  {string.Join("\n         ", expected)}\n{vault}");
         }

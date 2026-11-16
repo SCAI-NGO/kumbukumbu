@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
-using Kumbu.Core.Attachments;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -22,10 +22,12 @@ public static class NoteLinks
     /// resolved against the notes and attachments of its vault as they are now.</summary>
     public static async Task<IReadOnlyList<ResolvedLink>> OfAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct)
     {
-        var vault = VaultPath.Root.Child(path.Segments[0]);
-        var all = await notes.ReadNotesUnderAsync(vault, ct);
+        var graph = await notes.GraphAsync(VaultPath.Root.Child(path.Segments[0]), ct);
+        // The current content's links are the graph's; another version's are read from it, and resolve the same way.
+        if (graph.Extracts.ContainsKey(path) && await notes.ReadAsync(path, ct) == content) return graph.LinksOf(path);
+
         var resolver = new LinkResolver(
-            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
+            graph.Vault, graph.Extracts.Keys, graph.Attachments, graph.Extracts.ToDictionary(e => e.Key, e => e.Value.Aliases));
         return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link)))];
     }
 
@@ -34,24 +36,31 @@ public static class NoteLinks
     public static async Task<IReadOnlyList<Backlink>> ToAsync(INoteReader notes, VaultPath path, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
-        var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(
-            vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct), NoteAliases.Of(all, ct));
+        var graph = await notes.GraphAsync(vault, ct);
+        if (graph.IndexOf(path) is not { } node || graph.InEdges(node).Count == 0) return [];
+        var contents = (await notes.ReadNotesUnderAsync(vault, ct)).ToDictionary(n => n.Path, n => n.Content);
+        return To(graph, p => contents[p], path);
+    }
+
+    /// <summary><see cref="ToAsync"/> from <paramref name="graph"/>, each line's text from <paramref name="content"/>:
+    /// per in-edge, the lines of its source where a link leads to <paramref name="target"/>, then those where one is
+    /// ambiguous with it among the candidates.</summary>
+    public static IReadOnlyList<Backlink> To(LinkGraph graph, Func<VaultPath, string> content, VaultPath target)
+    {
+        if (graph.IndexOf(target) is not { } node) return [];
         var exact = new List<Backlink>();
         var maybe = new List<Backlink>();
-        foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
+        foreach (var edge in graph.InEdges(node))
         {
-            var lines = Lines.Split(source.Content);
-            var resolved = NoteLink.Parse(source.Content)
-                .Where(l => l.Target.Trim().Length > 0)
-                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l)))
-                .ToList();
-            exact.AddRange(resolved.Where(r => r.Resolution.Target == path).Select(r => r.Line).Distinct()
-                .Select(line => new Backlink(source.Path, line, lines[line], Ambiguous: false)));
-            maybe.AddRange(resolved
-                .Where(r => r.Resolution.Kind == LinkKind.Ambiguous && r.Resolution.Candidates.Contains(path))
-                .Select(r => r.Line).Distinct()
-                .Select(line => new Backlink(source.Path, line, lines[line], Ambiguous: true)));
+            var source = graph.Nodes[graph.Edges[edge].From].Path!;
+            var lines = Lines.Split(content(source));
+            var links = graph.LinksOf(source).Where(l => l.Link.Target.Trim().Length > 0).ToList();
+            exact.AddRange(links.Where(l => l.Resolution.Target == target).Select(l => l.Link.Line).Distinct()
+                .Select(line => new Backlink(source, line, lines[line], Ambiguous: false)));
+            maybe.AddRange(links
+                .Where(l => l.Resolution.Kind == LinkKind.Ambiguous && l.Resolution.Candidates.Contains(target))
+                .Select(l => l.Link.Line).Distinct()
+                .Select(line => new Backlink(source, line, lines[line], Ambiguous: true)));
         }
 
         return [.. exact, .. maybe];
