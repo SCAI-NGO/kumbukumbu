@@ -53,7 +53,8 @@ public static class SvgImage
     /// <summary>
     /// The size of an SVG <see cref="Problem"/> accepted: the root's <c>width</c> and <c>height</c> (in px, or unitless),
     /// else its <c>viewBox</c>, one side given scaling the viewBox to it; null when neither gives one. A huge size is
-    /// kept as it is: an SVG is rendered at the size asked for, so its claimed canvas costs nothing.
+    /// kept as it is: an SVG is rendered at the size asked for, so its claimed canvas costs nothing (what it draws is
+    /// bounded by the sidecar's time limit).
     /// </summary>
     public static (int Width, int Height)? Size(ReadOnlySpan<byte> content)
     {
