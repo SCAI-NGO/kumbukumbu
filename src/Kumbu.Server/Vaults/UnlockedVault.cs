@@ -4,8 +4,10 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Calendar;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Graph;
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Publishing;
@@ -111,9 +113,10 @@ public sealed class UnlockedVault
 
     public ImmutableList<(ObjectId Id, TrashedAttachment Trashed)> AttachmentTrash { get; set; } = [];
 
-    /// <summary>Each note's links, tags and dates as <see cref="Graph"/> last parsed them, with the content they were
-    /// parsed from: a note made again at its path starts at revision 1 again, so the revision alone can't tell.</summary>
-    internal ImmutableDictionary<VaultPath, (string Content, LinkExtract Extract)> Extracts { get; private set; } =
+    /// <summary>Each note's links, tags and dates as last parsed or read from the stored extracts, with the content they
+    /// were made from: a note made again at its path starts at revision 1 again, so the revision alone can't tell. Set
+    /// by the load before the vault is published, then under the graph's lock only.</summary>
+    internal ImmutableDictionary<VaultPath, (string Content, LinkExtract Extract)> Extracts { get; set; } =
         ImmutableDictionary<VaultPath, (string, LinkExtract)>.Empty;
 
     /// <summary>How many notes <see cref="Graph"/> has parsed, for the tests.</summary>
@@ -134,24 +137,35 @@ public sealed class UnlockedVault
             if (_graph is { } cached && ReferenceEquals(cached.Notes, notes) && ReferenceEquals(cached.Attachments, attachments)) return cached.Graph;
 
             var extracts = ImmutableDictionary.CreateBuilder<VaultPath, (string Content, LinkExtract Extract)>();
-            foreach (var (path, (_, note)) in notes)
-            {
-                if (!Extracts.TryGetValue(path, out var known) || !string.Equals(known.Content, note.Content, StringComparison.Ordinal))
-                {
-                    known = (note.Content, LinkExtract.Of(path, note.Content));
-                    Parses++;
-                }
-
-                extracts[path] = known;
-            }
+            foreach (var (path, (_, note)) in notes) extracts[path] = Extract(path, note.Content);
 
             Extracts = extracts.ToImmutable();
-            var graph = LinkGraph.Build(Name, Extracts.ToDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
+            var graph = LinkGraph.Build(Name, Extracts.ToImmutableDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
             if (_graph is not { } previous || !graph.SameAs(previous.Graph)) _graphCounter++;
             graph = graph.WithVersion($"{_graphEpoch}.{_graphCounter}");
             _graph = (graph, notes, attachments);
             return graph;
         }
+    }
+
+    /// <summary>The extract of a note with <paramref name="content"/>, held for <see cref="Graph"/>: the one held if made from
+    /// that content, else parsed.</summary>
+    internal LinkExtract ExtractOf(VaultPath path, string content)
+    {
+        lock (_graphLock)
+        {
+            var extract = Extract(path, content);
+            Extracts = Extracts.SetItem(path, extract);
+            return extract.Extract;
+        }
+    }
+
+    /// <summary>Under <see cref="_graphLock"/>.</summary>
+    private (string Content, LinkExtract Extract) Extract(VaultPath path, string content)
+    {
+        if (Extracts.TryGetValue(path, out var known) && string.Equals(known.Content, content, StringComparison.Ordinal)) return known;
+        Parses++;
+        return (content, LinkExtract.Of(path, content));
     }
 
     /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
@@ -333,6 +347,28 @@ public sealed class UnlockedVault
             p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector)), c.Part))], p.Scheme));
     }
 
+    /// <summary>
+    /// A note's extract (graph backend spec §4.1), under the note's path id as its embeddings are, with the version token
+    /// of the content it was made from. <paramref name="scheme"/> is another than the current one only in tests.
+    /// </summary>
+    internal byte[] SealExtract(VaultPath path, string version, LinkExtract extract, int scheme = LinkExtract.SchemeVersion) =>
+        Seal(ExtractContext(PathId(path)), ExtractPayload.From(path, version, scheme, extract));
+
+    /// <summary>Opens an extract and checks its path against the document's path id, as <see cref="OpenEmbeddings"/> does.</summary>
+    internal (VaultPath Path, string Version, int Scheme, LinkExtract Extract) OpenExtract(SealedDocument doc)
+    {
+        var p = Open<ExtractPayload>(ExtractContext(doc.PathId), doc.Blob);
+        var path = Payload.Path(p.Path);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PathId(path), doc.PathId))
+        {
+            throw new InvalidDataException($"Path id of extract {doc.Id} does not match its sealed path");
+        }
+
+        return (path, p.Version, p.Scheme, p.ToExtract());
+    }
+
+    private string ExtractContext(byte[] pathId) => $"links:{Id}:{Convert.ToBase64String(pathId)}";
+
     /// <summary>Vectors are stored as 16-bit floats, half the size; search precision doesn't need more.</summary>
     private static byte[] Halves(float[] vector)
     {
@@ -420,7 +456,7 @@ public sealed class UnlockedVault
     /// <paramref name="collection"/> under this object's key, with the AAD its clear fields give and without checking its
     /// <c>pid</c>, and seals what it holds under <paramref name="to"/>'s key, keeping <c>_id</c> and <c>rev</c>. The pid
     /// is computed under <paramref name="to"/> from what is sealed inside, whatever the stored one says; where the AAD
-    /// holds the pid (embeddings, texts, blobs, analyses), the new seal has the new one; a blob's <c>bid</c> stands in for
+    /// holds the pid (embeddings, extracts, texts, blobs, analyses), the new seal has the new one; a blob's <c>bid</c> stands in for
     /// its pid, and an analysis's too, its part number for the revision (the blob's new id comes from <paramref name="ids"/>).
     /// A checkpoint or an attachment record sealed under another key than <paramref name="to"/>'s gets its text or blob
     /// ids through <paramref name="ids"/>; one not found there stays as it is, and is named in <c>Unmapped</c>. Null if
@@ -434,6 +470,7 @@ public sealed class UnlockedVault
             "trash" => $"trash:{Id}:{doc.Id}",
             "moves" => $"move:{Id}:{doc.Id}",
             "embeddings" => $"embeddings:{Id}:{Convert.ToBase64String(doc.PathId)}",
+            "links" => ExtractContext(doc.PathId),
             "checkpoints" => $"checkpoint:{Id}:{doc.Id}",
             "checkpoint_texts" => $"cptext:{Id}:{Convert.ToBase64String(doc.PathId)}",
             "attachments" => $"attachment:{Id}:{doc.Id}:{doc.Revision}",
@@ -468,6 +505,13 @@ public sealed class UnlockedVault
                     var path = Payload.Path(Parse<EmbeddingsPayload>(plain).Path);
                     var pid = to.PathId(path);
                     return new Resealed(pid, PathId(path), SealPlain($"embeddings:{Id}:{Convert.ToBase64String(pid)}"), null, []);
+                }
+
+                case "links":
+                {
+                    var path = Payload.Path(Parse<ExtractPayload>(plain).Path);
+                    var pid = to.PathId(path);
+                    return new Resealed(pid, PathId(path), SealPlain(ExtractContext(pid)), null, []);
                 }
 
                 case "checkpoints":
@@ -700,6 +744,61 @@ internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string V
 /// <remarks>Model is missing in embeddings written before step 7b; step 7 had only arctic-m. Scheme is missing in
 /// embeddings written before structural chunking.</remarks>
 internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null, string? Scheme = null);
+
+/// <summary>
+/// A note's extract as sealed (graph backend spec §4.1): its path and the version token of the content it was made from,
+/// the scheme it was made with, then what <see cref="LinkExtract"/> holds. A link keeps every part of its source text, so
+/// that <c>mv</c>'s rewrite (<see cref="Kumbu.Core.Notes.NoteMover.Rewrites"/>) works on a stored one as on a parsed one;
+/// a time is held as its text, its offset included.
+/// </summary>
+internal sealed record ExtractPayload(
+    string Path, string Version, int Scheme, List<LinkPayload> Links, List<string> Aliases, List<string> Tags,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? When = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Until = null)
+{
+    public static ExtractPayload From(VaultPath path, string version, int scheme, LinkExtract e) => new(
+        path.Value, version, scheme, [.. e.Links.Select(LinkPayload.From)], [.. e.Aliases], [.. e.Tags], Text(e.When), Text(e.Until));
+
+    public LinkExtract ToExtract() => new(
+        [.. (Links ?? throw new InvalidDataException("An extract without links")).Select(l => l.ToLink())],
+        Aliases ?? throw new InvalidDataException("An extract without aliases"), Tags ?? throw new InvalidDataException("An extract without tags"),
+        Time(When), Time(Until));
+
+    private static string? Text(CalendarTime? time) => time switch
+    {
+        null => null,
+        { Offset: null } => time.Write(),
+        { Offset: var o } when o == TimeSpan.Zero => time.Write() + "Z",
+        { Offset: { } o } => time.Write() + (o < TimeSpan.Zero ? "-" : "+") + o.Duration().ToString(@"hh\:mm", System.Globalization.CultureInfo.InvariantCulture),
+    };
+
+    private static CalendarTime? Time(string? text) =>
+        text is null ? null : CalendarTime.TryParse(text, out var time) ? time : throw new InvalidDataException($"Invalid time in an extract: {text}");
+}
+
+/// <summary>A link of an extract: <c>w</c> a wikilink with its alias, <c>m</c> a Markdown link with its text,
+/// destination and rest as written.</summary>
+internal sealed record LinkPayload(
+    string Kind, bool Embed, string Target, string Subpath, int Line, int Start, string Raw,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Alias = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Destination = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Rest = null)
+{
+    public static LinkPayload From(NoteLink link) => link switch
+    {
+        WikiLink w => new("w", w.Embed, w.Target, w.Subpath, w.Line, w.Start, w.Raw, Alias: w.Alias),
+        MarkdownLink m => new("m", m.Embed, m.Target, m.Subpath, m.Line, m.Start, m.Raw, Text: m.Text, Destination: m.Destination, Rest: m.Rest),
+        _ => throw new ArgumentException($"No such link: {link.GetType().Name}", nameof(link)),
+    };
+
+    public NoteLink ToLink() => Kind switch
+    {
+        "w" => new WikiLink(Line, Start, Raw, Embed, Target, Subpath, Alias ?? ""),
+        "m" => new MarkdownLink(Line, Start, Raw, Target, Subpath, Text ?? "", Destination ?? "", Rest ?? "", Embed),
+        _ => throw new InvalidDataException($"Unknown link kind in an extract: {Kind}"),
+    };
+}
 
 /// <summary>A chunk's vector, with the hash of the text it was made from, to reuse it while the text stays. A chunk
 /// is keyed by its start line (a PDF's page) and its <paramref name="Part"/> on it.</summary>

@@ -1060,6 +1060,8 @@ public sealed class EncryptedNoteStore(
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
             if (reservation is not null) _quota!.Commit(reservation);
+            // After the commit, not in it: a stale or missing extract is parsed anew on the next unlock (graph backend spec §4.1).
+            await catalog.WriteExtractsAsync(vault, paths);
             index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
             return true;

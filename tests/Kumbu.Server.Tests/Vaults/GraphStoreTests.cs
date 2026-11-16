@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
@@ -146,5 +147,23 @@ public sealed class GraphStoreTests(MongoFixture fixture)
         await WriteAsync(store, "/Work/A.md", "see [[C]]\n");
 
         Assert.Equal(["/Work/A.md -> ?C"], Edges(await store.GraphAsync(Work, Ct)));
+    }
+
+    [Fact]
+    public async Task Uploading_an_attachment_redirects_a_ghost()
+    {
+        var (_, _, store) = await WorldAsync();
+        await WriteAsync(store, "/Work/A.md", "see [[a.png]]\n");
+        var before = await store.GraphAsync(Work, Ct);
+        Assert.Equal(["/Work/A.md -> ?A.PNG"], Edges(before));
+
+        byte[] bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var state = new AttachmentState("image/png", bytes.Length, 1, 1, VersionToken.Of(bytes), await store.PutBlobAsync("Work", bytes, Ct));
+        var attachment = new StoredAttachment(P("/Work/a.png"), state, 1, Writers.Dev, T0, [], null, Ref: WriterRef.Server);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, Writers.Dev, WriterRef.Server, T0, Ct));
+        var after = await store.GraphAsync(Work, Ct);
+
+        Assert.Equal(["/Work/A.md -> /Work/a.png"], Edges(after));
+        Assert.NotEqual(before.Version, after.Version);
     }
 }
