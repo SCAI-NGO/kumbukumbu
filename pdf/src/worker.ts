@@ -8,7 +8,7 @@ import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
 import { textBoxes } from "./boxes.js";
 import { extractImage, listImages, quietly, renderRegion } from "./extract.js";
-import { renderImage } from "./image.js";
+import { renderImage, renderSvg } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
 import { renderPage } from "./render.js";
@@ -27,6 +27,8 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
           ? await renderPage(job.bytes, job.page, job.target, job.crop, job.rotate)
           : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame),
       );
+    case "svg":
+      return own(await renderSvg(job.bytes, job.target, job.size, job.crop, job.rotate));
     case "boxes":
       return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
     // A backstop: whatever pdf.js prints during an extraction job, warnings on or not, may name details
