@@ -43,6 +43,23 @@ Anti-goals, which make this a failure even if it works:
   | decrypt every note (comparison) | ~7 ms | ~70 ms |
 
   Parsing is the cost; resolving is cheap. Every `backlinks` pays the ~300 ms today.
+- **Measured on the built backend, 2026-11-17** (Release build, a 4-core cloud container, MongoDB 7.0 on the same machine; a scratch harness in `Kumbu.Server.Tests`, not committed, as the pull request's 1,600-note figure was taken). Generated vaults of ~1.15 KB and 12 links per note: 40 folders, a tenth day notes, one note in fifty under a name another folder has, two tags each; of the links six in ten to a note, one to a heading of a note, one a Markdown link, one by an alias, one to one of 500 names nobody has. 16,000 notes give 192,000 links, 198,000 edges and 16,500 nodes. Medians of 4 to 30 rounds, the range where it spread widely:
+
+  | | 1,600 notes | 16,000 notes |
+  |---|---|---|
+  | unlock, extracts stored | ~80 ms | ~1.2–1.4 s (1.0–1.8 s) |
+  | unlock, no extracts | ~47 ms | ~360 ms |
+  | first graph after unlock, from stored extracts (parses nothing) | ~37 ms | ~1.0–1.3 s (0.8–1.5 s) |
+  | first graph after unlock without extracts (parses every note) | ~150 ms | ~2.0 s |
+  | in memory, warm: parse every note | ~50–120 ms | ~1.05 s |
+  | in memory, warm: build the graph from extracts | ~30–100 ms | ~0.65–0.77 s, of which resolving ~0.2–0.4 s |
+  | write one note through the store (its extract included) | ~5 ms | ~7 ms |
+  | the first read of the graph after that write | ~31 ms | ~0.86 s (0.74–1.13 s) |
+  | write, then `cat` at once (its embeds read the graph) | ~35 ms | ~0.84 s |
+  | `backlinks` once the graph is current | ~1 ms | ~10 ms |
+  | memory figure (`ApproxBytes`) with the graph built | 8 MB | 85 MB |
+
+  The 1,600-note figures of the pull request hold. At 16,000 notes two things grow faster than the notes, both well beyond the ~150 ms resolving that §4.4 expected: the rebuild after every change, which the first `cat`, `links`, `backlinks`, `mv` or graph read after a write pays (an agent writing and reading in turn waits ~0.9 s a round, and other readers wait for the same build); and opening the stored extracts on unlock, which now costs about what they save (unlock and first graph ~2.4 s either way). Resolving itself is under half of a build; the rest is assembling nodes and edges (sorted per source and in text order) and the garbage of both. **Incremental resolving now looks necessary for vaults towards 16,000 notes, not for the 1,600 that asked**: before it, the cheaper steps are to take the build's assembly and the extracts' opening apart with a profiler, and to let `cat`'s embeds resolve one note's links without the whole graph; incremental resolving (§4.4's "optimisation for later") if a build then still takes more than ~200 ms at 16,000 notes.
 - Every write goes through one place, `EncryptedNoteStore.UnderGateAsync` (`EncryptedNoteStore.cs:1016`): vault gate, Mongo transaction, commit, `apply()` to the working set, then the search index's `Enqueue` and `NotesChanged`. The index hangs off the same place.
 
 ## 3. Decisions
@@ -230,7 +247,7 @@ Test-first, for every part. Beyond the unit tests of each query:
 - **The creation time**: set on each way of creation, kept through mv, archive, restores; the "at the latest" fill for old notes.
 - **Rights**: a hidden discreet vault absent from a graph over several vaults; a key without the vault refused.
 - **Budget**: the local graph of a hub with 400 backlinks and depth 3 stays within the output budget with the line that says how to go on.
-- **Load time**, measured not unit-tested: building the snapshot from extracts for 1,600 synthetic notes stays well under 50 ms on the CI machine; noted in the pull request.
+- **Load time**, measured not unit-tested: building the snapshot from extracts for 1,600 synthetic notes stays well under 50 ms on the CI machine; noted in the pull request. *(2026-11-17: ~36–53 ms in the pull request, ~37 ms again, so not "well under"; 16,000 notes in §2.)*
 
 ## 11. Documentation
 
