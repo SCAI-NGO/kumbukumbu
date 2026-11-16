@@ -20,7 +20,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
     ];
 
     private static readonly string[] Modes = ["path", "orphans", "hubs", "unresolved"];
-    
+
     // What the last line may take on top of the budget: the line that names how to narrow it.
     private const int TailReserve = 1_500;
 
@@ -41,7 +41,8 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         graph --path <a> <b> [--out]
           The shortest paths between two notes (at most 5, at most 6 links), one per line, each arrow in its
           link's own direction: /W/A.md -> /W/C.md <- /W/B.md. --out follows links as written. Says whether the
-          notes are not connected at all or farther apart than 6 steps. Takes the filters: --no-days finds connections that don't run through day notes.
+          notes are not connected at all or farther apart than 6 steps. Takes the filters: --no-days finds
+          connections that don't run through day notes.
         graph --orphans [path]
           The notes below a path (default: every vault) that no note links to and that link to nothing.
         graph --hubs [path] [-n N]
