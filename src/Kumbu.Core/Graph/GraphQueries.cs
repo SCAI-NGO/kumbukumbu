@@ -75,6 +75,81 @@ public static partial class GraphQueries
         return new LocalGraph(order, [.. edges], leftOut);
     }
 
+    /// <summary>The notes (day notes included) the filter keeps that no note links to and that link to nothing.</summary>
+    public static IReadOnlyList<int> Orphans(LinkGraph g, GraphFilter f)
+    {
+        var kept = Kept(g, f);
+        return [.. Enumerable.Range(0, g.Nodes.Count)
+            .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day && g.InEdges(i).Count == 0 && g.OutEdges(i).Count == 0)];
+    }
+
+    /// <summary>The <paramref name="top"/> kept notes by links in plus links out, then by path.</summary>
+    public static IReadOnlyList<(int Node, int In, int Out)> Hubs(LinkGraph g, GraphFilter f, int top)
+    {
+        var kept = Kept(g, f);
+        return [.. Enumerable.Range(0, g.Nodes.Count)
+            .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day)
+            .Select(i => (Node: i, In: g.InEdges(i).Count, Out: g.OutEdges(i).Count))
+            .OrderByDescending(h => h.In + h.Out)
+            .ThenBy(h => g.Nodes[h.Node].Key, TextOrder.Default)
+            .Take(top)];
+    }
+
+    /// <summary>The kept ghosts with the lines (0-based) of the kept notes that link to each, by how many notes that is,
+    /// then by key.</summary>
+    public static IReadOnlyList<(int Ghost, IReadOnlyList<(VaultPath Source, int Line)> From)> Unresolved(LinkGraph g, GraphFilter f)
+    {
+        var kept = Kept(g, f);
+        return [.. Enumerable.Range(0, g.Nodes.Count)
+            .Where(i => kept[i] && g.Nodes[i].Kind == NodeKind.Ghost)
+            .Select(i => (Ghost: i, Edges: g.InEdges(i).Select(e => g.Edges[e]).Where(e => kept[e.From]).ToList()))
+            .OrderByDescending(u => u.Edges.Count)
+            .ThenBy(u => g.Nodes[u.Ghost].Key, TextOrder.Default)
+            .Select(u => (u.Ghost, (IReadOnlyList<(VaultPath, int)>)[.. u.Edges.SelectMany(e => e.Lines.Select(l => (g.Nodes[e.From].Path!, l)))]))];
+    }
+
+    /// <summary>
+    /// What a publication of <paramref name="note"/> takes: the notes reached by outgoing links to <paramref name="depth"/>,
+    /// entering only notes <paramref name="admit"/> accepts (a refused note is not walked through either), the
+    /// attachments those notes link to or embed, and the edges between them. A start the predicate refuses gives
+    /// nothing. The graph is one vault's, so nothing crosses a vault.
+    /// </summary>
+    public static GraphSelection Bundle(LinkGraph g, VaultPath note, int depth, Func<VaultPath, bool> admit)
+    {
+        if (g.IndexOf(note) is not { } start || !IsNote(g, start) || !admit(note)) return new GraphSelection([], []);
+
+        var selected = new HashSet<int> { start };
+        var level = new List<int> { start };
+        for (var d = 1; d <= depth && level.Count > 0; d++)
+        {
+            var next = new List<int>();
+            foreach (var node in level)
+            {
+                foreach (var e in g.OutEdges(node))
+                {
+                    var to = g.Edges[e].To;
+                    if (IsNote(g, to) && admit(g.Nodes[to].Path!) && selected.Add(to)) next.Add(to);
+                }
+            }
+
+            level = next;
+        }
+
+        var notes = selected.ToList();
+        foreach (var node in notes)
+        {
+            foreach (var e in g.OutEdges(node))
+            {
+                if (g.Nodes[g.Edges[e].To].Kind == NodeKind.Attachment) selected.Add(g.Edges[e].To);
+            }
+        }
+
+        var edges = Enumerable.Range(0, g.Edges.Count).Where(e => selected.Contains(g.Edges[e].From) && selected.Contains(g.Edges[e].To));
+        return new GraphSelection([.. selected.Order()], [.. edges]);
+    }
+
+    private static bool IsNote(LinkGraph g, int node) => g.Nodes[node].Kind is NodeKind.Note or NodeKind.Day;
+
     /// <summary>A node's degree, its times and the start of its text; the times and text are null without the note.</summary>
     public static NodeDetail Node(LinkGraph g, int node, StoredNote? note)
     {

@@ -148,4 +148,60 @@ public class GraphQueryTests
         Assert.Contains(body.Split(' ')[^1], words.Split(' '));
         Assert.Null(GraphQueries.Node(graph, 0, null).FirstParagraph);
     }
+
+    [Fact]
+    public void Orphans_are_notes_only()
+    {
+        var graph = Build(("/W/A.md", "[[B]] ![[pic.png]] [[Nowhere]]"), ("/W/B.md", ""), ("/W/Lone.md", ""), ("/W/2026-11-16.md", ""), ("/W/In/Lone2.md", ""));
+
+        Assert.Equal(["/W/2026-11-16.md", "/W/In/Lone2.md", "/W/Lone.md"], Keys(graph, GraphQueries.Orphans(graph, GraphFilter.All)));
+        Assert.Equal(["/W/In/Lone2.md"], Keys(graph, GraphQueries.Orphans(graph, With(f => f with { Paths = [P("/W/In")] }))));
+    }
+
+    [Fact]
+    public void Hubs_ordered_by_degree_then_path()
+    {
+        var graph = Build(("/W/A.md", "[[C]] [[D]]"), ("/W/B.md", "[[C]] [[D]] [[pic.png]]"), ("/W/C.md", "[[D]]"), ("/W/D.md", ""), ("/W/E.md", ""));
+
+        var hubs = GraphQueries.Hubs(graph, GraphFilter.All, 3);
+
+        // B, C and D all have three links, so the path orders them; A (two) falls off the top three.
+        Assert.Equal([("/W/B.md", 0, 3), ("/W/C.md", 2, 1), ("/W/D.md", 3, 0)], hubs.Select(h => (graph.Nodes[h.Node].Key, h.In, h.Out)));
+    }
+
+    [Fact]
+    public void Unresolved_ordered_by_sources()
+    {
+        var graph = Build(("/W/A.md", "[[Once]] [[Twice]]\n[[Twice]]"), ("/W/B.md", "[[Many]]"), ("/W/C.md", "[[Many]] [[Twice]]"), ("/W/D.md", "[[Many]]"));
+
+        var unresolved = GraphQueries.Unresolved(graph, GraphFilter.All);
+
+        Assert.Equal(["Many", "Twice", "Once"], unresolved.Select(u => graph.Nodes[u.Ghost].Title));
+        Assert.Equal([("/W/A.md", 0), ("/W/A.md", 1), ("/W/C.md", 0)], unresolved[1].From.Select(f => (f.Source.Value, f.Line)));
+        Assert.Empty(GraphQueries.Unresolved(graph, With(f => f with { Ghosts = false })));
+    }
+
+    [Fact]
+    public void Bundle_stops_at_depth_and_at_refused_notes()
+    {
+        var graph = Build(("/W/A.md", "[[B]] [[Secret]]"), ("/W/B.md", "[[C]]"), ("/W/C.md", "[[D]]"), ("/W/D.md", ""), ("/W/Secret.md", "[[E]]"), ("/W/E.md", ""));
+
+        var bundle = GraphQueries.Bundle(graph, P("/W/A.md"), 2, p => p.Name != "Secret.md");
+
+        Assert.Equal(["/W/A.md", "/W/B.md", "/W/C.md"], Keys(graph, bundle.Nodes));
+        Assert.Equal([("/W/A.md", "/W/B.md"), ("/W/B.md", "/W/C.md")],
+            bundle.Edges.Select(e => (graph.Nodes[graph.Edges[e].From].Key, graph.Nodes[graph.Edges[e].To].Key)));
+        Assert.Empty(GraphQueries.Bundle(graph, P("/W/Secret.md"), 2, p => p.Name != "Secret.md").Nodes);
+    }
+
+    [Fact]
+    public void Bundle_takes_embedded_attachments()
+    {
+        var graph = Build(("/W/A.md", "![[pic.png]] [[B]] [[Nowhere]]"), ("/W/B.md", "[pic](pic.png)"), ("/W/C.md", "![[pic.png]]"));
+
+        var bundle = GraphQueries.Bundle(graph, P("/W/A.md"), 1, _ => true);
+
+        Assert.Equal(["/W/A.md", "/W/B.md", "/W/pic.png"], Keys(graph, bundle.Nodes));
+        Assert.Equal(3, bundle.Edges.Count);
+    }
 }
