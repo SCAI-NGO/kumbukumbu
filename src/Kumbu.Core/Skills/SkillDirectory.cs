@@ -124,7 +124,10 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
             var (editor, byOther) = await WritersAsync(vault, info, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
-            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner, AtStart = manifest.AtStart });
+            // The start-up mark counts only in her own vault and only while no other user changed the skill: a writer of a
+            // shared vault must not steer every reader's agent before its first answer. Otherwise it is an ordinary skill.
+            var atStart = manifest.AtStart && info?.Owner is null && !byOther;
+            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner, AtStart = atStart });
         }
 
         return skills;

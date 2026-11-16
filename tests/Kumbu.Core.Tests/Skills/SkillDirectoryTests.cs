@@ -66,6 +66,47 @@ public class SkillDirectoryTests
     public async Task Project_memory_is_a_start_up_skill() =>
         Assert.True(Assert.Single(await dir.ListAsync(null, Ct), s => s.Name == "project-memory" && s.IsSystem).AtStart);
 
+    private const string Marked = "---\nname: steer\ndescription: Steers.\nmetadata:\n  kumbu-when: session-start\n---\n";
+
+    /// <summary>The start-up skills of the section: the entries between its head and the blank line after them.</summary>
+    private static string StartPart(string section) =>
+        section.StartsWith(SkillInstructions.StartHead, StringComparison.Ordinal) ? section[..section.IndexOf("\n\n", StringComparison.Ordinal)] : "";
+
+    [Theory]
+    [InlineData(InstructionsMode.ListAndHint)]
+    [InlineData(InstructionsMode.HintOnly)]
+    public async Task A_marked_skill_of_her_own_starts_the_session(InstructionsMode mode)
+    {
+        Put("/Skills/steer/SKILL.md", Marked);
+
+        var skills = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+
+        Assert.True(Assert.Single(skills, s => s.Name == "steer").AtStart);
+        Assert.Contains("\n- steer (/Skills/steer, ", StartPart(SkillInstructions.Section(mode, skills)));
+        Assert.Contains("\n- project-memory (system)", StartPart(SkillInstructions.Section(mode, skills)));
+    }
+
+    /// <summary>A writer of a shared vault must not steer every reader's agent before its first answer: in Alice's Work the
+    /// mark counts for nothing, though Bob wrote the skill himself, and in his own Private once Carol last changed it.</summary>
+    [Theory]
+    [InlineData(InstructionsMode.ListAndHint, "/Work/_skills/steer", "w-bob")]
+    [InlineData(InstructionsMode.HintOnly, "/Work/_skills/steer", "w-bob")]
+    [InlineData(InstructionsMode.ListAndHint, "/Private/_skills/steer", "w-carol")]
+    [InlineData(InstructionsMode.HintOnly, "/Private/_skills/steer", "w-carol")]
+    public async Task A_marked_skill_another_user_can_change_is_an_ordinary_skill(InstructionsMode mode, string folder, string writer)
+    {
+        _store.Infos["Private"] = new VaultInfo(null, AccessLevel.Owner, true);
+        Put(folder + "/SKILL.md", Marked, WriterRef.ForMember(writer));
+
+        var skills = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
+        var section = SkillInstructions.Section(mode, skills);
+
+        Assert.False(Assert.Single(skills, s => s.Name == "steer").AtStart);
+        Assert.DoesNotContain("steer", StartPart(section));
+        if (mode == InstructionsMode.HintOnly) Assert.DoesNotContain("steer", section);
+        else Assert.Contains($"\n- steer ({folder}, ", section[StartPart(section).Length..]);
+    }
+
     [Fact]
     public async Task A_skill_in_a_vaults_skills_folder_never_replaces_a_system_skill()
     {
