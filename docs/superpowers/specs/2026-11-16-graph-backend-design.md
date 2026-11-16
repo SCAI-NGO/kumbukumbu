@@ -72,7 +72,7 @@ A new collection, `links`, one `SealedDocument` per note (`Documents.cs:176`): `
 | Field | What |
 |---|---|
 | `scheme` | the extract's scheme version (§4.5) |
-| `links` | every `NoteLink.Parse` result: kind (wiki or Markdown), embed, target, subpath, line, start; the alias text of a wikilink is not needed and not stored |
+| `links` | every `NoteLink.Parse` result as it is, the visible text and the alias of a wikilink included: `mv`'s rewrite builds the replacement from them *(amended while building Task 9)* |
 | `aliases` | `NoteAliases.Of` |
 | `tags` | the note's tags as `TagReader` reads them, front matter and inline |
 | `when` | the note's calendar time as `EntryReader` reads it from the front matter (start, and `until` if present), or none |
@@ -85,7 +85,7 @@ Attachments get no extract: they link to nothing. They are nodes when a note lin
 
 ### 4.2 On unlock
 
-`VaultCatalog.LoadAsync` reads the extracts with the notes. A note whose extract is missing, has an older `scheme`, or was made from another state of the note (its version token differs) gets one parsed in memory at once, so the graph is complete when the vault opens; writing those extracts back happens after the load, not inside it *(Claude's call: the first unlock after the upgrade parses every note once, ~300 ms for 1,600 notes, and the user gets the vault without waiting for 1,600 writes)*. An extract that doesn't open (damaged) is treated as missing; the note is reported as damaged only by the note's own document, as today.
+`VaultCatalog.LoadAsync` reads the extracts with the notes. A note whose extract is missing, has an older `scheme`, or was made from another state of the note (its version token differs) gets one parsed in memory on the first read of the graph (or by the write-back, whichever comes first), so the graph is complete whenever it is read *(amended while building Task 9)*; writing those extracts back happens after the load, not inside it *(Claude's call: the first unlock after the upgrade parses every note once, ~300 ms for 1,600 notes, and the user gets the vault without waiting for 1,600 writes)*. An extract that doesn't open (damaged) is treated as missing; the note is reported as damaged only by the note's own document, as today.
 
 ### 4.3 The graph in memory
 
