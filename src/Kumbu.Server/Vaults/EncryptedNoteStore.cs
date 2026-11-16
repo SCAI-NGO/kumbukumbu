@@ -74,8 +74,7 @@ public sealed class EncryptedNoteStore(
     public async Task<LinkGraph> GraphAsync(VaultPath vault, CancellationToken ct)
     {
         if (await VaultAsync(vault, ct) is not { } a) return LinkGraph.Build(vault.Segments[0], new Dictionary<VaultPath, LinkExtract>(), []);
-        var graph = a.Vault.Graph();
-        return a.Renamed ? graph.Rebased(a.ToCaller) : graph;
+        return a.Vault.Graph(a.Name);
     }
 
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct)

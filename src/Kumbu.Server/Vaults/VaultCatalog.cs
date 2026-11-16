@@ -1573,7 +1573,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>
-    /// Holds the stored extracts that match their note's state (its version token, the current scheme) in the working
+    /// Holds the stored extracts that match their note's state (its content's SHA-256, the current scheme) in the working
     /// set, so that the graph parses none of them (graph backend spec §4.2), and returns the paths whose document is to
     /// be written: notes without a current extract, and paths that are no note any more. A document that doesn't open
     /// counts as missing; a note is reported damaged by its own document only, and a damaged note's extract is kept.
@@ -1585,7 +1585,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var unreadable = 0;
         foreach (var d in await Links.Find(n => n.Vault == vault.Id).ToListAsync(ct))
         {
-            (VaultPath Path, string Version, int Scheme, LinkExtract Extract) stored;
+            (VaultPath Path, string? Hash, int Scheme, LinkExtract Extract) stored;
             try
             {
                 stored = vault.OpenExtract(d);
@@ -1598,7 +1598,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             if (vault.Notes.TryGetValue(stored.Path, out var note))
             {
-                if (stored.Scheme == LinkExtract.SchemeVersion && stored.Version == note.Note.Version) held[stored.Path] = (note.Note.Content, stored.Extract);
+                if (stored.Scheme == LinkExtract.SchemeVersion && stored.Hash == VersionToken.Hash(note.Note.Content)) held[stored.Path] = (note.Note.Content, stored.Extract);
             }
             else if (!damagedNotes.Contains(Convert.ToBase64String(d.PathId)))
             {
@@ -1662,7 +1662,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 if (vault.Notes.TryGetValue(path, out var note))
                 {
                     writes.Add(new UpdateOneModel<SealedDocument>(filter, Builders<SealedDocument>.Update
-                        .Set(d => d.Blob, vault.SealExtract(path, note.Note.Version, vault.ExtractOf(path, note.Note.Content)))
+                        .Set(d => d.Blob, vault.SealExtract(path, VersionToken.Hash(note.Note.Content), vault.ExtractOf(path, note.Note.Content)))
                         .SetOnInsert(d => d.Vault, vault.Id)
                         .SetOnInsert(d => d.PathId, pid)) { IsUpsert = true });
                 }

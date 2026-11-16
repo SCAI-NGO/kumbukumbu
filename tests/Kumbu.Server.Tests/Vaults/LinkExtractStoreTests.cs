@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Links;
@@ -38,14 +39,17 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         Assert.True(written);
     }
 
+    /// <summary>The content's full SHA-256, which an extract is sealed with.</summary>
+    private static string Sha256(string content) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+
     private static IMongoCollection<SealedDocument> Links(VaultWorld world) => world.Db.GetCollection<SealedDocument>("links");
 
     private static IMongoCollection<BsonDocument> Raw(VaultWorld world, string name) => world.Db.GetCollection<BsonDocument>(name);
 
     /// <summary>The stored extracts, opened, by path.</summary>
-    private static async Task<Dictionary<VaultPath, (string Version, int Scheme, LinkExtract Extract)>> StoredAsync(VaultWorld world, UnlockedVault vault)
+    private static async Task<Dictionary<VaultPath, (string? Hash, int Scheme, LinkExtract Extract)>> StoredAsync(VaultWorld world, UnlockedVault vault)
     {
-        var result = new Dictionary<VaultPath, (string, int, LinkExtract)>();
+        var result = new Dictionary<VaultPath, (string?, int, LinkExtract)>();
         foreach (var doc in await Links(world).Find(d => d.Vault == vault.Id).ToListAsync(Ct))
         {
             var (path, version, scheme, extract) = vault.OpenExtract(doc);
@@ -73,7 +77,7 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         {
             var stored = await StoredAsync(world, vault);
             return stored.Count == vault.Notes.Count && vault.Notes.All(n =>
-                stored.TryGetValue(n.Key, out var s) && s.Version == n.Value.Note.Version && s.Scheme == LinkExtract.SchemeVersion);
+                stored.TryGetValue(n.Key, out var s) && s.Hash == Sha256(n.Value.Note.Content) && s.Scheme == LinkExtract.SchemeVersion);
         }
         catch (Exception e) when (e is System.Security.Cryptography.CryptographicException)
         {
@@ -99,7 +103,7 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         Assert.DoesNotContain("hidden-tag", blob);
         var (path, version, scheme, extract) = vault.OpenExtract(doc);
         Assert.Equal(P("/Work/A.md"), path);
-        Assert.Equal(vault.Notes[path].Note.Version, version);
+        Assert.Equal(Sha256("see [[Secret target]] #hidden-tag\n"), version);
         Assert.Equal(LinkExtract.SchemeVersion, scheme);
         Assert.Equal(["Secret target"], extract.Links.Select(l => l.Target));
         Assert.Equal(["hidden-tag"], extract.Tags);
@@ -157,6 +161,8 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
     [Theory]
     [InlineData("version")]
     [InlineData("scheme")]
+    // What an extract held before it was sealed with the full hash: the 12-hex version token, trusted no more.
+    [InlineData("token")]
     public async Task Stale_version_or_scheme_is_parsed_and_written_back(string stale)
     {
         var (world, catalog, store) = await WorldAsync();
@@ -166,9 +172,12 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         var vault = catalog.OpenVaults.Single();
         // A's extract claims another state: one that linked to C.
         var wrong = LinkExtract.Of(P("/Work/A.md"), "see [[C]]\n");
-        var blob = stale == "version"
-            ? vault.SealExtract(P("/Work/A.md"), "another-state", wrong)
-            : vault.SealExtract(P("/Work/A.md"), vault.Notes[P("/Work/A.md")].Note.Version, wrong, scheme: LinkExtract.SchemeVersion - 1);
+        var blob = stale switch
+        {
+            "version" => vault.SealExtract(P("/Work/A.md"), "another-state", wrong),
+            "token" => vault.SealExtract(P("/Work/A.md"), vault.Notes[P("/Work/A.md")].Note.Version, wrong),
+            _ => vault.SealExtract(P("/Work/A.md"), Sha256(vault.Notes[P("/Work/A.md")].Note.Content), wrong, scheme: LinkExtract.SchemeVersion - 1),
+        };
         await Links(world).UpdateOneAsync(d => d.Vault == vault.Id && d.PathId == vault.PathId(P("/Work/A.md")), Builders<SealedDocument>.Update.Set(d => d.Blob, blob), cancellationToken: Ct);
 
         var later = world.Catalog();
@@ -267,6 +276,6 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
 
         var stored = await StoredAsync(world, vault);
         Assert.Equal([P("/Work/Sub/A.md")], stored.Keys);
-        Assert.Equal(old.Version, stored[P("/Work/Sub/A.md")].Version);
+        Assert.Equal(Sha256(old.Content), stored[P("/Work/Sub/A.md")].Hash);
     }
 }

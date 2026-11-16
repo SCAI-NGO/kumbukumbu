@@ -782,6 +782,9 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
             graph.Extracts.Keys.Concat(graph.Attachments).Select(p => p.Value).Order(StringComparer.Ordinal));
         Assert.NotNull(graph.Version);
         Assert.Equal(graph.Version, (await store.GraphAsync(P("/Garten"), Ct)).Version);
+        // Rebased once: the next request's read gets the same graph instead of building it again.
+        var next = new EncryptedNoteStore(Catalog, new UserCredential(w.Alice.User.Id, w.Alice.UserKey));
+        Assert.Same(graph, await next.GraphAsync(P("/Garten"), Ct));
     });
 
     [Fact]
