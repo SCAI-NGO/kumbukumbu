@@ -746,7 +746,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
                      ("get", "/api/vaults"), ("post", "/api/vaults"), ("get", "/api/vaults/{vault}/tree"),
                      ("get", "/api/notes/{vault}/{path}"), ("put", "/api/notes/{vault}/{path}"), ("delete", "/api/notes/{vault}/{path}"),
                      ("post", "/api/move"), ("get", "/api/links/{vault}/{path}"), ("get", "/api/backlinks/{vault}/{path}"),
-                     ("get", "/api/mentions/{vault}/{path}"),
+                     ("get", "/api/mentions/{vault}/{path}"), ("get", "/api/graph"), ("get", "/api/graph/local"), ("get", "/api/graph/node"), ("get", "/api/graph/paths"),
                      ("get", "/api/history/{vault}/{path}"), ("get", "/api/search"), ("get", "/api/changes"),
                      ("post", "/api/upload/{vault}/{folder}"), ("put", "/api/vaults/{vault}/embeddings"), ("get", "/api/embeddings"),
                      ("get", "/api/files/{vault}/{path}"), ("put", "/api/files/{vault}/{path}"), ("delete", "/api/files/{vault}/{path}"),

@@ -319,6 +319,7 @@ app.MapAccountApi();
 app.MapDiscreetApi();
 app.MapConnectionApi();
 app.MapNoteApi();
+app.MapGraphApi();
 app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();

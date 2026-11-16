@@ -1,0 +1,187 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
+using Kumbu.Core.Sh;
+using Kumbu.Core.Tests.Fakes;
+
+namespace Kumbu.Core.Tests.Sh;
+
+public class GraphCommandTests
+{
+    // The spec's example (§7.1) in small: Plan links Budget and embeds a picture, Budget links a name nobody has, two
+    // notes link to Plan, and a hub of five linking notes is capped to three of them.
+    private static Shell Spec()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Plan.md", "[[Budget]]\n![[diagram.png]]\n"),
+            ("/Work/Budget.md", "[[Anna]]\n"),
+            ("/Work/Daily/2026-11-12.md", "[[Plan]]\n"),
+            ("/Work/Daily.md", "[[Plan]]\n"),
+            ("/Work/Log1.md", "[[Daily]]\n"), ("/Work/Log2.md", "[[Daily]]\n"), ("/Work/Log3.md", "[[Daily]]\n"),
+            ("/Work/Log4.md", "[[Daily]]\n"), ("/Work/Log5.md", "[[Daily]]\n"));
+        store.AddAttachment("/Work/Pump/diagram.png");
+        return TestShell.Of(store);
+    }
+
+    private static Task<ShellResult> Run(Shell sh, string line) => sh.RunAsync(line, CancellationToken.None);
+
+    [Fact]
+    public async Task Local_graph_prints_as_the_spec_shows()
+    {
+        var result = await Run(Spec(), "graph /Work/Plan.md --depth 2 --cap 4");
+        Assert.False(result.IsError);
+        Assert.Equal(
+            """
+            /Work/Plan.md, depth 2, both directions: 7 notes, 1 attachment, 1 without a note
+            1  /Work/Plan.md -> /Work/Budget.md
+            1  /Work/Plan.md -> /Work/Pump/diagram.png (embed)
+            1  /Work/Daily.md -> /Work/Plan.md
+            1  /Work/Daily/2026-11-12.md -> /Work/Plan.md
+            2  /Work/Budget.md -> Anna (no note)
+            2  /Work/Log1.md -> /Work/Daily.md
+            2  /Work/Log2.md -> /Work/Daily.md
+            2  /Work/Log3.md -> /Work/Daily.md
+               +2 more linking to /Work/Daily.md: graph /Work/Daily.md --in
+            """.ReplaceLineEndings("\n"),
+            result.Output);
+    }
+
+    [Fact]
+    public async Task Path_prints_arrows_in_link_direction()
+    {
+        var sh = TestShell.Of(("/W/A.md", "[[C]]\n"), ("/W/B.md", "[[C]]\n"), ("/W/C.md", "text\n"), ("/W/D.md", "[[A]]\n"));
+
+        Assert.Equal(
+            "/W/A.md to /W/B.md, 2 steps, in either direction: 1 path\n/W/A.md -> /W/C.md <- /W/B.md",
+            (await Run(sh, "graph --path /W/A.md /W/B.md")).Output);
+        Assert.Equal(
+            "/W/B.md to /W/A.md, 2 steps, in either direction: 1 path\n/W/B.md -> /W/C.md <- /W/A.md",
+            (await Run(sh, "graph --path /W/B.md /W/A.md")).Output);
+        Assert.Equal(
+            "/W/D.md to /W/C.md, 2 steps, following links as written: 1 path\n/W/D.md -> /W/A.md -> /W/C.md",
+            (await Run(sh, "graph --path /W/D.md /W/C.md --out")).Output);
+    }
+
+    [Fact]
+    public async Task Not_connected_and_farther_than_six_are_told_apart()
+    {
+        // A chain of eight notes, and one note on its own.
+        var notes = Enumerable.Range(1, 8).Select(i => ($"/W/n{i}.md", i < 8 ? $"[[n{i + 1}]]\n" : "end\n")).Append(("/W/island.md", "x\n")).ToArray();
+        var sh = TestShell.Of(notes);
+
+        Assert.Equal("/W/n1.md and /W/island.md are not connected at all (no path of any length)", (await Run(sh, "graph --path /W/n1.md /W/island.md")).Output);
+        Assert.Equal("/W/n1.md and /W/n8.md are farther than 6 steps apart", (await Run(sh, "graph --path /W/n1.md /W/n8.md")).Output);
+        Assert.StartsWith("/W/n1.md to /W/n7.md, 6 steps,", (await Run(sh, "graph --path /W/n1.md /W/n7.md")).Output);
+
+        // Under --out "not connected" would claim too much: the other way round there is a path.
+        Assert.Equal("no path from /W/n8.md to /W/n1.md following links as written", (await Run(sh, "graph --path /W/n8.md /W/n1.md --out")).Output);
+        Assert.Equal("/W/n1.md and /W/n8.md are farther than 6 steps apart following links as written", (await Run(sh, "graph --path /W/n1.md /W/n8.md --out")).Output);
+    }
+
+    [Fact]
+    public async Task Orphans_hubs_unresolved_list()
+    {
+        var sh = TestShell.Of(
+            ("/W/hub.md", "[[a]] [[b]] [[ghost one]]\n"), ("/W/a.md", "[[hub]]\n"), ("/W/b.md", "[[hub]] [[ghost one]]\nline two [[Other ghost]]\n"),
+            ("/W/alone.md", "x\n"), ("/W/sub/alone2.md", "x\n"), ("/V/other.md", "x\n"));
+
+        Assert.Equal("/V/other.md\n/W/alone.md\n/W/sub/alone2.md", (await Run(sh, "graph --orphans")).Output);
+        Assert.Equal("/W/sub/alone2.md", (await Run(sh, "graph --orphans /W/sub")).Output);
+        Assert.Equal("(no notes without links)", (await Run(sh, "graph --orphans /W/a.md")).Output);
+        Assert.Equal(
+            "5  /W/hub.md  (2 in, 3 out)\n4  /W/b.md  (1 in, 3 out)\n2  /W/a.md  (1 in, 1 out)",
+            (await Run(sh, "graph --hubs /W -n 3")).Output);
+        Assert.Equal(
+            """
+            ghost one, linked from 2 notes:
+              /W/b.md:1
+              /W/hub.md:1
+            Other ghost, linked from 1 note:
+              /W/b.md:2
+            """.ReplaceLineEndings("\n"),
+            (await Run(sh, "graph --unresolved /W")).Output);
+        Assert.Equal("(no unresolved links)", (await Run(sh, "graph --unresolved /W --no-ghosts")).Output);
+    }
+
+    [Fact]
+    public async Task Hub_at_depth_three_stays_in_budget()
+    {
+        var pad = new string('x', 90);
+        var notes = new List<(string, string)> { ("/Hub/Hub.md", "hub\n") };
+        for (var i = 0; i < 400; i++)
+        {
+            var next = string.Concat(Enumerable.Range(1, 3).Select(k => $"[[{pad}{(i + k) % 400:D3}]] "));
+            notes.Add(($"/Hub/{pad}{i:D3}.md", $"[[Hub]] {next}\n"));
+        }
+
+        var result = await Run(TestShell.Of([.. notes]), "graph /Hub/Hub.md --depth 3 --cap 100");
+        Assert.False(result.IsError);
+        Assert.True(result.Output.Length <= OutputLimit.MaxChars, $"{result.Output.Length} chars");
+        Assert.DoesNotContain("[truncated", result.Output);
+        var last = result.Output.Split('\n')[^1];
+        Assert.StartsWith("(", last);
+        Assert.Contains("--depth", last);
+        Assert.Contains("--tag", last);
+        Assert.Contains("go on from /Hub/", last);
+        Assert.DoesNotContain("go on from /Hub/Hub.md", last);
+        Assert.Equal(result.Output, OutputLimit.Apply(result).Output);
+    }
+
+    [Fact]
+    public async Task Path_takes_the_filters()
+    {
+        var sh = TestShell.Of(("/W/A.md", "[[2026-11-12]]\n"), ("/W/2026-11-12.md", "[[B]]\n"), ("/W/B.md", "x\n"));
+        Assert.Equal(
+            "/W/A.md to /W/B.md, 2 steps, in either direction: 1 path\n/W/A.md -> /W/2026-11-12.md -> /W/B.md",
+            (await Run(sh, "graph --path /W/A.md /W/B.md")).Output);
+        Assert.Equal("/W/A.md and /W/B.md are not connected at all (no path of any length)", (await Run(sh, "graph --path /W/A.md /W/B.md --no-days")).Output);
+    }
+
+    [Fact]
+    public async Task Hubs_and_unresolved_name_their_own_way_to_narrow()
+    {
+        var pad = new string('x', 90);
+        var notes = Enumerable.Range(0, 400).Select(i => ($"/L/{pad}{i:D3}.md", $"[[{pad}ghost{i:D3}]]\n")).ToArray();
+        var sh = TestShell.Of(notes);
+
+        var hubs = (await Run(sh, "graph --hubs -n 500")).Output.Split('\n')[^1];
+        Assert.Contains("a smaller -n (now 500)", hubs);
+        Assert.Contains("graph --hubs /Work", hubs);
+        var unresolved = (await Run(sh, "graph --unresolved")).Output.Split('\n')[^1];
+        Assert.Contains("graph --unresolved /Work", unresolved);
+        Assert.DoesNotContain("--orphans", unresolved);
+    }
+
+    [Theory]
+    [InlineData("graph /W/a.md --depth 0", "graph: --depth must be 1 to 3")]
+    [InlineData("graph /W/a.md --depth 4", "graph: --depth must be 1 to 3")]
+    [InlineData("graph /W/a.md --depth x", "graph: --depth must be 1 to 3")]
+    [InlineData("graph /W/a.md --cap 0", "graph: --cap must be 1 to 100")]
+    [InlineData("graph /W/a.md --cap 101", "graph: --cap must be 1 to 100")]
+    [InlineData("graph /W/a.md --out --in", "graph: --out and --in are exclusive: give one")]
+    [InlineData("graph --orphans --hubs", "graph: --path, --orphans, --hubs and --unresolved are exclusive: give one")]
+    [InlineData("graph --path /W/a.md", "graph: --path needs two notes")]
+    [InlineData("graph --orphans --depth 2", "graph: --depth applies to a local graph only")]
+    [InlineData("graph --hubs -n 0", "graph: -n must be 1 or more")]
+    [InlineData("graph", "graph: missing operand")]
+    [InlineData("graph /W/nope.md", "graph: /W/nope.md: No such file or directory")]
+    [InlineData("graph a.md", "graph: a.md: paths must be absolute (there is no working directory)")]
+    [InlineData("graph /W/a.md /W/b.md", "graph: too many arguments")]
+    [InlineData("graph --orphans /Nowhere", "graph: /Nowhere: No such file or directory")]
+    [InlineData("graph --path /W/a.md /X/b.md", "graph: --path: /W/a.md and /X/b.md are in different vaults, and links never cross vaults")]
+    public async Task Bad_depth_and_two_modes_are_errors(string line, string message)
+    {
+        var sh = TestShell.Of(("/W/a.md", "x\n"), ("/W/b.md", "x\n"), ("/X/b.md", "x\n"));
+        var result = await Run(sh, line);
+        Assert.True(result.IsError);
+        Assert.StartsWith(message, result.Output);
+    }
+
+    [Fact]
+    public async Task Help_names_every_mode()
+    {
+        var help = (await Run(TestShell.Of(), "help graph")).Output;
+        Assert.StartsWith("graph <note> [--depth N]", help);
+        foreach (var mode in new[] { "--path", "--orphans", "--hubs", "--unresolved", "--tag", "--no-ghosts" }) Assert.Contains(mode, help);
+        Assert.Contains("graph <note>", Manual.ToolDescription);
+    }
+}

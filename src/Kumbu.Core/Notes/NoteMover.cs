@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -238,9 +239,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);
         var replaced = Replaced(replacing);
-        var notes = (await store.ReadNotesUnderAsync(vault, ct)).Where(n => !replaced.Contains(n.Path)).ToList();
-        var rewrites = !rewriteLinks ? []
-            : Rewrites(notes, map, await StoreAttachments.PathsUnderAsync(store, vault, ct) is { } all ? [.. all.Where(p => !replaced.Contains(p))] : null);
+        var graph = rewriteLinks ? await store.GraphAsync(vault, ct) : null;
+        var rewrites = graph is null ? []
+            : Rewrites(graph.Extracts.Where(e => !replaced.Contains(e.Key)).ToDictionary(), map, [.. graph.Attachments.Where(p => !replaced.Contains(p))]);
         var now = time.GetUtcNow().UtcDateTime;
         var writer = caller.WriterIn(vault.Segments[0]);
         var reference = caller.ReferenceIn(vault.Segments[0]);
@@ -318,25 +319,24 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// <summary>
     /// For each note (by its path after the move), the links whose target the move changes, with the text to
     /// put in their place: links to a moved note or attachment, and links that would now hit one by a name collision.
-    /// <paramref name="map"/> holds notes and attachments; <paramref name="attachments"/> are the vault's attachments
-    /// before the move, null if unknown (links to them then stay as they are).
+    /// <paramref name="notes"/> are the vault's notes' extracts before the move; <paramref name="map"/> holds notes and
+    /// attachments; <paramref name="attachments"/> are the vault's attachments before the move, null if unknown (links to
+    /// them then stay as they are).
     /// </summary>
     public static Dictionary<VaultPath, List<(NoteLink Link, string Replacement)>> Rewrites(
-        IReadOnlyList<Note> notes, IReadOnlyDictionary<VaultPath, VaultPath> map, IReadOnlyList<VaultPath>? attachments = null)
+        IReadOnlyDictionary<VaultPath, LinkExtract> notes, IReadOnlyDictionary<VaultPath, VaultPath> map, IReadOnlyCollection<VaultPath>? attachments = null)
     {
         var vault = map.Keys.First().Vault!;
         // A note's aliases move with it, so a link by alias keeps leading to it and isn't rewritten.
-        var aliases = NoteAliases.Of(notes);
-        var before = new LinkResolver(vault, notes.Select(n => n.Path), attachments, aliases);
+        var before = new LinkResolver(vault, notes.Keys, attachments, notes.ToDictionary(n => n.Key, n => n.Value.Aliases));
         var after = new LinkResolver(
-            vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)), attachments?.Select(a => map.GetValueOrDefault(a, a)),
-            aliases.ToDictionary(a => map.GetValueOrDefault(a.Key, a.Key), a => a.Value));
+            vault, notes.Keys.Select(p => map.GetValueOrDefault(p, p)), attachments?.Select(a => map.GetValueOrDefault(a, a)),
+            notes.ToDictionary(n => map.GetValueOrDefault(n.Key, n.Key), n => n.Value.Aliases));
         var result = new Dictionary<VaultPath, List<(NoteLink, string)>>();
-        foreach (var note in notes)
+        foreach (var (oldPath, extract) in notes)
         {
-            var oldPath = note.Path;
             var newPath = map.GetValueOrDefault(oldPath, oldPath);
-            foreach (var link in NoteLink.Parse(note.Content))
+            foreach (var link in extract.Links)
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(oldPath, link);

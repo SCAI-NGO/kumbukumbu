@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Attachments;
+using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Skills;
@@ -67,6 +68,14 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => new Note(n.Path, n.Content))];
+
+    /// <summary>The vault's graph from its working set (graph backend spec §4.4), in the caller's names; a vault the
+    /// caller doesn't have is an empty graph, as the reader's default has it.</summary>
+    public async Task<LinkGraph> GraphAsync(VaultPath vault, CancellationToken ct)
+    {
+        if (await VaultAsync(vault, ct) is not { } a) return LinkGraph.Build(vault.Segments[0], new Dictionary<VaultPath, LinkExtract>(), []);
+        return a.Vault.Graph(a.Name);
+    }
 
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct)
     {
@@ -1050,6 +1059,8 @@ public sealed class EncryptedNoteStore(
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
             if (reservation is not null) _quota!.Commit(reservation);
+            // After the commit, not in it: a stale or missing extract is parsed anew on the next unlock (graph backend spec §4.1).
+            await catalog.WriteExtractsAsync(vault, paths);
             index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
             return true;

@@ -90,6 +90,9 @@ public sealed record HistoryEntry(
 /// <param name="Restored">The current state came back from the trash (<see cref="NoteWriter.Restored"/>); the next write
 /// of content clears it, a move keeps it. A note stored before the flag existed reads as not restored.</param>
 /// <param name="Message">The one line the writer gave with the write that made the current state; null if none.</param>
+/// <param name="CreatedAt">When the note came into being, once a write has recorded it; read it through <see cref="NoteCreation.Of"/>,
+/// which also covers a note that never did.</param>
+/// <param name="CreatedAtLeast"><paramref name="CreatedAt"/> is only the oldest time known, the note being older than its history.</param>
 public sealed record StoredNote(
     VaultPath Path,
     string Content,
@@ -101,7 +104,9 @@ public sealed record StoredNote(
     Changeset? Changeset = null,
     WriterRef? Ref = null,
     bool Restored = false,
-    string? Message = null)
+    string? Message = null,
+    DateTime? CreatedAt = null,
+    bool CreatedAtLeast = false)
 {
     public string Version => VersionToken.Of(Content);
 }

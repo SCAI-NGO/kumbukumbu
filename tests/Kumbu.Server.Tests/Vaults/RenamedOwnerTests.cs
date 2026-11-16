@@ -764,6 +764,29 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     [Fact]
     public Task Session_reads_attachments() => ReadsAttachmentsAsync(key: false);
 
+    // The graph is built and cached under the stored name; the owner sees hers, the version kept.
+    [Fact]
+    public Task Graph_shows_the_owners_names() => WithRenamedAsync(async w =>
+    {
+        await OkAsync(w, HttpMethod.Put, "/api/notes/Garten/links.md", new { content = "[[plan]] ![[Bilder/a.png]] [[weg]]\n" });
+        var store = new EncryptedNoteStore(Catalog, new UserCredential(w.Alice.User.Id, w.Alice.UserKey));
+
+        var graph = await store.GraphAsync(P("/Garten"), Ct);
+
+        Assert.Equal("Garten", graph.Vault);
+        Assert.Equal(
+            ["/Garten/Bilder/a.png", "/Garten/links.md", "/Garten/plan.md", "?WEG"],
+            graph.Nodes.Select(n => n.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["/Garten/Bilder/a.png", "/Garten/links.md", "/Garten/plan.md", "/Garten/x.pdf"],
+            graph.Extracts.Keys.Concat(graph.Attachments).Select(p => p.Value).Order(StringComparer.Ordinal));
+        Assert.NotNull(graph.Version);
+        Assert.Equal(graph.Version, (await store.GraphAsync(P("/Garten"), Ct)).Version);
+        // Rebased once: the next request's read gets the same graph instead of building it again.
+        var next = new EncryptedNoteStore(Catalog, new UserCredential(w.Alice.User.Id, w.Alice.UserKey));
+        Assert.Same(graph, await next.GraphAsync(P("/Garten"), Ct));
+    });
+
     [Fact]
     public Task KeyRest_reads_attachments() => ReadsAttachmentsAsync(key: true);
 

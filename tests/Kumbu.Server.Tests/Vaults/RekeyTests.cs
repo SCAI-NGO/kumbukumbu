@@ -31,7 +31,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 {
     private const string Password = "correct horse battery staple";
 
-    private static readonly string[] Collections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash"];
+    private static readonly string[] Collections = ["notes", "trash", "moves", "embeddings", "links", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -161,6 +161,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.True(await store.TryAddCheckpointAsync(Cp("zwei", "/Arbeit/ideen/a.md", na), [new Note(na.Path, na.Content)], Ct));
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(4, await Docs("embeddings").CountDocumentsAsync(d => d.Vault == a.Id("Arbeit"), cancellationToken: Ct));
+        Assert.Equal(4, await Docs("links").CountDocumentsAsync(d => d.Vault == a.Id("Arbeit"), cancellationToken: Ct));
         return a;
     }
 
@@ -212,6 +213,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
                 "trash" => v.PathId(v.OpenTrash(doc).Note.Path),
                 "moves" => v.PathId(v.OpenMove(doc).From),
                 "embeddings" => v.PathId(v.OpenEmbeddings(doc).Path),
+                "links" => v.PathId(v.OpenExtract(doc).Path),
                 "checkpoints" => v.NameId(v.OpenCheckpoint(doc).Checkpoint.Name),
                 "attachments" => v.PathId(v.OpenAttachment(doc).Path),
                 "attachment_trash" => v.PathId(v.OpenAttachmentTrash(doc).Attachment.Path),
@@ -384,8 +386,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
 
-        // notes (6 with the moved one gone: plan, a, b, neu), trash 1, moves 1, embeddings 4, checkpoints 2, texts 1.
-        Assert.Equal(13, summary.Documents);
+        // notes (6 with the moved one gone: plan, a, b, neu), trash 1, moves 1, embeddings 4, links 4, checkpoints 2, texts 1.
+        Assert.Equal(17, summary.Documents);
         Assert.Equal(0, summary.Damaged);
         Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
         Assert.Equal(before, await SnapshotAsync(Store(a)));
@@ -742,7 +744,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
 
         Assert.Equal(1, summary.Damaged);
-        Assert.Equal(13, summary.Documents);
+        Assert.Equal(17, summary.Documents);
         Assert.Equal(raw, (await Raw("notes").Find(new BsonDocument("_id", damaged)).SingleAsync(Ct)).ToJson());
         Assert.Single(_log.Lines, l => l.Contains($"Document {damaged} of vault {id}", StringComparison.Ordinal) && l.Contains("neither key", StringComparison.Ordinal));
         Assert.Equal(1, await Store(a).CountDamagedAsync(P("/Arbeit"), Ct));
@@ -796,7 +798,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         Assert.Contains(batches, b => b is { Documents: 1, Bytes: > 100_000 });
         Assert.All(batches.Where(b => b.Bytes > 30_000), b => Assert.Equal(1, b.Documents));
-        Assert.Equal(7, batches.Sum(b => b.Documents));
+        // Their notes and their links.
+        Assert.Equal(14, batches.Sum(b => b.Documents));
         Assert.True(batches.Count >= 4, $"{batches.Count} batches");
         Assert.Equal(new string('z', 100_000), await Store(a).ReadAsync(P("/Arbeit/big.md"), Ct));
     }
@@ -1416,7 +1419,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         // The owner's request does, and waits for the run.
         var summary = await runner.RunAsync(id, a.User.Id, a.Key).WaitAsync(TimeSpan.FromSeconds(30), Ct);
         Assert.Equal(2, attempts);
-        Assert.Equal(13, summary.Documents);
+        Assert.Equal(17, summary.Documents);
         // A vault that isn't the user's ends the entry, and the wait, at once.
         await Assert.ThrowsAsync<VaultNotRekeyableException>(() => runner.RunAsync(id, a.User.Id, VaultCrypto.NewKey()).WaitAsync(TimeSpan.FromSeconds(30), Ct));
     }
@@ -1545,7 +1548,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         // Not pending anywhere, since nothing began: the retry re-keys the vault, it doesn't report a re-keying that never ran.
         var summary = await runner.RunAsync(id, a.User.Id, a.Key).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-        Assert.Equal(13, summary.Documents);
+        Assert.Equal(17, summary.Documents);
         Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
         Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
     }

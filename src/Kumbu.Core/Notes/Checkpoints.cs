@@ -452,7 +452,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         {
             var map = moved.ToDictionary(m => m.Value.Now.Path, m => m.Key);
             foreach (var (to, (attachment, _)) in files.Moved) map[attachment.Path] = to;
-            foreach (var (path, list) in NoteMover.Rewrites(notes, map, attachments))
+            foreach (var (path, list) in NoteMover.Rewrites((await store.GraphAsync(vault, ct)).Extracts, map, attachments))
             {
                 if (Outside(path)) rewrites[path] = list;
             }

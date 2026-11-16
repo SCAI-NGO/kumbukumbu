@@ -42,8 +42,11 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var history = HistoryAfterWrite(
             current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref, current.Message),
             current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
+        var (createdAt, createdAtLeast) = NoteCreation.Of(current);
         return current with
         {
+            CreatedAt = createdAt,
+            CreatedAtLeast = createdAtLeast,
             Content = content,
             Revision = current.Revision + 1,
             LastWriter = writer,
@@ -405,14 +408,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         // Asked before removing: once the note is gone, its backlinks can't be asked for any more.
-        var vault = VaultPath.Root.Child(path.Segments[0]);
-        var notes = await store.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path), noteAliases: NoteAliases.Of(notes, ct));
-        var linking = notes
-            .Where(n => n.Path != path)
-            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l).Target == path)))
+        var graph = await store.GraphAsync(VaultPath.Root.Child(path.Segments[0]), ct);
+        // In-edges come by source path order.
+        IEnumerable<int> into = graph.IndexOf(path) is { } node ? graph.InEdges(node) : [];
+        var linking = into
+            .Select(e => graph.Nodes[graph.Edges[e].From].Path!)
+            .Where(source => source != path)
+            .Select(source => (Path: source, Count: graph.LinksOf(source).Count(l => l.Link.Target.Trim().Length > 0 && l.Resolution.Target == path)))
             .Where(x => x.Count > 0)
-            .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
 
         // A batch rather than a plain trash, so the trash record joins the writer's changeset.
@@ -488,29 +491,27 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     private async Task<string> LinkHintsAsync(VaultPath created, CancellationToken ct)
     {
         var vault = created.Segments[0];
-        var notes = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
-        var aliases = NoteAliases.Of(notes, ct);
-        var after = new LinkResolver(vault, notes.Select(n => n.Path), noteAliases: aliases);
+        // Where links lead now is the graph's answer; where they led before the note was there, a resolver without it.
+        var graph = await store.GraphAsync(VaultPath.Root.Child(vault), ct);
         var before = new LinkResolver(
-            vault, notes.Select(n => n.Path).Where(p => p != created),
-            noteAliases: aliases.Where(a => a.Key != created).ToDictionary());
+            vault, graph.Extracts.Keys.Where(p => p != created), graph.Attachments,
+            graph.Extracts.Where(e => e.Key != created).ToDictionary(e => e.Key, e => e.Value.Aliases));
         var found = new List<string>();
         var moved = new List<string>();
-        foreach (var note in notes.Where(n => n.Path != created).OrderBy(n => n.Path.Value, TextOrder.Default))
+        foreach (var source in graph.Extracts.Keys.Where(p => p != created).OrderBy(p => p.Value, TextOrder.Default))
         {
-            foreach (var link in NoteLink.Parse(note.Content))
+            foreach (var (link, now) in graph.LinksOf(source))
             {
                 if (link.Target.Trim().Length == 0) continue;
-                var now = after.Resolve(note.Path, link);
-                var was = before.Resolve(note.Path, link);
+                var was = before.Resolve(source, link);
                 if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && was.Kind == LinkKind.Note)
                 {
-                    found.Add($"{link.Raw} in {note.Path.Value} ({now.Candidates.Count} notes)");
+                    found.Add($"{link.Raw} in {source.Value} ({now.Candidates.Count} notes)");
                 }
                 else if (was is { Kind: LinkKind.Note, ViaAlias: true } && was.Target != created
                     && now is { Kind: LinkKind.Note, ViaAlias: false } && now.Target == created)
                 {
-                    moved.Add($"{link.Raw} in {note.Path.Value} now leads to {created.Value} (before: {was.Target!.Value} by its alias)");
+                    moved.Add($"{link.Raw} in {source.Value} now leads to {created.Value} (before: {was.Target!.Value} by its alias)");
                 }
             }
         }
