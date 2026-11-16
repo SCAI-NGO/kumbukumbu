@@ -149,6 +149,28 @@ public sealed class GraphStoreTests(MongoFixture fixture)
         Assert.Equal(["/Work/A.md -> ?C"], Edges(await store.GraphAsync(Work, Ct)));
     }
 
+    // What the memory limit weighs (VaultCatalog.Sweep) includes the extracts the load holds and the graph once built:
+    // 200 links to names nobody has, 100 characters each, are 20,000 characters of link text in the note, again in its
+    // extract (its raw text and its parts), and again in the graph as the ghosts' keys and titles.
+    [Fact]
+    public async Task Memory_figure_counts_the_extracts_and_the_graph()
+    {
+        var (world, _, store) = await WorldAsync();
+        var targets = Enumerable.Range(0, 200).Select(i => $"{new string('x', 96)}{i:D4}").ToList();
+        var content = string.Concat(targets.Select(t => $"[[{t}]]\n"));
+        await WriteAsync(store, "/Work/A.md", content);
+        var linkText = 2L * targets.Sum(t => t.Length);
+
+        var later = world.Catalog();
+        await Store(later).GetAsync(P("/Work/A.md"), Ct);
+        var vault = later.OpenVaults.Single();
+        var loaded = vault.ApproxBytes;
+        Assert.InRange(loaded - 2L * content.Length, 2 * linkText, 20 * linkText);
+
+        await Store(later).GraphAsync(Work, Ct);
+        Assert.InRange(vault.ApproxBytes - loaded, 2 * linkText, 20 * linkText);
+    }
+
     [Fact]
     public async Task Uploading_an_attachment_redirects_a_ghost()
     {

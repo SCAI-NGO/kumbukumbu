@@ -231,11 +231,12 @@ public sealed class UnlockedVault
 
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
-    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included); of attachments only
-    /// their records, never their bytes.</summary>
+    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included), the link extracts and
+    /// the graph built from them included; of attachments only their records, never their bytes.</summary>
     public long ApproxBytes =>
         Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length))
-        + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment));
+        + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment))
+        + Extracts.Values.Sum(e => Size(e.Extract)) + (_graph?.Graph is { } graph ? Size(graph) : 0);
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
@@ -676,6 +677,21 @@ public sealed class UnlockedVault
     private static long Size(StoredAttachment a) => 2L * (a.Path.Value.Length + a.LastWriter.Length) + StateBytes * (1 + a.History.Count);
 
     private const long StateBytes = 256;
+
+    /// <summary>A link's text about twice (its raw text and the parts cut from it), and a rough allowance for the rest.</summary>
+    private static long Size(LinkExtract e) =>
+        e.Links.Sum(l => 4L * l.Raw.Length + LinkBytes) + 2L * (e.Aliases.Sum(a => a.Length) + e.Tags.Sum(t => t.Length));
+
+    /// <summary>The nodes' keys and titles, the edges, and each link resolved; the extracts it shares are counted above.</summary>
+    private static long Size(LinkGraph g) =>
+        g.Nodes.Sum(n => 2L * (n.Key.Length + n.Title.Length) + NodeBytes) + g.Edges.Sum(e => EdgeBytes + 4L * e.Lines.Count)
+        + g.Extracts.Values.Sum(e => (long)e.Links.Count) * LinkBytes;
+
+    private const long LinkBytes = 64;
+
+    private const long NodeBytes = 96;
+
+    private const long EdgeBytes = 64;
 }
 
 internal sealed record ChangesetPayload(string Id, DateTime Started)
