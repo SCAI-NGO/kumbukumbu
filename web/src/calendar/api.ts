@@ -68,7 +68,7 @@ export type SetEntryRequest = {
 export type CloseRequest = { path: string; reason?: string };
 export type MoveEntryRequest = { path: string; when: string };
 export type LaterRequest = { path: string; part: "postpone" | "moreTime"; step?: "day" | "week"; date?: string };
-export type NewEntryRequest = { day: string; title: string; time?: string; task: boolean; upcoming?: string };
+export type NewEntryRequest = { day: string; title: string; time?: string; until?: string; task: boolean; upcoming?: string };
 
 type Answer<T> = Promise<{ data?: T; error?: unknown; response: Response }>;
 type Init = { params: { path?: { vault: string }; query?: Record<string, string> }; body?: unknown };

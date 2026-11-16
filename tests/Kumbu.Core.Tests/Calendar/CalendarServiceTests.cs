@@ -467,7 +467,7 @@ public class CalendarServiceTests
         var service = Service(store, new FixedCaller("bob", LevelOf: _ => AccessLevel.Read));
 
         var result = await service.CloseAsync("/Garten/x.md", null, Ct);
-        var created = await service.AddAsync("Garten", "Beete", "2026-12-20", null, false, null, Ct);
+        var created = await service.AddAsync("Garten", "Beete", "2026-12-20", null, null, false, null, Ct);
 
         Assert.True(result.IsError);
         Assert.Equal(ShellErrorKind.Refused, result.Kind);
@@ -567,8 +567,8 @@ public class CalendarServiceTests
         var store = new InMemoryNoteStore(("/Work/x.md", ""));
         var service = Service(store);
 
-        var result = await service.AddAsync("Work", "  Zahnarzt ", "2026-12-17", "14:00", false, null, Ct);
-        Ok(await service.AddAsync("Work", "Certificate", "2026-12-20", null, true, "14d", Ct));
+        var result = await service.AddAsync("Work", "  Zahnarzt ", "2026-12-17", "14:00", null, false, null, Ct);
+        Ok(await service.AddAsync("Work", "Certificate", "2026-12-20", null, null, true, "14d", Ct));
 
         Assert.Equal("calendar: created /Work/Calendar/Zahnarzt.md (17 Dec 14:00)", result.Output);
         Assert.Equal("/Work/Calendar/Zahnarzt.md", result.Version?.Path);
@@ -577,11 +577,36 @@ public class CalendarServiceTests
     }
 
     [Fact]
+    public async Task Add_writes_an_until_on_the_same_day()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", ""));
+
+        Ok(await Service(store).AddAsync("Work", "Market", "2026-12-17", "12:00", "21:00", false, null, Ct));
+
+        Assert.Equal("---\nwhen: 2026-12-17T12:00\nuntil: 2026-12-17T21:00\n---\n# Market\n", await Content(store, "/Work/Calendar/Market.md"));
+    }
+
+    [Theory]
+    [InlineData(null, "17:00", "an until needs a time")]
+    [InlineData("14:00", "14:00", "until 14:00 is not after 14:00")]
+    [InlineData("14:00", "09:00", "until 09:00 is not after 14:00")]
+    [InlineData("14:00", "5pm", "5pm is not a time; give 17:00")]
+    public async Task Add_refuses_an_until_that_is_missing_its_time_not_after_it_or_malformed(string? time, string until, string message)
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", ""));
+
+        var result = await Service(store).AddAsync("Work", "Market", "2026-12-17", time, until, false, null, Ct);
+
+        Assert.Equal(ShellResult.Error("calendar: " + message) with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Single(await store.ListNotesUnderAsync(VaultPath.Root, Ct));
+    }
+
+    [Fact]
     public async Task A_clash_gives_Title_2()
     {
         var store = new InMemoryNoteStore(("/Work/Calendar/Zahnarzt.md", "old\n"), ("/Work/Calendar/zahnarzt 2.md", "old\n"));
 
-        var result = await Service(store).AddAsync("Work", "Zahnarzt", "2026-12-17", null, false, null, Ct);
+        var result = await Service(store).AddAsync("Work", "Zahnarzt", "2026-12-17", null, null, false, null, Ct);
 
         Assert.Equal("/Work/Calendar/Zahnarzt 3.md", result.Version?.Path);
         Assert.Equal("old\n", await Content(store, "/Work/Calendar/Zahnarzt.md"));
@@ -595,7 +620,7 @@ public class CalendarServiceTests
     {
         var store = new InMemoryNoteStore(("/Work/x.md", ""));
 
-        var result = await Service(store).AddAsync("Work", title, "2026-12-17", null, false, null, Ct);
+        var result = await Service(store).AddAsync("Work", title, "2026-12-17", null, null, false, null, Ct);
 
         Assert.Equal(ShellResult.Error("calendar: a title can't contain / or start with a dot") with { Kind = ShellErrorKind.Invalid }, result);
         Assert.Single(await store.ListNotesUnderAsync(VaultPath.Root, Ct));
@@ -607,9 +632,9 @@ public class CalendarServiceTests
         var store = new InMemoryNoteStore(("/Work/x.md", ""));
         var service = Service(store);
 
-        Ok(await service.AddAsync("Work", "Café", "2026-12-17", null, false, null, Ct));
-        var bad = await service.AddAsync("Work", "a:b", "2026-12-17", null, false, null, Ct);
-        var day = await service.AddAsync("Work", "x", "17.12.2026", null, false, null, Ct);
+        Ok(await service.AddAsync("Work", "Café", "2026-12-17", null, null, false, null, Ct));
+        var bad = await service.AddAsync("Work", "a:b", "2026-12-17", null, null, false, null, Ct);
+        var day = await service.AddAsync("Work", "x", "17.12.2026", null, null, false, null, Ct);
 
         Assert.NotNull(await Content(store, "/Work/Calendar/Café.md"));
         Assert.Equal(ShellErrorKind.Invalid, bad.Kind);
