@@ -97,7 +97,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
         var lines = new List<string>();
         foreach (var v in NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s))
         {
-            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? Current(note.Restored) : ""));
+            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Message is null ? "" : $"  \u2014 {v.Message}") + (v.Current ? Current(note.Restored) : ""));
         }
 
         return ShellResult.Ok(lines.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };

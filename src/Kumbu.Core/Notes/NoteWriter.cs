@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
@@ -7,6 +8,9 @@ using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Notes;
+
+/// <summary>One replacement of <see cref="NoteWriter.EditManyAsync"/>; the names are those of the MCP tool's parameters.</summary>
+public sealed record TextEdit([property: JsonPropertyName("old_text")] string OldText, [property: JsonPropertyName("new_text")] string NewText);
 
 /// <summary>
 /// Every change to a note goes through here: validation, version tokens (optimistic concurrency),
@@ -21,6 +25,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
     public const int MaxBytes = 1_048_576;
     public const int HistoryLimit = 10;
+    public const int MaxMessage = 200;
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);
 
     /// <summary>
@@ -31,10 +36,11 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// Without a changeset (a restore of a version or a checkpoint), the new state joins none, so it stays a version of its own.
     /// </summary>
     public static StoredNote Next(
-        StoredNote current, string content, string writer, WriterRef reference, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
+        StoredNote current, string content, string writer, WriterRef reference, DateTime now, Changeset? changeset = null, bool keepCurrent = false,
+        string? message = null)
     {
         var history = HistoryAfterWrite(
-            current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref),
+            current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref, current.Message),
             current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
         return current with
         {
@@ -46,7 +52,28 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             Changeset = changeset,
             Ref = reference,
             Restored = false,
+            // A write that joins the session of the one before keeps its message unless it brings its own.
+            Message = Coalesces(current.History.Count, current.Changeset, changeset, keepCurrent) ? message ?? current.Message : message,
         };
+    }
+
+    /// <summary>The message is one line of at most 200 characters (UTF-16 code units); blank is none. Trimmed. Control
+    /// characters and the Unicode line and paragraph separators are refused, so a message can't fake a line of <c>history</c>.</summary>
+    public static bool TryMessage(string? message, string tool, out string? clean, out ShellResult? error)
+    {
+        clean = message?.Trim();
+        error = null;
+        if (string.IsNullOrEmpty(clean))
+        {
+            clean = null;
+            return true;
+        }
+
+        if (clean.Length <= MaxMessage && !clean.Any(c => char.IsControl(c) || c is '\u2028' or '\u2029')) return true;
+
+        clean = null;
+        error = ShellResult.Error($"{tool}: message is one line of at most {MaxMessage} characters") with { Kind = ShellErrorKind.Invalid };
+        return false;
     }
 
     /// <summary>
@@ -66,22 +93,26 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     public static IReadOnlyList<T> HistoryAfterWrite<T>(
         IReadOnlyList<T> history, T replaced, Changeset? replacedChangeset, Changeset? changeset, bool keepCurrent, Func<T, T, bool> sameState)
     {
-        // Without history, the current state is the one it was created with: every later write leaves an entry.
-        var created = history.Count == 0;
-        var coalesce = !keepCurrent && !created && changeset is not null && replacedChangeset?.Id == changeset.Id;
+        var coalesce = Coalesces(history.Count, replacedChangeset, changeset, keepCurrent);
         // A state already on top of the history (after a restore, say) is not kept twice.
         var duplicate = history.Count > 0 && sameState(history[0], replaced);
         return coalesce || duplicate ? history : [.. new[] { replaced }.Concat(history).Take(HistoryLimit)];
     }
+
+    /// <summary>Whether a write in <paramref name="changeset"/> replaces the state of the same changeset without a history entry.</summary>
+    private static bool Coalesces(int historyCount, Changeset? replacedChangeset, Changeset? changeset, bool keepCurrent) =>
+        // Without history, the current state is the one it was created with: every later write leaves an entry.
+        !keepCurrent && historyCount > 0 && changeset is not null && replacedChangeset?.Id == changeset.Id;
 
     /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
     public Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
         Changeset.ForAsync(store, path.Segments[0], caller.ReferenceIn(path.Segments[0]), caller.WriterIn(path.Segments[0]), caller.ChangesetIdle, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
-    public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct)
+    public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct, string? message = null)
     {
         const string tool = "write";
+        if (!TryMessage(message, tool, out message, out var messageError)) return messageError!;
         if (SectionAddress.Split(pathText).Fragment is not null)
         {
             return ShellResult.Error(
@@ -116,7 +147,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
 
-            var note = new StoredNote(path, content, 1, caller.WriterIn(path.Segments[0]), Now, [], Changeset: await ChangesetAsync(path, ct), Ref: caller.ReferenceIn(path.Segments[0]));
+            var note = new StoredNote(path, content, 1, caller.WriterIn(path.Segments[0]), Now, [], Changeset: await ChangesetAsync(path, ct), Ref: caller.ReferenceIn(path.Segments[0]), Message: message);
             if (!await store.TryCreateAsync(note, ct))
             {
                 return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again") with { Kind = ShellErrorKind.Conflict };
@@ -130,7 +161,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (existing.Version != version) return Conflict(tool, path, version, existing);
         if (existing.Content == content) return Written($"{path.Value} is unchanged", existing);
 
-        return await ReplaceAsync(tool, existing, content, $"wrote {path.Value} ({Lines.Count(content)})", ct);
+        return await ReplaceAsync(tool, existing, content, $"wrote {path.Value} ({Lines.Count(content)})", message, ct);
     }
 
     /// <summary>
@@ -140,9 +171,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// </summary>
     public async Task<ShellResult> EditAsync(
         string pathText, string version, string? oldText, string newText, CancellationToken ct,
-        bool replaceSection = false, bool replaceAll = false)
+        bool replaceSection = false, bool replaceAll = false, string? message = null)
     {
         const string tool = "edit";
+        if (!TryMessage(message, tool, out message, out var messageError)) return messageError!;
         if (replaceAll && (oldText is null || replaceSection))
         {
             return ShellResult.Error("edit: replace_all needs old_text (and no replace_section): it replaces every occurrence of old_text");
@@ -170,26 +202,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         newText = Normalize(newText);
 
         // The part of the note the edit may touch: all of it, or one section without its trailing blank lines.
-        int scopeStart = 0, scopeEnd = current.Length;
-        string where = path.Value, inSection = "";
-        if (fragment is not null)
-        {
-            if (!SectionLookup.TryFind(path, current, fragment, out var match, out var sectionError))
-            {
-                return ShellResult.Error($"edit: {sectionError}");
-            }
+        if (!TryScope(path, current, fragment, out var scope, out var scopeError)) return scopeError!;
+        var (scopeStart, scopeEnd, where, inSection) = scope;
 
-            scopeStart = match.Offset(match.Heading.Line, current);
-            scopeEnd = match.Offset(match.Heading.ContentEnd, current);
-            where = $"section {match.Heading.Address} of {path.Value}";
-            inSection = $" (in section {match.Heading.Address})";
-        }
-
-        string content, message;
+        string content, summary;
         if (replaceSection)
         {
             content = Splice(current, scopeStart, scopeEnd, newText);
-            message = newText.Length == 0
+            summary = newText.Length == 0
                 ? $"removed {where} (now {Lines.Count(content)} in the note)"
                 : $"replaced {where} (now {Lines.Count(content)} in the note)" + HeadinglessNote(newText, content, scopeStart);
         }
@@ -197,7 +217,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         {
             // Append after the scope's last line, before blank lines that separate it from what follows.
             content = Splice(current, scopeEnd, scopeEnd, newText);
-            message = fragment is null
+            summary = fragment is null
                 ? $"appended to {path.Value} (now {Lines.Count(content)})"
                 : $"appended to {where} at line {current.AsSpan(0, scopeEnd).Count('\n') + 1}";
         }
@@ -206,38 +226,124 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             oldText = Normalize(oldText);
             if (oldText.Length == 0) return ShellResult.Error("edit: old_text is empty; leave it out to append");
 
-            var scope = current[scopeStart..scopeEnd];
-            var at = scope.IndexOf(oldText, StringComparison.Ordinal);
-            if (at < 0)
-            {
-                return ShellResult.Error(
-                    $"edit: old_text not found in {where}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
-            }
-
-            var count = Occurrences(scope, oldText);
+            if (Locate(current, scope, fragment is not null, oldText, replaceAll, out var at, out var count) is { } notFound) return notFound;
             if (replaceAll)
             {
-                content = string.Concat(current.AsSpan(0, scopeStart), scope.Replace(oldText, newText, StringComparison.Ordinal), current.AsSpan(scopeEnd));
-                message = $"replaced {count} {(count == 1 ? "occurrence" : "occurrences")} in {where}";
-            }
-            else if (count > 1)
-            {
-                return ShellResult.Error(
-                    $"edit: old_text occurs {count} times in {where}; include more of the surrounding text so it matches once"
-                    + (fragment is null ? ", or put the section in the path (note.md#Heading)" : ""));
+                var text = current[scopeStart..scopeEnd];
+                content = string.Concat(current.AsSpan(0, scopeStart), text.Replace(oldText, newText, StringComparison.Ordinal), current.AsSpan(scopeEnd));
+                summary = $"replaced {count} {(count == 1 ? "occurrence" : "occurrences")} in {where}";
             }
             else
             {
-                at += scopeStart;
                 content = string.Concat(current.AsSpan(0, at), newText, current.AsSpan(at + oldText.Length));
-                message = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
+                summary = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
             }
         }
 
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
         if (content == current) return Written($"{path.Value} is unchanged", existing);
 
-        return await ReplaceAsync(tool, existing, content, message, ct);
+        return await ReplaceAsync(tool, existing, content, summary, message, ct);
+    }
+
+    /// <summary>The part of a note an edit may touch, and how errors and summaries name it.</summary>
+    private readonly record struct EditScope(int Start, int End, string Where, string InSection);
+
+    private static bool TryScope(VaultPath path, string current, string? fragment, out EditScope scope, out ShellResult? error)
+    {
+        error = null;
+        if (fragment is null)
+        {
+            scope = new EditScope(0, current.Length, path.Value, "");
+            return true;
+        }
+
+        scope = default;
+        if (!SectionLookup.TryFind(path, current, fragment, out var match, out var sectionError))
+        {
+            error = ShellResult.Error($"edit: {sectionError}");
+            return false;
+        }
+
+        scope = new EditScope(
+            match.Offset(match.Heading.Line, current), match.Offset(match.Heading.ContentEnd, current),
+            $"section {match.Heading.Address} of {path.Value}", $" (in section {match.Heading.Address})");
+        return true;
+    }
+
+    /// <summary>
+    /// Finds <paramref name="oldText"/> (normalised, not empty) in the scope: its offset in the note and how often it occurs.
+    /// Unless <paramref name="all"/>, it must occur exactly once. Null when found.
+    /// </summary>
+    private static ShellResult? Locate(string current, EditScope scope, bool inSection, string oldText, bool all, out int at, out int count)
+    {
+        var text = current[scope.Start..scope.End];
+        at = text.IndexOf(oldText, StringComparison.Ordinal);
+        count = 0;
+        if (at < 0)
+        {
+            return ShellResult.Error(
+                $"edit: old_text not found in {scope.Where}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
+        }
+
+        count = Occurrences(text, oldText);
+        if (!all && count > 1)
+        {
+            return ShellResult.Error(
+                $"edit: old_text occurs {count} times in {scope.Where}; include more of the surrounding text so it matches once"
+                + (inSection ? "" : ", or put the section in the path (note.md#Heading)"));
+        }
+
+        at += scope.Start;
+        return null;
+    }
+
+    public const int MaxEdits = 64;
+
+    /// <summary>
+    /// Several unique replacements on the same version, applied in order, all or none, as one version. Each
+    /// <c>OldText</c> must occur exactly once (in the section, if the path has one) when its turn comes.
+    /// </summary>
+    public async Task<ShellResult> EditManyAsync(string pathText, string version, IReadOnlyList<TextEdit> edits, CancellationToken ct, string? message = null)
+    {
+        const string tool = "edit";
+        if (!TryMessage(message, tool, out message, out var messageError)) return messageError!;
+        if (edits.Count == 0) return ShellResult.Error("edit: edits is empty; give at least one {old_text, new_text}");
+        if (edits.Count > MaxEdits) return ShellResult.Error($"edit: at most {MaxEdits} edits in one call");
+        for (var i = 0; i < edits.Count; i++)
+        {
+            if (edits[i] is null) return ShellResult.Error($"edit: edit {i + 1} of {edits.Count} is empty; give old_text and new_text");
+        }
+
+        var (notePath, fragment) = SectionAddress.Split(pathText);
+        if (!TryParse(tool, notePath, out var path, out var error)) return error;
+        if (NotText(tool, path) is { } attachment) return attachment;
+        if (caller.Refuse(tool, path) is { } refused) return refused;
+
+        var existing = await store.GetAsync(path, ct);
+        if (existing is null) return await MissingAsync(tool, path, ct);
+        if (existing.Version != version) return Conflict(tool, path, version, existing);
+
+        var current = existing.Content;
+        for (var i = 0; i < edits.Count; i++)
+        {
+            var oldText = Normalize(edits[i].OldText ?? "");
+            var failed = oldText.Length == 0 ? ShellResult.Error("edit: old_text is empty")
+                : edits[i].NewText is null ? ShellResult.Error("edit: new_text is missing; give \"\" to delete the text") : null;
+            var at = 0;
+            if (failed is null && TryScope(path, current, fragment, out var scope, out failed))
+            {
+                failed = Locate(current, scope, fragment is not null, oldText, false, out at, out _);
+            }
+
+            if (failed is not null) return failed with { Output = $"edit: edit {i + 1} of {edits.Count}: {failed.Output["edit: ".Length..]}" };
+            current = string.Concat(current.AsSpan(0, at), Normalize(edits[i].NewText), current.AsSpan(at + oldText.Length));
+        }
+
+        if (TooLarge(tool, current) is { } sizeError) return sizeError;
+        if (current == existing.Content) return Written($"{path.Value} is unchanged", existing);
+
+        return await ReplaceAsync(tool, existing, current, $"edited {path.Value}: {edits.Count} change{(edits.Count == 1 ? "" : "s")}", message, ct);
     }
 
     /// <summary>
@@ -289,7 +395,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("rm", path));
             return (await store.ListNotesUnderAsync(path, ct)).Count > 0 || path.IsRoot
-                ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm removes one note at a time)")
+                ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm doesn't remove folders with notes in them; there is no -r)")
                 : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
         }
 
@@ -423,16 +529,18 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     }
 
     private async Task<ShellResult> ReplaceAsync(
-        string tool, StoredNote existing, string content, string message, CancellationToken ct)
+        string tool, StoredNote existing, string content, string summary, string? message, CancellationToken ct)
     {
-        var next = Next(existing, content, caller.WriterIn(existing.Path.Segments[0]), caller.ReferenceIn(existing.Path.Segments[0]), Now, await ChangesetAsync(existing.Path, ct));
+        var next = Next(
+            existing, content, caller.WriterIn(existing.Path.Segments[0]), caller.ReferenceIn(existing.Path.Segments[0]), Now, await ChangesetAsync(existing.Path, ct),
+            message: message);
         if (!await store.TryReplaceAsync(existing, next, ct))
         {
             var now = await store.GetAsync(existing.Path, ct);
             return now is null ? await MissingAsync(tool, existing.Path, ct) : Conflict(tool, existing.Path, existing.Version, now);
         }
 
-        return Written(message, next);
+        return Written(summary, next);
     }
 
     private async Task<ShellResult?> CheckNewNoteAsync(string tool, VaultPath path, CancellationToken ct)

@@ -13,12 +13,12 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
 {
     public string Name => "cat";
 
-    public string Usage => "cat [--version V] <path>[#section]";
+    public string Usage => "cat [--version V] <path>[#section] [<path>…]";
 
     public string Summary => "print a note, or one section of it";
 
     public string Help => """
-        cat <path>[#section]
+        cat <path>[#section] [<path>…]
           Print a note, or one section of it: the heading and everything below it up to the next
           heading of the same or a higher level, or a block by its id, #^id (written as ^id at the end
           of a paragraph, item or heading). 'outline <path>' lists the sections.
@@ -31,6 +31,10 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
           and file size ('cat /Work/shot.png' → shot.png: image (PNG), 1440×3120, 412 KB); for a PDF
           its pages and their types (paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB).
           'help img' and 'help pdf' say how to look at them.
+          Several paths print one after the other, each under '==> <path> <==', and one version token each
+          (a section works per path). A path that fails prints its error line in place and the others go on.
+          Notes print whole while they fit the call; one that doesn't prints its outline, marked, so read it
+          alone or by section. No embedded notes block, and --version takes one path.
           A text file in a skill's folder prints as it is.
           A whole note too long for one call (about 8000 tokens) prints its outline instead; read it in
           parts with cat "<path>#Section", head -n 40 <path> or rg -n. In a pipeline, cat passes the
@@ -46,6 +50,7 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
           cat "/Demo/welcome.md#Try it"
           cat "/Work/plan.md#Architecture#Gates" | head -n 20
           cat "/Work/plan.md#^goal"
+          cat /Work/plan.md /Work/notes.md
         """;
 
     public bool ReadsInput => false;
@@ -55,26 +60,110 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
         if (!CommandArgs.TryTakeVersion(Name, args, out var version, out var rest, out var versionError)) return versionError!;
         if (CommandArgs.CheckOptions(Name, rest) is { } optionError) return optionError;
         if (rest.Count == 0) return ShellResult.Error("cat: missing operand");
-        if (rest.Count > 1) return ShellResult.Error($"cat: too many arguments{CommandArgs.QuoteHint}");
+        if (rest.Count > 1) return version is not null ? ShellResult.Error("cat: --version takes one path") : await ReadSeveralAsync(rest, ct);
+        return await ReadOneAsync(rest[0], version, withNotice: true, ct);
+    }
 
-        var (pathText, _) = SectionAddress.Split(rest[0]);
+    private const string OutlineOnly = "[outline only: too long for this call; read it alone or by section]";
+
+    // Room kept free for the line that says how many paths were left out.
+    private const int MoreReserve = 100;
+
+    private async Task<ShellResult> ReadSeveralAsync(IReadOnlyList<string> args, CancellationToken ct)
+    {
+        // Room for the notice above the output, as for the embeds block. Every line is counted, so the shell's
+        // own limit never cuts inside a note.
+        const int budget = OutputLimit.MaxChars - 200;
+        var output = new StringBuilder();
+        var versions = new List<NoteVersion>();
+        var paths = new List<VaultPath>();
+        var printed = 0;
+        for (var i = 0; i < args.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var arg = args[i];
+            var read = await ReadOneAsync(arg, null, withNotice: false, ct);
+            var limit = i + 1 < args.Count ? budget - MoreReserve : budget;
+            var separator = output.Length > 0 ? "\n" : "";
+            string entry;
+            var keepVersion = false;
+            if (read.IsError)
+            {
+                entry = separator + read.Output + "\n";
+            }
+            else
+            {
+                var header = $"{separator}==> {arg} <==\n";
+                var text = read.Output.EndsWith('\n') ? read.Output : read.Output + "\n";
+                entry = header + text;
+                keepVersion = true;
+                if (output.Length + entry.Length > limit)
+                {
+                    // A note is never cut in the middle: its outline if that fits, else only a marker.
+                    var (pathText, fragment) = SectionAddress.Split(arg);
+                    var outline = fragment is null && read.Version is not null && VaultPath.TryParse(pathText, out var whole)
+                        ? header + OutlineOnly + "\n" + OutlineCommand.Render(whole, read.Output) + "\n"
+                        : null;
+                    if (outline is not null && output.Length + outline.Length <= limit)
+                    {
+                        entry = outline;
+                    }
+                    else
+                    {
+                        entry = header + $"[too long for this call; read it alone: cat {Quoted(arg, pathText, fragment)}]\n";
+                        keepVersion = false;
+                    }
+                }
+            }
+
+            if (output.Length + entry.Length > limit)
+            {
+                var left = args.Count - i;
+                output.Append(left == 1
+                    ? "\n[1 more path not read: this call is full; read it in another call]\n"
+                    : $"\n[{left} more paths not read: this call is full; read them in another call]\n");
+                break;
+            }
+
+            output.Append(entry);
+            if (read.IsError) continue;
+            printed++;
+            if (keepVersion && read.Version is { } v)
+            {
+                versions.Add(v);
+                if (VaultPath.TryParse(v.Path, out var notePath)) paths.Add(notePath);
+            }
+        }
+
+        if (printed == 0) return ShellResult.Error(output.ToString().TrimEnd('\n') + CommandArgs.QuoteHint);
+
+        var result = ShellResult.Ok(output.ToString()) with { Versions = versions };
+        return marks is null || paths.Count == 0 ? result : result with { Notice = await marks.NoticeAsync(paths, ct) };
+    }
+
+    private static string Quoted(string arg, string pathText, string? fragment) =>
+        fragment is null && VaultPath.TryParse(pathText, out var path) ? SectionLookup.Quote(path) : $"\"{arg}\"";
+
+    private async Task<ShellResult> ReadOneAsync(string arg, string? version, bool withNotice, CancellationToken ct)
+    {
+        var (pathText, _) = SectionAddress.Split(arg);
         if (VaultPath.TryParse(pathText, out var path) && !FolderMarker.Is(path) && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
         {
             return await DescribeAsync(path, attachment, version, ct);
         }
 
         // x.png#Layout: a section of an attachment, which has none (a '#' may also be part of a name, as in a#b.png).
-        for (var at = rest[0].IndexOf('#'); at > 0; at = rest[0].IndexOf('#', at + 1))
+        for (var at = arg.IndexOf('#'); at > 0; at = arg.IndexOf('#', at + 1))
         {
-            if (VaultPath.TryParse(rest[0][..at], out var file) && file.IsAttachment && !FolderMarker.Is(file) && await StoreAttachments.GetAsync(notes, file, ct) is not null)
+            if (VaultPath.TryParse(arg[..at], out var file) && file.IsAttachment && !FolderMarker.Is(file) && await StoreAttachments.GetAsync(notes, file, ct) is not null)
             {
                 return ShellResult.Error($"cat: {file.Value} is an attachment, which has no sections; 'cat {SectionLookup.Quote(file)}' describes it");
             }
         }
 
-        var read = await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
+        var read = await CommandArgs.ReadAddressAsync(Name, notes, arg, ct, version);
         // The current note only: an earlier version's writer is history's to show.
-        if (read.IsError || version is not null || marks is null || !VaultPath.TryParse(pathText, out var notePath)) return read;
+        if (!withNotice || read.IsError || version is not null || marks is null || !VaultPath.TryParse(pathText, out var notePath)) return read;
         return read with { Notice = await marks.NoticeAsync([notePath], ct) };
     }
 

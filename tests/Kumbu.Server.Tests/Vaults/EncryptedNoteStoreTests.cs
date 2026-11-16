@@ -334,13 +334,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync();
         var v1 = New("/Work/a.md", "one");
         await store.TryCreateAsync(v1, Ct);
-        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1));
+        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1), message: "second");
         await store.TryReplaceAsync(v1, v2, Ct);
 
         Assert.True(await store.TryTrashAsync(v2, Writers.Dev, WriterRef.Server, T0.AddHours(2), Ct));
         Assert.Null(await store.GetAsync(P("/Work/a.md"), Ct));
         var trashed = Assert.Single(await Store(world.Catalog()).ListTrashAsync(P("/Work"), Ct));
         Assert.Equal((T0.AddHours(2), Writers.Dev, "two"), (trashed.DeletedAt, trashed.DeletedBy, trashed.Note.Content));
+        Assert.Equal("second", trashed.Note.Message);
 
         var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), new Changeset("c1", T0.AddHours(3)), Ct);
 
@@ -412,6 +413,33 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var written = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
         Assert.DoesNotContain("Restored", written, StringComparison.Ordinal);
         Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Restored = true }))), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_message_survives_sealing_on_the_note_and_its_history()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = New("/Work/a.md", "one") with { Message = "first" };
+        await store.TryCreateAsync(note, Ct);
+        var next = NoteWriter.Next(note, "two", Writers.Dev, WriterRef.Server, T0.AddHours(1), message: "second");
+        Assert.True(await store.TryReplaceAsync(note, next, Ct));
+
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+
+        Assert.Equal("second", read.Message);
+        Assert.Equal(["first"], read.History.Select(h => h.Message));
+    }
+
+    [Fact]
+    public void A_document_without_a_message_reads_with_none()
+    {
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[{"Content":"o","WrittenBy":"dev","WrittenAt":"2026-10-22T12:00:00Z"}],"SeedContent":null}""";
+        var note = JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1);
+        Assert.Null(note.Message);
+        Assert.Null(note.History[0].Message);
+
+        var written = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        Assert.DoesNotContain("\"msg\"", written, StringComparison.Ordinal);
     }
 
     [Fact]

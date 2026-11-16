@@ -74,11 +74,11 @@ public sealed class McpClientTests(KumbuAppFactory app)
         static string[] Required(McpClientTool tool) =>
             [.. tool.ProtocolTool.InputSchema.GetProperty("required").EnumerateArray().Select(p => p.GetString()!).Order()];
 
-        Assert.Equal(["content", "path", "version"], Properties(tools["write"]));
+        Assert.Equal(["content", "message", "path", "version"], Properties(tools["write"]));
         Assert.Equal(["content", "path"], Required(tools["write"]));
-        Assert.Equal(["new_text", "old_text", "path", "replace_all", "replace_section", "version"], Properties(tools["edit"]));
-        Assert.Equal(["new_text", "path", "version"], Required(tools["edit"]));
-        Assert.Equal(["new_text", "old_text", "path", "plan", "word"], Properties(tools["replace"]));
+        Assert.Equal(["edits", "message", "new_text", "old_text", "path", "replace_all", "replace_section", "version"], Properties(tools["edit"]));
+        Assert.Equal(["path", "version"], Required(tools["edit"]));
+        Assert.Equal(["message", "new_text", "old_text", "path", "plan", "word"], Properties(tools["replace"]));
         Assert.Equal(["new_text", "old_text", "path"], Required(tools["replace"]));
     }
 
@@ -138,6 +138,43 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Edit_takes_a_list_of_replacements()
+    {
+        var path = "/Demo/scratch-many.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "a b c\n" });
+        var edits = new[]
+        {
+            new Dictionary<string, object?> { ["old_text"] = "a", ["new_text"] = "x" },
+            new Dictionary<string, object?> { ["old_text"] = "x b", ["new_text"] = "y" },
+        };
+
+        var edited = await CallAsync("edit", new() { ["path"] = path, ["version"] = Token(created), ["edits"] = edits });
+
+        Assert.NotEqual(true, edited.IsError);
+        Assert.Equal($"edited {path}: 2 changes", Text(edited));
+        Assert.Equal("y c\n", Text(await ShAsync($"cat {path}")));
+
+        var v = Token(edited);
+        var both = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["new_text"] = "z" });
+        Assert.Equal("edit: give edits, or new_text, not both", Text(both));
+        // The error names what was sent, so the agent knows which to drop.
+        var withOld = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["old_text"] = "y" });
+        Assert.Equal("edit: give edits, or old_text, not both", Text(withOld));
+        var withPair = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["old_text"] = "y", ["new_text"] = "z" });
+        Assert.Equal("edit: give edits, or old_text and new_text, not both", Text(withPair));
+        Assert.True(withPair.IsError);
+        Assert.Equal("y c\n", Text(await ShAsync($"cat {path}")));
+        var neither = await CallAsync("edit", new() { ["path"] = path, ["version"] = v });
+        Assert.Equal("edit: new_text or edits is needed", Text(neither));
+        var all = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["replace_all"] = true });
+        Assert.Equal("edit: edits takes no replace_section or replace_all", Text(all));
+        var section = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = edits, ["replace_section"] = true });
+        Assert.Equal("edit: edits takes no replace_section or replace_all", Text(section));
+        var many = await CallAsync("edit", new() { ["path"] = path, ["version"] = v, ["edits"] = Enumerable.Repeat(edits[0], 65).ToArray() });
+        Assert.Equal("edit: at most 64 edits in one call", Text(many));
+    }
+
+    [Fact]
     public async Task Cat_then_edit_then_conflict_then_history_and_restore()
     {
         var path = "/Demo/scratch-edit.md";
@@ -169,6 +206,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var restored = await ShAsync($"restore {path} {Token(edited)}");
         Assert.True(restored.IsError);
         Assert.StartsWith($"restore: {path} has no version {Token(edited)}", Text(restored), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Write_with_a_message_shows_it_in_history()
+    {
+        var path = "/Demo/scratch-message.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "# One\n", ["message"] = "started the note" });
+        Assert.NotEqual(true, created.IsError);
+        var written = await CallAsync("write", new() { ["path"] = path, ["content"] = "# Two\n", ["version"] = Token(created), ["message"] = "consolidated" });
+        Assert.NotEqual(true, written.IsError);
+
+        Assert.Contains("— consolidated", Text(await ShAsync($"history {path}")), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -218,6 +267,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         Assert.NotEqual(true, result.IsError);
         Assert.Equal(expected, Text(result));
+    }
+
+    [Fact]
+    public async Task Cat_with_two_paths_sends_two_version_blocks()
+    {
+        var result = await ShAsync("cat \"/Demo/Meeting Notes.md\" /Ideas/retrofuturism.md");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(3, result.Content.Count);
+        var blocks = result.Content.Skip(1).Select(b => Assert.IsType<TextContentBlock>(b).Text).ToList();
+        Assert.StartsWith("\nversion of /Demo/Meeting Notes.md: ", blocks[0], StringComparison.Ordinal);
+        Assert.StartsWith("\nversion of /Ideas/retrofuturism.md: ", blocks[1], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -301,7 +362,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
     [Theory]
     [InlineData("edit", "path=/Demo/welcome.md,new_text=x", "edit: version is required; get it from 'cat <path>' (it comes as a separate block)")]
     [InlineData("edit", "version=abc,new_text=x", "edit: path is required; an absolute path like /Work/plan.md")]
-    [InlineData("edit", "path=/Demo/welcome.md,version=abc", "edit: new_text is required; the replacement text, or the text to append")]
+    [InlineData("edit", "path=/Demo/welcome.md,version=abc", "edit: new_text or edits is needed")]
     [InlineData("write", "path=/Demo/x.md", "write: content is required; the note's full Markdown text")]
     [InlineData("sh", "", "sh: command is required; a command line like ls /")]
     public async Task A_missing_required_argument_says_what_to_pass(string tool, string args, string message)

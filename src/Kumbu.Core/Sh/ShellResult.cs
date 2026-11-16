@@ -28,6 +28,9 @@ public sealed record ShellResult(string Output, bool IsError)
 {
     public NoteVersion? Version { get; init; }
 
+    /// <summary>The versions of several notes read in one call (<c>cat</c> with several paths); <see cref="Version"/> stays null then.</summary>
+    public IReadOnlyList<NoteVersion>? Versions { get; init; }
+
     /// <summary>Why an error happened, where the command says; null otherwise.</summary>
     public ShellErrorKind? Kind { get; init; }
 

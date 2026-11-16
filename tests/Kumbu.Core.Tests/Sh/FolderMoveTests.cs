@@ -121,4 +121,137 @@ public class FolderMoveTests
     [InlineData("mv /Demo/welcome.md/ /Demo/x/", "mv: /Demo/welcome.md/: Not a directory (to move the note, leave out the '/')")]
     [InlineData("mv /Demo/projects/ /Demo/welcome.md", "mv: /Demo/welcome.md: Not a directory")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
+
+    [Fact]
+    public async Task Several_notes_move_into_a_folder_and_their_links_follow()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "see [[b]]\n");
+        await Seed("/W/b.md", "b\n");
+        await Seed("/W/c.md", "[b](/b.md)\n");
+
+        var result = await Run("mv /W/a.md /W/b.md /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(2, result.Output.Split('\n').Length);
+        Assert.Null(await Content("/W/a.md"));
+        Assert.Null(await Content("/W/b.md"));
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/b.md"));
+        Assert.Equal("[b](/Old/b.md)\n", await Content("/W/c.md"));
+        // a.md moved before b.md did, so its link was rewritten to keep leading to b.
+        Assert.Equal("see [[b]]\n", await Content("/W/Old/a.md"));
+    }
+
+    [Fact]
+    public async Task A_failing_source_leaves_the_others_moved()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+
+        var result = await Run("mv /W/a.md /W/missing.md /W/b.md /W/Old/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal(3, lines.Length);
+        Assert.Contains("missing.md: No such file or directory", lines[1]);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/b.md"));
+        Assert.Null(await Content("/W/a.md"));
+        Assert.Null(await Content("/W/b.md"));
+    }
+
+    [Fact]
+    public async Task Several_sources_need_a_folder_target()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+
+        var result = await Run("mv /W/a.md /W/b.md /W/Old");
+
+        Assert.Equal(ShellResult.Error("mv: with several sources the target must be a folder, ending in '/'"), result);
+        Assert.NotNull(await Content("/W/a.md"));
+        Assert.NotNull(await Content("/W/b.md"));
+    }
+
+    [Fact]
+    public async Task Notes_and_folders_mix()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/Sub/s.md", "s\n");
+
+        var result = await Run("mv /W/a.md /W/Sub/ /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.NotNull(await Content("/W/Old/Sub/s.md"));
+        Assert.Null(await Content("/W/Sub/s.md"));
+    }
+
+    [Fact]
+    public async Task A_folder_that_already_exists_in_the_target_is_a_plain_collision()
+    {
+        _store.AddVault("W");
+        await Seed("/W/Sub/s.md", "s\n");
+        await Seed("/W/X/x.md", "x\n");
+        await Seed("/W/Old/Sub/t.md", "t\n");
+
+        var result = await Run("mv /W/Sub/ /W/X/ /W/Old/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal("mv: /W/Old/Sub already exists; rm it first, or choose another name", lines[0]);
+        Assert.StartsWith("moved /W/X/ to /W/Old/X/", lines[1]);
+        Assert.NotNull(await Content("/W/Sub/s.md"));
+        Assert.NotNull(await Content("/W/Old/X/x.md"));
+    }
+
+    [Fact]
+    public async Task Two_folders_land_inside_a_target_that_does_not_exist_yet()
+    {
+        _store.AddVault("W");
+        await Seed("/W/A/a.md", "a\n");
+        await Seed("/W/B/b.md", "b\n");
+
+        var result = await Run("mv /W/A/ /W/B/ /W/New/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/New/A/a.md"));
+        Assert.NotNull(await Content("/W/New/B/b.md"));
+    }
+
+    [Fact]
+    public async Task Several_sources_with_keep_links_leave_links_as_they_are()
+    {
+        _store.AddVault("W");
+        await Seed("/W/a.md", "a\n");
+        await Seed("/W/b.md", "b\n");
+        await Seed("/W/c.md", "[b](/b.md) [[a]]\n");
+
+        var result = await Run("mv --keep-links /W/a.md /W/b.md /W/Old/");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.NotNull(await Content("/W/Old/a.md"));
+        Assert.Equal("[b](/b.md) [[a]]\n", await Content("/W/c.md"));
+    }
+
+    [Fact]
+    public async Task A_target_in_another_vault_is_not_probed_for_collisions()
+    {
+        _store.AddVault("W");
+        _store.AddVault("Other");
+        await Seed("/W/A/a.md", "a\n");
+        await Seed("/W/B/b.md", "b\n");
+        await Seed("/Other/A/x.md", "x\n");
+
+        var result = await Run("mv /W/A/ /W/B/ /Other/");
+
+        Assert.True(result.IsError);
+        var lines = result.Output.Split('\n');
+        Assert.Equal("mv: notes can't move between vaults (W → Other); a vault is its own space", lines[0]);
+        Assert.DoesNotContain("already exists", result.Output);
+    }
 }

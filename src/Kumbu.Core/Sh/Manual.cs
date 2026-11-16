@@ -8,9 +8,9 @@ public static class Manual
 
         Commands:
           ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
-          cat <path>[#section]            print a note or one section; its version token comes as a separate block
+          cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block
           outline <path>                  the headings of a note, with line ranges and sizes
-          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
+          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages (--archive: also archived notes)
           img <path>                      look at an image attachment, whole or a part of it
@@ -29,10 +29,10 @@ public static class Manual
           diff <path> [from [to]]         what changed between versions (default: last change); --word
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
-          mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
+          mv <path>… <target>             move or rename notes, or folders (/Work/old/); links are rewritten
           archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)
           mkdir <path>                    make a folder; an empty folder stays until you remove it
-          rm <path>                       move a note or an empty folder to the trash (kept 30 days)
+          rm <path> [<path>…]             move notes or empty folders to the trash (kept 30 days)
           trash [path]                    list removed notes and folders
           df [-h] [-b] [/vault]           what your own vaults take, history and trash included, against your limit
           du [-h] [-b] [-s] [-d N] [path] sizes of what is below a path now, largest first
@@ -76,6 +76,8 @@ public static class Manual
         Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
+        message: optionally one line on why you wrote, kept with the version and shown by history. A write that
+        changes nothing makes no version and so keeps no message.
         """;
 
     public const string EditDescription = """
@@ -85,6 +87,8 @@ public static class Manual
         included); it becomes new_text. Include enough surrounding text to make it unique.
         Append: leave out old_text; new_text is added at the end, on a new line.
         replace_all: every occurrence of old_text becomes new_text (in the section, if the path has one).
+        edits: instead of old_text and new_text, a list of {old_text, new_text} applied in order on the same version,
+        all or none, as one version; each old_text must occur exactly once when its turn comes.
         To replace text across many notes, use the replace tool.
 
         Sections: put a section in the path, /Work/plan.md#Goals (nested: #Architecture#Gates; sh 'outline'
@@ -95,6 +99,8 @@ public static class Manual
         version is the token from 'cat' (or from the last write or edit). If the note changed since, the edit
         fails: cat it again and redo the change. Returns the new version token; earlier versions stay
         recoverable (sh: history, restore).
+        message: optionally one line on why you changed it, kept with the version and shown by history. An edit
+        that changes nothing makes no version and so keeps no message.
         """;
 
     public const string BoardDescription = """
@@ -132,6 +138,8 @@ public static class Manual
         one hour and once. Each changed note keeps the state before this session in its history
         (sh: history, diff, restore). The replace is literal, in links too: the preview names links that
         would lead nowhere afterwards. To rename a note, mv it first (that rewrites its links), then replace.
+        message: optionally one line on why, kept with each changed version and shown by history (given on the
+        apply step). A note that does not change gets no version and so no message.
         """;
 }
 

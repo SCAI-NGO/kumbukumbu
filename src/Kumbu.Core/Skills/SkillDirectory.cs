@@ -34,6 +34,17 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         return skills;
     }
 
+    /// <summary>
+    /// The skills as a name finds them: a system skill gives way to one of the same name in the person's own Skills vault,
+    /// directly under its root. Its <c>_skills</c> and a shared vault's never replace one: a system skill is not to be
+    /// switched off by whoever may write to a vault shared with her.
+    /// </summary>
+    public static IReadOnlyList<Skill> Effective(IReadOnlyList<Skill> skills)
+    {
+        var replaced = skills.Where(s => s.Folder is { Segments.Count: 2 }).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+        return [.. skills.Where(s => !s.IsSystem || !replaced.Contains(s.Name))];
+    }
+
     /// <summary>The skill's files relative to its folder, <c>SKILL.md</c> first, then in <see cref="TextOrder"/>.</summary>
     public async Task<IReadOnlyList<SkillFile>> FilesAsync(Skill skill, CancellationToken ct)
     {
@@ -88,7 +99,7 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
     private static Skill System(SystemSkill skill)
     {
         var manifest = SkillManifest.Read(skill.Name, skill.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Content);
-        return new Skill(skill.Name, null, manifest.Description ?? "", null, null, false, manifest.Problems);
+        return new Skill(skill.Name, null, manifest.Description ?? "", null, null, false, manifest.Problems) { AtStart = manifest.AtStart };
     }
 
     private async Task<IReadOnlyList<Skill>> InAsync(string vault, string? marked, CancellationToken ct)
@@ -113,7 +124,10 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
             var (editor, byOther) = await WritersAsync(vault, info, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
-            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner });
+            // The start-up mark counts only in her own vault and only while no other user changed the skill: a writer of a
+            // shared vault must not steer every reader's agent before its first answer. Otherwise it is an ordinary skill.
+            var atStart = manifest.AtStart && info?.Owner is null && !byOther;
+            skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner, AtStart = atStart });
         }
 
         return skills;

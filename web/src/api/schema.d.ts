@@ -12293,6 +12293,7 @@ export interface components {
             current: boolean;
             changeset: null | string;
             writerKind?: null | string;
+            message?: null | string;
             /** @default note */
             kind: string;
             /** @default text/markdown */

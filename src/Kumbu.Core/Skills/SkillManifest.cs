@@ -14,11 +14,12 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
     IReadOnlyDictionary<string, string> Metadata, IReadOnlyList<string> Problems)
 {
     public const int MaxName = 64, MaxDescription = 1024;
-    public const string SourceKey = "kumbu-source", HashKey = "kumbu-hash";
+    public const string SourceKey = "kumbu-source", HashKey = "kumbu-hash", WhenKey = "kumbu-when", SessionStart = "session-start";
 
     private static readonly IReadOnlyDictionary<string, string> NoMetadata = new Dictionary<string, string>();
 
     public string? Source => Metadata.GetValueOrDefault(SourceKey);
+    public bool AtStart => Metadata.GetValueOrDefault(WhenKey) == SessionStart;
     public string? Hash => Metadata.GetValueOrDefault(HashKey);
 
     /// <summary>Whether a name keeps the rules: lowercase letters, digits and hyphens, at most <see cref="MaxName"/> characters.</summary>
@@ -61,6 +62,8 @@ public sealed partial record SkillManifest(string? Name, string? Description, st
             if (raw is IReadOnlyDictionary<string, object?> map) metadata = map.Where(p => p.Value is string).ToDictionary(p => p.Key, p => (string)p.Value!);
             else problems.Add("metadata must be a map of keys and values");
         }
+
+        if (metadata.TryGetValue(WhenKey, out var when) && when != SessionStart) problems.Add($"metadata {WhenKey} must be {SessionStart}");
 
         return new SkillManifest(name, description, Text(read.Values, "license"), Text(read.Values, "compatibility"), Text(read.Values, "allowed-tools"), metadata, problems);
     }

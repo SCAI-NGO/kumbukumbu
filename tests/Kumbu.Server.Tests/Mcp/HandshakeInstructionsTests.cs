@@ -148,6 +148,21 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Hint_only_names_the_system_start_up_skill()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        using var keys = await alice.GetAsync("/api/keys");
+        var id = (await RestClient.JsonAsync(keys)).AsArray().Single(k => k!["name"]!.GetValue<string>() == "Claude Code")!["id"]!.GetValue<string>();
+        using var put = await alice.SendAsync(HttpMethod.Put, $"/api/keys/{id}/instructions", new { mode = "hint" });
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+
+        var text = await InstructionsAsync(key);
+
+        Assert.Contains("- project-memory (system):", text);
+        Assert.DoesNotContain("- create-skill", text);
+    }
+
+    [Fact]
     public async Task Hint_only_sends_no_list()
     {
         var (alice, key) = await AliceAsync("Skills", "Work");

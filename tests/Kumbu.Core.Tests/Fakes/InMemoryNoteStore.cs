@@ -54,6 +54,17 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         return attachment;
     }
 
+    /// <summary>Puts a text file (as a skill folder holds one) at <paramref name="path"/> directly.</summary>
+    public void AddTextFile(string path, string text)
+    {
+        if (!VaultPath.TryParse(path, out var parsed)) throw new ArgumentException($"Bad path: {path}");
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        var id = PutBlobAsync(parsed.Vault!, bytes, CancellationToken.None).Result;
+        _attachments[parsed] = new StoredAttachment(
+            parsed, new AttachmentState(AttachmentFormat.TextMediaType, bytes.Length, null, null, VersionToken.Of(bytes), id), 1, Writers.Seed, Seeded, [], null, WriterRef.Server);
+        _vaults.Add(parsed.Vault!);
+    }
+
     /// <summary>Paths whose stored document doesn't open.</summary>
     public HashSet<VaultPath> Damaged { get; } = [];
 

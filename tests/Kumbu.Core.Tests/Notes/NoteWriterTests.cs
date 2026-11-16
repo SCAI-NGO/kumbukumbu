@@ -285,6 +285,183 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task Several_edits_apply_in_order_as_one_version()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- uno", "- eins")], Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("edited /Work/plan.md: 2 changes", result.Output);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("# Plan\n\n- eins\n- two\n", note.Content);
+        Assert.Equal([Plan], note.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task An_edit_without_new_text_is_refused_and_writes_nothing()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- two", null!)], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2: new_text is missing; give \"\" to delete the text", result.Output);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal(Plan, note.Content);
+        Assert.Empty(note.History);
+    }
+
+    [Fact]
+    public async Task An_empty_new_text_deletes()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- two\n", "")], Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("# Plan\n\n- one\n", (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_failing_edit_changes_nothing()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("- absent", "x")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("edit: edit 2 of 2: old_text not found in /Work/plan.md", result.Output, StringComparison.Ordinal);
+        var note = await Get("/Work/plan.md");
+        Assert.Equal(Plan, note.Content);
+        Assert.Equal(V(Plan), note.Version);
+        Assert.Empty(note.History);
+    }
+
+    [Fact]
+    public async Task Edits_stay_in_the_section()
+    {
+        const string content = "# A\n\nfoo\n\n# B\n\nbar\n";
+        await Seed("/Work/sec.md", content);
+
+        var result = await _writer.EditManyAsync("/Work/sec.md#A", V(content), [new("bar", "baz")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("edit: edit 1 of 1: old_text not found in section", result.Output, StringComparison.Ordinal);
+        Assert.Equal(content, (await Get("/Work/sec.md")).Content);
+    }
+
+    [Fact]
+    public async Task One_edit_is_one_change()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno")], Ct);
+
+        Assert.Equal("edited /Work/plan.md: 1 change", result.Output);
+    }
+
+    [Fact]
+    public async Task An_empty_old_text_in_the_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), new("", "x")], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2: old_text is empty", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task An_empty_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edits is empty; give at least one {old_text, new_text}", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_null_entry_in_the_list_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md", V(Plan), [new("- one", "- uno"), null!], Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 2 of 2 is empty; give old_text and new_text", result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_list_on_a_missing_section_is_refused()
+    {
+        var result = await _writer.EditManyAsync("/Work/plan.md#Absent", V(Plan), [new("- one", "- uno")], Ct);
+        var single = await _writer.EditAsync("/Work/plan.md#Absent", V(Plan), "- one", "- uno", Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("edit: edit 1 of 1: " + single.Output["edit: ".Length..], result.Output);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
+    public async Task A_write_message_reaches_history()
+    {
+        var v1 = (await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "consolidated")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(11));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "two", Ct, message: "tidied");
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("tidied", note.Message);
+        Assert.Equal(["consolidated", null], note.History.Select(h => h.Message));
+        Assert.Equal(["tidied", "consolidated", null], NoteHistory.Versions(note).Select(v => v.Message));
+    }
+
+    [Fact]
+    public async Task A_coalesced_write_keeps_the_last_message()
+    {
+        var v1 = (await _writer.EditAsync("/Work/plan.md", V(Plan), null, "a", Ct, message: "first")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "b", Ct, message: "second");
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("second", note.Message);
+        Assert.Single(note.History);
+    }
+
+    [Fact]
+    public async Task A_coalesced_write_without_message_keeps_the_earlier_one()
+    {
+        var v1 = (await _writer.EditAsync("/Work/plan.md", V(Plan), null, "a", Ct, message: "first")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await _writer.EditAsync("/Work/plan.md", v1, null, "b", Ct);
+
+        var note = await Get("/Work/plan.md");
+        Assert.Equal("first", note.Message);
+        Assert.Single(note.History);
+    }
+
+    [Theory]
+    [InlineData("two\nlines")]
+    [InlineData("two\rlines")]
+    [InlineData("two\u2028lines")]
+    [InlineData("two\u2029lines")]
+    [InlineData("two\u0085lines")]
+    [InlineData("two\u001b[2Klines")]
+    [InlineData("long")]
+    public void A_message_is_one_line(string kind)
+    {
+        var message = kind == "long" ? new string('x', 201) : kind;
+
+        Assert.False(NoteWriter.TryMessage(message, "write", out _, out var error));
+        Assert.Equal("write: message is one line of at most 200 characters", error!.Output);
+        Assert.True(error.IsError);
+        Assert.True(NoteWriter.TryMessage("  " + new string('x', 200) + " ", "write", out var clean, out _));
+        Assert.Equal(new string('x', 200), clean);
+        Assert.True(NoteWriter.TryMessage("  ", "write", out clean, out _));
+        Assert.Null(clean);
+    }
+
+    [Fact]
+    public async Task A_bad_message_writes_nothing()
+    {
+        var result = await _writer.WriteAsync("/Work/plan.md", "one\n", V(Plan), Ct, message: "a\nb");
+        var edit = await _writer.EditAsync("/Work/plan.md", V(Plan), null, "x", Ct, message: new string('x', 201));
+
+        Assert.True(result.IsError);
+        Assert.True(edit.IsError);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+    }
+
+    [Fact]
     public async Task APauseOrAnotherWriterStartsANewVersion()
     {
         var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;
@@ -443,7 +620,7 @@ public class NoteWriterTests
         await _writer.RestoreAsync(P("/Work/none.md"), null, Ct));
 
     [Theory]
-    [InlineData("/Work/sub", "rm: /Work/sub: Is a directory (rm removes one note at a time)")]
+    [InlineData("/Work/sub", "rm: /Work/sub: Is a directory (rm doesn't remove folders with notes in them; there is no -r)")]
     [InlineData("/Work/none.md", "rm: /Work/none.md: No such file or directory")]
     public async Task RemoveErrors(string path, string error) =>
         Assert.Equal(ShellResult.Error(error), await _writer.RemoveAsync(P(path), Ct));

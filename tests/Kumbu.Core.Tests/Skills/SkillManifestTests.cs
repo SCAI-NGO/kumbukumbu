@@ -14,6 +14,13 @@ public class SkillManifestTests
         Assert.Equal("MIT", m.License);
     }
 
+    [Fact]
+    public void Kumbu_when_takes_only_session_start()
+    {
+        var manifest = SkillManifest.Read("x", "---\nname: x\ndescription: d\nmetadata:\n  kumbu-when: always\n---\n");
+        Assert.Contains("metadata kumbu-when must be session-start", manifest.Problems);
+    }
+
     [Theory]
     [InlineData("Write-As", "name 'Write-As' must be lowercase letters, digits and hyphens, at most 64 characters")]
     [InlineData("other", "name 'other' must be the folder's name, 'write-as-alice'")]

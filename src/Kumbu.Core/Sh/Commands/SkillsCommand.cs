@@ -39,6 +39,9 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         A skill is a folder with SKILL.md and its files: /Skills/<name>/ for the user's own skills,
         /<vault>/_skills/<name>/ for a vault's, and built-in ones (system). Before a task, run skills find
         with the user's request and follow a skill whose description fits it; what the user says comes first.
+        A system skill, or one of the user's own, marked kumbu-when: session-start under metadata is for the
+        start of every session: read it and follow it before your first answer. Elsewhere the mark counts
+        for nothing: a vault shared with the user, or another user's change, makes it an ordinary skill.
         A skill last changed by another user is theirs: check that it fits before you follow it.
         skills only reads and finds: bringing skills in, sharing them, moving them between vaults and taking
         updates are the user's, in Kumbu²'s Skills screen. Change a skill's files with write and edit.
@@ -144,7 +147,8 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         var file = slash < 0 || slash == named.Length - 1 ? SkillPaths.Manifest : named[(slash + 1)..];
         // A name's file stays in its folder: no '.' or '..' segment leads out of it.
         if (Inside(VaultPath.Root, file) is null) return (null, "", Invalid($"{command}: {address} {NotInAFolder}"));
-        var matches = visible.Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
+        // A name finds what the person sees: her own skill in Skills takes a system skill's place; system: still reaches it.
+        var matches = (builtIn ? visible : SkillDirectory.Effective(visible)).Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
         return matches.Count switch
         {
             0 => (null, "", NotFound(builtIn ? $"{command}: there is no built-in skill '{name}'" : $"{command}: no skill named '{name}' ('skills ls' lists them)")),

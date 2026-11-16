@@ -76,7 +76,9 @@ public sealed record Changeset(string Id, DateTime Started)
 
 /// <summary>An earlier state of a note: its content, who wrote it when, and in which changeset.</summary>
 /// <param name="Ref">The reference sealed beside <paramref name="WrittenBy"/> (<see cref="WriterRef"/>).</param>
-public sealed record HistoryEntry(string Content, string WrittenBy, DateTime WrittenAt, Changeset? Changeset = null, WriterRef? Ref = null);
+/// <param name="Message">The one line the writer gave with the write that made this state; null if none.</param>
+public sealed record HistoryEntry(
+    string Content, string WrittenBy, DateTime WrittenAt, Changeset? Changeset = null, WriterRef? Ref = null, string? Message = null);
 
 /// <summary>A note as stored, with what the write rules need.</summary>
 /// <param name="Revision">Increases with every write; the store replaces a note only at the revision the
@@ -87,6 +89,7 @@ public sealed record HistoryEntry(string Content, string WrittenBy, DateTime Wri
 /// <param name="Ref">The reference sealed beside <paramref name="LastWriter"/>; a store refuses a write without one.</param>
 /// <param name="Restored">The current state came back from the trash (<see cref="NoteWriter.Restored"/>); the next write
 /// of content clears it, a move keeps it. A note stored before the flag existed reads as not restored.</param>
+/// <param name="Message">The one line the writer gave with the write that made the current state; null if none.</param>
 public sealed record StoredNote(
     VaultPath Path,
     string Content,
@@ -97,7 +100,8 @@ public sealed record StoredNote(
     string? SeedContent = null,
     Changeset? Changeset = null,
     WriterRef? Ref = null,
-    bool Restored = false)
+    bool Restored = false,
+    string? Message = null)
 {
     public string Version => VersionToken.Of(Content);
 }
