@@ -2,7 +2,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../../state/session";
 import { fakeApi, json, navigateAway, noContent, renderApp } from "../../test/app";
 
@@ -49,6 +49,10 @@ async function createInvitation(queryClient?: QueryClient) {
   await userEvent.click(await screen.findByRole("button", { name: "New invitation" }));
   return { fetch, router, bodies, dialog: screen.getByRole("dialog", { name: "New invitation" }) };
 }
+
+beforeEach(() => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+});
 
 afterEach(() => {
   cleanup();

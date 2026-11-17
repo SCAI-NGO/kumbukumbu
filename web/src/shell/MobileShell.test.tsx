@@ -431,7 +431,7 @@ describe("the shell", () => {
     ["Access", "Settings", "button", "Close"],
     ["Settings", "Settings", "button", "Close"],
     ["Console", "Console", "button", "Close"],
-    ["Admin", "Users", "link", "Back to the notes"],
+    ["Admin", "Admin", "button", "Close"],
   ] as const)("closes the drawer when %s is followed, so the way back finds it shut", async (link, title, role, back) => {
     signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
     renderApp("/notes/Work/inbox.md");
@@ -553,16 +553,6 @@ describe("the shell", () => {
     const window = await screen.findByRole("dialog", { name: "Settings" });
     await userEvent.click(within(window).getByRole("button", { name: "Close" }));
     expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
-  });
-
-  it.each([
-    ["/admin/users", "Users"],
-    ["/admin/invitations", "Invitations"],
-  ])("has a page at %s, with the way back to the notes", async (path, title) => {
-    signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
-    renderApp(path);
-    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to the notes" })).toHaveAttribute("href", "/");
   });
 
   it("moves focus into the drawer, keeps it there, and gives it back on Escape", async () => {

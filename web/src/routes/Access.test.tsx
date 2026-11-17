@@ -64,7 +64,7 @@ describe("Access", () => {
     expect(router.state.location.pathname).toBe("/settings/access/keys");
   });
 
-  it("/keys redirects to /access/keys", async () => {
+  it("/keys redirects to /settings/access/keys", async () => {
     api();
     const router = renderApp("/keys");
 
@@ -119,7 +119,7 @@ describe("Access", () => {
 
   it("Home and End move to the first and the last tab, in place of the current entry", async () => {
     api();
-    const router = renderApp(["/settings", "/settings/access/apps"]);
+    const router = renderApp(["/", "/settings/access/apps"]);
     await screen.findByRole("heading", { name: "Connections" });
     tab("Apps").focus();
 
@@ -131,7 +131,7 @@ describe("Access", () => {
     expect(tab("API keys")).toHaveFocus();
 
     await act(() => router.navigate(-1));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
   });
 });
 

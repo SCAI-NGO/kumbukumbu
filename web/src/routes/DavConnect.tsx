@@ -3,6 +3,7 @@ import { useId, useState, type ReactNode } from "react";
 import type { components } from "../api/schema";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
+import { useWindowLock } from "../windows/context";
 
 type DavShare = components["schemas"]["DavShareView"];
 
@@ -127,6 +128,7 @@ export default function DavConnect({ share, password, onDone }: { share: DavShar
   const [closing, setClosing] = useState(false);
   const shownOnce = password !== undefined;
   const blocker = useLeaveGuard(saved || !shownOnce);
+  useWindowLock(shownOnce ? "Save the password first" : null);
   const host = window.location.host;
 
   // Only the password counts as saved: the URL and the username can be read here again.

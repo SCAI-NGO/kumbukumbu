@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { useEffect, useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../../components/shownOnce";
+import { useWindowLock } from "../../windows/context";
 
 /**
  * A new invitation's link and QR code, shown once. Until the link was copied, leaving the page or closing asks
@@ -16,6 +17,7 @@ export default function InvitationReveal({ link, onDone }: { link: string; onDon
   const [closing, setClosing] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
   const blocker = useLeaveGuard(saved);
+  useWindowLock("Copy the invitation link first");
 
   useEffect(() => {
     let current = true;

@@ -167,7 +167,7 @@ function DownloadsSection() {
 function InstallSection() {
   const { hash } = useLocation();
   const section = useRef<HTMLDivElement>(null);
-  // The phone's hint links here (`/settings#install`); a navigation within the app doesn't scroll to it by itself.
+  // The phone's hint links here (`/settings/appearance#install`); a navigation within the app doesn't scroll to it by itself.
   useEffect(() => {
     if (hash === "#install") section.current?.scrollIntoView?.({ block: "start" });
   }, [hash]);

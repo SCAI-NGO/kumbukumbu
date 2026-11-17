@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
+import { useWindowLock } from "../windows/context";
 
 /** The line that adds Kumbu² to Claude Code with this key. */
 export const claudeCodeLine = (key: string) =>
@@ -19,6 +20,7 @@ export default function KeyReveal({ name, value, onDone }: { name: string; value
   const [closing, setClosing] = useState(false);
   const blocker = useLeaveGuard(saved);
   const line = claudeCodeLine(value);
+  useWindowLock("Save the key first");
 
   const copied = (ok: boolean) => {
     setCopyFailed(!ok);

@@ -7,7 +7,7 @@ import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { useDialog } from "../../hooks/useDialog";
-import AdminOnly, { useIsAdmin } from "./AdminOnly";
+import { useIsAdmin } from "./AdminOnly";
 import InvitationReveal from "./InvitationReveal";
 import NewInvitationDialog from "./NewInvitationDialog";
 
@@ -27,15 +27,11 @@ export default function Invitations() {
   const [revoking, setRevoking] = useState<Invitation | null>(null);
 
   if (link) {
-    return (
-      <AdminOnly title="Invitations">
-        <InvitationReveal link={link} onDone={() => setLink(null)} />
-      </AdminOnly>
-    );
+    return <InvitationReveal link={link} onDone={() => setLink(null)} />;
   }
 
   return (
-    <AdminOnly title="Invitations">
+    <>
       <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
         New invitation
       </button>
@@ -84,7 +80,7 @@ export default function Invitations() {
         />
       )}
       {revoking && <RevokeDialog invitation={revoking} onClose={() => setRevoking(null)} />}
-    </AdminOnly>
+    </>
   );
 }
 

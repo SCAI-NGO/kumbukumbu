@@ -10,7 +10,7 @@ import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, inputClass, secondaryButtonClass } from "../../components/form";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../../components/SharedVaultsChoice";
 import { useSession } from "../../state/session";
-import AdminOnly, { useIsAdmin } from "./AdminOnly";
+import { useIsAdmin } from "./AdminOnly";
 import DeletionReceipt, { type Receipt } from "./DeletionReceipt";
 
 type AdminUser = components["schemas"]["AdminUserView"];
@@ -39,7 +39,7 @@ export default function Users() {
   const restored = deletions.data?.restored ?? [];
 
   return (
-    <AdminOnly title="Users">
+    <>
       {deletions.isError && <FormError>{errorText(deletions.error)}</FormError>}
       {deletions.data?.configured === false && (
         <p className="mb-4 text-sm text-text-body">
@@ -96,7 +96,7 @@ export default function Users() {
         />
       )}
       {receipts.length > 0 && <DeletionReceipt key={receipts[0].userId} receipt={receipts[0]} onClose={() => setReceipts((rs) => rs.slice(1))} />}
-    </AdminOnly>
+    </>
   );
 }
 

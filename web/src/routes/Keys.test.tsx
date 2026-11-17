@@ -571,3 +571,31 @@ describe("Skills in the instructions", () => {
     expect(screen.queryByLabelText("Skills in the instructions")).toBeNull();
   });
 });
+
+describe("Keys in a window", () => {
+  it("Back with a key on show asks; Stay keeps the window and the key, Leave closes the window", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+    api({
+      "POST /api/keys": () => json(201, { key: secret, apiKey: { ...listed, id: "k2", name: "Claude", vaults: { Work: "write" } } }),
+    });
+    const router = renderApp(["/", "/settings/access/keys"]);
+    const dialog = await openNewKey();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read and write"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+    await screen.findByText(secret);
+    expect(screen.getByText("Save the key first")).toBeInTheDocument();
+
+    await act(async () => {});
+    await act(() => router.navigate(-1));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your API key");
+    await userEvent.click(screen.getByRole("button", { name: "Stay" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByText(secret)).toBeInTheDocument();
+
+    await act(() => router.navigate(-1));
+    await userEvent.click(screen.getByRole("button", { name: "Leave without it" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+  });
+});

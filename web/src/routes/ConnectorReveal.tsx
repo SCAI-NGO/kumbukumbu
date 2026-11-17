@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 import type { components } from "../api/schema";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
+import { useWindowLock } from "../windows/context";
 
 type Connection = components["schemas"]["ConnectionView"];
 
@@ -13,6 +14,7 @@ type Connection = components["schemas"]["ConnectionView"];
 export default function ConnectorReveal({ connection, onDone }: { connection: Connection; onDone(): void }) {
   const id = useId();
   const [copyFailed, setCopyFailed] = useState(false);
+  useWindowLock("Copy the connector's details first");
 
   return (
     <section aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-5">

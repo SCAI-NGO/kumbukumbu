@@ -148,6 +148,14 @@ export const routes: RouteObject[] = [
                   { path: "/settings/about", lazy: lazyPage(() => import("./routes/settings/About")) },
                 ],
               },
+              {
+                lazy: lazyPage(() => import("./routes/admin/AdminWindow")),
+                handle: { window: true },
+                children: [
+                  { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
+                  { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
+                ],
+              },
               // The addresses before the settings were a window, in bookmarks and older links: windows too, so that
               // the shell stays behind while they are replaced.
               { path: "/settings", handle: { window: true }, element: <SettingsMoved /> },
@@ -167,8 +175,6 @@ export const routes: RouteObject[] = [
           { path: "/recent", lazy: lazyPage(() => import("./recent/RecentPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
-          { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
-          { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],
       },
     ],

@@ -92,7 +92,7 @@ function DiscreetSection() {
   const revealed = useDiscreet((s) => s.revealed);
   const { hash } = useLocation();
   const section = useRef<HTMLDivElement>(null);
-  // More vaults… links here (`/settings#discreet-vaults`), as the install hint does to its section.
+  // More vaults… links here (`/settings/security#discreet-vaults`), as the install hint does to its section.
   useEffect(() => {
     if (hash === "#discreet-vaults") section.current?.scrollIntoView?.({ block: "start" });
   }, [hash]);
