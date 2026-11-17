@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { fakeApi, json, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, renderApp, user } from "../test/app";
 import { bodiesOf, entryView, openTask, writtenView } from "../test/calendar";
 import { FakeSocket } from "../test/socket";
 import type { EntryView, WhatsOnView } from "./api";
@@ -13,6 +13,7 @@ import { cameFromOf } from "./backLink";
 beforeEach(() => {
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
 });
 
 afterEach(() => {
@@ -46,18 +47,27 @@ function api(view: WhatsOnView | (() => WhatsOnView), extra: Parameters<typeof f
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, vaults),
     "GET /api/calendar/whats-on": (r) => (new URL(r.url).searchParams.get("count") === "true" ? json(200, { ...answer(), items: [] }) : json(200, answer())),
+    // The notes behind the window.
+    "GET /api/vaults/*": (r) => {
+      const [, , , name, what] = new URL(r.url).pathname.split("/").map(decodeURIComponent);
+      if (what === "publications") return json(200, { publications: [], unpublishable: [] });
+      return json(200, { damaged: 0, root: { name, path: `/${name}`, folders: [], notes: [] } });
+    },
+    "GET /api/notes/*": (r) => json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "Text.", version: "v1", lastWriter: "Bob", lastWriteAt: new Date().toISOString() }),
+    "GET /api/links/*": () => json(200, []),
+    "GET /api/embeddings": () => json(200, []),
     ...extra,
   });
 }
 
-const page = () => screen.findByRole("heading", { level: 1, name: "What's on" });
+const page = () => screen.findByRole("dialog", { name: "What's on" });
 
 describe("What's on", () => {
   it("lists what's on with vault and span", async () => {
     api(whatsOn([certificate, trip, dentist]));
     renderApp("/whats-on");
     await page();
-    const items = await screen.findAllByRole("listitem");
+    const items = await within(await page()).findAllByRole("listitem");
     expect(items.map((i) => within(i).getByRole("link").textContent)).toEqual(["Certificate", "Trip", "Zahnarzt"]);
     const [first, second, third] = items;
     expect(within(first).getByRole("link", { name: "Certificate" })).toHaveAttribute("href", "/notes/Work/Certificate.md");
@@ -66,7 +76,7 @@ describe("What's on", () => {
     // Overdue is said calmly: the word and its span in the warning colour beside an icon, never a red box.
     const overdue = within(first).getByText("overdue · 3 weeks");
     expect(overdue.closest(".text-warning")).not.toBeNull();
-    expect(document.querySelector('[class*="bg-red"], [class*="bg-warning"]')).toBeNull();
+    expect((await page()).querySelector('[class*="bg-red"], [class*="bg-warning"]')).toBeNull();
     expect(second).toHaveTextContent("Home");
     expect(second).toHaveTextContent("ongoing · until Fri");
     expect(third).toHaveTextContent("upcoming · in 7 days");
@@ -83,7 +93,7 @@ describe("What's on", () => {
     api(whatsOn([call, meeting]));
     renderApp("/whats-on");
     await page();
-    const [first, second] = await screen.findAllByRole("listitem");
+    const [first, second] = await within(await page()).findAllByRole("listitem");
     expect(within(first).getByText("today · 14:00")).toBeInTheDocument();
     expect(first).not.toHaveTextContent("ongoing");
     // Within its window it is ongoing until its end.
@@ -120,7 +130,7 @@ describe("What's on", () => {
     renderApp("/whats-on");
     await page();
     expect(await screen.findByText("Nothing on. Enjoy it.")).toBeInTheDocument();
-    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(within(await page()).queryByRole("list")).not.toBeInTheDocument();
   });
 
   it("names the dates it couldn't read at the bottom, with a link to them", async () => {
@@ -191,5 +201,81 @@ describe("What's on", () => {
         { path: card.path, part: "postpone", date: "2026-11-12" },
       ]),
     );
+  });
+
+  describe("as a window", () => {
+    it("opens as a light window over the note, with no header of its own; a backdrop click closes it", async () => {
+      api(whatsOn([certificate]));
+      const router = renderApp(["/notes/Work/A.md"]);
+      await screen.findByText("Text.");
+      await navigateAway(router, "/whats-on");
+      const dialog = await page();
+      expect(screen.queryByRole("heading", { level: 1, name: "What's on" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Back to the notes" })).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("search", { name: "Tag filter" })).toBeInTheDocument();
+      await userEvent.click(dialog.parentElement!.querySelector<HTMLElement>(":scope > [aria-hidden]")!);
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "What's on" })).not.toBeInTheDocument());
+      expect(router.state.location.pathname).toBe("/notes/Work/A.md");
+    });
+
+    it("ticking Done keeps the window open", async () => {
+      api(whatsOn([certificate]), {
+        "POST /api/vaults/Work/calendar/close": () => json(200, writtenView(certificate.path, { ...certificate, task: "closed", state: "done" })),
+      });
+      const router = renderApp(["/notes/Work/A.md"]);
+      await screen.findByText("Text.");
+      await navigateAway(router, "/whats-on");
+      await page();
+      await userEvent.click(await screen.findByRole("checkbox", { name: "To do: Certificate" }));
+      expect(await screen.findByRole("dialog", { name: "What's on" })).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe("/whats-on");
+    });
+
+    it("the link to the calendar closes it and shows the calendar", async () => {
+      api(whatsOn([], { couldntRead: 1, couldntReadVaults: ["Work"] }), {
+        "GET /api/vaults/Work/calendar/view": () => json(200, {}),
+        "GET /api/vaults/Work/calendar": () => json(200, { vault: "Work", today: "2026-11-13", zone: "Europe/Vienna", weeks: [], couldntRead: [], canWrite: true }),
+      });
+      const router = renderApp(["/notes/Work/A.md"]);
+      await screen.findByText("Text.");
+      await navigateAway(router, "/whats-on");
+      await page();
+      await userEvent.click(await screen.findByRole("link", { name: "1 date I couldn't read" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/calendar/Work"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.queryByRole("dialog", { name: "What's on" })).not.toBeInTheDocument();
+    });
+
+    it("a note opened from it replaces the window and keeps the way back, which reopens the window over the note", async () => {
+      api(whatsOn([certificate, trip]));
+      const router = renderApp(["/notes/Work/A.md"]);
+      await screen.findByText("Text.");
+      await navigateAway(router, "/whats-on");
+      await page();
+      await userEvent.click(await screen.findByRole("link", { name: "Trip" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Trip.md"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(cameFromOf(router.state.location.state, "/Home/Trip.md")).toEqual({ label: "What's on", to: "/whats-on" });
+      expect(screen.queryByRole("dialog", { name: "What's on" })).not.toBeInTheDocument();
+
+      await userEvent.click(await screen.findByRole("link", { name: "Back to What's on" }));
+      expect(await page()).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe("/whats-on");
+      // Closing it shows the note it was opened over.
+      await act(() => router.navigate(-1));
+      expect(router.state.location.pathname).toBe("/notes/Home/Trip.md");
+      expect(screen.queryByRole("dialog", { name: "What's on" })).not.toBeInTheDocument();
+    });
+
+    it("choosing a tag replaces the address inside the window", async () => {
+      api(whatsOn([certificate]));
+      const router = renderApp(["/notes/Work/A.md"]);
+      await screen.findByText("Text.");
+      await navigateAway(router, "/whats-on");
+      const dialog = await page();
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Tag" }), "kumbu{Enter}");
+      await waitFor(() => expect(router.state.location.search).toBe("?tag=kumbu"));
+      expect(router.state.historyAction).toBe("REPLACE");
+    });
   });
 });

@@ -5,13 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { fakeApi, json, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, renderApp, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
 import type { RecentItem, RecentView } from "./api";
 
 beforeEach(() => {
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
 });
 
 afterEach(() => {
@@ -78,7 +79,7 @@ function api(answer: (query: URLSearchParams) => RecentView, vaults = ["Home", "
 
 const view = (items: RecentItem[], extra: Partial<RecentView> = {}): RecentView => ({ items, more: false, vaults: ["Home", "Skills", "Work"], ...extra });
 
-const page = () => screen.findByRole("heading", { level: 1, name: "Recent changes" });
+const page = () => screen.findByRole("dialog", { name: "Recent changes" });
 const rows = () => within(screen.getByRole("list", { name: "Recent changes" })).getAllByRole("listitem");
 const chip = (name: string) => within(screen.getByRole("group", { name: "Vaults" })).getByRole("button", { name });
 
@@ -288,9 +289,11 @@ describe("Recent changes", () => {
     hidden = true;
     // The filters start again, and the rows the page had without them are not shown again while it asks.
     act(() => useDiscreet.setState({ revealed: false, names: new Set() }));
-    expect(document.body).not.toHaveTextContent("Tagebuch");
+    // In the window: the vault list behind it is not the page's to empty here.
+    const dialog = screen.getByRole("dialog", { name: "Recent changes" });
+    expect(dialog).not.toHaveTextContent("Tagebuch");
     await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(document.body).not.toHaveTextContent("Tagebuch");
+    expect(dialog).not.toHaveTextContent("Tagebuch");
   });
 
   it("Nothing changed here yet.", async () => {
@@ -314,12 +317,44 @@ describe("Recent changes", () => {
     expect(JSON.stringify([state, { ...localStorage }, { ...sessionStorage }])).not.toMatch(/Home|Work|Pump/);
   });
 
-  it("a way back to the notes", async () => {
+  it("opens as a light window over the note, and a click on the backdrop closes it", async () => {
     api(() => view([certificate]));
-    const router = renderApp("/recent");
-    await page();
-    await userEvent.click(screen.getByRole("link", { name: "Back to the notes" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    const router = renderApp(["/notes/Work/A.md"]);
+    await screen.findByText("Text.");
+    await navigateAway(router, "/recent");
+    const dialog = await page();
+    expect(screen.queryByRole("heading", { level: 1, name: "Recent changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Back to the notes" })).not.toBeInTheDocument();
+    await userEvent.click(dialog.parentElement!.querySelector<HTMLElement>(":scope > [aria-hidden]")!);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/A.md"));
+    expect(screen.queryByRole("dialog", { name: "Recent changes" })).not.toBeInTheDocument();
   });
 
+  it("a note opened from it replaces the window, and Back shows the note before", async () => {
+    api(() => view([certificate]));
+    const router = renderApp(["/notes/Home/A.md"]);
+    await screen.findByText("Text.");
+    await navigateAway(router, "/recent");
+    await page();
+    await userEvent.click(await screen.findByRole("link", { name: /Certificate/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Pump/Certificate.md"));
+    expect(router.state.historyAction).toBe("REPLACE");
+    expect(screen.queryByRole("dialog", { name: "Recent changes" })).not.toBeInTheDocument();
+    await act(() => router.navigate(-1));
+    expect(router.state.location.pathname).toBe("/notes/Home/A.md");
+    expect(screen.queryByRole("dialog", { name: "Recent changes" })).not.toBeInTheDocument();
+  });
+
+  it("an attachment opens in the lightbox, a full page, replacing the window", async () => {
+    api(() => view([sketch]));
+    const router = renderApp(["/notes/Home/A.md"]);
+    await screen.findByText("Text.");
+    await navigateAway(router, "/recent");
+    await page();
+    await userEvent.click(await screen.findByRole("link", { name: /sketch\.png/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/view/Work/Pump/sketch.png"));
+    expect(router.state.historyAction).toBe("REPLACE");
+    await act(() => router.navigate(-1));
+    expect(router.state.location.pathname).toBe("/notes/Home/A.md");
+  });
 });

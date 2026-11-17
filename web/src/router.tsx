@@ -131,6 +131,9 @@ export const routes: RouteObject[] = [
             children: [
               { path: "/", element: null },
               { path: "/notes/:vault/*", element: null },
+              { path: "/whats-on", handle: { window: true }, lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
+              // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
+              { path: "/recent", handle: { window: true }, lazy: lazyPage(() => import("./recent/RecentPage")) },
               { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
               {
                 lazy: lazyPage(() => import("./routes/settings/SettingsWindow")),
@@ -170,9 +173,6 @@ export const routes: RouteObject[] = [
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
           { path: "/calendar/:vault", lazy: lazyPage(() => import("./calendar/CalendarPage")) },
-          { path: "/whats-on", lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
-          // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
-          { path: "/recent", lazy: lazyPage(() => import("./recent/RecentPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
         ],

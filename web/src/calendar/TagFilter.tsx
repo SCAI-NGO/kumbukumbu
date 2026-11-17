@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useInWindow } from "../windows/context";
 
 /**
  * The tag filter's tag, without its #, and its setter. In the address (`?tag=kumbu`), so a filtered week can be kept
@@ -11,8 +12,10 @@ import { useSearchParams } from "react-router-dom";
 export function useTagFilter(inAddress = true, initial?: string): [string | undefined, (next: string | null) => void] {
   const [params, setParams] = useSearchParams();
   const address = params.get("tag")?.trim() || undefined;
+  // Inside a window every move replaces its one history entry.
+  const inWindow = useInWindow();
   const [kept, setKept] = useState<string | undefined>(inAddress ? undefined : initial);
-  const toAddress = (next: string | null, replace = false) =>
+  const toAddress = (next: string | null, replace = inWindow) =>
     setParams(
       (current) => {
         const changed = new URLSearchParams(current);
