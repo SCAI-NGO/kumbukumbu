@@ -39,13 +39,13 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Lists_sh_write_edit_and_replace_with_their_manuals()
+    public async Task Lists_sh_write_edit_replace_board_and_upload_with_their_manuals()
     {
         await using var client = await app.ConnectAsync();
 
         var tools = await client.ListToolsAsync(cancellationToken: Ct);
 
-        Assert.Equal(["board", "edit", "replace", "sh", "write"], tools.Select(t => t.Name).Order());
+        Assert.Equal(["board", "edit", "replace", "sh", "upload", "write"], tools.Select(t => t.Name).Order());
         Assert.Contains("ls [--archive] [path]", tools.Single(t => t.Name == "sh").Description, StringComparison.Ordinal);
         Assert.StartsWith("Create a note", tools.Single(t => t.Name == "write").Description, StringComparison.Ordinal);
         Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);

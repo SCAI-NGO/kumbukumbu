@@ -41,6 +41,9 @@ public sealed class UploadTickets : IDisposable
     private readonly Dictionary<string, Queue<string>> _byHolder = new(StringComparer.Ordinal);
     private readonly Lock _issuing = new();
 
+    /// <summary>For tests: how many tickets are held, expired ones not yet swept included.</summary>
+    internal int Count => _tickets.Count;
+
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>

@@ -45,7 +45,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images (an SVG among them, which you can draw: help attachments) and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
+        Attachments: vaults also hold images (an SVG among them, which you can draw: help attachments) and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments). To put a file from your own machine into a vault, use the upload tool.
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day or a week (2026-11-12.md, 2026-W46.md); until ends it (an entry over days, or a time with an end), task: open makes it a to-do, upcoming: 7d shows it that early; calendar notifications is what's on in every vault, in the user's time zone; calendar set, move, close, reopen and unset change only those keys and leave a version (calendar set <note> --until 2026-11-22 gives an entry its end). On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
@@ -127,6 +127,25 @@ public static class Manual
         A move or update needs no version token and never changes the card's text; change the text with edit.
         A full archivable column (Done, say) moves its oldest cards to Board/Archive/ on an add or move into it;
         the result names them.
+        """;
+
+    public const string UploadDescription = """
+        Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): an image (PNG, JPEG,
+        GIF, WebP, SVG) or a PDF, whatever you can't send as text. Notes are not files: create and change those with
+        the write tool. Two steps:
+
+        1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you
+           need write access; the name's extension says the format). It answers a one-time URL and a curl line.
+        2. Run that curl line in a shell, with <local file> the file's path on that machine:
+           curl -sS -X PUT --data-binary @<local file> '<url>'
+           This needs a shell that can reach this server over the network. Without one, you can't upload; tell the user.
+
+        To replace a file that exists, pass its version (sh: cat shows it); without version a path that exists is
+        refused. At most 15 MB; Kumbu² keeps PNG, JPEG, GIF, WebP, SVG and PDF only, and checks the format from the
+        bytes, not from the name: a file that isn't what its name says is refused. The URL works once and expires
+        after 10 minutes. If the PUT fails, call upload again for a new URL.
+        The PUT's answer says where the file went and its version; reach it from a note with ![](/Folder/file.png)
+        (a PDF as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.
         """;
 
     public const string ReplaceDescription = """
