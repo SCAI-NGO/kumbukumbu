@@ -23,7 +23,7 @@ namespace Kumbu.Server.Api;
 /// owner chose, or the server's default (<c>internal</c>, the model on this server, unless the admin set another). <c>pending</c>: the vault is being
 /// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>level</c>: what
 /// the caller may do in it, <c>read</c>, <c>write</c>, <c>maintain</c> (also its structure: the board's columns,
-/// checkpoints) or <c>owner</c>; for a member, at most her role. <c>canWrite</c>: <c>level</c> is <c>write</c> or above
+/// checkpoints) or <c>owner</c>; for a member, at most her role. <c>id</c>: the vault's own id, the same for its owner and every member whatever each calls it (the web app's note links name it). <c>canWrite</c>: <c>level</c> is <c>write</c> or above
 /// (kept for older clients). <c>owner</c>: for a vault shared with the caller, its owner's display name, sanitised and
 /// quoted, or <c>the owner</c> once her account is gone; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).
 /// <c>members</c>: on the owner's own vault, how many people it is shared with now (what her embedding dialog states);
@@ -39,7 +39,7 @@ namespace Kumbu.Server.Api;
 /// own vault, what it is marked as (<c>skills</c>); absent for an ordinary vault and for one shared with her.
 /// <c>discreet</c>: the vault is one of her discreet vaults, so only ever true while her session shows them.</summary>
 public sealed record VaultView(
-    string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
+    string Id, string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
     int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false, DateTime? ClosingAt = null,
     string? OwnerUsername = null, string? Kind = null, bool Discreet = false);
 
@@ -383,7 +383,7 @@ public static class NoteApi
         var level = info?.Level ?? caller.Level(name) ?? AccessLevel.Read;
         var members = access.Membership is null && access.IsOwner && info?.Shared == true ? await catalog.ActiveMemberCountAsync(access.Id, ct) : access.Membership is null ? 0 : (int?)null;
         return new VaultView(
-            name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
+            access.Id, name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
             members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access), access.ReadOnlyCode == Refusals.OwnerInactive,
             access.ReadOnlyCode == Refusals.Closing ? access.Membership?.ClosingAt : null,
             access.Membership is { } membership ? await catalog.UsernameAsync(membership.Owner, ct) : null,
@@ -394,10 +394,11 @@ public static class NoteApi
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
     {
         var name = VaultNames.Check(body.Name);
+        UnlockedVault created;
 
         try
         {
-            await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
+            created = await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
         }
         catch (VaultNameTakenException)
         {
@@ -405,7 +406,7 @@ public static class NoteApi
             throw;
         }
 
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(created.Id, name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
