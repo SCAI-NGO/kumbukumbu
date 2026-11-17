@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { createContext, createElement, useCallback, useContext, useLayoutEffect } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect } from "react";
 import { Navigate, useMatches, useNavigate } from "react-router-dom";
 import { ROOT, useWindows } from "./store";
 
@@ -37,4 +37,14 @@ export function ShellRedirect({ to }: { to: string }) {
     if (open) useWindows.setState({ behind: { ...ROOT, pathname: to } });
   }, [open, to]);
   return open ? null : createElement(Navigate, { to, replace: true });
+}
+
+/** While `text` is set, the window's navigation is locked and shows it; the lock ends when the caller unmounts. Outside a window it does nothing. */
+export function useWindowLock(text: string | null): void {
+  const inWindow = useInWindow();
+  useEffect(() => {
+    if (!inWindow || text === null) return;
+    useWindows.setState({ lock: text });
+    return () => useWindows.setState({ lock: null });
+  }, [inWindow, text]);
 }
