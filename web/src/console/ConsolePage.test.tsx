@@ -521,3 +521,71 @@ describe("browser storage", () => {
     expect(JSON.stringify(after)).not.toMatch(/Tomaten|Gartenarbeit|plan\.md/);
   });
 });
+
+describe("the console scheme", () => {
+  const desktop = () => vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+  const stored = () => localStorage.getItem("kumbu.consoleScheme");
+  afterEach(() => localStorage.clear());
+
+  it("switches on the desktop with a group of three buttons, and keeps the choice", async () => {
+    desktop();
+    consoleApi();
+    await open();
+    const group = screen.getByRole("group", { name: "Console scheme" });
+    expect(within(group).getByRole("button", { name: "Plain" })).toHaveAttribute("aria-pressed", "true");
+    expect(log()).toHaveAttribute("data-scheme", "plain");
+    await userEvent.click(within(group).getByRole("button", { name: "Amber" }));
+    expect(within(group).getByRole("button", { name: "Amber" })).toHaveAttribute("aria-pressed", "true");
+    expect(log()).toHaveAttribute("data-scheme", "amber");
+    expect(stored()).toBe("amber");
+    cleanup();
+    await open();
+    expect(log()).toHaveAttribute("data-scheme", "amber");
+  });
+
+  it("starts in Plain, without a crash, where storage throws", async () => {
+    desktop();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    consoleApi();
+    await open();
+    expect(log()).toHaveAttribute("data-scheme", "plain");
+    await userEvent.click(screen.getByRole("button", { name: "Green" }));
+    expect(log()).toHaveAttribute("data-scheme", "green");
+  });
+
+  it("cycles with one button on the phone", async () => {
+    consoleApi();
+    await open();
+    expect(screen.queryByRole("group", { name: "Console scheme" })).not.toBeInTheDocument();
+    for (const [now, next] of [["Plain", "Green"], ["Green", "Amber"], ["Amber", "Plain"]]) {
+      await userEvent.click(screen.getByRole("button", { name: `Console scheme: ${now}` }));
+      expect(log()).toHaveAttribute("data-scheme", next.toLowerCase());
+    }
+    expect(stored()).toBe("plain");
+  });
+
+  it("shows an error in inverse video with the word, and keeps the output selectable", async () => {
+    localStorage.setItem("kumbu.consoleScheme", "green");
+    consoleApi(() => text("rm: not in this console, which only reads", true));
+    await open();
+    await run("rm /Work/a.md");
+    const error = screen.getByText("rm: not in this console, which only reads", { exact: false }).closest("[data-line]")!;
+    expect(error).toHaveAttribute("data-error");
+    expect(error).toHaveTextContent(/error/i);
+    const scanlines = log().parentElement!.querySelector("[data-scanlines]")!;
+    expect(scanlines).toHaveAttribute("aria-hidden", "true");
+    expect(scanlines).toHaveClass("pointer-events-none");
+  });
+
+  it("shows the word error in Plain too", async () => {
+    consoleApi(() => text("rm: nope", true));
+    await open();
+    await run("rm /Work/a.md");
+    expect(screen.getByText("Error:")).toBeVisible();
+  });
+});
