@@ -5,8 +5,8 @@ import { errorText } from "../api/error-text";
 import { updateSharedSkill, useSharedSkills, withdrawSharedSkill, type SharedSkillView } from "../api/skills";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
-import { useWindowLock } from "../windows/context";
 import { useDialog } from "../hooks/useDialog";
+import { useWindowLock } from "../windows/context";
 
 const dayAndTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 

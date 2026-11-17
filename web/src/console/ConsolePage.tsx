@@ -87,34 +87,34 @@ export default function ConsolePage() {
         className="relative flex h-full flex-col gap-4 px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))]"
       >
         <div className="relative min-h-0 flex-1">
-        <div
-          ref={log}
-          role="log"
-          data-scheme={scheme}
-          aria-label="Console output"
-          aria-busy={running !== null}
-          onScroll={(event) => {
-            const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
-            following.current = scrollHeight - scrollTop - clientHeight < 8;
-          }}
-          // A click in the output goes on typing, unless it selected something to copy.
-          onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-          className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
-        >
-          <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
-          {entries.map((entry, i) => (
-            <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} crt={crt} onImage={follow} />
-          ))}
-          {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} crt={crt} onImage={follow} />}
-        </div>
-          {crt && (
           <div
-            data-scanlines
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-10 opacity-[0.06]"
-            style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
-          />
-        )}
+            ref={log}
+            role="log"
+            data-scheme={scheme}
+            aria-label="Console output"
+            aria-busy={running !== null}
+            onScroll={(event) => {
+              const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+              following.current = scrollHeight - scrollTop - clientHeight < 8;
+            }}
+            // A click in the output goes on typing, unless it selected something to copy.
+            onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
+            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
+          >
+            <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
+            {entries.map((entry, i) => (
+              <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} crt={crt} onImage={follow} />
+            ))}
+            {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} crt={crt} onImage={follow} />}
+          </div>
+          {crt && (
+            <div
+              data-scanlines
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-10 opacity-[0.06]"
+              style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
+            />
+          )}
         </div>
         <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
           <PathLine cwd={cwd} crt={crt} />
@@ -122,37 +122,37 @@ export default function ConsolePage() {
             <span aria-hidden className={crt ? "text-(--crt-dim)" : "text-muted"}>
               &gt;
             </span>
-            <div className="relative min-w-0 flex-1">
-            <input
-              ref={input}
-              aria-label="Command"
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-              onKeyDown={onKeyDown}
-              onKeyUp={markCaret}
-              onSelect={markCaret}
-              onClick={markCaret}
-              onFocus={() => setFocused(true)}
-              onBlur={() => setFocused(false)}
-              disabled={running !== null}
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              enterKeyHint="go"
-              // 16 px so iOS doesn't zoom in. In the phosphor schemes the real caret is hidden behind a drawn block.
-              style={crt ? { caretColor: "transparent" } : undefined}
-              className={`min-h-11 w-full bg-transparent font-mono text-base focus:outline-none disabled:opacity-60 ${crt ? "" : "text-text"}`}
-            />
-            {crt && focused && running === null && (
-              // Monospace, so the caret's column is its width in characters. Steady under reduced motion, blinking otherwise.
-              <span
-                data-cursor
-                aria-hidden="true"
-                style={{ left: `${caret}ch`, backgroundColor: "var(--crt-fg)" }}
-                className="pointer-events-none absolute top-1/2 h-[1.2em] w-[1ch] -translate-y-1/2 font-mono text-base motion-safe:animate-[k-blink_1s_steps(1)_infinite]"
+            <div className="relative min-w-0 flex-1 overflow-hidden">
+              <input
+                ref={input}
+                aria-label="Command"
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                onKeyDown={onKeyDown}
+                onKeyUp={markCaret}
+                onSelect={markCaret}
+                onClick={markCaret}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                disabled={running !== null}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                // 16 px so iOS doesn't zoom in. In the phosphor schemes the real caret is hidden behind a drawn block.
+                style={crt ? { caretColor: "transparent" } : undefined}
+                className={`min-h-11 w-full bg-transparent font-mono text-base focus:outline-none disabled:opacity-60 ${crt ? "" : "text-text"}`}
               />
-            )}
+              {crt && focused && running === null && (
+                // Monospace, so the caret's column is its width in characters. Steady under reduced motion, blinking otherwise.
+                <span
+                  data-cursor
+                  aria-hidden="true"
+                  style={{ left: `${caret}ch`, backgroundColor: "var(--crt-fg)" }}
+                  className="pointer-events-none absolute top-1/2 h-[1.2em] w-[1ch] -translate-y-1/2 font-mono text-base motion-safe:animate-[k-blink_1s_steps(1)_infinite]"
+                />
+              )}
             </div>
           </div>
         </form>

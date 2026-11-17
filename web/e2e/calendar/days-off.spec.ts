@@ -63,7 +63,7 @@ test.describe("he-IL", () => {
 
   test("fixes §2.4 #2: in he-IL, Settings shows Friday and Saturday as Day off @calendar", async ({ page, aliceApi }) => {
     expect(await storedDays(aliceApi), "Alice hasn't chosen her week").toBeNull();
-    await page.goto("/settings");
+    await page.goto("/settings/calendar");
     const section = page.getByRole("region", { name: "Calendar" });
     for (const name of WEEKDAYS) {
       const level = name === "Friday" || name === "Saturday" ? "Day off" : "Workday";
@@ -89,7 +89,7 @@ test.describe("en-GB, chosen", () => {
       await aliceApi.putNote(`/Work/${folder}/${title}.md`, note({ when: day, tags: `[${tag}]` }, `# ${title}\n`));
     }
     try {
-      await page.goto("/settings");
+      await page.goto("/settings/calendar");
       const section = page.getByRole("region", { name: "Calendar" });
       const row = (name: string) => section.getByRole("group", { name, exact: true });
       await row("Monday").getByRole("button", { name: "Day off" }).click();
@@ -146,7 +146,7 @@ test.describe("en-GB, chosen", () => {
         await threeShades(`${scheme} month grid`, gridWeek().nth(0), gridWeek().nth(1), gridWeek().nth(4));
       }
 
-      await page.goto("/settings");
+      await page.goto("/settings/calendar");
       await section.getByRole("button", { name: "Use my browser's weekend" }).click();
       await expect.poll(() => storedDays(aliceApi)).toBeNull();
       await expect(section.getByRole("button", { name: "Use my browser's weekend" })).toHaveCount(0);

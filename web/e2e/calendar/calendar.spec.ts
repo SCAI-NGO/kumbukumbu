@@ -45,7 +45,7 @@ test.afterEach(async ({ aliceApi, folder }) => {
 test("calendar #1: Settings → Calendar says the times are in Europe/Vienna, preset without asking @calendar", async ({ page, aliceApi }) => {
   // Preset by the app on the setup's first visit, from the browser's zone: nobody chose it.
   expect((await aliceApi.json<{ zone: string | null }>("GET", "/api/account/calendar")).zone).toBe("Europe/Vienna");
-  await page.goto("/settings");
+  await page.goto("/settings/calendar");
   const section = page.getByRole("region", { name: "Calendar" });
   await expect(section.getByText("Your calendar shows times in Europe/Vienna.", { exact: true })).toBeVisible();
   await expect(section.getByLabel("Your time zone")).toHaveValue("Europe/Vienna");

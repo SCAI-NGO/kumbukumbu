@@ -137,9 +137,9 @@ async function onThePhone(page: Page, api: Api, folder: string) {
     await atLeast48(calendar);
     await calendar.click();
     await expect(page).toHaveURL(/\/whats-on$/);
-    await expect(page.getByRole("heading", { level: 1, name: "What's on" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "What's on" })).toBeVisible();
 
-    await page.getByRole("main").getByRole("link", { name: "Dentist", exact: true }).click();
+    await page.getByRole("dialog", { name: "What's on" }).getByRole("link", { name: "Dentist", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Dentist\\.md$`));
     const back = page.getByRole("navigation", { name: "Back" }).getByRole("link", { name: "Back to What's on" });
     await expect(back).toHaveText("What's on");
@@ -153,7 +153,7 @@ async function onThePhone(page: Page, api: Api, folder: string) {
 
     await back.click();
     await expect(page).toHaveURL(/\/whats-on$/);
-    await expect(page.getByRole("heading", { level: 1, name: "What's on" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "What's on" })).toBeVisible();
   } finally {
     if (standup) await api.deleteNote(standup).catch(() => {});
     if (boardMade) await api.deleteNote("/Work/Board/Board.md").catch(() => {});

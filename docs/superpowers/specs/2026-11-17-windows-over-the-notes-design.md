@@ -116,7 +116,7 @@ In Green and Amber:
 - **Glow:** a light `text-shadow` in the phosphor colour; the text stays sharp.
 - **Scanlines:** a line pattern at about 6 % opacity over the output, `pointer-events: none`, so selecting and copying work as before.
 - **Cursor:** a block cursor, blinking only without `prefers-reduced-motion`.
-- **Errors:** a phosphor screen has one colour, so errors show in inverse video (light bar, dark text) with the word "error". Status never by colour alone.
+- **Errors:** a phosphor screen has one colour, so errors show in inverse video (light bar, dark text) with the word "error". Status never by colour alone: the word "Error:" is visible in every scheme, Plain included, so an error never rests on its colour.
 - **Frame:** the title bar and border keep the app's look; only the inside glows, a screen in a case.
 - Left out on purpose: flicker, curvature, colour fringes. Enough feeling; more would break usability.
 
@@ -151,7 +151,7 @@ Three ways were considered:
 
 This part is the risky one and is built test-first.
 
-The update bar: `Root` shows it above every page outside the shell (`router.tsx:43`); window routes are inside the shell now and use the shell's bar.
+The update bar: `Root` shows it above every page outside the shell (`router.tsx:43`); window routes are inside the shell now and use the shell's bar. While a window is open the bar sits behind it, `inert` with the rest of the shell, and is reachable again once the window closes; the update is not urgent enough to be worth a way through the modal.
 
 The frame: one component for both shapes (`shape: "navigated" | "plain"`, `frame: "robust" | "light"`), `role="dialog"`, `aria-modal`, labelled by its title, using `useDialog` for focus, Tab and Esc, the shell behind it `inert`. `AccountScreen` (`components/form.tsx:20`) goes; its users render into the window.
 

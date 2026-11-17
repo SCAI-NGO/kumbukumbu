@@ -6,12 +6,12 @@ import { useMayChange } from "../api/notes";
 import { calendarUrl } from "../api/paths";
 import { FormError } from "../components/form";
 import { useDiscreet } from "../discreet/state";
+import WindowFrame from "../windows/WindowFrame";
 import { useWhatsOn, type EntryView, type WhatsOnView } from "./api";
 import { keptTagOf } from "./backLink";
 import { useClosing } from "./ClosedToast";
 import EntryItem, { type EntryActions } from "./EntryItem";
 import LaterMenu, { useMoved, type Moved } from "./LaterMenu";
-import WindowFrame from "../windows/WindowFrame";
 import TagFilter, { useTagFilter } from "./TagFilter";
 
 /**

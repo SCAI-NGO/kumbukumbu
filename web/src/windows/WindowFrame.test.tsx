@@ -88,6 +88,7 @@ describe("WindowFrame", () => {
   it("on the desktop it is no sheet and the title is only the title", () => {
     const dialog = renderFrame("navigated", "Security");
     expect(dialog).not.toHaveAttribute("data-sheet");
+    expect(dialog.classList).toContain("relative");
     expect(dialog).not.toHaveTextContent("Security");
   });
 });

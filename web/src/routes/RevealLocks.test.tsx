@@ -118,7 +118,7 @@ describe("every reveal locks the window's navigation", () => {
     for (const link of nav.getAllByRole("link")) expect(link).toHaveAttribute("aria-disabled", "true");
 
     await finish();
-    // An unsaved reveal's Done asks first; the copied ones go straight on.
+    // Done ends the reveal: the lock lifts and the links work again.
     expect(screen.getByText("Nothing on show")).toBeInTheDocument();
     expect(nav.queryByText(lock)).not.toBeInTheDocument();
     for (const link of nav.getAllByRole("link")) expect(link).not.toHaveAttribute("aria-disabled");

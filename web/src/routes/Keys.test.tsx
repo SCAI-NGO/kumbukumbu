@@ -586,6 +586,7 @@ describe("Keys in a window", () => {
     await screen.findByText(secret);
     expect(screen.getByText("Save the key first")).toBeInTheDocument();
 
+    // Let the pending effects settle, so the leave guard is in place before going back.
     await act(async () => {});
     await act(() => router.navigate(-1));
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved your API key");

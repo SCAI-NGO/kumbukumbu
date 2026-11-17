@@ -40,7 +40,7 @@ type WhatsOn = { items: Item[]; count: number; overdue: boolean; vaults: { vault
 const whatsOn = (api: Api) => api.json<WhatsOn>("GET", "/api/calendar/whats-on");
 
 /** What's on's entries, by their titles. */
-const whatsOnItems = (page: Page) => page.getByRole("main").getByRole("list").first().getByRole("listitem");
+const whatsOnItems = (page: Page) => page.getByRole("dialog", { name: "What's on" }).getByRole("list").first().getByRole("listitem");
 const itemOf = (page: Page, title: string) => whatsOnItems(page).filter({ has: page.getByRole("link", { name: title, exact: true }) });
 
 /** The badge's words on What's on in the navigation: "3 on", "3 on, some overdue", nothing at zero. */
@@ -311,7 +311,7 @@ test("calendar #12: the tag filter kumbu keeps #kumbu and #kumbu/sub in the week
   const t = today();
   await seedAs("tags/calendar/Tags", `/Work/${folder}/Tags`);
   const kept = ["Kumbu", "Kumbu sub"];
-  const titles = (page: Page) => page.getByRole("main").getByRole("listitem").getByRole("link").allTextContents();
+  const titles = (page: Page) => page.getByRole("main").or(page.getByRole("dialog", { name: "What's on" })).getByRole("listitem").getByRole("link").allTextContents();
   const filter = async () => {
     await page.getByRole("search", { name: "Tag filter" }).getByLabel("Tag").fill("kumbu");
     await page.getByRole("search", { name: "Tag filter" }).getByRole("button", { name: "Filter" }).click();
@@ -365,14 +365,14 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     await expect(itemOf(page, "Zahnarzt")).toContainText("Home");
     await expect(itemOf(page, "Zahnarzt")).toContainText("overdue · 1 day");
 
-    await page.getByRole("link", { name: "Back to the notes" }).click();
+    await page.getByRole("dialog", { name: "What's on" }).getByRole("button", { name: "Close" }).click();
     await hideDiscreet(page);
 
     // Hidden: nothing of Home in What's on, the badge's count and colour, or the switcher.
     await page.goto("/whats-on");
-    await expect(page.getByRole("heading", { level: 1, name: "What's on" })).toBeVisible();
-    await expect(page.getByRole("main")).not.toContainText("Zahnarzt");
-    await expect(page.getByRole("main")).not.toContainText("Home");
+    await expect(page.getByRole("dialog", { name: "What's on" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "What's on" })).not.toContainText("Zahnarzt");
+    await expect(page.getByRole("dialog", { name: "What's on" })).not.toContainText("Home");
     const hidden = await whatsOn(await apiOf(context));
     expect([hidden.count, hidden.overdue, hidden.vaults.map((v) => v.vault)]).toEqual([before.count, false, before.vaults.map((v) => v.vault)]);
     const { panel: shell, link } = await whatsOnLink(page, testInfo);
@@ -404,7 +404,7 @@ test("calendar #15: a hidden discreet vault leaves no trace in What's on, the ba
     await expect(itemOf(page, "Zahnarzt")).toContainText("Home");
     const unset = await guarded(() => context.request.post("/api/vaults/Home/calendar/unset", { data: { path: "/Home/Zahnarzt.md" }, headers }), "POST calendar unset");
     expect(unset.status()).toBe(200);
-    await page.getByRole("link", { name: "Back to the notes" }).click();
+    await page.getByRole("dialog", { name: "What's on" }).getByRole("button", { name: "Close" }).click();
     await hideDiscreet(page);
   } finally {
     await endHidden(page, home);
@@ -468,7 +468,7 @@ test("flags #20: Today's day note isn't counted by What's on and the badge until
     await expect(page.getByLabel("Markdown source", { exact: true })).toHaveValue(new RegExp(`^# ${longDay(t)}`));
 
     await page.goto("/whats-on");
-    await expect(page.getByRole("heading", { level: 1, name: "What's on" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "What's on" })).toBeVisible();
     await expect(page.getByRole("link", { name: t, exact: true })).toHaveCount(0);
     expect((await whatsOn(aliceApi)).count).toBe(before.count);
     await expect((await whatsOnLink(page, testInfo)).link).toHaveAccessibleName(named("What's on", before.count, before.overdue));

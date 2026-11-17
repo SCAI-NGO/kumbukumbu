@@ -219,7 +219,7 @@ describe("What's on", () => {
     });
 
     it("ticking Done keeps the window open", async () => {
-      api(whatsOn([certificate]), {
+      const fetch = api(whatsOn([certificate]), {
         "POST /api/vaults/Work/calendar/close": () => json(200, writtenView(certificate.path, { ...certificate, task: "closed", state: "done" })),
       });
       const router = renderApp(["/notes/Work/A.md"]);
@@ -227,6 +227,7 @@ describe("What's on", () => {
       await navigateAway(router, "/whats-on");
       await page();
       await userEvent.click(await screen.findByRole("checkbox", { name: "To do: Certificate" }));
+      await waitFor(async () => expect(await bodiesOf(fetch, "POST", "/api/vaults/Work/calendar/close")).toHaveLength(1));
       expect(await screen.findByRole("dialog", { name: "What's on" })).toBeInTheDocument();
       expect(router.state.location.pathname).toBe("/whats-on");
     });
