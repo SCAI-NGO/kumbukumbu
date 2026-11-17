@@ -30,7 +30,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
 }
 
 async function openNewShare() {
-  renderApp("/access/dav");
+  renderApp("/settings/access/dav");
   await userEvent.click(await screen.findByRole("button", { name: "New share" }));
   return screen.getByRole("dialog", { name: "New WebDAV share" });
 }

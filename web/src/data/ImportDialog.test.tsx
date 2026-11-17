@@ -58,7 +58,7 @@ async function server({ bDiffers = true } = {}) {
 const exported = { "Work/a.md": "A", "Work/b.md": "B", "Work/notes.txt": "txt", "Ideas/c.md": "C", "Ideas/d/e.md": "E" };
 
 async function openAndPick(file: File, queryClient?: QueryClient) {
-  renderApp("/settings", queryClient);
+  renderApp("/settings/data", queryClient);
   const section = await screen.findByRole("region", { name: "Your data" });
   await userEvent.click(within(section).getByRole("button", { name: "Import vaults…" }));
   const dialog = await screen.findByRole("dialog", { name: "Import vaults" });

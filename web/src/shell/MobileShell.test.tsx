@@ -420,16 +420,16 @@ describe("the shell", () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
-    expect(within(account).getByRole("link", { name: "Skills" })).toHaveAttribute("href", "/skills/installed");
-    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/access/keys");
-    expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(within(account).getByRole("link", { name: "Skills" })).toHaveAttribute("href", "/settings/skills/installed");
+    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/settings/access/keys");
+    expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings/appearance");
     expect(within(account).getByRole("link", { name: "Console" })).toHaveAttribute("href", "/console");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
   it.each([
-    ["Access", "Access", "link", "Back to the notes"],
-    ["Settings", "Settings", "link", "Back to the notes"],
+    ["Access", "Settings", "button", "Close"],
+    ["Settings", "Settings", "button", "Close"],
     ["Console", "Console", "button", "Close"],
     ["Admin", "Users", "link", "Back to the notes"],
   ] as const)("closes the drawer when %s is followed, so the way back finds it shut", async (link, title, role, back) => {
@@ -547,9 +547,15 @@ describe("the shell", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A vault named Ideas exists already.");
   });
 
+  it.each(["/settings/access/keys", "/settings/appearance"])("opens the settings window at %s, with the way back to the notes", async (path) => {
+    signedInApi();
+    renderApp(path);
+    const window = await screen.findByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(window).getByRole("button", { name: "Close" }));
+    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+  });
+
   it.each([
-    ["/access/keys", "Access"],
-    ["/settings", "Settings"],
     ["/admin/users", "Users"],
     ["/admin/invitations", "Invitations"],
   ])("has a page at %s, with the way back to the notes", async (path, title) => {
@@ -1143,11 +1149,11 @@ describe("More vaults… on a phone", () => {
     await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "More vaults…" }));
     const pin = await screen.findByRole("dialog", { name: "More vaults" });
     await userEvent.click(within(pin).getByRole("link", { name: "Settings → Discreet vaults" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/security"));
     expect(router.state.location.hash).toBe("#discreet-vaults");
     expect(screen.queryByRole("dialog", { name: "More vaults" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
-    // Settings is outside the shell, which unmounts: the drawer is closed in the store, not only out of sight.
+    // Settings is a window over the shell: the drawer is closed in the store, not only out of sight.
     expect(useEditor.getState().overlay).toBe("none");
   });
 });

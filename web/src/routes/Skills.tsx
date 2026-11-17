@@ -3,7 +3,6 @@ import { Fragment, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
-import { AccountScreen } from "../components/form";
 import Installed from "../skills/Installed";
 import Marketplaces from "../skills/Marketplaces";
 import Shared from "../skills/Shared";
@@ -42,14 +41,10 @@ export default function Skills() {
   const tabs = allTabs.filter((t) => (t.id !== "shared" || publishEnabled === true) && (t.id !== "marketplaces" || marketplacesEnabled === true));
 
   if ((tab === "shared" && publishEnabled === undefined) || (tab === "marketplaces" && marketplaces.isPending)) {
-    return (
-      <AccountScreen title="Skills">
-        <p className="text-text-body">Loading…</p>
-      </AccountScreen>
-    );
+    return <p className="text-text-body">Loading…</p>;
   }
   const index = tabs.findIndex((t) => t.id === tab);
-  if (index < 0) return <Navigate to="/skills/installed" replace />;
+  if (index < 0) return <Navigate to="/settings/skills/installed" replace />;
   const current = tabs[index];
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -57,13 +52,13 @@ export default function Skills() {
     if (to === undefined) return;
     e.preventDefault();
     const next = tabs[(to + tabs.length) % tabs.length];
-    // Moving along the tabs is one step, as for any tablist; Back leaves the page rather than walking the tabs.
-    navigate(`/skills/${next.id}`, { replace: true });
+    // Moving along the tabs is one step, as for any tablist; Back leaves the window rather than walking the tabs.
+    navigate(`/settings/skills/${next.id}`, { replace: true });
     refs.current[next.id]?.focus();
   };
 
   return (
-    <AccountScreen title="Skills">
+    <>
       <div role="tablist" aria-label="Skills" onKeyDown={onKeyDown} className="flex gap-1 rounded-[12px] border border-line p-1">
           {tabs.map((t) => (
             <Link
@@ -71,7 +66,8 @@ export default function Skills() {
               ref={(el) => {
                 refs.current[t.id] = el;
               }}
-              to={`/skills/${t.id}`}
+              to={`/settings/skills/${t.id}`}
+              replace
               role="tab"
               id={`skills-tab-${t.id}`}
               aria-selected={t.id === current.id}
@@ -92,6 +88,6 @@ export default function Skills() {
         {/* Keyed, so a tab's state goes with it. */}
         <Fragment key={current.id}>{panels[current.id]()}</Fragment>
       </div>
-    </AccountScreen>
+    </>
   );
 }

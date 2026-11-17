@@ -11,6 +11,7 @@ import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hi
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
+import { Moved, SettingsMoved } from "./routes/settings/redirects";
 import SignIn from "./routes/SignIn";
 import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
@@ -112,7 +113,7 @@ export const routes: RouteObject[] = [
       { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
       // Signed in or not: without a session it says what to do first, and keeps the link's secret through sign-in.
       { path: "/share", lazy: lazyPage(() => import("./routes/Share")) },
-      // As /share: a shared skill's code waits through sign-in. Before /skills/:tab, which would take "add" for a tab.
+      // As /share: a shared skill's code waits through sign-in. Not a window: it is before the app (and outranks /skills/:tab).
       { path: "/skills/add", lazy: lazyPage(() => import("./skills/AddSkill")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
@@ -131,6 +132,30 @@ export const routes: RouteObject[] = [
               { path: "/", element: null },
               { path: "/notes/:vault/*", element: null },
               { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
+              {
+                lazy: lazyPage(() => import("./routes/settings/SettingsWindow")),
+                handle: { window: true },
+                children: [
+                  { path: "/settings/appearance", lazy: lazyPage(() => import("./routes/settings/Appearance")) },
+                  { path: "/settings/vaults", lazy: lazyPage(() => import("./routes/settings/Vaults")) },
+                  { path: "/settings/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
+                  { path: "/settings/access", element: <Navigate to="/settings/access/keys" replace /> },
+                  { path: "/settings/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
+                  { path: "/settings/skills", element: <Navigate to="/settings/skills/installed" replace /> },
+                  { path: "/settings/calendar", lazy: lazyPage(() => import("./routes/settings/Calendar")) },
+                  { path: "/settings/security", lazy: lazyPage(() => import("./routes/settings/Security")) },
+                  { path: "/settings/data", lazy: lazyPage(() => import("./routes/settings/Data")) },
+                  { path: "/settings/about", lazy: lazyPage(() => import("./routes/settings/About")) },
+                ],
+              },
+              // The addresses before the settings were a window, in bookmarks and older links: windows too, so that
+              // the shell stays behind while they are replaced.
+              { path: "/settings", handle: { window: true }, element: <SettingsMoved /> },
+              { path: "/access/:tab", handle: { window: true }, element: <Moved to="access" /> },
+              { path: "/access", handle: { window: true }, element: <Navigate to="/settings/access/keys" replace /> },
+              { path: "/keys", handle: { window: true }, element: <Navigate to="/settings/access/keys" replace /> },
+              { path: "/skills/:tab", handle: { window: true }, element: <Moved to="skills" /> },
+              { path: "/skills", handle: { window: true }, element: <Navigate to="/settings/skills/installed" replace /> },
             ],
           },
           { path: "/n/:vaultId/*", lazy: lazyPage(() => import("./routes/DeepLink")) },
@@ -142,13 +167,6 @@ export const routes: RouteObject[] = [
           { path: "/recent", lazy: lazyPage(() => import("./recent/RecentPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
-          { path: "/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
-          { path: "/access", element: <Navigate to="/access/keys" replace /> },
-          // The page's address before it had tabs, in bookmarks and older links.
-          { path: "/keys", element: <Navigate to="/access/keys" replace /> },
-          { path: "/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
-          { path: "/skills", element: <Navigate to="/skills/installed" replace /> },
-          { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
           { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],

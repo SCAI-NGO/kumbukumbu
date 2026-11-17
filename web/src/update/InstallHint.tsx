@@ -67,7 +67,7 @@ export default function InstallHint() {
       <BarButton
         onClick={() => {
           close();
-          navigate("/settings#install");
+          navigate("/settings/appearance#install");
         }}
       >
         How

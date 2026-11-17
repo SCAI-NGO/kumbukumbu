@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Fragment, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import { AccountScreen } from "../components/form";
 import Connections from "./Connections";
 import DavShares from "./DavShares";
 import Keys from "./Keys";
@@ -33,7 +32,7 @@ export default function Access() {
   const [revealing, setRevealing] = useState<Tab | null>(null);
 
   const index = tabs.findIndex((t) => t.id === tab);
-  if (index < 0) return <Navigate to="/access/keys" replace />;
+  if (index < 0) return <Navigate to="/settings/access/keys" replace />;
   const current = tabs[index];
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -41,8 +40,8 @@ export default function Access() {
     if (to === undefined) return;
     e.preventDefault();
     const next = tabs[(to + tabs.length) % tabs.length];
-    // Moving along the tabs is one step, as for any tablist; Back leaves the page rather than walking the tabs.
-    navigate(`/access/${next.id}`, { replace: true });
+    // Moving along the tabs is one step, as for any tablist; Back leaves the window rather than walking the tabs.
+    navigate(`/settings/access/${next.id}`, { replace: true });
     refs.current[next.id]?.focus();
   };
 
@@ -50,7 +49,7 @@ export default function Access() {
   const alone = revealing === current.id;
 
   return (
-    <AccountScreen title="Access">
+    <>
       {!alone && (
         <div role="tablist" aria-label="Access" onKeyDown={onKeyDown} className="flex gap-1 rounded-[12px] border border-line p-1">
           {tabs.map((t) => (
@@ -59,7 +58,8 @@ export default function Access() {
               ref={(el) => {
                 refs.current[t.id] = el;
               }}
-              to={`/access/${t.id}`}
+              to={`/settings/access/${t.id}`}
+              replace
               role="tab"
               id={`access-tab-${t.id}`}
               aria-selected={t.id === current.id}
@@ -82,6 +82,6 @@ export default function Access() {
         {/* Keyed, so a tab's state goes with it. */}
         <Fragment key={current.id}>{panels[current.id](onReveal)}</Fragment>
       </div>
-    </AccountScreen>
+    </>
   );
 }

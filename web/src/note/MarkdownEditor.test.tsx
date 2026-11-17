@@ -887,15 +887,16 @@ describe("Named from its heading", () => {
     await screen.findByText("Beet text.");
   });
 
-  it("names it when leaving the notes for Settings", async () => {
+  // Not for a window, such as Settings: the note stays open under it, in Write mode.
+  it("names it when leaving the notes for the board", async () => {
     const { moves } = gardenApi();
     const { u, router } = await writeIn(untitledUrl);
     await u.type(editorBox(), "Einkaufsliste");
     await wait(800);
-    await act(() => router.navigate("/settings"));
+    await act(() => router.navigate("/board/Home"));
     await waitFor(() => expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md")]));
     await wait(50);
-    expect(router.state.location.pathname).toBe("/settings");
+    expect(router.state.location.pathname).toBe("/board/Home");
     expect(useEditor.getState().recentPaths[0]).toBe("/Home/Garden/Einkaufsliste.md");
     expect(useEditor.getState().recentPaths).not.toContain(UNTITLED);
   });

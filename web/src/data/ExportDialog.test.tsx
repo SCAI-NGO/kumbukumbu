@@ -93,7 +93,7 @@ describe("Export as ZIP in the vault menu", () => {
 describe("Export my vaults… in Settings", () => {
   async function openDialog() {
     api();
-    renderApp("/settings");
+    renderApp("/settings/data");
     const section = await screen.findByRole("region", { name: "Your data" });
     expect(section).toHaveTextContent(/a folder for each vault, with its Markdown notes, PDFs and images/);
     await userEvent.click(within(section).getByRole("button", { name: "Export my vaults…" }));

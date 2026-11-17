@@ -28,7 +28,7 @@ describe("Shared vaults", () => {
       { kind: "membership-removed", at: "2026-11-01T11:00:00Z", text: "Alice removed you from a vault shared with you.", role: null, vault: null },
       { kind: "member-export", at: "2026-10-30T08:00:00Z", text: "You exported Work.", role: null, vault: "Work" },
     ]);
-    renderApp("/settings");
+    renderApp("/settings/vaults");
     const section = await screen.findByRole("region", { name: "Shared vaults" });
     const items = await within(section).findAllByRole("listitem");
     // Newest first, whatever order the server gives.
@@ -45,7 +45,7 @@ describe("Shared vaults", () => {
 
   it("shows nothing for someone with no events", async () => {
     api([]);
-    renderApp("/settings");
+    renderApp("/settings/vaults");
     const section = await screen.findByRole("region", { name: "Shared vaults" });
     expect(await within(section).findByText("No sharing events yet.")).toBeInTheDocument();
     expect(within(section).queryByRole("listitem")).toBeNull();

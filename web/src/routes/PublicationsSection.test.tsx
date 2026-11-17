@@ -32,7 +32,7 @@ describe("Published notes", () => {
       { path: "/Work/Routing/Questions.md", snapshotAt: at("2026-11-05T14:32:00"), older: false, changedAt: null, publishedBy: user.username },
       { path: "/Work/plan.md", snapshotAt: at("2026-11-04T09:05:00"), older: true, changedAt: at("2026-11-05T10:00:00"), publishedBy: "Claude" },
     ]);
-    renderApp("/settings");
+    renderApp("/settings/vaults");
     const section = await screen.findByRole("region", { name: "Published notes" });
     const items = await within(section).findAllByRole("listitem");
     expect(items).toHaveLength(2);
@@ -52,7 +52,7 @@ describe("Published notes", () => {
 
   it("says when there are none", async () => {
     api([]);
-    renderApp("/settings");
+    renderApp("/settings/vaults");
     const section = await screen.findByRole("region", { name: "Published notes" });
     expect(await within(section).findByText("No published notes.")).toBeInTheDocument();
     expect(within(section).queryByRole("listitem")).toBeNull();

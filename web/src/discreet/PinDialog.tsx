@@ -83,7 +83,7 @@ export default function PinDialog({ onClose, onSettings }: { onClose(): void; on
             {/* For everyone, before and after a wrong PIN: it says nothing about whether one is set. */}
             <p className="text-sm text-muted">
               The PIN is set in{" "}
-              <Link to="/settings#discreet-vaults" onClick={onSettings ?? onClose} className="font-medium text-accent-text underline underline-offset-2">
+              <Link to="/settings/security#discreet-vaults" onClick={onSettings ?? onClose} className="font-medium text-accent-text underline underline-offset-2">
                 Settings → Discreet vaults
               </Link>
               .
