@@ -30,13 +30,15 @@ public sealed class BackgroundMetadata
 /// segments case-insensitively, so <c>/MCP</c> reaches <c>MapMcp("/mcp")</c>), also without an endpoint, unless an
 /// anonymous endpoint is mapped there itself (an anonymous fallback doesn't count).</item>
 /// </list>
-/// Everything else (the web app's static files, later) is anonymous. A connection's URL, <c>/mcp/c/{id}</c>, and
-/// everything under <c>/dav</c> are answered before all that (<see cref="ConnectionUrlAsync"/>, <see cref="DavAsync"/>).
-/// Runs after routing and before the MCP SDK sees the request; never logs a key, a share's password or a cookie.
+/// Everything else (the web app's static files, later) is anonymous. A connection's URL, <c>/mcp/c/{id}</c>, everything
+/// under <c>/dav</c> and an agent's upload, <c>PUT /api/agent-upload/{token}</c>, are answered before all that
+/// (<see cref="ConnectionUrlAsync"/>, <see cref="DavAsync"/>, <see cref="AgentUploadAsync"/>).
+/// Runs after routing and before the MCP SDK sees the request; never logs a key, a share's password, an upload token or a cookie.
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, IHostEnvironment environment, ILogger<CallerMiddleware> log)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, Api.UploadTickets uploads, IHostEnvironment environment,
+    ILogger<CallerMiddleware> log)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -72,6 +74,12 @@ public sealed class CallerMiddleware(
         if (IsUnder(context, "/dav"))
         {
             await DavAsync(context);
+            return;
+        }
+
+        if (HttpMethods.IsPut(context.Request.Method) && context.Request.Path.StartsWithSegments(AgentUploadPrefix, StringComparison.OrdinalIgnoreCase, out var token))
+        {
+            await AgentUploadAsync(context, token.Value is { Length: > 0 } t ? t[1..] : "");
             return;
         }
 
@@ -257,13 +265,11 @@ public sealed class CallerMiddleware(
                 return;
             }
 
-            RequestCaller? caller = null;
-            AccessResolution resolution;
+            RequestCaller? caller;
+            bool known;
             try
             {
-                var origin = OAuthUrls.Origin(context, options.Value.PublicUrl);
-                resolution = await tokens.ResolveAccessAsync(bearer, id, OAuthUrls.Resource(origin, id), context.RequestAborted);
-                if (resolution.Connection is { } connection) caller = await RequestCaller.ForConnectionAsync(connection, bearer, catalog, context.RequestAborted);
+                (caller, known) = await ResolveAccessAsync(context, bearer, id);
             }
             catch (VaultBusyException e)
             {
@@ -278,7 +284,7 @@ public sealed class CallerMiddleware(
                 throw;
             }
 
-            if (resolution.Known) wrongKeys.Release(ip);
+            if (known) wrongKeys.Release(ip);
             else wrongKeys.Failed(ip);
             if (caller is not null)
             {
@@ -292,6 +298,84 @@ public sealed class CallerMiddleware(
         if (bearer is not null) challenge += ", error=\"invalid_token\"";
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         context.Response.Headers.WWWAuthenticate = challenge;
+    }
+
+    /// <summary>A connection's access token on its own URL: the caller, or null, and whether the token was known at all
+    /// (known but no longer valid there, or opening no vault).</summary>
+    private async Task<(RequestCaller? Caller, bool Known)> ResolveAccessAsync(HttpContext context, string bearer, string connectionId)
+    {
+        var origin = OAuthUrls.Origin(context, options.Value.PublicUrl);
+        var resolution = await tokens.ResolveAccessAsync(bearer, connectionId, OAuthUrls.Resource(origin, connectionId), context.RequestAborted);
+        return (resolution.Connection is { } connection ? await RequestCaller.ForConnectionAsync(connection, bearer, catalog, context.RequestAborted) : null, resolution.Known);
+    }
+
+    private const string AgentUploadPrefix = "/api/agent-upload";
+
+    /// <summary>
+    /// <c>PUT /api/agent-upload/{token}</c> (binary upload design): the token alone authorises; no cookie and no
+    /// <c>Authorization</c> header is read. Only over HTTPS outside Development, as for <c>/dav</c>; a token sent in the
+    /// clear is spent all the same, as whoever saw it on the way could use it. The ticket is taken out of the store under
+    /// the wrong-key limit, an unknown, used or expired one counting as a wrong key, and its credential then resolved as
+    /// the same credential in a bearer header (on <c>/mcp</c>) or on its connection's URL is: its slots opened afresh,
+    /// revocation, expiry, user, membership and right all checked by that code. The ticket's copy of the credential is
+    /// zeroed as soon as that is done, whatever its outcome. Every refusal says to ask for a new URL.
+    /// </summary>
+    private async Task AgentUploadAsync(HttpContext context, string token)
+    {
+        if (!context.Request.IsHttps && !environment.IsDevelopment())
+        {
+            if (uploads.Take(token) is { } spent) uploads.Zero(spent);
+            await AskAgainAsync(context, StatusCodes.Status403Forbidden, "Uploads need HTTPS; this URL was sent in the clear and is spent.");
+            return;
+        }
+
+        var ip = WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
+        if (wrongKeys.TryReserve(ip) is { } retryAfter)
+        {
+            await TooManyAsync(context, retryAfter);
+            return;
+        }
+
+        if (uploads.Take(token) is not { } ticket)
+        {
+            wrongKeys.Failed(ip);
+            await AskAgainAsync(context, StatusCodes.Status401Unauthorized, "This upload URL is unknown, used or expired.");
+            return;
+        }
+
+        // A ticket found isn't a guess, whatever its credential resolves to now.
+        wrongKeys.Release(ip);
+        RequestCaller? caller;
+        try
+        {
+            var bearer = Encoding.UTF8.GetString(ticket.Bearer);
+            caller = ticket.ConnectionId is { } id ? (await ResolveAccessAsync(context, bearer, id)).Caller : await ResolveBearerAsync(bearer, context.RequestAborted);
+        }
+        catch (VaultBusyException e)
+        {
+            await BusyAsync(context, e);
+            return;
+        }
+        finally
+        {
+            uploads.Zero(ticket);
+        }
+
+        if (caller is null)
+        {
+            await AskAgainAsync(context, StatusCodes.Status403Forbidden, "The key or connection this upload URL was made for no longer opens anything (revoked, expired or re-encrypted).");
+            return;
+        }
+
+        context.Features.Set(caller);
+        context.Features.Set(ticket);
+        await next(context);
+    }
+
+    private static Task AskAgainAsync(HttpContext context, int status, string sentence)
+    {
+        context.Response.StatusCode = status;
+        return context.Response.WriteAsJsonAsync(new Api.ApiError($"{sentence} {Api.AgentUploadApi.AskAgain}"));
     }
 
     /// <summary>

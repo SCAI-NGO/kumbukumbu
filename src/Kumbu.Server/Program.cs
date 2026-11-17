@@ -331,6 +331,7 @@ app.MapTagApi();
 app.MapConsoleApi();
 app.MapUploadApi();
 app.MapFileApi();
+app.MapAgentUploadApi();
 app.MapSyncApi();
 app.MapPairingApi();
 app.MapExportApi();

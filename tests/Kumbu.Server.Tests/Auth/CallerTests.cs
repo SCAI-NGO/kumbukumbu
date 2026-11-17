@@ -252,6 +252,7 @@ public sealed class CallerTests(KumbuAppFactory app)
         builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.OAuth.OAuthTokens>());
         builder.Services.AddSingleton(app.Services.GetRequiredService<Rekeying>());
         builder.Services.AddSingleton(app.Services.GetRequiredService<DavShares>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.Api.UploadTickets>());
         var minimal = builder.Build();
         minimal.UseRouting();
         minimal.UseMiddleware<CallerMiddleware>();

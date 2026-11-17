@@ -48,10 +48,16 @@ public static class FileApi
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/files/{vault}/{**path}", ReadAsync).ProducesFile().Errors(400, 401, 404, 503);
-        api.MapPut("/files/{vault}/{**path}", WriteAsync)
+        api.MapPut("/files/{vault}/{**path}", WriteAsync).TakesFileBody().Errors(400, 401, 403, 404, 413, 503, 507);
+        api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
+    }
+
+    /// <summary>The body of a route that stores it with <see cref="StoreAsync"/>: the size limit, and the file's bytes in
+    /// the OpenAPI document. Described, not declared with Accepts: routing would then refuse a body whose Content-Type
+    /// isn't listed, and the Content-Type is the client's to get wrong.</summary>
+    internal static RouteHandlerBuilder TakesFileBody(this RouteHandlerBuilder builder) =>
+        builder
             .WithMetadata(new RequestSizeLimitAttribute(MaxBody))
-            // Described, not declared with Accepts: routing would then refuse a body whose Content-Type isn't listed,
-            // and the Content-Type is the client's to get wrong.
             .AddOpenApiOperationTransformer((operation, _, _) =>
             {
                 operation.RequestBody = new OpenApiRequestBody
@@ -64,10 +70,7 @@ public static class FileApi
                     },
                 };
                 return Task.CompletedTask;
-            })
-            .Errors(400, 401, 403, 404, 413, 503, 507);
-        api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
-    }
+            });
 
     /// <summary>Declares a 200 with an attachment's bytes, in any of the formats Kumbu² keeps, and a 500 for bytes that
     /// are gone or don't open (<see cref="ContentMissingException"/>; never a 404, which a client reads as deleted).
@@ -134,11 +137,7 @@ public static class FileApi
         return bytes ?? throw new ContentMissingException($"The content of {path.Value} doesn't open: it was changed or removed outside Kumbu².");
     }
 
-    /// <summary>
-    /// Uploads the body as the file at the path: created without <c>version</c>, overwritten with the version the
-    /// caller last read (409 with the file as it is now otherwise). The body is the file's bytes as they are; its
-    /// <c>Content-Type</c> is ignored. Nothing is stored before the whole body has arrived and passed the checks.
-    /// </summary>
+    /// <summary>Uploads the body as the file at the path (<see cref="StoreAsync"/>), with the version the caller last read to overwrite it.</summary>
     private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> WriteAsync(
         string vault, string? path, string? version, HttpRequest request, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels,
         CancellationToken ct)
@@ -148,8 +147,11 @@ public static class FileApi
     }
 
     /// <summary>
-    /// Stores the request's body as the file at the path, as <see cref="WriteAsync"/> does: the one write path of every
-    /// route that uploads a file, so that all of them check, limit and record it alike.
+    /// Stores the request's body as the file at the path: created without <c>version</c>, overwritten with the version
+    /// the caller last read (409 with the file as it is now otherwise). The body is the file's bytes as they are; its
+    /// <c>Content-Type</c> is ignored. Nothing is stored before the whole body has arrived and passed the checks. The one
+    /// write path of both routes that upload a file, <c>PUT /api/files</c> (<see cref="WriteAsync"/>) and an agent's
+    /// <c>PUT /api/agent-upload</c> (<see cref="AgentUploadApi"/>), so that both check, limit and record it alike.
     /// </summary>
     internal static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> StoreAsync(
         VaultPath filePath, string? version, HttpRequest request, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels,

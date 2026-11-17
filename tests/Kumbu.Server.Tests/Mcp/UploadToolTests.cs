@@ -2,9 +2,12 @@
 using System.Text.RegularExpressions;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Mcp;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -187,6 +190,21 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         var result = await UploadAsync(client, "/NoSuchVault/x.png");
 
         Assert.True(result.IsError);
+        Assert.Equal(before, Tickets);
+    }
+
+    [Fact]
+    public async Task Refuses_a_request_without_a_bearer_credential()
+    {
+        var tickets = app.Services.GetRequiredService<UploadTickets>();
+        var before = Tickets;
+        var http = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+
+        // Before anything else is asked: no caller nor store is needed to refuse it.
+        var result = await UploadTool.Upload(tickets, null!, null!, http, Options.Create(new KumbuOptions()), "/Work/x.png", ct: Ct);
+
+        Assert.True(result.IsError);
+        Assert.Contains("no bearer credential", Text(result), StringComparison.Ordinal);
         Assert.Equal(before, Tickets);
     }
 
