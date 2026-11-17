@@ -15,16 +15,18 @@ public static class WriteTools
     [McpServerTool(Name = "write", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description(Manual.WriteDescription)]
     public static async Task<CallToolResult> Write(
         NoteWriter writer,
+        DeepLinks links,
         [Description("Absolute path of the note, e.g. /Work/projects/plan.md")] string path,
         [Description("The note's full Markdown content")] string content,
         [Description("Version token from cat or the last write/edit; leave out to create a new note")] string? version = null,
         [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct, message));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct, message), links);
 
     [McpServerTool(Name = "edit", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.EditDescription)]
     public static async Task<CallToolResult> Edit(
         NoteWriter writer,
+        DeepLinks links,
         [Description("Absolute path of the note, e.g. /Work/projects/plan.md, or of one section: /Work/projects/plan.md#Goals")] string path,
         [Description("Version token from cat or the last write/edit")] string version,
         [Description("The replacement text, or the text to append")] string? new_text = null,
@@ -34,7 +36,7 @@ public static class WriteTools
         [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         [Description("Several replacements on the same version, applied in order, all or none: a list of {old_text, new_text}; each old_text must occur exactly once (in the section, if the path has one) when its turn comes. Instead of old_text and new_text")] TextEdit[]? edits = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Edit, () => EditAsync(writer, path, version, new_text, old_text, replace_section, replace_all, message, edits, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Edit, () => EditAsync(writer, path, version, new_text, old_text, replace_section, replace_all, message, edits, ct), links);
 
     private static Task<ShellResult> EditAsync(
         NoteWriter writer, string path, string version, string? new_text, string? old_text, bool replace_section, bool replace_all, string? message, TextEdit[]? edits,
@@ -64,6 +66,7 @@ public static class WriteTools
     [McpServerTool(Name = "replace", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description(Manual.ReplaceDescription)]
     public static async Task<CallToolResult> Replace(
         Replacer replacer,
+        DeepLinks links,
         [Description("A vault, folder or note to replace in, e.g. /Work or /Work/projects")] string path,
         [Description("The text to find, literally and case-sensitive")] string old_text,
         [Description("The text to put in its place")] string new_text,
@@ -71,5 +74,5 @@ public static class WriteTools
         [Description("The plan token from the preview; leave out to preview")] string? plan = null,
         [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Replace, () => replacer.RunAsync(path, old_text, new_text, word, plan, ct, message));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Replace, () => replacer.RunAsync(path, old_text, new_text, word, plan, ct, message), links);
 }

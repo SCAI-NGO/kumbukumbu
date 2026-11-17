@@ -16,7 +16,8 @@ public static class ShTool
     [McpServerTool(Name = "sh", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.ToolDescription)]
     public static async Task<CallToolResult> Sh(
         Shell shell,
+        DeepLinks links,
         [Description("A command line, e.g. ls /  or  rg -i kumbu | head -5  or  cat \"/Work/Meeting Notes.md\"")] string command,
         CancellationToken ct) =>
-        await ToolResult.RunAsync(KumbuMetrics.Tool.Sh, () => shell.RunAsync(command, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Sh, () => shell.RunAsync(command, ct), links);
 }

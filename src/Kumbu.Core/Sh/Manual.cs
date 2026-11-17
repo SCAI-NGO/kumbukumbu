@@ -8,7 +8,7 @@ public static class Manual
 
         Commands:
           ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
-          cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block
+          cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block, followed by its link into the web app (show it to the user)
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
@@ -79,6 +79,7 @@ public static class Manual
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
         message: optionally one line on why you wrote, kept with the version and shown by history. A write that
         changes nothing makes no version and so keeps no message.
+        The answer carries the note's link into the web app (it opens after sign-in): show it to the user.
         """;
 
     public const string EditDescription = """
@@ -102,6 +103,7 @@ public static class Manual
         recoverable (sh: history, restore).
         message: optionally one line on why you changed it, kept with the version and shown by history. An edit
         that changes nothing makes no version and so keeps no message.
+        The answer carries the note's link into the web app (it opens after sign-in): show it to the user.
         """;
 
     public const string BoardDescription = """
@@ -141,6 +143,7 @@ public static class Manual
         would lead nowhere afterwards. To rename a note, mv it first (that rewrites its links), then replace.
         message: optionally one line on why, kept with each changed version and shown by history (given on the
         apply step). A note that does not change gets no version and so no message.
+        The answer carries the note's link into the web app (it opens after sign-in): show it to the user.
         """;
 }
 

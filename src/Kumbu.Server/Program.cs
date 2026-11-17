@@ -189,6 +189,7 @@ builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<TreeWriter>();
 builder.Services.AddScoped<Replacer>();
+builder.Services.AddScoped<DeepLinks>();
 builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),

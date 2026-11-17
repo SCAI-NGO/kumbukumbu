@@ -240,7 +240,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
         var summary = $"replaced {Count(total, "occurrence")} in {Count(batch.Replaces.Count, "note")}";
         plans.Applied(token, summary, now);
-        return ShellResult.Ok(summary);
+        return ShellResult.Ok(summary) with { Versions = [.. batch.Replaces.Select(r => new NoteVersion(r.Next.Path.Value, r.Next.Version))] };
     }
 
     /// <summary>Start indexes of the non-overlapping occurrences; with <paramref name="word"/>, only where

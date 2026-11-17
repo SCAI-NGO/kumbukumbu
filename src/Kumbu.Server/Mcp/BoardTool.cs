@@ -18,6 +18,7 @@ public static class BoardTool
     [McpServerTool(Name = "board", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.BoardDescription)]
     public static async Task<CallToolResult> Board(
         BoardService board,
+        DeepLinks links,
         [Description("The vault with the board, e.g. Work")] string vault,
         [Description("add, move, update, create (the board's Board.md) or rename_column")] string action,
         [Description("add: the new card's title, which becomes the note's name")] string? title = null,
@@ -55,7 +56,7 @@ public static class BoardTool
                 default:
                     return ShellResult.Error($"board: unknown action '{action}'; use {Actions}");
             }
-        });
+        }, links);
 
     private static async Task<ShellResult> UpdateAsync(
         BoardService board, string vault, string card, string? due, string[]? tags, bool clearDue, bool clearTags, CancellationToken ct)
