@@ -8,7 +8,9 @@ import { useDiscreet } from "../discreet/state";
 import { startOver } from "../shell/lastNote";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
+import { FakeSocket } from "../test/socket";
 
 beforeEach(() => {
   window.innerWidth = 390;
@@ -26,6 +28,7 @@ afterEach(async () => {
   useDiscreet.getState().reset();
   useDiscreet.setState({ gone: new Set() });
   useConsole.getState().reset();
+  useSyncStatus.setState({ connected: false, editors: {} });
 });
 
 const note = (path: string) => ({ name: path.split("/").at(-1)!, path, size: 10 });
@@ -216,5 +219,75 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(screen.getByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
+  });
+
+  describe("as the sync socket moves the note behind it", () => {
+    beforeEach(() => {
+      FakeSocket.all = [];
+      vi.stubGlobal("WebSocket", FakeSocket);
+    });
+
+    /** Work and Garten, while `at.names` lists them; the socket gets a ticket. */
+    function socketApi(at: { names: string[] }) {
+      return signedInApi(undefined, {
+        "GET /api/vaults": () => json(200, at.names.map((n) => vault(n))),
+        "GET /api/vaults/Garten/tree": () => tree("Garten", ["inbox.md"]),
+        "POST /api/ws-ticket": () => json(200, { ticket: "t1", expiresAt: "2026-11-17T10:00:30Z" }),
+      });
+    }
+
+    /** The console open over /notes/Work/inbox.md, reached in-app, "pw" typed into it, the socket open. */
+    async function consoleOverInbox(at: { names: string[] }) {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const router = renderApp(["/notes/Work/readme.md", "/notes/Work/inbox.md"], queryClient);
+      await screen.findByText("Text of /Work/inbox.md.");
+      await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+      FakeSocket.all.at(-1)!.open();
+      await waitFor(() => expect(queryClient.getQueryData<{ name: string }[]>(["vaults"])?.map((v) => v.name)).toEqual(at.names));
+      await navigateAway(router, "/console");
+      await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+      await userEvent.type(screen.getByRole("textbox", { name: "Command" }), "pw");
+      return { router, queryClient };
+    }
+
+    it("stays open as the vault behind it is taken away, and then closes to the vault list", async () => {
+      const at = { names: ["Work", "Garten"] };
+      socketApi(at);
+      const { router, queryClient } = await consoleOverInbox(at);
+
+      // Marked discreet in another session: the socket is closed for it, opens again and the list no longer has Work.
+      at.names = ["Garten"];
+      FakeSocket.all.at(-1)!.drop(4412);
+      await waitFor(() => expect(FakeSocket.all).toHaveLength(2));
+      FakeSocket.all.at(-1)!.open();
+      await waitFor(() => expect(queryClient.getQueryData<{ name: string }[]>(["vaults"])?.map((v) => v.name)).toEqual(["Garten"]));
+
+      await screen.findByRole("heading", { name: "Your vaults" });
+      expect(router.state.location.pathname).toBe("/console");
+      expect(screen.getByRole("dialog", { name: "Console" })).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Command" })).toHaveValue("pw");
+
+      await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.getByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    });
+
+    it("stays open as the vault behind it is renamed in another tab, and then closes to the renamed note", async () => {
+      const at = { names: ["Work", "Garten"] };
+      socketApi(at);
+      const { router } = await consoleOverInbox(at);
+
+      FakeSocket.all.at(-1)!.frame({ type: "renamed", vault: "Garten", from: "Work" });
+
+      expect(await screen.findByText("Text of /Garten/inbox.md.")).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe("/console");
+      expect(screen.getByRole("textbox", { name: "Command" })).toHaveValue("pw");
+
+      await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/inbox.md"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.getByText("Text of /Garten/inbox.md.")).toBeInTheDocument();
+    });
   });
 });

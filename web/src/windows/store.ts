@@ -19,6 +19,8 @@ export const ROOT: Behind = { pathname: "/", search: "", hash: "", state: null, 
  * a reload, a vault hidden meanwhile).
  */
 interface WindowsState {
+  /** A window is open: the router's location is a window's. */
+  open: boolean;
   behind: Behind | null;
   inApp: boolean;
   /** Why the window mustn't be left unasked (a secret on show), or null. */
@@ -27,7 +29,7 @@ interface WindowsState {
   navOpen: boolean;
 }
 
-export const useWindows = create<WindowsState>()(() => ({ behind: null, inApp: false, lock: null, navOpen: false }));
+export const useWindows = create<WindowsState>()(() => ({ open: false, behind: null, inApp: false, lock: null, navOpen: false }));
 
 /** The app's routes, set by the router: whether a location is a window's, for code the router itself imports. */
 let routes: RouteObject[] = [];

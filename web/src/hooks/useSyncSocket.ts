@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate, type NavigateFunction } from "react-router-dom";
+import { useLocation, type NavigateFunction } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
 import { leaveVaults } from "../discreet/leftElsewhere";
 import { presenceKey, useSyncStatus } from "../state/sync";
+import { useShellNavigate } from "../windows/context";
 
 /** The server closed the socket for a newer one of this session (more than four tabs): reconnecting would replace that one. */
 const REPLACED = 4409;
@@ -91,8 +92,8 @@ const down = { connected: false, editors: {}, send: () => false };
  */
 export function useSyncSocket() {
   const queryClient = useQueryClient();
-  // Not a dependency of the socket: a new navigate mustn't open it again.
-  const navigateNow = useNavigate();
+  // Not a dependency of the socket: a new navigate mustn't open it again. Behind a window it moves what the shell shows.
+  const navigateNow = useShellNavigate();
   const navigate = useRef(navigateNow);
   navigate.current = navigateNow;
   const { pathname } = useLocation();

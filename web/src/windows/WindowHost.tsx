@@ -20,11 +20,12 @@ export default function WindowHost() {
   // Before the paint, so that the window opening finds the location it came from: a deep link or a reload has none,
   // and shows the window over `/`, the kept note or the vault list.
   useLayoutEffect(() => {
-    if (!open) useWindows.setState({ behind: { pathname: location.pathname, search: location.search, hash: location.hash, state: location.state, key: location.key }, inApp: true });
-    else if (!useWindows.getState().behind) useWindows.setState({ behind: ROOT, inApp: false });
+    if (!open) useWindows.setState({ open, behind: { pathname: location.pathname, search: location.search, hash: location.hash, state: location.state, key: location.key }, inApp: true });
+    else if (!useWindows.getState().behind) useWindows.setState({ open, behind: ROOT, inApp: false });
+    else useWindows.setState({ open });
   }, [open, location]);
   // Another page (the board, sign-in) leaves the shell: a window opened after it has nothing behind it in the shell.
-  useEffect(() => () => useWindows.setState({ behind: null, inApp: false }), []);
+  useEffect(() => () => useWindows.setState({ open: false, behind: null, inApp: false }), []);
 
   // A discreet vault hidden again under a window: the window's address names no vault, so hiding doesn't navigate.
   // The note behind gives way to the vault list, and the window stays, with what was typed into it.

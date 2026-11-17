@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect } from "react";
-import { Navigate, useMatches, useNavigate } from "react-router-dom";
+import { createPath, Navigate, parsePath, useMatches, useNavigate, type NavigateFunction } from "react-router-dom";
 import { ROOT, useWindows } from "./store";
 
 /** Set by the window host around a window's content. */
@@ -17,14 +17,32 @@ export function useWindowOpen(): boolean {
 /**
  * Closes the window. Reached in-app, it is the history entry after the location behind, and Back to that is the
  * way out; reached otherwise (a deep link, a reload), there is nothing behind it in this app's history, and the window's
- * entry becomes the vault list (or what that opens on).
+ * entry becomes the location behind: the vault list (or what that opens on), or where the shell was moved meanwhile.
  */
 export function useCloseWindow(): () => void {
   const navigate = useNavigate();
   return useCallback(() => {
-    if (useWindows.getState().inApp) void navigate(-1);
-    else void navigate("/", { replace: true });
+    const { inApp, behind } = useWindows.getState();
+    if (inApp) void navigate(-1);
+    else void navigate(behind ? createPath(behind) : "/", { replace: true, state: behind?.state });
   }, [navigate]);
+}
+
+/**
+ * The shell's navigations that no click asked for (the sync socket following a vault renamed or taken away): behind
+ * a window they move the location behind, and the window stays with what was typed into it. That location is no
+ * longer the history entry before the window's, so closing replaces the window's entry with it.
+ */
+export function useShellNavigate(): NavigateFunction {
+  const navigate = useNavigate();
+  return useCallback(
+    ((to, options) => {
+      if (typeof to === "number" || !useWindows.getState().open) return navigate(to as never, options);
+      const path = typeof to === "string" ? parsePath(to) : to;
+      useWindows.setState({ behind: { ...ROOT, pathname: path.pathname ?? "/", search: path.search ?? "", hash: path.hash ?? "", state: options?.state ?? null }, inApp: false });
+    }) as NavigateFunction,
+    [navigate],
+  );
 }
 
 /**
