@@ -34,6 +34,8 @@ Origin: `KUMBU_PUBLIC_URL`, else the request's origin, as OAuth does (`OAuth/OAu
 
 **One rule: wherever a version block is printed, the link is printed with it.** That covers `write`, `edit`, `replace` (one per changed note), `cat` of a note or a section (the link leads to the note), and the upload's answer (`docs/superpowers/specs/2026-11-17-binary-upload-for-agents-design.md`). Not in search results (`rg`, `semsearch`): many hits, many tokens, little use; the agent `cat`s the note it wants to show.
 
+**At most ten links per answer. Decided by Chris.** `Mcp/ToolResult.cs` prints the link block after the first ten version blocks that get a link and then one line, `…and N more links: cat a note for its link`; the version blocks stay complete. Reason: versions are for the agent, and every one is needed for a follow-up edit; links are for the person to tap, and past a handful they only cost context (a `replace` of 400 notes would add about 44 KB of links). One limit in one place covers `replace`, `cat` pipelines and `mv` of a folder alike, so the one rule holds, with a measure.
+
 It is its own text block after the version block, on its own line, e.g. `link to /Work/plan.md: https://…/n/…/plan.md`, so it never mixes with the note's text or the version token (`Mcp/ToolResult.cs:16`). The server maps the path's vault name to the vault's id through the caller's opened access; Core stays unaware of hosts and ids.
 
 The tool descriptions (`Sh/Manual.cs`) say once that the link opens the note in the web app after sign-in, and that it is the thing to show the user.

@@ -75,4 +75,44 @@ public class ImageContentTests
 
         Assert.Equal(2, ToolResult.From(result).Content.Count);
     }
+
+    private static ShellResult Versions(int count) =>
+        ShellResult.Ok("x") with { Versions = [.. Enumerable.Range(1, count).Select(n => new NoteVersion($"/V/n{n}.md", $"t{n}"))] };
+
+    private static string[] Texts(CallToolResult call) => [.. call.Content.OfType<TextContentBlock>().Select(b => b.Text)];
+
+    [Fact]
+    public void Links_stop_at_ten_and_the_rest_are_counted()
+    {
+        var call = ToolResult.From(Versions(12), path => $"https://x/{path}");
+
+        var texts = Texts(call);
+        Assert.Equal(12, texts.Count(t => t.StartsWith("\nversion of ", StringComparison.Ordinal)));
+        Assert.Equal(10, texts.Count(t => t.StartsWith("\nlink to ", StringComparison.Ordinal)));
+        Assert.Equal("\n…and 2 more links: cat a note for its link", texts[^1]);
+    }
+
+    [Fact]
+    public void Exactly_ten_links_need_no_note_about_more()
+    {
+        var texts = Texts(ToolResult.From(Versions(10), path => $"https://x/{path}"));
+
+        Assert.Equal(10, texts.Count(t => t.StartsWith("\nlink to ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(texts, t => t.Contains("more links", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_version_without_a_link_does_not_count_towards_the_ten()
+    {
+        // Ten linkless versions first, then eleven with a link: one link is left out.
+        var result = ShellResult.Ok("x") with
+        {
+            Versions = [.. Enumerable.Range(1, 21).Select(n => new NoteVersion($"/V/n{n}.md", $"t{n}"))],
+        };
+
+        var texts = Texts(ToolResult.From(result, path => int.Parse(path[(path.LastIndexOf('n') + 1)..^3]) <= 10 ? null : $"https://x/{path}"));
+
+        Assert.Equal(10, texts.Count(t => t.StartsWith("\nlink to ", StringComparison.Ordinal)));
+        Assert.Equal("\n…and 1 more links: cat a note for its link", texts[^1]);
+    }
 }

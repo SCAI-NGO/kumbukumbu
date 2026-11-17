@@ -9,6 +9,8 @@ namespace Kumbu.Server.Mcp;
 
 internal static class ToolResult
 {
+    private const int MaxLinks = 10;
+
     /// <summary>
     /// Errors are tool results (isError: true), not JSON-RPC errors: a wrong path is a normal answer.
     /// A version token travels as its own content block, so it never mixes with the note's text; the note's link into the web app, when there is one, follows it.
@@ -19,11 +21,25 @@ internal static class ToolResult
             ? [.. parts.Select(Block)]
             : [new TextContentBlock { Text = result.Output }];
         // Each starts on its own line: some clients join the blocks without a separator.
+        // Every version is kept (the agent needs each for a follow-up edit); links are for the person to tap, so past MaxLinks they only cost context.
+        var linked = 0;
+        var left = 0;
         foreach (var version in result.Versions ?? (result.Version is { } one ? [one] : []))
         {
             content.Add(new TextContentBlock { Text = $"\nversion of {version.Path}: {version.Token}" });
-            if (linkOf?.Invoke(version.Path) is { } link) content.Add(new TextContentBlock { Text = $"\nlink to {version.Path}: {link}" });
+            if (linkOf?.Invoke(version.Path) is not { } link) continue;
+            if (linked < MaxLinks)
+            {
+                linked++;
+                content.Add(new TextContentBlock { Text = $"\nlink to {version.Path}: {link}" });
+            }
+            else
+            {
+                left++;
+            }
         }
+
+        if (left > 0) content.Add(new TextContentBlock { Text = $"\n…and {left} more links: cat a note for its link" });
 
         return new CallToolResult { IsError = result.IsError, Content = content };
     }
