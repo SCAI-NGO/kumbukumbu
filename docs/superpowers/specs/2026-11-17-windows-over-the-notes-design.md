@@ -134,6 +134,8 @@ Which reveals lock (my call): every secret shown once inside a window, the same 
 
 A window can be open over a note of a discreet vault when the vault hides again (the clock, ✕ on the reveal, another device). `hideAgain` and `leftElsewhere` navigate only when the address names the vault or shows the neutral address, and a window's address does neither. So the shell's memory of the location behind follows `useDiscreet` itself (my call): when the vault of the note behind is gone, the location behind becomes `/` (the vault list), the window stays open, and nothing typed in it is lost. Why not close the window: the anti-goal of losing input; and the window's own content already follows the discreet state as the pages do today. The discreet code itself stays untouched.
 
+The same holds when the note behind a window moves or goes because another session renames or hides its vault: the window stays open and ✕ shows the new place (the renamed note, or the vault list), and the old address stays in the history before it, as it does without a window. Why: the sync socket's moves are not the person's, so they mustn't cost what she typed.
+
 ## The how (approach A, chosen)
 
 Three ways were considered:
