@@ -29,10 +29,10 @@ export default function ConsolePage() {
   const close = useCloseWindow();
   const [scheme, setScheme] = useState(storedConsoleScheme);
   const crt = scheme !== "plain";
-  // The caret's column and whether the input has the focus, for the drawn cursor.
-  const [caret, setCaret] = useState(0);
+  // The caret's column, how far a long line scrolled the input, and whether it has the focus, for the drawn cursor.
+  const [caret, setCaret] = useState({ column: 0, scrolled: 0 });
   const [focused, setFocused] = useState(false);
-  const markCaret = () => setCaret(input.current?.selectionStart ?? 0);
+  const markCaret = () => setCaret({ column: input.current?.selectionStart ?? 0, scrolled: input.current?.scrollLeft ?? 0 });
   const choose = (next: ConsoleScheme) => {
     setScheme(next);
     keepConsoleScheme(next);
@@ -126,12 +126,14 @@ export default function ConsolePage() {
               <input
                 ref={input}
                 aria-label="Command"
+                data-autofocus
                 value={value}
                 onChange={(event) => setValue(event.target.value)}
                 onKeyDown={onKeyDown}
                 onKeyUp={markCaret}
                 onSelect={markCaret}
                 onClick={markCaret}
+                onScroll={markCaret}
                 onFocus={() => setFocused(true)}
                 onBlur={() => setFocused(false)}
                 disabled={running !== null}
@@ -149,7 +151,7 @@ export default function ConsolePage() {
                 <span
                   data-cursor
                   aria-hidden="true"
-                  style={{ left: `${caret}ch`, backgroundColor: "var(--crt-fg)" }}
+                  style={{ left: `calc(${caret.column}ch - ${caret.scrolled}px)`, backgroundColor: "var(--crt-fg)" }}
                   className="pointer-events-none absolute top-1/2 h-[1.2em] w-[1ch] -translate-y-1/2 font-mono text-base motion-safe:animate-[k-blink_1s_steps(1)_infinite]"
                 />
               )}

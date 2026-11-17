@@ -600,11 +600,15 @@ describe("the console scheme", () => {
     const cursor = document.querySelector<HTMLElement>("[data-cursor]")!;
     expect(cursor).toHaveAttribute("aria-hidden", "true");
     expect(cursor).toHaveClass("motion-safe:animate-[k-blink_1s_steps(1)_infinite]");
-    expect(cursor.style.left).toBe("0ch");
+    expect(cursor.style.left).toBe("calc(0ch - 0px)");
     await userEvent.type(input(), "help");
-    expect(cursor.style.left).toBe("4ch");
+    expect(cursor.style.left).toBe("calc(4ch - 0px)");
     await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
-    expect(cursor.style.left).toBe("2ch");
+    expect(cursor.style.left).toBe("calc(2ch - 0px)");
+    // A line longer than the field scrolls it: the cursor stays on the caret.
+    input().scrollLeft = 20;
+    fireEvent.scroll(input());
+    expect(cursor.style.left).toBe("calc(2ch - 20px)");
     input().blur();
     await waitFor(() => expect(document.querySelector("[data-cursor]")).toBeNull());
   });
