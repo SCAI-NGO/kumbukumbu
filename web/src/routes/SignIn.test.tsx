@@ -116,6 +116,50 @@ describe("a session that ends mid-use", () => {
     expect(useEditor.getState().recentPaths).toEqual([]);
   });
 
+  it("returns to a deep link after signing in", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    let signedIn = false;
+    const vault = { id: "v1", name: "Arbeit", notes: 1, embeddings: "ready", pending: false, canWrite: true };
+    fakeApi({
+      "GET /api/session": () => (signedIn ? json(200, { user, previousSignInAt: null }) : json(401, { error: "Sign in first." })),
+      "POST /api/session": () => {
+        signedIn = true;
+        return json(200, { user, previousSignInAt: null });
+      },
+      "GET /api/vaults": () => json(200, [vault]),
+      "GET /api/vaults/Arbeit/tree": () =>
+        json(200, { root: { name: "Arbeit", path: "/Arbeit", folders: [], notes: [{ name: "Roses.md", path: "/Arbeit/Roses.md", size: 1, kind: "note", mediaType: "text/markdown" }] } }),
+    });
+
+    const router = renderApp("/n/v1/Roses.md");
+    await screen.findByText("Your session has ended. Please sign in again.");
+    expect(path(router)).toBe(`/signin?next=${encodeURIComponent("/n/v1/Roses.md")}`);
+    await signIn();
+
+    await waitFor(() => expect(path(router)).toBe("/notes/Arbeit/Roses.md"));
+  });
+
+  it("doesn't take someone else signing in to the previous user's deep link", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const liz = { ...user, id: "u2", username: "liz", display: "Liz" };
+    let signedIn = false;
+    fakeApi({
+      "GET /api/session": () => (signedIn ? json(200, { user: liz, previousSignInAt: null }) : json(401, { error: "Sign in first." })),
+      "POST /api/session": () => {
+        signedIn = true;
+        return json(200, { user: liz, previousSignInAt: null });
+      },
+      "GET /api/vaults": () => json(200, [{ name: "Garten", notes: 1 }]),
+    });
+
+    const router = renderApp("/n/v1/Roses.md");
+    await screen.findByText("Your session has ended. Please sign in again.");
+    await signIn();
+
+    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    expect(path(router)).toBe("/");
+  });
+
   it("sends a first visit to sign-in without the message", async () => {
     fakeApi({ "GET /api/session": () => json(401, { error: "Sign in first." }) });
     const router = renderApp("/");

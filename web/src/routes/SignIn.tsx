@@ -52,7 +52,7 @@ export default function SignIn() {
       const previous = useSession.getState().previousUser;
       if (previous && previous !== view.user.username) {
         useEditor.getState().reset();
-        if (next.startsWith("/notes/")) next = "/";
+        if (next.startsWith("/notes/") || next.startsWith("/n/")) next = "/";
       }
       signedIn(view);
       navigate(next, { replace: true });

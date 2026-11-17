@@ -130,6 +130,7 @@ export const routes: RouteObject[] = [
               { path: "/notes/:vault/*", element: null },
             ],
           },
+          { path: "/n/:vaultId/*", lazy: lazyPage(() => import("./routes/DeepLink")) },
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
           { path: "/calendar/:vault", lazy: lazyPage(() => import("./calendar/CalendarPage")) },
