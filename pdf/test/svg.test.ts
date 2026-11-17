@@ -77,7 +77,7 @@ describe("renderSvg", () => {
   });
 
   // An external reference resolved on the server would be SSRF; Skia resolves none.
-  it("fetches nothing an SVG refers to, and still renders it", async () => {
+  it("fetches nothing an SVG refers to (images, files, @import, use, paint servers, masks, clips, filters, fonts, feImage, a nested SVG), and still renders it", async () => {
     const seen: string[] = [];
     const red = createCanvas(10, 10);
     red.getContext("2d").fillStyle = "#ff0000";
@@ -93,17 +93,33 @@ describe("renderSvg", () => {
       const local = join(dir, "red.png");
       writeFileSync(local, red.toBuffer("image/png"));
       const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const nested = Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="${origin}/nested.png" width="10" height="10"/></svg>`,
+      ).toString("base64");
+      // Below the drawing that is looked at, every other way an SVG can name something outside it.
+      const elsewhere =
+        `<use href="${origin}/sprite.svg#a" y="200"/>` +
+        `<rect y="200" width="20" height="20" fill="url(${origin}/paint.svg#p)"/>` +
+        `<rect y="200" width="20" height="20" mask="url(${origin}/mask.svg#m)"/>` +
+        `<rect y="200" width="20" height="20" clip-path="url(${origin}/clip.svg#c)"/>` +
+        `<rect y="200" width="20" height="20" filter="url(${origin}/filter.svg#f)"/>` +
+        `<style>@font-face { font-family: Far; src: url("${origin}/font.woff2"); } .far { font-family: Far; }</style>` +
+        `<text class="far" y="250">far</text>` +
+        `<filter id="fi"><feImage href="${origin}/fe.png"/></filter><rect y="250" width="20" height="20" filter="url(#fi)"/>` +
+        `<image href="data:image/svg+xml;base64,${nested}" y="270" width="20" height="20"/>`;
       const file = svg(
         `<style>@import url("${origin}/style.css");</style>` +
           `<image href="${origin}/a.png" x="0" y="0" width="100" height="100"/>` +
           `<image xlink:href="file://${local}" x="100" y="0" width="100" height="100"/>` +
-          `<rect x="0" y="100" width="200" height="100" fill="blue"/>`,
-        'width="200" height="200"',
+          `<rect x="0" y="100" width="200" height="100" fill="blue"/>` +
+          elsewhere,
+        'width="200" height="300"',
       );
 
-      const r = await renderSvg(file, SMALL, { width: 200, height: 200 });
+      const r = await renderSvg(file, SMALL, { width: 200, height: 300 });
 
-      expect(isBlue(await pixel(r.data, 10, r.height - 10))).toBe(true);
+      const row = (y: number) => Math.round((y * r.height) / 300);
+      expect(isBlue(await pixel(r.data, 10, row(190)))).toBe(true);
       expect(isWhite(await pixel(r.data, 10, 10))).toBe(true);
       expect(isWhite(await pixel(r.data, r.width - 10, 10))).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 200));
