@@ -23,6 +23,8 @@ It asks what the skill is for and when it should be used, writes the folder, and
 
 A second built-in skill, `ingest-attachments`, turns a PDF into notes: drop a pump manual into a folder Inbox and say to your AI "Make notes of the pump manual in Inbox." It asks whether you want one note or a folder of them, writes the notes with the manual's pictures and diagrams where they stood, and asks whether to keep, archive or delete the PDF; archived, it moves to the vault's `_archive/` folder, out of the way of search, and the notes' links follow it there.
 
+A third, `kumbu-binary-upload`, lets your AI put an image or PDF it made or holds into a vault: it asks Kumbu² for a one-time upload URL, sends the file there, writes the link into your note and shows you where the file went.
+
 ## The Skills screen
 
 In the drawer, **Skills** lists every skill you and your AI can see, where each one comes from and who last changed it. From there you copy or move a skill to another vault, download it as a .zip, and share it with a link of its own, which looks like {{server}}/k#… and is shown once. **Try** shows which skills your AI would find for a request. Your server may also offer **Marketplaces**: collections of skills on GitHub that you add skills from.
