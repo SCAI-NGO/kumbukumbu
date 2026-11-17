@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type JSX, type ReactNode } from "react";
-import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
+import { Navigate, Outlet, useLocation, useMatches, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { useZonePreset } from "./calendar/preferences";
 import { errorText } from "./api/error-text";
@@ -12,11 +12,11 @@ import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
-import MobileShell from "./shell/MobileShell";
 import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
 import UpdateBar from "./update/UpdateBar";
+import WindowHost from "./windows/WindowHost";
 
 /**
  * Sends to sign-in, with the way back, as soon as any request found the session gone; and reloads into a new
@@ -39,8 +39,8 @@ function Root() {
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(neutral ? "/" : pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
-  // The shell shows the update bar under its own top bar; every other page has it above.
-  const inShell = pathname === "/" || pathname.startsWith("/notes/");
+  // The shell shows the update bar under its own top bar, under a window too; every other page has it above.
+  const inShell = useMatches().some((m) => (m.handle as { shell?: boolean } | undefined)?.shell === true);
   return (
     <>
       {!inShell && <UpdateBar />}
@@ -124,10 +124,12 @@ export const routes: RouteObject[] = [
         errorElement: <RouteError />,
         children: [
           {
-            element: <MobileShell />,
+            element: <WindowHost />,
+            handle: { shell: true },
             children: [
               { path: "/", element: null },
               { path: "/notes/:vault/*", element: null },
+              { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
             ],
           },
           { path: "/n/:vaultId/*", lazy: lazyPage(() => import("./routes/DeepLink")) },
@@ -146,7 +148,6 @@ export const routes: RouteObject[] = [
           { path: "/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
           { path: "/skills", element: <Navigate to="/skills/installed" replace /> },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
-          { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
           { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],

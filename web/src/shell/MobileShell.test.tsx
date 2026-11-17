@@ -428,11 +428,11 @@ describe("the shell", () => {
   });
 
   it.each([
-    ["Access", "Access"],
-    ["Settings", "Settings"],
-    ["Console", "Console"],
-    ["Admin", "Users"],
-  ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
+    ["Access", "Access", "link", "Back to the notes"],
+    ["Settings", "Settings", "link", "Back to the notes"],
+    ["Console", "Console", "button", "Close"],
+    ["Admin", "Users", "link", "Back to the notes"],
+  ] as const)("closes the drawer when %s is followed, so the way back finds it shut", async (link, title, role, back) => {
     signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
@@ -441,7 +441,7 @@ describe("the shell", () => {
     expect(await screen.findByRole("heading", { name: title }, { timeout: 5_000 })).toBeInTheDocument();
     expect(useEditor.getState().overlay).toBe("none");
 
-    await userEvent.click(screen.getByRole("link", { name: "Back to the notes" }));
+    await userEvent.click(screen.getByRole(role, { name: back }));
     await screen.findByRole("button", { name: "Open file tree" });
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
   });

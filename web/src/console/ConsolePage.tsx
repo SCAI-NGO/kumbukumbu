@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import WindowFrame from "../windows/WindowFrame";
+import { useCloseWindow } from "../windows/context";
 import { run } from "./run";
 import { useConsole, type Entry, type Output, type Running } from "./store";
 
@@ -23,7 +24,7 @@ export default function ConsolePage() {
   const log = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
   const following = useRef(true);
-  const navigate = useNavigate();
+  const close = useCloseWindow();
 
   // Leaving the page stops the running command; the store keeps the rest for coming back.
   useEffect(() => () => controller.current?.abort(), []);
@@ -44,7 +45,7 @@ export default function ConsolePage() {
     setValue("");
     setWalk(null);
     following.current = true;
-    void run(value, controller.current.signal, () => navigate("/"));
+    void run(value, controller.current.signal, close);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -64,57 +65,53 @@ export default function ConsolePage() {
   };
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-5xl flex-col gap-4 px-4 pt-10 pb-[max(16px,env(safe-area-inset-bottom))]">
-      <header className="flex flex-col gap-2">
-        <Link to="/" className="flex min-h-11 items-center self-start text-accent-text">
-          Back to the notes
-        </Link>
-        <h1 className="text-[28px] leading-tight font-bold text-text">Console</h1>
-      </header>
-      <div
-        ref={log}
-        role="log"
-        aria-label="Console output"
-        aria-busy={running !== null}
-        onScroll={(event) => {
-          const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
-          following.current = scrollHeight - scrollTop - clientHeight < 8;
-        }}
-        // A click in the output goes on typing, unless it selected something to copy.
-        onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-        // Relative: an error's screen-reader label is absolutely positioned, and must scroll here rather than grow the page.
-        className="relative min-h-0 flex-1 overflow-y-auto font-mono text-sm text-text"
-      >
-        <p className={`mb-4 text-text-body ${wrap}`}>{welcome}</p>
-        {entries.map((entry, i) => (
-          <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} onImage={follow} />
-        ))}
-        {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} onImage={follow} />}
-      </div>
-      <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
-        <PathLine cwd={cwd} />
-        <div className="flex items-center gap-2">
-          <span aria-hidden className="text-muted">
-            &gt;
-          </span>
-          <input
-            ref={input}
-            aria-label="Command"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={running !== null}
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            enterKeyHint="go"
-            // 16 px so iOS doesn't zoom in.
-            className="min-h-11 min-w-0 flex-1 bg-transparent font-mono text-base text-text focus:outline-none disabled:opacity-60"
-          />
+    <WindowFrame kind="console" title="Console">
+      <div className="flex h-full flex-col gap-4 px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))]">
+        <div
+          ref={log}
+          role="log"
+          aria-label="Console output"
+          aria-busy={running !== null}
+          onScroll={(event) => {
+            const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+            following.current = scrollHeight - scrollTop - clientHeight < 8;
+          }}
+          // A click in the output goes on typing, unless it selected something to copy.
+          onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
+          // Relative: an error's screen-reader label is absolutely positioned, and must scroll here rather than grow the page.
+          className="relative min-h-0 flex-1 overflow-y-auto font-mono text-sm text-text"
+        >
+          <p className={`mb-4 text-text-body ${wrap}`}>{welcome}</p>
+          {entries.map((entry, i) => (
+            <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} onImage={follow} />
+          ))}
+          {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} onImage={follow} />}
         </div>
-      </form>
-    </main>
+        <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
+          <PathLine cwd={cwd} />
+          <div className="flex items-center gap-2">
+            <span aria-hidden className="text-muted">
+              &gt;
+            </span>
+            <input
+              ref={input}
+              aria-label="Command"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={running !== null}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="go"
+              // 16 px so iOS doesn't zoom in.
+              className="min-h-11 min-w-0 flex-1 bg-transparent font-mono text-base text-text focus:outline-none disabled:opacity-60"
+            />
+          </div>
+        </form>
+      </div>
+    </WindowFrame>
   );
 }
 
