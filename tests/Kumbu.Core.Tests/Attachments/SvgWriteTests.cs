@@ -104,6 +104,21 @@ public sealed class SvgWriteTests
     }
 
     [Fact]
+    public async Task A_folder_with_an_svg_isnt_copied_into_a_skills_folder()
+    {
+        var (store, writer, _) = Make();
+        await writer.WriteAsync("/Work/Icons/a.svg", Drawing, null, Ct);
+        var trees = new TreeWriter(store, Time, new FixedCaller(Writers.Dev));
+
+        var copied = await trees.CopyAsync(P("/Work/Icons"), P("/Work/_skills/x/icons"), deep: true, overwrite: false, Ct);
+
+        Assert.Equal(ShellErrorKind.Invalid, copied.Result.Kind);
+        Assert.Contains("a.svg is an SVG image, and inside a skill's folder an .svg is a text file", copied.Result.Output);
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/_skills/x/icons/a.svg"), Ct));
+        Assert.False((await trees.CopyAsync(P("/Work/Icons"), P("/Work/Copies"), deep: true, overwrite: false, Ct)).Result.IsError);
+    }
+
+    [Fact]
     public async Task Rg_doesnt_search_an_svg()
     {
         var (_, writer, shell) = Make();

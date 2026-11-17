@@ -112,7 +112,8 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
 
         foreach (var (from, to) in files)
         {
-            if (to == target && AttachmentFormat.RenameProblem(from.Path, to) is { } renameProblem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {renameProblem}");
+            // Every file, as mv checks them: a folder copied into a skill's folder would make its SVGs text files.
+            if (AttachmentFormat.RenameProblem(from.Path, to) is { } renameProblem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {renameProblem}");
             if (NoteNames.NameProblem(to) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {FolderMarker.Shown(to)}: {problem}");
         }
 
