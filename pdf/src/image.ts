@@ -107,6 +107,44 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
   };
 }
 
+// An SVG is drawn, not scaled: at the size step whatever canvas it claims, enlarged too. Its size
+// is the one the server stored from its root (width and height, else its viewBox); without one it
+// is drawn as if square, 300 × 300 (300 the width a browser gives an SVG that names none). Skia's
+// own size can differ from that box (for a viewBox alone it is 150 px high, for mm it converts), so
+// the image is drawn into the box with its own aspect, from the top left. Skia loads nothing an SVG refers to:
+// no <image href>, no file, no @import (pdf/test/svg.test.ts keeps it that way).
+export async function renderSvg(svg: Uint8Array, t: Target, size?: { width: number; height: number }, crop?: Crop, rotate = 0): Promise<RenderedImage> {
+  if (imageHeader(svg)) throw notImage();
+  let image: Image;
+  try {
+    image = await loadImage(Buffer.from(svg.buffer, svg.byteOffset, svg.byteLength));
+  } catch {
+    throw notImage();
+  }
+  if (!(image.width > 0 && image.height > 0)) throw notImage();
+  const { width: ow, height: oh } = size ?? { width: 300, height: 300 };
+  const k = Math.min(ow / image.width, oh / image.height);
+  const [tw, th] = rotate === 90 || rotate === 270 ? [oh, ow] : [ow, oh];
+  const region = crop ?? { x: 0, y: 0, w: tw, h: th };
+  if (!inside(region, tw, th)) throw new PdfError(`The region lies outside the image (${tw} × ${th} px).`, "bad_crop");
+
+  const { width, height } = pixels(region.w, region.h, fit(region.w, region.h, t, Infinity));
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(width / region.w, height / region.h);
+  ctx.translate(-region.x, -region.y);
+  if (rotate !== 0) ctx.transform(...turn(rotate, ow, oh));
+  ctx.drawImage(image, 0, 0, image.width * k, image.height * k);
+  const transparent = hasTransparency(canvas);
+  return {
+    ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)),
+    originalWidth: ow,
+    originalHeight: oh,
+    transparent,
+    rotate,
+  };
+}
+
 const startsWith = (b: Uint8Array, at: number, s: string) => at + s.length <= b.length && [...s].every((c, i) => b[at + i] === c.charCodeAt(0));
 const isGif = (b: Uint8Array) => startsWith(b, 0, "GIF87a") || startsWith(b, 0, "GIF89a");
 

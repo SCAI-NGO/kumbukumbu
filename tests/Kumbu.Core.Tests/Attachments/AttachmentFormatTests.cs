@@ -26,7 +26,7 @@ public class AttachmentFormatTests
     [InlineData("/a/x.webp", new byte[] { 0x52, 0x49, 0x46, 0x46 }, "x.webp isn't a WebP image (its content doesn't match its name)")]
     [InlineData("/a/x.png", new byte[] { 0x25, 0x50, 0x44, 0x46, 0x2D }, "x.png isn't a PNG image (its content doesn't match its name)")]
     [InlineData("/a/x.pdf", new byte[0], "x.pdf isn't a PDF document (its content doesn't match its name)")]
-    [InlineData("/a/x.docx", new byte[] { 0x50, 0x4B }, "Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP) only")]
+    [InlineData("/a/x.docx", new byte[] { 0x50, 0x4B }, "Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP, SVG) only")]
     public void Problem_checks_extension_and_magic_bytes(string path, byte[] head, string? expected) =>
         Assert.Equal(expected, AttachmentFormat.Problem(P(path), head));
 
@@ -34,11 +34,12 @@ public class AttachmentFormatTests
     [InlineData("/a/x.PNG", true)]
     [InlineData("/a/x.Pdf", true)]
     [InlineData("/a/x.webp", true)]
+    [InlineData("/a/x.svg", true)]
     [InlineData("/a/x.md", false)]
     [InlineData("/a/x.heic", false)]
     [InlineData("/a/png", false)]
     [InlineData("/", false)]
-    public void IsAttachment_follows_the_six_extensions(string path, bool expected) =>
+    public void IsAttachment_follows_the_seven_extensions(string path, bool expected) =>
         Assert.Equal(expected, P(path).IsAttachment);
 
     [Theory]
@@ -50,7 +51,7 @@ public class AttachmentFormatTests
     public void Skill_folders_keep_text_files(string path, AttachmentKind kind) => Assert.Equal(kind, AttachmentFormat.ForPath(P(path))!.Kind);
 
     [Theory]
-    [InlineData("/Work/run.py")] [InlineData("/Skills/run.py")] [InlineData("/Work/_skills/x/scripts")] [InlineData("/Work/logo.svg")] [InlineData("/Skills/pdf/a.exe")]
+    [InlineData("/Work/run.py")] [InlineData("/Skills/run.py")] [InlineData("/Work/_skills/x/scripts")] [InlineData("/Skills/pdf/a.exe")]
     public void Elsewhere_nothing_changes(string path) => Assert.Null(AttachmentFormat.ForPath(P(path)));
 
     [Fact]
@@ -105,7 +106,7 @@ public class AttachmentFormatTests
     public void The_marker_is_no_format_listed_to_users()
     {
         Assert.DoesNotContain(AttachmentFormat.Marker, AttachmentFormat.All);
-        Assert.Equal("Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP) only", AttachmentFormat.UnsupportedMessage);
+        Assert.Equal("Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP, SVG) only", AttachmentFormat.UnsupportedMessage);
     }
 
     [Fact]

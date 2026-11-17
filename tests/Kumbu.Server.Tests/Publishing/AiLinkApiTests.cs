@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Text;
 using System.Text.Json.Nodes;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -8,6 +9,7 @@ using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Publishing;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Attachments;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -158,6 +160,27 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
         Assert.Contains($"\n![flow.jpg]({KumbuAppFactory.PublicUrl}/s/t/{linked.Token}/files/0) (image/jpeg)", text, StringComparison.Ordinal);
         Assert.Matches("^" + KumbuAppFactory.PublicUrl.Replace(".", "\\.", StringComparison.Ordinal) + "/s/t/[0-9A-HJKMNP-TV-Z]{32}$", linked.Link);
         Assert.Equal(DateTime.UtcNow + AiLinkToken.Lifetime, linked.ExpiresAt, TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public async Task An_svg_reads_from_its_image_URL_under_the_file_content_policy()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateFileAsync("Beds/plan.svg", Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg));
+        await alice.CreateAsync("Beds/Drawn.md", "# Drawn\n\n![[plan.svg]]\n");
+        var (notes, access) = await OpenAsync(alice);
+        var made = await Api.Services.GetRequiredService<Publications>()
+            .PublishAsync(access, notes, P("/Work/Beds/Drawn.md"), alice.User.Id, alice.Username, WriterRef.ForOwner(WriterRef.Session, null), KumbuAppFactory.PublicUrl, Ct);
+        var formatted = made.Link[(made.Link.IndexOf('#') + 1)..];
+        using var linked = await LinkedAsync(Api, "100.70.2.3", new ReaderApiTests.Published(alice, ShareCode.Parse(formatted)!, formatted));
+        using var ai = new Fetcher(Api, "100.70.2.4");
+
+        using var file = await ai.GetAsync($"{linked.Link}/files/0");
+
+        Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+        Assert.Equal("image/svg+xml", file.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(Security.FileContentPolicy, Assert.Single(file.Headers.GetValues("Content-Security-Policy")));
+        Assert.Equal("nosniff", Assert.Single(file.Headers.GetValues("X-Content-Type-Options")));
     }
 
     [Fact]

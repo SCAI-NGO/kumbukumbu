@@ -76,6 +76,22 @@ public sealed class DavReadTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_svg_put_and_got_runs_nothing_under_the_file_content_policy()
+    {
+        var dav = await DavClient.NewAsync(Api);
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/diagram.svg", new ByteArrayContent(FileApiTests.Svg));
+        using var response = await dav.SendAsync(HttpMethod.Get, "/dav/Work/diagram.svg");
+
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(FileApiTests.Svg, await response.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal("image/svg+xml", Header(response, "Content-Type"));
+        Assert.Equal(Security.FileContentPolicy, Header(response, "Content-Security-Policy"));
+        Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
+    }
+
+    [Fact]
     public async Task Head_has_no_body_but_the_length()
     {
         var dav = await DavClient.NewAsync(Api);

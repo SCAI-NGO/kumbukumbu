@@ -10,10 +10,10 @@ export const MAX_NOTE_BYTES = 1_048_576;
 export const MAX_ATTACHMENT_BYTES = 15_728_640;
 
 /**
- * What the file picker offers: notes, the five formats and the text files of skill folders by extension and media type. Concrete types, never
+ * What the file picker offers: notes, the seven formats and the text files of skill folders by extension and media type. Concrete types, never
  * `image/*`: iOS Safari then converts a HEIC photo to JPEG as it is picked.
  */
-export const ACCEPT = ".md,.markdown,text/markdown,.py,.sh,.js,.mjs,.ts,.json,.yaml,.yml,.toml,.txt,.csv,.xml,.html,.css,.svg,.pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp";
+export const ACCEPT = ".md,.markdown,text/markdown,.py,.sh,.js,.mjs,.ts,.json,.yaml,.yml,.toml,.txt,.csv,.xml,.html,.css,.svg,.pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp,image/svg+xml";
 
 export interface Skipped {
   path: string;
@@ -26,15 +26,15 @@ export interface UploadFile {
 }
 
 // The server's sentences where it has them, so its list and this one read alike.
-export const NOT_SUPPORTED = "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp)";
+export const NOT_SUPPORTED = "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)";
 export const OBSIDIAN = "Obsidian's settings or trash, not a note";
 export const TOO_LARGE = `larger than ${MAX_NOTE_BYTES} bytes (1 MiB), the limit for a note`;
 export const TOO_LARGE_FILE = "larger than 15 MB, the limit for a file";
 
 export const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
 
-/** Whether a file name is one of the five formats kept besides notes (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`). */
-export const isAttachmentName = (name: string) => /.\.(pdf|png|jpe?g|gif|webp)$/i.test(name);
+/** Whether a file name is one of the seven formats kept besides notes (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`). */
+export const isAttachmentName = (name: string) => /.\.(pdf|png|jpe?g|gif|webp|svg)$/i.test(name);
 
 /**
  * An empty folder's marker (`.vaultkeep`): its folder's name comes first, and no dot folder lies above it. One directly in
@@ -66,7 +66,7 @@ export interface UploadPlan<T> {
   files: T[];
   /** Empty folders' markers: sent as zero bytes, whatever their size and content, and counted nowhere. */
   markers: T[];
-  /** Images over 15 MB: the user is offered to shrink them. A PDF over 15 MB is skipped. */
+  /** Images over 15 MB: the user is offered to shrink them. A PDF or an SVG over 15 MB is skipped: an SVG is never shrunk or converted. */
   tooLarge: T[];
   skipped: Skipped[];
 }
@@ -86,7 +86,7 @@ export function planUpload<T extends { path: string; size: number }>(files: T[],
       if (file.size > MAX_NOTE_BYTES) plan.skipped.push({ path: file.path, reason: TOO_LARGE });
       else plan.notes.push(file);
     } else if (file.size <= MAX_ATTACHMENT_BYTES) plan.files.push(file);
-    else if (isAttachmentName(file.path) && !/\.pdf$/i.test(file.path)) plan.tooLarge.push(file);
+    else if (isAttachmentName(file.path) && !/\.(pdf|svg)$/i.test(file.path)) plan.tooLarge.push(file);
     else plan.skipped.push({ path: file.path, reason: TOO_LARGE_FILE });
   }
   return plan;

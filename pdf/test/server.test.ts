@@ -82,6 +82,19 @@ describe("server", () => {
     expect(r.headers.get("x-kumbu-transparent")).toBe("1");
   });
 
+  it("renders an SVG at the step with the size it is given, or as if square", async () => {
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><rect width="200" height="100" fill="red"/></svg>');
+    const sized = await post(`/render/svg?${medium}&width=200&height=100`, svg);
+    expect(sized.status).toBe(200);
+    expect([sized.headers.get("x-kumbu-width"), sized.headers.get("x-kumbu-height")]).toEqual(["1549", "774"]);
+    expect([sized.headers.get("x-kumbu-original-width"), sized.headers.get("x-kumbu-original-height")]).toEqual(["200", "100"]);
+
+    const square = await post(`/render/svg?${medium}`, svg);
+    expect(square.headers.get("x-kumbu-width")).toBe(square.headers.get("x-kumbu-height"));
+    expect((await post(`/render/svg?${medium}&width=200`, svg)).status).toBe(400);
+    expect((await post(`/render/svg?${medium}`, new TextEncoder().encode("<html/>"))).status).toBe(400);
+  });
+
   it("takes rotate on both render routes and answers X-Kumbu-Rotate", async () => {
     const page = await post(`/render/page?page=1&${medium}&rotate=90`, await chartPage());
     expect(page.status).toBe(200);

@@ -206,6 +206,34 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         await WaitUntilAsync(() => AllCurrentAsync(world, later.OpenVaults.Single()));
     }
 
+    // The database refuses every write to links (a validator nothing passes): the note's write still stands, the graph
+    // follows it at once, and the next unlock finds the stored extract stale and parses the note.
+    [Fact]
+    public async Task Failed_extract_write_keeps_the_commit_and_heals_on_the_next_read()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        await WriteAsync(store, "/Work/A.md", "see [[B]]\n");
+        await world.Db.RunCommandAsync<BsonDocument>(
+            new BsonDocument { { "collMod", "links" }, { "validator", new BsonDocument("$expr", false) } }, cancellationToken: Ct);
+
+        await WriteAsync(store, "/Work/A.md", "see [[C]] now\n");
+        await WriteAsync(store, "/Work/C.md", "c\n");
+
+        Assert.Equal("see [[C]] now\n", (await store.GetAsync(P("/Work/A.md"), Ct))!.Content);
+        Assert.Equal(["/Work/A.md -> /Work/C.md"], Edges(await store.GraphAsync(Work, Ct)));
+        var vault = catalog.OpenVaults.Single();
+        Assert.Equal([(P("/Work/A.md"), Sha256("see [[B]]\n"))], (await StoredAsync(world, vault)).Select(s => (s.Key, s.Value.Hash)));
+
+        var later = world.Catalog();
+        Assert.Equal(["/Work/A.md -> /Work/C.md"], Edges(await Store(later).GraphAsync(Work, Ct)));
+        Assert.Equal(2, later.OpenVaults.Single().Parses);
+
+        await world.Db.RunCommandAsync<BsonDocument>(new BsonDocument { { "collMod", "links" }, { "validator", new BsonDocument() } }, cancellationToken: Ct);
+        var healed = world.Catalog();
+        await Store(healed).GraphAsync(Work, Ct);
+        await WaitUntilAsync(() => AllCurrentAsync(world, healed.OpenVaults.Single()));
+    }
+
     [Fact]
     public async Task Damaged_extract_is_ignored()
     {

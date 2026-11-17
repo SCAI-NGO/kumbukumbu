@@ -25,7 +25,7 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
     public string Help => """
         df [-h] [-b] [/vault]
           What your own vaults take in the database, and your storage limit. Used is everything a vault
-          keeps: its notes with their history, the trash, moves, embeddings, checkpoints and attachments;
+          keeps: its notes with their history, the trash, moves, embeddings, link extracts, checkpoints and attachments;
           Notes and Attachments count what is there now, not the trash. Writes that add data are refused
           once Used reaches the limit; rm, mv and emptying the trash (in the web app) always work.
           A vault shared with you is not listed: what anyone writes there counts against its owner.

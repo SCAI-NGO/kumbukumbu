@@ -23,6 +23,10 @@ public interface IPdfSidecar
     /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
     Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct);
 
+    /// <summary>An SVG drawn to fit <paramref name="target"/>, enlarged as well as reduced; <paramref name="size"/> is its stored size
+    /// (none: drawn as if square), which a crop counts in, turned <paramref name="rotate"/> degrees clockwise.</summary>
+    Task<Picture> RenderSvgAsync(ReadOnlyMemory<byte> svg, (int Width, int Height)? size, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
+
     /// <summary>The text of <paramref name="pages"/> (ascending, distinct, at most 50) with the boxes of its items.</summary>
     Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct);
 
@@ -144,6 +148,10 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) =>
         SendAsync("render/image", Query(target, crop, rotate, frame), image, "application/octet-stream", RenderTimeout, ct,
             (response, token) => PictureAsync(response, target, rotate, frame, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
+
+    public Task<Picture> RenderSvgAsync(ReadOnlyMemory<byte> svg, (int Width, int Height)? size, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
+        SendAsync("render/svg", Query(target, crop, rotate) + (size is var (w, h) ? string.Create(CultureInfo.InvariantCulture, $"&width={w}&height={h}") : ""), svg, "image/svg+xml", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, null, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
 
     public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
     {

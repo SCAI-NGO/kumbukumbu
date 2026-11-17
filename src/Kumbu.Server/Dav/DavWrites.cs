@@ -599,10 +599,10 @@ internal sealed partial class DavWrites(
         }
 
         // The dimensions stored are read here from the bytes stored, as on /api/files; bytes that aren't of the
-        // format have none, and the writer refuses them.
+        // format have none, and the writer refuses them. An SVG's the writer reads itself.
         (int, int)? dimensions = null;
         var matches = AttachmentFormat.Problem(path, bytes) is null;
-        if (matches && format.Kind == AttachmentKind.Image)
+        if (matches && format.Kind == AttachmentKind.Image && format != AttachmentFormat.Svg)
         {
             dimensions = ImageHeader.Read(bytes, out var headerProblem)
                 ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.");
@@ -631,9 +631,7 @@ internal sealed partial class DavWrites(
             if (!holds) throw new DavException(StatusCodes.Status412PreconditionFailed, "The file isn't at the version If-Match names.");
         }
 
-        var ifNoneMatch = Request.Headers.IfNoneMatch;
-        if (ifNoneMatch.Count > 0 && etag is not null && EntityTagHeaderValue.TryParseList(ifNoneMatch, out var none)
-            && none.Any(t => t.Equals(EntityTagHeaderValue.Any) || t.Compare(etag, useStrongComparison: false)))
+        if (etag is not null && Api.EntityTags.NoneMatchNames(Request, etag))
         {
             throw new DavException(StatusCodes.Status412PreconditionFailed, "Something is there already, and If-None-Match says it may not be.");
         }

@@ -433,6 +433,27 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_svg_in_a_copy_reads_stripped_under_the_file_content_policy()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateFileAsync("Beds/plan.svg", Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg));
+        await alice.CreateAsync("Beds/Drawn.md", "# Drawn\n\n![[plan.svg]]\n");
+        var (notes, access) = await OpenAsync(Api, alice);
+        var published = await Api.Services.GetRequiredService<Publications>()
+            .PublishAsync(access, notes, P("/Work/Beds/Drawn.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+        using var reader = new Reader(Api, "203.0.113.108");
+        (await reader.PostAsync(published.Link[(published.Link.IndexOf('#') + 1)..])).Dispose();
+
+        using var file = await reader.FileAsync(0);
+
+        Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+        Assert.Equal("image/svg+xml", file.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg), "image/svg+xml"), await file.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal(Security.FileContentPolicy, Assert.Single(file.Headers.GetValues("Content-Security-Policy")));
+        Assert.Equal("nosniff", Assert.Single(file.Headers.GetValues("X-Content-Type-Options")));
+    }
+
+    [Fact]
     public async Task A_copy_with_more_images_than_the_read_allowance_loads()
     {
         var published = await PublishedAsync(Api, more: ReadsPerAddress + 1);

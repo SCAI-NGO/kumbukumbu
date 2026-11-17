@@ -43,6 +43,23 @@ Anti-goals, which make this a failure even if it works:
   | decrypt every note (comparison) | ~7 ms | ~70 ms |
 
   Parsing is the cost; resolving is cheap. Every `backlinks` pays the ~300 ms today.
+- **Measured on the built backend, 2026-11-17** (Release build, a 4-core cloud container, MongoDB 7.0 on the same machine; a scratch harness in `Kumbu.Server.Tests`, not committed, as the pull request's 1,600-note figure was taken). Generated vaults of ~1.15 KB and 12 links per note: 40 folders, a tenth day notes, one note in fifty under a name another folder has, two tags each; of the links six in ten to a note, one to a heading of a note, one a Markdown link, one by an alias, one to one of 500 names nobody has. 16,000 notes give 192,000 links, 198,000 edges and 16,500 nodes. Medians of 4 to 30 rounds, the range where it spread widely:
+
+  | | 1,600 notes | 16,000 notes |
+  |---|---|---|
+  | unlock, extracts stored | ~80 ms | ~1.2–1.4 s (1.0–1.8 s) |
+  | unlock, no extracts | ~47 ms | ~360 ms |
+  | first graph after unlock, from stored extracts (parses nothing) | ~37 ms | ~1.0–1.3 s (0.8–1.5 s) |
+  | first graph after unlock without extracts (parses every note) | ~150 ms | ~2.0 s |
+  | in memory, warm: parse every note | ~50–120 ms | ~1.05 s |
+  | in memory, warm: build the graph from extracts | ~30–100 ms | ~0.65–0.77 s, of which resolving ~0.2–0.4 s |
+  | write one note through the store (its extract included) | ~5 ms | ~7 ms |
+  | the first read of the graph after that write | ~31 ms | ~0.86 s (0.74–1.13 s) |
+  | write, then `cat` at once (its embeds read the graph) | ~35 ms | ~0.84 s |
+  | `backlinks` once the graph is current | ~1 ms | ~10 ms |
+  | memory figure (`ApproxBytes`) with the graph built | 8 MB | 85 MB |
+
+  The 1,600-note figures of the pull request hold. At 16,000 notes two things grow faster than the notes, both well beyond the ~150 ms resolving that §4.4 expected: the rebuild after every change, which the first `cat`, `links`, `backlinks`, `mv` or graph read after a write pays (an agent writing and reading in turn waits ~0.9 s a round, and other readers wait for the same build); and opening the stored extracts on unlock, which now costs about what they save (unlock and first graph ~2.4 s either way). Resolving itself is under half of a build; the rest is assembling nodes and edges (sorted per source and in text order) and the garbage of both. **Incremental resolving now looks necessary for vaults towards 16,000 notes, not for the 1,600 that asked**: before it, the cheaper steps are to take the build's assembly and the extracts' opening apart with a profiler, and to let `cat`'s embeds resolve one note's links without the whole graph; incremental resolving (§4.4's "optimisation for later") if a build then still takes more than ~200 ms at 16,000 notes.
 - Every write goes through one place, `EncryptedNoteStore.UnderGateAsync` (`EncryptedNoteStore.cs:1016`): vault gate, Mongo transaction, commit, `apply()` to the working set, then the search index's `Enqueue` and `NotesChanged`. The index hangs off the same place.
 
 ## 3. Decisions
@@ -80,6 +97,8 @@ A new collection, `links`, one `SealedDocument` per note (`Documents.cs:176`): `
 The payload also holds the note's path and that hash; its associated data binds it to the path id, as for embeddings: `links:{vault}:{pid}` *(Claude's call, while planning: the document is upserted by path id like an embedding, `UnlockedVault.cs:265`)*. The extract is derived data: anything in it can be rebuilt from the note.
 
 **A cache, never a source of truth** *(Claude's call, while planning; amended 2026-11-16)*. The graph in memory never trusts a stored extract whose content hash differs from the SHA-256 of the note's content: it parses the note instead. The full hash, not the 12-hex version token cut from it: 48 bits are enough to name a state to a client, not to rest a trust check on *(final review; an extract sealed with the token reads as stale and is parsed anew, so nothing is migrated)*. Not the revision: a note removed and made again at its path starts at revision 1 again, so a revision would let the old note's extract pass *(Claude's call, while building Task 8)*. So the extract is not written inside the note's transaction but right after the commit, still under the vault's gate (where `UnderGateAsync` enqueues the search index today, `EncryptedNoteStore.cs:1053`); a crash between the two leaves a stale extract, which the next unlock parses anew. Why: correctness then rests on one comparison of hashes instead of on every write path's transaction, and no write path has to know about extracts. It is written after every operation that writes a note's content or path: create, write, edit, replace, mv, archive, rm (the extract is removed with the note; trashed notes are not in the graph), restore from the trash (made anew), restore of a version, checkpoint restore, the seeder, sync and WebDAV, which all go through `EncryptedNoteStore`. Emptying the trash touches no extract. Re-keying reseals the collection with the rest (`VaultCatalog.Rekey.cs:46`); deleting a vault or an account deletes it (`Deletion.cs`).
+
+**What it weighs.** The stored extracts count towards the storage figure (`df`, the quota, the admin's user list) like the embeddings: the collection is one of `VaultCatalog.ContentCollections`, which those figures sum. The working set's memory figure, `UnlockedVault.ApproxBytes`, which the memory limit weighs when it locks idle vaults (`VaultCatalog.Sweep`), counts the extracts held and the graph once built *(amended 2026-11-17: it counted neither; the graph is counted though it is never stored, because that figure is what the vault holds in memory, not in the database; a renamed vault's rebased copy is left out, as it lives only while a member reads under another name)*.
 
 Attachments get no extract: they link to nothing. They are nodes when a note links to them (§4.3).
 
@@ -192,7 +211,7 @@ Paths print each path on one line (`/Work/A.md -> /Work/C.md <- /Work/B.md`, the
 
 For the web app, in 0.7.0; built and tested now, under `/api/graph` beside `/api/links` (`NoteApi.cs:252`):
 
-- `GET /api/graph?vault=…&vault=…&<filter>`: the global graph. `ETag` and `If-None-Match` → `304` as `SyncApi` does (`SyncApi.cs:152`).
+- `GET /api/graph?vault=…&vault=…&<filter>`: the global graph. `ETag` and `If-None-Match` → `304` as `SyncApi` does (`SyncApi.cs:152`). `If-None-Match` is compared weakly (RFC 9110 §8.8.3.2, §13.1.2), a list and `*` included, through one rule the sync versions and WebDAV share (`EntityTags.cs`); the ETag stays strong, since the same version always serialises to the same bytes *(amended 2026-11-17: behind a proxy that compresses the answer the tag comes back as `W/"…"`, which an exact string comparison never matched, so `304` never fired)*.
 - `GET /api/graph/local?path=…&depth=…&dir=…&cap=…&<filter>`: the local graph, with the same ETag (the vault's).
 - `GET /api/graph/node?path=…`: one node.
 - `GET /api/graph/paths?from=…&to=…&dir=…&<filter>`: paths, walking only the notes the filter keeps (the two ends always), as `graph --path` does.
@@ -228,7 +247,7 @@ Test-first, for every part. Beyond the unit tests of each query:
 - **The creation time**: set on each way of creation, kept through mv, archive, restores; the "at the latest" fill for old notes.
 - **Rights**: a hidden discreet vault absent from a graph over several vaults; a key without the vault refused.
 - **Budget**: the local graph of a hub with 400 backlinks and depth 3 stays within the output budget with the line that says how to go on.
-- **Load time**, measured not unit-tested: building the snapshot from extracts for 1,600 synthetic notes stays well under 50 ms on the CI machine; noted in the pull request.
+- **Load time**, measured not unit-tested: building the snapshot from extracts for 1,600 synthetic notes stays well under 50 ms on the CI machine; noted in the pull request. *(2026-11-17: ~36–53 ms in the pull request, ~37 ms again, so not "well under"; 16,000 notes in §2.)*
 
 ## 11. Documentation
 

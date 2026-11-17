@@ -90,9 +90,22 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, changed);
     }
 
-    private static async Task<HttpStatusCode> GetWithEtagAsync(RestClient user, string state)
+    // Behind a proxy that compresses the answer, the ETag comes back weak: If-None-Match compares weakly (RFC 9110 §13.1.2).
+    [Fact]
+    public async Task Weak_or_listed_etag_answers_304()
     {
-        using var response = await user.SendAsync(HttpMethod.Get, VersionsUrl(user), headers: new Dictionary<string, string> { ["If-None-Match"] = $"\"{state}\"" });
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        var state = (await VersionsAsync(user))["state"]!.GetValue<string>();
+
+        Assert.Equal(HttpStatusCode.NotModified, await GetWithEtagAsync(user, state, $"W/\"{state}\""));
+        Assert.Equal(HttpStatusCode.NotModified, await GetWithEtagAsync(user, state, $"\"other\", W/\"{state}\""));
+        Assert.Equal(HttpStatusCode.OK, await GetWithEtagAsync(user, state, "W/\"other\""));
+    }
+
+    private static async Task<HttpStatusCode> GetWithEtagAsync(RestClient user, string state, string? header = null)
+    {
+        using var response = await user.SendAsync(HttpMethod.Get, VersionsUrl(user), headers: new Dictionary<string, string> { ["If-None-Match"] = header ?? $"\"{state}\"" });
         return response.StatusCode;
     }
 

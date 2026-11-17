@@ -143,3 +143,28 @@ describe("Image thumbnails", () => {
     }
   });
 });
+
+describe("SVG thumbnails", () => {
+  it("show an SVG through an <img> of its object URL, never its markup in the page", async () => {
+    const { createObjectURL, revokeObjectURL } = URL;
+    const blobs: Blob[] = [];
+    URL.createObjectURL = (blob: Blob) => (blobs.push(blob), "blob:diagram");
+    URL.revokeObjectURL = () => {};
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect id="drawn" width="4" height="4"/></svg>';
+    fakeApi({ "GET /api/files/W/diagram.svg": () => new Response(svg, { headers: { "Content-Type": "image/svg+xml" } }) });
+    try {
+      const { container } = render(
+        <span className="relative">
+          <Thumbnail vault="W" path="/W/diagram.svg" alt="diagram.svg" />
+        </span>,
+      );
+
+      await waitFor(() => expect(container.querySelector("img")).toHaveAttribute("src", "blob:diagram"));
+      expect(blobs[0]!.type).toBe("image/svg+xml");
+      expect(container.querySelector("svg, script, #drawn, object, iframe")).toBeNull();
+    } finally {
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+    }
+  });
+});

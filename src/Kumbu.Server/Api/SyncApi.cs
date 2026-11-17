@@ -155,7 +155,7 @@ public static class SyncApi
         var from = Since(since, now, unlocked.Horizon);
         if (from is null)
         {
-            if (since is null && http.Request.Headers.IfNoneMatch.Contains($"\"{state}\"")) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
+            if (since is null && EntityTags.NoneMatchNames(http.Request, new($"\"{state}\""))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
             var all = notes.Values.Select(n => Entry(access.ToCaller(n.Note.Path), n.Note.Version, withFiles))
                 .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles)))
                 .OrderBy(e => e.Path, TextOrder.Default)

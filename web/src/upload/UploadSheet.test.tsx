@@ -186,7 +186,7 @@ describe("the upload", () => {
     expect(within(skipped).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
       "Vault/.obsidian/app.jsonObsidian's settings or trash, not a note",
       "Vault/.obsidian/workspace.jsonObsidian's settings or trash, not a note",
-      "Vault/img/pic.heicnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp)",
+      "Vault/img/pic.heicnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)",
       "Vault/notes/deep/c.mda note exists at this path",
     ]);
     for (const key of [["tree", "Work"], ["vaults"], ["search"], ["note"]]) expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
@@ -403,7 +403,7 @@ describe("images and PDFs", () => {
     expect(within(sheet).getByRole("button", { name: "Upload" })).toBeDisabled();
     await userEvent.click(within(sheet).getByText("1 file skipped"));
     expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent(
-      "Photos/IMG_0001.HEICnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp)",
+      "Photos/IMG_0001.HEICnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)",
     );
     expect(puts).toEqual([]);
   });

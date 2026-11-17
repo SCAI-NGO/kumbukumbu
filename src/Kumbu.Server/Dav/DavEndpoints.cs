@@ -220,8 +220,7 @@ public static class DavEndpoints
         headers.ETag = etag;
         headers.LastModified = new DateTimeOffset(DateTime.SpecifyKind(content.LastWrite, DateTimeKind.Utc));
 
-        if (EntityTagHeaderValue.TryParseList(request.Headers.IfNoneMatch, out var tags)
-            && tags.Any(t => t.Equals(EntityTagHeaderValue.Any) || t.Compare(etag, useStrongComparison: false)))
+        if (EntityTags.NoneMatchNames(request, etag))
         {
             response.StatusCode = StatusCodes.Status304NotModified;
             return;

@@ -104,6 +104,53 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal(Pdf, await pdf.Content.ReadAsByteArrayAsync(Ct));
     }
 
+    internal static readonly byte[] Svg =
+        "<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 100\"><script>alert(1)</script><rect width=\"200\" height=\"100\"/></svg>\n"u8.ToArray();
+
+    [Fact]
+    public async Task An_svg_round_trips_with_its_size_under_the_sandbox_policy()
+    {
+        var user = await UserAsync();
+
+        using var put = await user.PutFileAsync("diagram.svg", Svg);
+        Assert.True(put.StatusCode == HttpStatusCode.Created, await put.Content.ReadAsStringAsync(Ct));
+        var state = await JsonAsync(put);
+        Assert.Equal("image/svg+xml", state["mediaType"]!.GetValue<string>());
+        Assert.Equal((200, 100), (state["width"]!.GetValue<int>(), state["height"]!.GetValue<int>()));
+
+        using var get = await user.GetAsync(user.Url("diagram.svg", "files"));
+        Assert.Equal(Svg, await get.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal("image/svg+xml", get.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("nosniff", get.Headers.GetValues("X-Content-Type-Options").Single());
+        // Opened directly, its script runs nothing and it loads nothing.
+        Assert.Equal(Security.FileContentPolicy, get.Headers.GetValues("Content-Security-Policy").Single());
+    }
+
+    [Fact]
+    public async Task An_svg_without_a_size_or_with_a_huge_one_uploads()
+    {
+        var user = await UserAsync();
+
+        using var plain = await user.PutFileAsync("plain.svg", "<svg width=\"10cm\" height=\"5cm\"/>"u8.ToArray());
+        using var huge = await user.PutFileAsync("huge.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100000\" height=\"100000\"/>"u8.ToArray());
+
+        Assert.True(plain.StatusCode == HttpStatusCode.Created, await plain.Content.ReadAsStringAsync(Ct));
+        Assert.Null((await JsonAsync(plain))["width"]);
+        Assert.True(huge.StatusCode == HttpStatusCode.Created, await huge.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(100000, (await JsonAsync(huge))["width"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Html_named_svg_is_a_400_naming_its_root()
+    {
+        var user = await UserAsync();
+
+        using var response = await user.PutFileAsync("page.svg", "<html><script>alert(1)</script></html>"u8.ToArray());
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("page.svg is not an SVG: the root element is html.", await RestClient.ErrorAsync(response));
+    }
+
     [Fact]
     public async Task A_jpeg_with_its_frame_header_past_300_KB_of_metadata_uploads()
     {
@@ -197,7 +244,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
         using var note = await user.PutFileAsync("plan.md", "# Plan\n"u8.ToArray());
 
         Assert.Equal(HttpStatusCode.BadRequest, docx.StatusCode);
-        Assert.Contains("PDFs and images (PNG, JPEG, GIF, WebP)", await RestClient.ErrorAsync(docx), StringComparison.Ordinal);
+        Assert.Contains("PDFs and images (PNG, JPEG, GIF, WebP, SVG)", await RestClient.ErrorAsync(docx), StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.BadRequest, note.StatusCode);
         Assert.Contains("/api/notes", await RestClient.ErrorAsync(note), StringComparison.Ordinal);
     }
@@ -548,6 +595,10 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         using var again = await user.GetAsync(user.Url("shot.png", "files")).WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+
+        // As a compressing proxy hands it back: weak, which If-None-Match compares weakly (RFC 9110 §13.1.2).
+        using var weak = await user.SendAsync(HttpMethod.Get, user.Url("shot.png", "files"), headers: new Dictionary<string, string> { ["If-None-Match"] = "W/" + tag });
+        Assert.Equal(HttpStatusCode.NotModified, weak.StatusCode);
     }
 
     [Fact]

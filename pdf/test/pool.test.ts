@@ -138,3 +138,24 @@ describe("Gate", () => {
     for (const w of waiting) expect(await w).toBe(1);
   });
 });
+
+// Skia draws an SVG in one native call that terminate() can't interrupt: a few filters take minutes.
+describe("an SVG", () => {
+  const worker = new URL("../dist/worker.js", import.meta.url);
+  const svg = (body: string) => new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">${body}</svg>`);
+  const heavy = svg(
+    '<filter id="f" x="-10" y="-10" width="30" height="30"><feGaussianBlur stdDeviation="50"/><feMorphology radius="20"/></filter>' +
+      '<rect width="200" height="200" filter="url(#f)"/>'.repeat(50),
+  );
+  const target = { longEdge: 1568, pixels: 1_200_000, bytes: 409_600 };
+
+  it("that draws past its deadline is stopped then, and its slot is free for the next job at once", async () => {
+    pool = new Pool({ workers: 1, queue: 1, entry: worker });
+    const started = Date.now();
+    await expect(pool.run(job({ kind: "svg", bytes: heavy, target, rotate: 0 }), 500)).rejects.toMatchObject({ code: "timeout" });
+    const next = await pool.run<{ width: number }>(job({ kind: "svg", bytes: svg('<rect width="10" height="10"/>'), target, rotate: 0 }), 5_000);
+    expect(next.width).toBe(1095);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(pool.threads).toBe(0);
+  });
+});
