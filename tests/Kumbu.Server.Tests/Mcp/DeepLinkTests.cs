@@ -133,6 +133,18 @@ public sealed class DeepLinkTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Mkdir_prints_no_link_for_the_folders_marker()
+    {
+        var o = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(o.Key);
+
+        var result = await CallAsync(client, "sh", new() { ["command"] = $"mkdir /{o.Vault}/Folder" });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Empty(Links(result));
+    }
+
+    [Fact]
     public async Task PublicUrl_wins_over_the_request_origin()
     {
         var o = await OwnVaultAsync();
