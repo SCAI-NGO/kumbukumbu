@@ -39,7 +39,7 @@ internal static class ToolResult
             }
         }
 
-        if (left > 0) content.Add(new TextContentBlock { Text = $"\n…and {left} more links: cat a note for its link" });
+        if (left > 0) content.Add(new TextContentBlock { Text = $"\n…and {left} more {(left == 1 ? "link" : "links")}: cat a note for its link" });
 
         return new CallToolResult { IsError = result.IsError, Content = content };
     }

@@ -28,6 +28,7 @@ function api(name: string, root = tree(name, [entry(`/${name}/Roses.md`), entry(
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [vault(name)]),
     [`GET /api/vaults/${name}/tree`]: () => json(200, root),
+    [`GET /api/vaults/${name}/versions`]: () => json(200, { notes: [{ path: `/${name}/_archive/Fotos 2026-11-08 213005/rose.png` }, { path: `/${name}/_archive/Fotos 2026-11-08 213005/.vaultkeep` }] }),
     [`GET /api/notes/${name}/_archive/Old.md`]: () => json(200, { path: `/${name}/_archive/Old.md`, content: "Old\n", version: "v", modified: "2026-11-17T00:00:00Z" }),
   });
 }
@@ -56,6 +57,18 @@ describe("DeepLink", () => {
   it("a_missing_archived_note_shows_the_one_page", async () => {
     api("gartenarbeit");
     renderApp("/n/v1/_archive/Gone.md");
+    expect(await screen.findByRole("heading", { name: "Not here" })).toBeInTheDocument();
+  });
+
+  it("an_archived_file_opens_in_the_viewer", async () => {
+    api("gartenarbeit");
+    const router = renderApp("/n/v1/_archive/Fotos%202026-11-08%20213005/rose.png");
+    await waitFor(() => expect(path(router)).toBe("/view/gartenarbeit/_archive/Fotos%202026-11-08%20213005/rose.png"));
+  });
+
+  it("a_missing_archived_file_shows_the_one_page", async () => {
+    api("gartenarbeit");
+    renderApp("/n/v1/_archive/gone.png");
     expect(await screen.findByRole("heading", { name: "Not here" })).toBeInTheDocument();
   });
 

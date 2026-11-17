@@ -113,6 +113,6 @@ public class ImageContentTests
         var texts = Texts(ToolResult.From(result, path => int.Parse(path[(path.LastIndexOf('n') + 1)..^3]) <= 10 ? null : $"https://x/{path}"));
 
         Assert.Equal(10, texts.Count(t => t.StartsWith("\nlink to ", StringComparison.Ordinal)));
-        Assert.Equal("\n…and 1 more links: cat a note for its link", texts[^1]);
+        Assert.Equal("\n…and 1 more link: cat a note for its link", texts[^1]);
     }
 }

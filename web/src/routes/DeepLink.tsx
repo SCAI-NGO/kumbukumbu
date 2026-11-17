@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useArchivedFiles } from "../api/archive";
 import { findFolder, useNote, useTree, useVaults } from "../api/notes";
-import { fileKindOf, folderOf, noteUrl, titleOf, viewUrl } from "../api/paths";
+import { fileKindOf, folderOf, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { AuthScreen, primaryButtonClass } from "../components/form";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -21,7 +22,7 @@ export default function DeepLink() {
   if (vaults.isPending || (vault && tree.isPending)) return <AuthScreen title="Opening the note…" />;
   const path = vault && `/${vault.name}/${rest}`;
   // The tree leaves `_archive/` out, so an archived note is looked for as the archive sheet opens it, by reading it.
-  if (path && fileKindOf(path) === "note" && rest.split("/")[0] === "_archive") return <ArchivedNote path={path} />;
+  if (path && rest.split("/")[0] === "_archive") return fileKindOf(path) === "note" ? <ArchivedNote path={path} /> : <ArchivedFile vault={vault.name} path={path} />;
   const folder = path && tree.data ? findFolder(tree.data.root, folderOf(path)) : undefined;
   if (!path || !folder?.notes.some((n) => n.path === path)) return <NotHere name={titleOf(path ?? `/${rest}`)} />;
   return <Navigate to={fileKindOf(path) === "note" ? noteUrl(path) : viewUrl(path)} replace />;
@@ -32,6 +33,14 @@ function ArchivedNote({ path }: { path: string }) {
   if (note.isPending) return <AuthScreen title="Opening the note…" />;
   if (note.isError) return <NotHere name={titleOf(path)} />;
   return <Navigate to={noteUrl(path)} replace />;
+}
+
+/** The archive sheet's list of the vault's archived files (`useArchivedFiles`), which holds attachments too. */
+function ArchivedFile({ vault, path }: { vault: string; path: string }) {
+  const files = useArchivedFiles(`/${vault}/_archive`, true);
+  if (files.isPending) return <AuthScreen title="Opening the note…" />;
+  if (!files.data?.includes(path)) return <NotHere name={titleOf(path)} />;
+  return <Navigate to={viewUrl(path)} state={{ paths: [path] } satisfies LightboxState} replace />;
 }
 
 function NotHere({ name }: { name: string }) {
