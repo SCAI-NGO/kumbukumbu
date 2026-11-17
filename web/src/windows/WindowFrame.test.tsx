@@ -77,6 +77,9 @@ describe("WindowFrame", () => {
     setDesktop(false);
     const dialog = renderFrame("navigated", "Security");
     expect(dialog).toHaveAttribute("data-sheet");
+    for (const token of ["absolute", "inset-x-0", "bottom-0", "top-[calc(max(32px,6dvh)+env(safe-area-inset-top))]", "rounded-t-[16px]", "border-b-0", "pb-[env(safe-area-inset-bottom)]", "motion-safe:animate-[k-slide-up_200ms_ease-out]"])
+      expect(dialog.classList).toContain(token);
+    expect(dialog.classList).not.toContain("relative");
     expect(dialog).toHaveAccessibleName("Settings");
     expect(screen.getByText("· Security")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Settings· Security");

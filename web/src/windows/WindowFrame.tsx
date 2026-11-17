@@ -20,7 +20,7 @@ const frame: Record<"robust" | "light", { window: string; bar: string; backdrop:
 };
 
 /** Below `lg` a window is a sheet: full width, top at 6 % of the height (at least 32 px) under the safe area, flush with the bottom. */
-const sheet = "absolute inset-x-0 bottom-0 top-[calc(max(32px,6dvh)+env(safe-area-inset-top))] rounded-t-[16px] pb-[env(safe-area-inset-bottom)] motion-safe:animate-[k-slide-up_200ms_ease-out]";
+const sheet = "absolute inset-x-0 bottom-0 top-[calc(max(32px,6dvh)+env(safe-area-inset-top))] rounded-t-[16px] border-b-0 pb-[env(safe-area-inset-bottom)] motion-safe:animate-[k-slide-up_200ms_ease-out]";
 
 /**
  * A window over the notes: its title and ✕, Esc through `useDialog`, and a click on the dimmed notes closing a light
@@ -59,7 +59,7 @@ export default function WindowFrame({
         aria-labelledby={titleId}
         data-frame={light ? "light" : "robust"}
         data-sheet={desktop ? undefined : ""}
-        className={`relative flex flex-col overflow-hidden border-line bg-surface ${look.window} ${desktop ? `rounded-[14px] ${size[kind]}` : sheet}`}
+        className={`flex flex-col overflow-hidden border-line bg-surface ${look.window} ${desktop ? `relative rounded-[14px] ${size[kind]}` : sheet}`}
       >
         <div className={`flex h-14 flex-none items-center gap-2 border-b border-line pl-4 ${look.bar}`}>
           <div className="flex min-w-0 flex-1 items-baseline gap-2">
