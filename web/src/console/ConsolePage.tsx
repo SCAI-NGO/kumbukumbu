@@ -29,6 +29,10 @@ export default function ConsolePage() {
   const close = useCloseWindow();
   const [scheme, setScheme] = useState(storedConsoleScheme);
   const crt = scheme !== "plain";
+  // The caret's column and whether the input has the focus, for the drawn cursor.
+  const [caret, setCaret] = useState(0);
+  const [focused, setFocused] = useState(false);
+  const markCaret = () => setCaret(input.current?.selectionStart ?? 0);
   const choose = (next: ConsoleScheme) => {
     setScheme(next);
     keepConsoleScheme(next);
@@ -44,6 +48,8 @@ export default function ConsolePage() {
     if (following.current && log.current) log.current.scrollTop = log.current.scrollHeight;
   };
   useLayoutEffect(follow, [entries, running]);
+  // Typing, history and clearing move the caret too.
+  useLayoutEffect(markCaret, [value]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -80,14 +86,7 @@ export default function ConsolePage() {
         style={crt ? ({ "--crt-fg": phosphor[scheme].fg, "--crt-bg": phosphor[scheme].bg, "--crt-dim": phosphor[scheme].dim, color: "var(--crt-fg)", backgroundColor: "var(--crt-bg)", textShadow: "0 0 6px color-mix(in srgb, var(--crt-fg) 55%, transparent)" } as CSSProperties) : undefined}
         className="relative flex h-full flex-col gap-4 px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))]"
       >
-        {crt && (
-          <div
-            data-scanlines
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-10 opacity-[0.06]"
-            style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
-          />
-        )}
+        <div className="relative min-h-0 flex-1">
         <div
           ref={log}
           role="log"
@@ -100,8 +99,7 @@ export default function ConsolePage() {
           }}
           // A click in the output goes on typing, unless it selected something to copy.
           onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-          // Relative: an error's screen-reader label is absolutely positioned, and must scroll here rather than grow the page.
-          className={`relative min-h-0 flex-1 overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
+          className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
         >
           <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
           {entries.map((entry, i) => (
@@ -109,28 +107,53 @@ export default function ConsolePage() {
           ))}
           {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} crt={crt} onImage={follow} />}
         </div>
+          {crt && (
+          <div
+            data-scanlines
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-10 opacity-[0.06]"
+            style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
+          />
+        )}
+        </div>
         <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
           <PathLine cwd={cwd} crt={crt} />
           <div className="flex items-center gap-2">
             <span aria-hidden className={crt ? "text-(--crt-dim)" : "text-muted"}>
               &gt;
             </span>
+            <div className="relative min-w-0 flex-1">
             <input
               ref={input}
               aria-label="Command"
               value={value}
               onChange={(event) => setValue(event.target.value)}
               onKeyDown={onKeyDown}
+              onKeyUp={markCaret}
+              onSelect={markCaret}
+              onClick={markCaret}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               disabled={running !== null}
               autoComplete="off"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
               enterKeyHint="go"
-              // 16 px so iOS doesn't zoom in. The block caret is the browser's own, which blinks as the system allows (so not under reduced motion).
-              style={crt ? { caretShape: "block", caretColor: "var(--crt-fg)" } as CSSProperties : undefined}
-              className={`min-h-11 min-w-0 flex-1 bg-transparent font-mono text-base focus:outline-none disabled:opacity-60 ${crt ? "" : "text-text"}`}
+              // 16 px so iOS doesn't zoom in. In the phosphor schemes the real caret is hidden behind a drawn block.
+              style={crt ? { caretColor: "transparent" } : undefined}
+              className={`min-h-11 w-full bg-transparent font-mono text-base focus:outline-none disabled:opacity-60 ${crt ? "" : "text-text"}`}
             />
+            {crt && focused && running === null && (
+              // Monospace, so the caret's column is its width in characters. Steady under reduced motion, blinking otherwise.
+              <span
+                data-cursor
+                aria-hidden="true"
+                style={{ left: `${caret}ch`, backgroundColor: "var(--crt-fg)" }}
+                className="pointer-events-none absolute top-1/2 h-[1.2em] w-[1ch] -translate-y-1/2 font-mono text-base motion-safe:animate-[k-blink_1s_steps(1)_infinite]"
+              />
+            )}
+            </div>
           </div>
         </form>
       </div>

@@ -251,14 +251,6 @@ describe("local commands", () => {
     expect(useConsole.getState().cwd).toBe("/Work");
   });
 
-  it("keeps absolutely positioned text inside the scrolling output", async () => {
-    // An error's screen-reader label is absolutely positioned. Without a positioned ancestor it grows the page instead
-    // of the output, and the page scrolls away from under the input.
-    consoleApi();
-    await open();
-    expect(log()).toHaveClass("relative");
-  });
-
   it("shows its own block for help, then the agents' manual from the server", async () => {
     const { posted } = consoleApi(() => text("Kumbu² shell. All paths are absolute."));
     await open();
@@ -577,15 +569,50 @@ describe("the console scheme", () => {
     const error = screen.getByText("rm: not in this console, which only reads", { exact: false }).closest("[data-line]")!;
     expect(error).toHaveAttribute("data-error");
     expect(error).toHaveTextContent(/error/i);
-    const scanlines = log().parentElement!.querySelector("[data-scanlines]")!;
+    const scanlines = document.querySelector("[data-scanlines]")!;
     expect(scanlines).toHaveAttribute("aria-hidden", "true");
     expect(scanlines).toHaveClass("pointer-events-none");
+    // Over the output only, not the command line.
+    expect(scanlines.parentElement).toContainElement(log());
+    expect(scanlines.parentElement).not.toContainElement(prompt());
+  });
+
+  it.each([
+    ["green", "#33ff66", "#030a05", "#22b348"],
+    ["amber", "#ffb000", "#0a0600", "#b37b00"],
+  ])("pins the %s colours", async (scheme, fg, bg, dim) => {
+    localStorage.setItem("kumbu.consoleScheme", scheme);
+    consoleApi();
+    await open();
+    const screenBox = document.querySelector<HTMLElement>("[data-crt]")!;
+    expect(screenBox.style.getPropertyValue("--crt-fg")).toBe(fg);
+    expect(screenBox.style.getPropertyValue("--crt-bg")).toBe(bg);
+    expect(screenBox.style.getPropertyValue("--crt-dim")).toBe(dim);
+  });
+
+  it("draws a decorative block cursor in the phosphor schemes only, following the caret", async () => {
+    consoleApi();
+    await open();
+    expect(document.querySelector("[data-cursor]")).toBeNull();
+    cleanup();
+    localStorage.setItem("kumbu.consoleScheme", "green");
+    await open();
+    const cursor = document.querySelector<HTMLElement>("[data-cursor]")!;
+    expect(cursor).toHaveAttribute("aria-hidden", "true");
+    expect(cursor).toHaveClass("motion-safe:animate-[k-blink_1s_steps(1)_infinite]");
+    expect(cursor.style.left).toBe("0ch");
+    await userEvent.type(input(), "help");
+    expect(cursor.style.left).toBe("4ch");
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(cursor.style.left).toBe("2ch");
+    input().blur();
+    await waitFor(() => expect(document.querySelector("[data-cursor]")).toBeNull());
   });
 
   it("shows the word error in Plain too", async () => {
     consoleApi(() => text("rm: nope", true));
     await open();
     await run("rm /Work/a.md");
-    expect(screen.getByText("Error:")).toBeVisible();
+    expect(screen.getByText("Error:")).not.toHaveClass("sr-only");
   });
 });

@@ -574,3 +574,9 @@ html {
     scroll-behavior: auto !important;
   }
 }
+
+@keyframes k-blink {
+  50% {
+    opacity: 0;
+  }
+}
