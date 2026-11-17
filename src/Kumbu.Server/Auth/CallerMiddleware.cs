@@ -324,6 +324,7 @@ public sealed class CallerMiddleware(
     {
         if (!context.Request.IsHttps && !environment.IsDevelopment())
         {
+            // Before the wrong-key limit: a URL seen in the clear is spent even when rate-limited, and the answer is the same whether the token exists, so a guess learns nothing.
             if (uploads.Take(token) is { } spent) uploads.Zero(spent);
             await AskAgainAsync(context, StatusCodes.Status403Forbidden, "Uploads need HTTPS; this URL was sent in the clear and is spent.");
             return;
@@ -353,7 +354,9 @@ public sealed class CallerMiddleware(
         }
         catch (VaultBusyException e)
         {
-            await BusyAsync(context, e);
+            // The ticket is spent: 503 with Retry-After, but the agent asks for a new URL rather than retrying this one.
+            context.Response.Headers.RetryAfter = ((int)Api.ApiErrors.BusyRetryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await AskAgainAsync(context, StatusCodes.Status503ServiceUnavailable, e.Message);
             return;
         }
         finally

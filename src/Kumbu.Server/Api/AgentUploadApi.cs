@@ -61,12 +61,12 @@ public static class AgentUploadApi
         return new AgentUploadView(file, $"{(image ? "!" : "")}[{text}]({MarkdownLink.Encode(path)})", links.For(path.Value));
     }
 
-    /// <summary>A refusal of who may write there (401, 403, or 404 for a vault the credential no longer opens) says to ask
+    /// <summary>A refusal of who may write there (401, 403, 404 for a vault the credential no longer opens, or 503 while a vault is re-encrypted) says to ask
     /// again; format, size, conflict and quota answers keep the files API's own.</summary>
     private static async ValueTask<object?> AskAgainFilter(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var result = await next(context);
-        return result is JsonHttpResult<ApiError> { StatusCode: StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound, Value: { } error } refused
+        return result is JsonHttpResult<ApiError> { StatusCode: StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound or StatusCodes.Status503ServiceUnavailable, Value: { } error } refused
             ? TypedResults.Json(error with { Error = $"{error.Error} {AskAgain}" }, statusCode: refused.StatusCode)
             : result;
     }

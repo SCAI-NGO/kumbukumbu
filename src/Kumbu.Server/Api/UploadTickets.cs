@@ -48,14 +48,12 @@ public sealed class UploadTickets : IDisposable
 
     /// <summary>
     /// A new ticket; <paramref name="bearer"/> is taken over (a copy the caller doesn't use again). It expires after
-    /// <see cref="Lifetime"/>, or at <paramref name="notAfter"/> if that is sooner, so a ticket never outlives the
-    /// credential it holds.
+    /// <see cref="Lifetime"/>; a credential that expires sooner is refused by the PUT's own resolution.
     /// </summary>
-    public (string Token, DateTime ExpiresAt) Issue(byte[] bearer, string? connectionId, string path, string? version, string holder, DateTime? notAfter = null)
+    public (string Token, DateTime ExpiresAt) Issue(byte[] bearer, string? connectionId, string path, string? version, string holder)
     {
         var token = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var expiresAt = Now + Lifetime;
-        if (notAfter is { } limit && limit < expiresAt) expiresAt = limit;
         var ticket = new UploadTicket(bearer, connectionId, path, version, holder, expiresAt);
         var key = KeyOf(token);
         lock (_issuing)

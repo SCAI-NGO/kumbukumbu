@@ -100,18 +100,4 @@ public sealed class UploadTicketsTests
         Assert.Matches(new Regex("^[A-Za-z0-9_-]{43}$"), b);
         Assert.NotEqual(a, b);
     }
-
-    [Fact]
-    public void A_credential_that_expires_sooner_shortens_the_ticket()
-    {
-        var soon = _time.GetUtcNow().UtcDateTime.AddMinutes(2);
-        var (token, expiresAt) = _tickets.Issue(Bearer(), null, "/Work/x.png", null, "key-1", soon);
-
-        Assert.Equal(soon, expiresAt);
-        _time.Advance(TimeSpan.FromMinutes(3));
-        Assert.Null(_tickets.Take(token));
-
-        var (_, normal) = _tickets.Issue(Bearer(), null, "/Work/x.png", null, "key-1", _time.GetUtcNow().UtcDateTime.AddHours(1));
-        Assert.Equal(_time.GetUtcNow().UtcDateTime + UploadTickets.Lifetime, normal);
-    }
 }

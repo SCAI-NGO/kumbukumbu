@@ -83,7 +83,7 @@ public static class UploadTool
             _ => ("dev", null),
         };
 
-        // notAfter stays unset: a connection's access token expiry isn't carried by the resolved caller, and the PUT resolves the token again, which refuses it once it has expired.
+        // The PUT's own resolution refuses a credential that has expired meanwhile.
         var (token, expiresAt) = tickets.Issue(Encoding.UTF8.GetBytes(bearer), connectionId, filePath.Value, version, holder);
         var url = $"{OAuthUrls.Origin(context, options.Value.PublicUrl)}/api/agent-upload/{token}";
         return ShellResult.Ok($"""
