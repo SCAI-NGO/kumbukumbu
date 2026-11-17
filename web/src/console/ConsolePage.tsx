@@ -238,7 +238,7 @@ function SchemeSwitch({ scheme, onChoose }: { scheme: ConsoleScheme; onChoose(sc
   if (!desktop) {
     const next = consoleSchemes[(consoleSchemes.indexOf(scheme) + 1) % consoleSchemes.length];
     return (
-      <button type="button" onClick={() => onChoose(next)} className={`${button} text-muted`}>
+      <button type="button" onClick={() => onChoose(next)} className={`${button} rounded-[10px] border border-line bg-surface text-text`}>
         Console scheme: {label[scheme]}
       </button>
     );
@@ -251,7 +251,7 @@ function SchemeSwitch({ scheme, onChoose }: { scheme: ConsoleScheme; onChoose(sc
           type="button"
           aria-pressed={option === scheme}
           onClick={() => onChoose(option)}
-          className={`${button} ${option === scheme ? "bg-surface text-accent-text font-bold" : "text-muted"}`}
+          className={`${button} ${option === scheme ? "bg-surface font-medium text-text" : "text-muted"}`}
         >
           {label[option]}
         </button>

@@ -48,7 +48,7 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
   }, [shown]);
 
   const list = (
-    <nav aria-label={label} className={desktop ? "flex h-full w-[220px] flex-none flex-col overflow-y-auto border-r border-line bg-surface-2 p-2" : "flex h-full w-3/4 flex-col overflow-y-auto border-r border-line bg-surface-2 p-2"}>
+    <nav aria-label={label} className={desktop ? "flex h-full w-[220px] flex-none flex-col overflow-y-auto border-r border-line bg-surface-2 p-2" : "flex h-full w-full flex-col overflow-y-auto border-r border-line bg-surface-2 p-2"}>
       {lock !== null && <p className="px-3 py-2 text-sm text-muted">{lock}</p>}
       {/* Link, not NavLink: NavLink would set aria-current by `to` alone, and an entry is current on every page under `match`. */}
       {entries.map((e) => (

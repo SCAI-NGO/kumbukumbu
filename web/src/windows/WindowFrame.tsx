@@ -70,14 +70,15 @@ export default function WindowFrame({
             </h2>
             {!desktop && heading && <span className="min-w-0 truncate text-lg text-muted">· {heading}</span>}
           </div>
-          {actions}
-          <button type="button" aria-label="Close" onClick={close} className="flex size-12 flex-none items-center justify-center text-muted focus-visible:outline-2 focus-visible:outline-accent">
+          {actions && <div className="mr-2 flex flex-none items-center">{actions}</div>}
+          {/* The ring drawn inside the target, rounded: the window's corner would clip one outside it. */}
+          <button type="button" aria-label="Close" onClick={close} className="flex size-12 flex-none items-center justify-center rounded-[10px] text-muted focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-accent">
             <X size={20} aria-hidden />
           </button>
         </div>
         <div className="relative flex min-h-0 flex-1">
           {nav}
-          <div inert={navOpen} className={`min-h-0 min-w-0 flex-1 overflow-y-auto ${nav && !desktop ? "pl-12" : ""}`}>{children}</div>
+          <div inert={navOpen} className={`min-h-0 min-w-0 flex-1 overflow-y-auto ${nav && !desktop ? "pl-10" : ""}`}>{children}</div>
         </div>
       </div>
     </div>
