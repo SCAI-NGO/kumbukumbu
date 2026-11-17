@@ -678,7 +678,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         using var missing = await ExportAsync(user, ZipUrl(user, "a.png", "gone.png"));
         using var note = await ExportAsync(user, ZipUrl(user, "a.png", "n.md"));
         using var escape = await ExportAsync(user, ZipUrl(user, "a.png", "../Fremd/b.png"));
-        using var unsupported = await ExportAsync(user, ZipUrl(user, "a.svg"));
+        using var unsupported = await ExportAsync(user, ZipUrl(user, "a.bmp"));
 
         Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
