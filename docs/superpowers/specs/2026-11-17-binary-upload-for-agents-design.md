@@ -1,6 +1,6 @@
 # Binary upload for agents — design
 
-Status: approved by Chris on 2026-11-17, for 0.6.0. Idea note: `/SWE/Kumbu/Ideas/Binary upload for agents 2026-11-17.md` (worked out with Brita and her agent Veyalt).
+Status: approved by Chris on 2026-11-17, for 0.6.0. Idea note: `/SWE/Kumbu/Ideas/Binary upload for agents 2026-11-17.md` (worked out together with a user of Kumbu² and their agent).
 
 ## Why
 
