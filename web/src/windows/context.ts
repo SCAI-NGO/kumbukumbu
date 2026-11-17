@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { createContext, createElement, useCallback, useContext, useEffect } from "react";
+import { createContext, createElement, useCallback, useContext, useLayoutEffect } from "react";
 import { Navigate, useMatches, useNavigate } from "react-router-dom";
 import { ROOT, useWindows } from "./store";
 
@@ -33,7 +33,7 @@ export function useCloseWindow(): () => void {
  */
 export function ShellRedirect({ to }: { to: string }) {
   const open = useWindowOpen();
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open) useWindows.setState({ behind: { ...ROOT, pathname: to } });
   }, [open, to]);
   return open ? null : createElement(Navigate, { to, replace: true });

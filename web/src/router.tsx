@@ -16,6 +16,7 @@ import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
 import UpdateBar from "./update/UpdateBar";
+import { setWindowRoutes } from "./windows/store";
 import WindowHost from "./windows/WindowHost";
 
 /**
@@ -155,3 +156,4 @@ export const routes: RouteObject[] = [
     ],
   },
 ];
+setWindowRoutes(routes);

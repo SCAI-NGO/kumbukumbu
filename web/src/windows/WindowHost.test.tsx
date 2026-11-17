@@ -33,7 +33,7 @@ const tree = (name: string, notes: string[]) => json(200, { damaged: 0, root: { 
 const vault = (name: string, discreet = false) => ({ name, notes: 2, embeddings: "internal", discreet });
 
 /** Work, and while `shown()` says so the discreet Tagebuch; every note reads "Text of <path>." */
-function signedInApi(shown = () => false) {
+function signedInApi(shown = () => false, extra: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown(), until: null } }),
     "GET /api/vaults": () => json(200, shown() ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
@@ -61,6 +61,7 @@ function signedInApi(shown = () => false) {
     "GET /api/member-notices": () => json(200, []),
     "POST /api/ws-ticket": () => json(503, { error: "later" }),
     "PUT /api/account/discreet/open-note": () => noContent(),
+    ...extra,
   });
 }
 
@@ -103,25 +104,55 @@ describe("a window over the notes", () => {
     expect(router.state.location.pathname).toBe("/notes/Work/readme.md");
   });
 
-  it("keeps Write mode and its draft, without reading the note again", async () => {
-    const fetch = signedInApi();
+  it.each([
+    ["while its save is under way", () => new Promise<Response>(() => {})],
+    ["when its save fails", () => json(500, { error: "Broken." })],
+  ])("keeps Write mode and its draft unsaved, opening without waiting for a save, %s", async (_, put) => {
+    const fetch = signedInApi(undefined, { "PUT /api/notes/*": put });
     const router = renderApp("/notes/Work/inbox.md");
     const write = await screen.findByRole("button", { name: "Write" });
     await waitFor(() => expect(write).toBeEnabled());
     await userEvent.click(write);
-    const source = await screen.findByRole("textbox", { name: "Markdown source" });
+    // On its first load the editor replaces a stand-in; it takes the focus once it is in.
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Markdown source" })).toHaveFocus());
+    const source = screen.getByRole("textbox", { name: "Markdown source" });
     await userEvent.type(source, "Draft");
     const draft = (source as HTMLTextAreaElement).value;
     expect(draft).toContain("Draft");
     const reads = noteReads(fetch);
+    const puts = () => fetch.mock.calls.filter(([r]) => (r as Request).method === "PUT" && new URL((r as Request).url).pathname.startsWith("/api/notes/")).length;
+    const putsBefore = puts();
     // Opened in-app, as the drawer's link does.
     await navigateAway(router, "/console");
     await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
     await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Console" })).not.toBeInTheDocument());
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
     expect(useEditor.getState().mode).toBe("write");
     expect(screen.getByRole("textbox", { name: "Markdown source" })).toHaveValue(draft);
+    expect(useEditor.getState().unsaved?.()?.text).toBe(draft);
+    // The blur as the focus moves into the window saves, as the autosave would anyway; nothing waits for it.
+    expect(puts()).toBeLessThanOrEqual(putsBefore + 1);
     expect(noteReads(fetch)).toBe(reads);
+  });
+
+  it("doesn't jump to where the note was opened at again, as a window opens and closes", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    signedInApi();
+    // Followed in-app, so that its entry has a key of its own (a first entry's is "default", as a keyless one's).
+    const router = renderApp("/notes/Work/readme.md");
+    await screen.findByText("Text of /Work/readme.md.");
+    await act(() => router.navigate("/notes/Work/inbox.md", { state: { line: 1 } }));
+    const text = await screen.findByText("Text of /Work/inbox.md.", { selector: "p" });
+    await waitFor(() => expect(scrollIntoView.mock.contexts).toContain(text));
+    scrollIntoView.mockClear();
+    await navigateAway(router, "/console");
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/inbox.md"));
+    await act(async () => {});
+    expect(scrollIntoView.mock.contexts).not.toContain(text);
   });
 
   it("on a deep link shows the window over the kept note, and closes to it", async () => {

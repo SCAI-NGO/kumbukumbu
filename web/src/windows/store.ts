@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { matchRoutes, type Location, type RouteObject } from "react-router-dom";
 import { create } from "zustand";
 
 export type WindowKind = "navigated" | "console" | "light";
 
-/** A location of the app, as React Router has it. */
-export type Behind = { pathname: string; search: string; hash: string; state: unknown };
+/**
+ * A location of the app, as React Router has it. Its key too: the note opened at a block or a line jumps there once per
+ * key, and a window opening or closing must not make it jump again.
+ */
+export type Behind = Pick<Location, "pathname" | "search" | "hash" | "state" | "key">;
 
 /** The vault list's location: what a window reached without a location behind shows under it. */
-export const ROOT: Behind = { pathname: "/", search: "", hash: "", state: null };
+export const ROOT: Behind = { pathname: "/", search: "", hash: "", state: null, key: "behind" };
 
 /**
  * The window over the notes, in memory only: the location the shell shows behind it (the last one that wasn't a
@@ -22,3 +26,9 @@ interface WindowsState {
 }
 
 export const useWindows = create<WindowsState>()(() => ({ behind: null, inApp: false, lock: null }));
+
+/** The app's routes, set by the router: whether a location is a window's, for code the router itself imports. */
+let routes: RouteObject[] = [];
+export const setWindowRoutes = (all: RouteObject[]) => void (routes = all);
+export const isWindowLocation = (location: Pick<Location, "pathname">) =>
+  !!matchRoutes(routes, location)?.some((m) => (m.route.handle as { window?: boolean } | undefined)?.window === true);

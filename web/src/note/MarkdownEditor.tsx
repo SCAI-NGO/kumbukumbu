@@ -9,6 +9,7 @@ import { goneVault, useDiscreet } from "../discreet/state";
 import { topDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { isWindowLocation, useWindows } from "../windows/store";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
@@ -196,6 +197,9 @@ export default function MarkdownEditor({
     ({ currentLocation, nextLocation }) => {
       // A session that ended goes to sign-in regardless; the text can't be saved without one.
       if (currentLocation.pathname === nextLocation.pathname || nextLocation.pathname === "/signin" || !unresolved()) return false;
+      // A window opens over the note, and closes back to it: the editor stays, and so does what it holds unsaved.
+      if (isWindowLocation(nextLocation)) return false;
+      if (isWindowLocation(currentLocation) && nextLocation.pathname === useWindows.getState().behind?.pathname) return false;
       // A discreet note on its way out with the vaults hidden again: the hide has held what is unsaved (`hold`), and
       // the note goes with its vault. Blocked, the hidden note would stay on screen, put back as the open note. An
       // ordinary note keeps its guard, and so does this one until the hide has its text: until the mode is reset, its

@@ -20,7 +20,7 @@ export default function WindowHost() {
   // Before the paint, so that the window opening finds the location it came from: a deep link or a reload has none,
   // and shows the window over `/`, the kept note or the vault list.
   useLayoutEffect(() => {
-    if (!open) useWindows.setState({ behind: { pathname: location.pathname, search: location.search, hash: location.hash, state: location.state }, inApp: true });
+    if (!open) useWindows.setState({ behind: { pathname: location.pathname, search: location.search, hash: location.hash, state: location.state, key: location.key }, inApp: true });
     else if (!useWindows.getState().behind) useWindows.setState({ behind: ROOT, inApp: false });
   }, [open, location]);
   // Another page (the board, sign-in) leaves the shell: a window opened after it has nothing behind it in the shell.
