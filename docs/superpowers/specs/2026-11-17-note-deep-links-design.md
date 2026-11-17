@@ -36,7 +36,7 @@ Origin: `KUMBU_PUBLIC_URL`, else the request's origin, as OAuth does (`OAuth/OAu
 
 **At most ten links per answer. Decided by Chris.** `Mcp/ToolResult.cs` prints the link block after the first ten version blocks that get a link and then one line, `…and N more links: cat a note for its link`; the version blocks stay complete. Reason: versions are for the agent, and every one is needed for a follow-up edit; links are for the person to tap, and past a handful they only cost context (a `replace` of 400 notes would add about 44 KB of links). One limit in one place covers `replace`, `cat` pipelines and `mv` of a folder alike, so the one rule holds, with a measure.
 
-It is its own text block after the version block, on its own line, e.g. `link to /Work/plan.md: https://…/n/…/plan.md`, so it never mixes with the note's text or the version token (`Mcp/ToolResult.cs:16`). The server maps the path's vault name to the vault's id through the caller's opened access; Core stays unaware of hosts and ids.
+It is its own text block after the version block, on its own line, e.g. `link to /Work/plan.md: https://…/n/…/plan.md`, so it never mixes with the note's text or the version token (`Mcp/ToolResult.cs`). The server maps the path's vault name to the vault's id through the caller's opened access; Core stays unaware of hosts and ids.
 
 The tool descriptions (`Sh/Manual.cs`) say once that the link opens the note in the web app after sign-in, and that it is the thing to show the user.
 
@@ -44,7 +44,7 @@ The tool descriptions (`Sh/Manual.cs`) say once that the link opens the note in 
 
 1. Not signed in: to sign-in, and back here afterwards (`safeNext` accepts `/n/`; the sign-in's reset for another user, `routes/SignIn.tsx:55`, covers `/n/` as it does `/notes/`).
 2. Finds the vault in the user's vault list by its id: `VaultView` (`Api/NoteApi.cs:41`) gains `id`.
-3. Checks the note or file exists, then replaces the URL with `/notes/<the user's name for it>/<path>` for a note, `/view/<name>/<path>` for a file.
+3. Checks the note or file exists, then replaces the URL with `/notes/<the user's name for it>/<path>` for a note, `/view/<name>/<path>` for a file. The tree leaves out the archive, so a path under `_archive/` is checked as the archive sheet checks it: a note through the notes API, a file against the archive's file list (found in the final review: an archived note's `cat` prints a link too, and the one rule holds there).
 4. **Otherwise one page for every case**: the vault isn't in the list (not a member, deleted, a discreet vault not revealed), or the path doesn't exist (moved, removed). Its text says so plainly and the same for all: "This link leads to a note that isn't here: it was moved or removed, or it's in a vault you can't see right now." It offers the search, filled with the note's name. Why one page: a link must never tell whether a vault or note exists that the reader can't see; and the honest sentence names every case, so it doesn't mislead the owner of a discreet vault either.
 
 ### A link pasted into a note
