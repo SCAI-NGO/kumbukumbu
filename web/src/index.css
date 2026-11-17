@@ -511,6 +511,11 @@ html {
     opacity: 0.4;
   }
 }
+@keyframes k-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+}
 @keyframes k-in-up {
   from {
     transform: translateY(24px);

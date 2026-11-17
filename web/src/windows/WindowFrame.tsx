@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { X } from "lucide-react";
 import { useId, type ReactNode } from "react";
+import { useDesktop } from "../hooks/useDesktop";
 import { useDialog } from "../hooks/useDialog";
 import { useCloseWindow } from "./context";
 import type { WindowKind } from "./store";
@@ -12,6 +13,15 @@ const size: Record<WindowKind, string> = {
   light: "lg:w-[min(672px,100vw-64px)] lg:h-[min(720px,100dvh-64px)]",
 };
 
+/** Robust windows hold work that can be lost, so they are loud: a firm border, a strong shadow, a dark backdrop. Light ones stay quiet. */
+const frame: Record<"robust" | "light", { window: string; bar: string; backdrop: string }> = {
+  robust: { window: "border-2 shadow-2xl", bar: "bg-surface-2", backdrop: "bg-black/60" },
+  light: { window: "border shadow-lg", bar: "bg-surface", backdrop: "bg-black/35" },
+};
+
+/** Below `lg` a window is a sheet: full width, top at 6 % of the height (at least 32 px) under the safe area, flush with the bottom. */
+const sheet = "absolute inset-x-0 bottom-0 top-[calc(max(32px,6dvh)+env(safe-area-inset-top))] rounded-t-[16px] pb-[env(safe-area-inset-bottom)] motion-safe:animate-[k-slide-up_200ms_ease-out]";
+
 /**
  * A window over the notes: its title and ✕, Esc through `useDialog`, and a click on the dimmed notes closing a light
  * one only (where nothing typed can be lost). `heading` names the entry shown, for the phone's title; `actions` sit
@@ -20,6 +30,7 @@ const size: Record<WindowKind, string> = {
 export default function WindowFrame({
   kind,
   title,
+  heading,
   nav,
   actions,
   children,
@@ -34,20 +45,29 @@ export default function WindowFrame({
   const close = useCloseWindow();
   const dialog = useDialog<HTMLDivElement>(close);
   const titleId = useId();
+  const desktop = useDesktop();
+  const light = kind === "light";
+  const look = frame[light ? "light" : "robust"];
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60" onClick={kind === "light" ? (e) => e.target === e.currentTarget && close() : undefined}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center">
+      <div aria-hidden className={`absolute inset-0 ${look.backdrop}`} onClick={light ? close : undefined} />
       <div
         ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`flex h-full w-full flex-col overflow-hidden border-2 border-line bg-surface lg:rounded-[14px] ${size[kind]}`}
+        data-frame={light ? "light" : "robust"}
+        data-sheet={desktop ? undefined : ""}
+        className={`relative flex flex-col overflow-hidden border-line bg-surface ${look.window} ${desktop ? `rounded-[14px] ${size[kind]}` : sheet}`}
       >
-        <div className="flex h-14 flex-none items-center gap-2 border-b border-line bg-surface-2 pl-4">
-          <h2 id={titleId} className="min-w-0 flex-1 truncate text-lg font-bold text-text">
-            {title}
-          </h2>
+        <div className={`flex h-14 flex-none items-center gap-2 border-b border-line pl-4 ${look.bar}`}>
+          <div className="flex min-w-0 flex-1 items-baseline gap-2">
+            <h2 id={titleId} className="min-w-0 truncate text-lg font-bold text-text">
+              {title}
+            </h2>
+            {!desktop && heading && <span className="min-w-0 truncate text-lg text-muted">· {heading}</span>}
+          </div>
           {actions}
           <button type="button" aria-label="Close" onClick={close} className="flex size-12 flex-none items-center justify-center text-muted focus-visible:outline-2 focus-visible:outline-accent">
             <X size={20} aria-hidden />
