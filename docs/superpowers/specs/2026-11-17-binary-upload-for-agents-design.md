@@ -42,7 +42,7 @@ Agents can write Markdown into Kumbu² but can't put a file there. An agent that
 - Arguments: `path` (absolute, the attachment's path including its vault, as `write` takes it) and optional `version` (the attachment's version token from `cat`, to overwrite an existing file; left out, the path must be free, as the existing `PUT` behaves).
 - Checks at once, before a ticket exists, what can be checked without the bytes: the path is valid and of an allowed attachment format (by its extension), the caller may write there (read-only keys and connections are refused here, not later), the path is free or `version` matches the current one, the server keeps attachments.
 - Answers, as text the agent can act on:
-  - the upload URL, `<origin>/api/upload/<token>`
+  - the upload URL, `<origin>/api/agent-upload/<token>`
   - the method (`PUT`) and that the body is the raw bytes
   - a ready `curl` line: `curl -sS -X PUT --data-binary @<local file> '<url>'`
   - when it expires (UTC) and that it works once
@@ -60,7 +60,9 @@ Agents can write Markdown into Kumbu² but can't put a file there. An agent that
 - **Dropped** when it expires (a sweep, or on the next lookup), when it is used, when the process ends, and the key material zeroed then, as a pairing code's copy is.
 - **Bounded:** at most a small number of open tickets per credential (builder's call, e.g. 20; the oldest goes). Why: a looping agent must not fill the server's memory.
 
-### `PUT /api/upload/{token}`
+### `PUT /api/agent-upload/{token}`
+
+Not under `/api/upload/`: that is the web app's Markdown upload (`POST /api/upload/{vault}/{**folder}`, `Api/UploadApi.cs`), and a vault may be called anything, so no prefix shared with it (found while planning).
 
 - **No other credential is read:** no cookie, no bearer key. The token alone authorises. CORS: none (agents call it from a shell). Rate-limited like wrong bearer keys: an unknown token counts against the wrong-key limit.
 - **Before the body:** `CallerMiddleware` recognises the route, takes the ticket out of the store (unknown or expired: `401`), and resolves the caller from the ticket's credential through the same path as a bearer header, so `RequestCaller` is built as today and no new credential kind is needed. A credential that no longer resolves (revoked, expired, user inactive, vault re-keyed) answers `403`; a right below write on the ticket's vault, or a membership ended, the usual refusal. Every refusal says to ask for a new URL.
