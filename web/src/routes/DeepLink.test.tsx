@@ -66,6 +66,8 @@ describe("DeepLink", () => {
     await userEvent.click(screen.getByRole("button", { name: "Search for it" }));
     expect(useEditor.getState().searchQuery).toBe("Roses");
     expect(useEditor.getState().overlay).toBe("search");
+    expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search" })).toHaveValue("Roses");
   });
 
   it("missing_path_shows_the_one_page", async () => {
@@ -76,6 +78,8 @@ describe("DeepLink", () => {
     await userEvent.click(screen.getByRole("button", { name: "Search for it" }));
     expect(useEditor.getState().searchQuery).toBe("Gone");
     expect(useEditor.getState().overlay).toBe("search");
+    expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search" })).toHaveValue("Gone");
   });
 
   it("a_vault_whose_tree_is_refused_shows_the_one_page", async () => {

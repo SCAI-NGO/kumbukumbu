@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { findFolder, useTree, useVaults } from "../api/notes";
 import { fileKindOf, folderOf, noteUrl, titleOf, viewUrl } from "../api/paths";
 import { AuthScreen, primaryButtonClass } from "../components/form";
@@ -25,6 +25,7 @@ export default function DeepLink() {
 
 function NotHere({ name }: { name: string }) {
   const { setSearchQuery, setOverlay } = useEditor();
+  const navigate = useNavigate();
   return (
     <AuthScreen title="Not here" lead="This link leads to a note that isn't here: it was moved or removed, or it's in a vault you can't see right now.">
       <button
@@ -33,6 +34,8 @@ function NotHere({ name }: { name: string }) {
         onClick={() => {
           setSearchQuery(name);
           setOverlay("search");
+          // The search sheet lives in the shell: this page is outside it, so the shell is opened to show it.
+          navigate("/", { replace: true });
         }}
       >
         Search for it
