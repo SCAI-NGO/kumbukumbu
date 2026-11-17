@@ -28,6 +28,7 @@ function api(name: string, root = tree(name, [entry(`/${name}/Roses.md`), entry(
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [vault(name)]),
     [`GET /api/vaults/${name}/tree`]: () => json(200, root),
+    [`GET /api/notes/${name}/_archive/Old.md`]: () => json(200, { path: `/${name}/_archive/Old.md`, content: "Old\n", version: "v", modified: "2026-11-17T00:00:00Z" }),
   });
 }
 
@@ -44,6 +45,18 @@ describe("DeepLink", () => {
     api("garten");
     const router = renderApp("/n/v1/Roses.md");
     await waitFor(() => expect(path(router)).toBe("/notes/garten/Roses.md"));
+  });
+
+  it("an_archived_note_opens", async () => {
+    api("gartenarbeit");
+    const router = renderApp("/n/v1/_archive/Old.md");
+    await waitFor(() => expect(path(router)).toBe("/notes/gartenarbeit/_archive/Old.md"));
+  });
+
+  it("a_missing_archived_note_shows_the_one_page", async () => {
+    api("gartenarbeit");
+    renderApp("/n/v1/_archive/Gone.md");
+    expect(await screen.findByRole("heading", { name: "Not here" })).toBeInTheDocument();
   });
 
   it("a_file_goes_to_the_lightbox", async () => {
