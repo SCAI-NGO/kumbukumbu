@@ -144,6 +144,17 @@ public static class FileApi
         CancellationToken ct)
     {
         var filePath = ApiPaths.Parse(vault, path, PathKind.Attachment);
+        return await StoreAsync(filePath, version, request, caller, store, notes, labels, ct);
+    }
+
+    /// <summary>
+    /// Stores the request's body as the file at the path, as <see cref="WriteAsync"/> does: the one write path of every
+    /// route that uploads a file, so that all of them check, limit and record it alike.
+    /// </summary>
+    internal static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> StoreAsync(
+        VaultPath filePath, string? version, HttpRequest request, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels,
+        CancellationToken ct)
+    {
         await NoteApi.RequireVaultAsync(store, filePath, ct);
         // Before the body is read: a key that may only read buffers and stores nothing.
         NoteApi.Refuse(caller, "upload", filePath);
