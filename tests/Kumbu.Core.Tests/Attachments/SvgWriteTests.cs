@@ -3,6 +3,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
 using Microsoft.Extensions.Time.Testing;
 
@@ -82,6 +83,24 @@ public sealed class SvgWriteTests
 
         Assert.Equal($"diagram.svg: image (SVG), 200×100, 101 B\n{Drawing}", (await shell.RunAsync("cat /Work/diagram.svg", Ct)).Output);
         Assert.Equal("diagram.svg  image 200×100 101 B", (await shell.RunAsync("ls /Work", Ct)).Output.Split('\n').Single(l => l.StartsWith("diagram", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Cat_gives_the_version_to_write_it_again_and_no_embeds_block()
+    {
+        var (store, writer, shell) = Make();
+        await writer.WriteAsync("/Work/a.md", "# A\n", null, Ct);
+        var drawing = Drawing.Replace("</svg>", "<text>![[a.md]]</text></svg>");
+        await writer.WriteAsync("/Work/diagram.svg", drawing, null, Ct);
+
+        var cat = await shell.RunAsync("cat /Work/diagram.svg", Ct);
+
+        var stored = (await store.GetAttachmentAsync(P("/Work/diagram.svg"), Ct))!;
+        Assert.Equal(new NoteVersion("/Work/diagram.svg", stored.Version), cat.Version);
+        Assert.DoesNotContain(Cat.EmbedsHeader, cat.Output);
+        Assert.Equal("wrote /Work/diagram.svg", (await writer.WriteAsync("/Work/diagram.svg", Drawing, cat.Version!.Token, Ct)).Output);
+        Assert.Contains(new NoteVersion("/Work/diagram.svg", (await store.GetAttachmentAsync(P("/Work/diagram.svg"), Ct))!.Version),
+            (await shell.RunAsync("cat /Work/diagram.svg /Work/a.md", Ct)).Versions!);
     }
 
     [Fact]
