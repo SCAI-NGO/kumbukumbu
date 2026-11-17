@@ -15,15 +15,20 @@ public enum AttachmentKind
 
 /// <summary>
 /// A file format Kumbu² keeps besides notes. The extension names the format; the first bytes decide
-/// whether the content really is that format.
+/// whether the content really is that format, and for an SVG, which has no magic bytes, its XML (<see cref="SvgImage"/>).
 /// </summary>
 public sealed record AttachmentFormat(string Extension, string MediaType, AttachmentKind Kind)
 {
     /// <summary>15 MB per file.</summary>
     public const long MaxBytes = 15 * 1024 * 1024;
 
-    public const string UnsupportedMessage = "Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP) only";
+    public const string UnsupportedMessage = "Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP, SVG) only";
 
+    /// <summary>An image of text: checked as XML, its size read from its root, shown only as a picture (spec 2026-11-17).
+    /// Inside a skill's folder, <see cref="ForPath"/> keeps <c>.svg</c> a text file.</summary>
+    public static AttachmentFormat Svg { get; } = new(".svg", "image/svg+xml", AttachmentKind.Image);
+
+    // After Svg: static initialisers run in order.
     public static IReadOnlyList<AttachmentFormat> All { get; } =
     [
         new(".pdf", "application/pdf", AttachmentKind.Pdf),
@@ -32,6 +37,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         new(".jpeg", "image/jpeg", AttachmentKind.Image),
         new(".gif", "image/gif", AttachmentKind.Image),
         new(".webp", "image/webp", AttachmentKind.Image),
+        Svg,
     ];
 
     /// <summary>The folder marker: kept like an attachment, but no format users may upload, so not in <see cref="All"/>.</summary>
@@ -101,6 +107,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         }
 
         if (ForPath(target)?.MediaType == format.MediaType) return null;
+        if (format == Svg && ForPath(target) == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
@@ -116,7 +123,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     };
 
     /// <summary>Null when the file is accepted; otherwise the reason to show the user. <paramref name="head"/>
-    /// is the start of the content (at least 12 bytes where the file has them); for a text file callers pass the whole content.</summary>
+    /// is the start of the content (at least 12 bytes where the file has them); for a text file and an SVG callers pass the whole content.</summary>
     public static string? Problem(VaultPath path, ReadOnlySpan<byte> head)
     {
         var format = ForPath(path);
@@ -131,6 +138,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         }
 
         if (format == Text) return TextProblem(path.Name, head);
+        if (format == Svg) return SvgImage.Problem(path.Name, head);
 
         return format.Matches(head)
             ? null
@@ -158,6 +166,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         "image/png" => "a PNG image",
         "image/jpeg" => "a JPEG image",
         "image/gif" => "a GIF image",
+        "image/svg+xml" => "an SVG image",
         TextMediaType => "a text file",
         _ => "a WebP image",
     };

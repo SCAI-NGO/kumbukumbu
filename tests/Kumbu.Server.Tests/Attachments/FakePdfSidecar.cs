@@ -123,6 +123,23 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height, Frames: frames);
     }
 
+    /// <summary>The stored size each SVG request carried.</summary>
+    public List<(int Width, int Height)?> SvgSizes { get; } = [];
+
+    /// <summary>An SVG drawn at the step, enlarged too: its stored size, or a square without one.</summary>
+    public async Task<Picture> RenderSvgAsync(ReadOnlyMemory<byte> svg, (int Width, int Height)? size, StepLimits target, Crop? crop, int rotate, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _renders);
+        lock (ImageRequests) { ImageRequests.Add((target, crop)); ImageRotations.Add(rotate); ImageFrames.Add(null); SvgSizes.Add(size); }
+        await AnswerAsync(ct);
+        var original = size ?? (300, 300);
+        var (w, h) = crop is null ? original : ((int)crop.Width, (int)crop.Height);
+        if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
+        var scale = Math.Min((double)target.LongEdge / Math.Max(w, h), Math.Sqrt((double)target.Pixels / ((long)w * h)));
+        var (width, height) = (Math.Max(1, (int)(w * scale)), Math.Max(1, (int)(h * scale)));
+        return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height);
+    }
+
     public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
     {
         lock (TextBoxPdfs) TextBoxPdfs.Add(pdf.ToArray());

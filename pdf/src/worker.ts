@@ -2,19 +2,18 @@
 
 // The entry of a pool worker: runs one job and posts its answer. Only a PdfError's code and
 // sentence leave the thread; anything else becomes "failed", since an exception's text may quote
-// the file.
+// the file. The same file runs as a child process for an SVG (pool.ts), and then speaks over IPC.
 
 import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
 import { textBoxes } from "./boxes.js";
 import { extractImage, listImages, quietly, renderRegion } from "./extract.js";
-import { renderImage } from "./image.js";
+import { renderImage, renderSvg } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
 import { renderPage } from "./render.js";
 
-const port = parentPort!;
-const post = (m: WorkerMessage, transfer: ArrayBuffer[] = []) => port.postMessage(m, transfer);
+const post = (m: WorkerMessage, transfer: ArrayBuffer[] = []) => (parentPort ? parentPort.postMessage(m, transfer) : process.send!(m));
 
 async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] }> {
   switch (job.kind) {
@@ -27,6 +26,8 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
           ? await renderPage(job.bytes, job.page, job.target, job.crop, job.rotate)
           : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame),
       );
+    case "svg":
+      return own(await renderSvg(job.bytes, job.target, job.size, job.crop, job.rotate));
     case "boxes":
       return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
     // A backstop: whatever pdf.js prints during an extraction job, warnings on or not, may name details
@@ -46,7 +47,7 @@ function own<T extends { data: Uint8Array }>(r: T): { value: T; transfer: ArrayB
   return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };
 }
 
-port.once("message", (job: Job) => {
+(parentPort ?? process).once("message", (job: Job) => {
   run(job).then(
     ({ value, transfer }) => post({ type: "done", value }, transfer),
     (e: unknown) =>

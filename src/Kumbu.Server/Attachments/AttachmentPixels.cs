@@ -19,10 +19,17 @@ public sealed class AttachmentPixels(
     EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner, ExtractionGate extractions, RequestCaller caller)
     : IAttachmentPixels
 {
-    /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.</summary>
+    /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.
+    /// An SVG is drawn at the size asked for, whatever canvas it claims, so its stored size goes with it and no header is checked.</summary>
     public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
+        if (state.MediaType == AttachmentFormat.Svg.MediaType)
+        {
+            var size = state is { Width: int w, Height: int h } ? (w, h) : ((int, int)?)null;
+            return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderSvgAsync(bytes, size, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "image rendering", path, null, crop, null));
+        }
+
         if (ImageHeader.Read(bytes, out var problem) is null) throw new PixelsUnavailableException(TooLarge(path, state, problem), PixelsProblem.TooLarge);
         return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, rotate, frame, ct), e => Refused(e, "image rendering", path, null, crop, frame));
     }

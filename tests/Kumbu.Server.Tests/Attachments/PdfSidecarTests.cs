@@ -483,6 +483,22 @@ public sealed class PdfSidecarTests
     }
 
     [Fact]
+    public async Task An_svg_goes_to_its_own_route_with_its_stored_size_or_none()
+    {
+        var png = FakePdfSidecar.SolidPng(1548, 774);
+        var stub = new Stub((_, _) => Image(png, "image/png", 1548, 774, ("X-Kumbu-Original-Width", "200"), ("X-Kumbu-Original-Height", "100")));
+        var svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 100\"/>"u8.ToArray();
+
+        var picture = await Sidecar(stub).RenderSvgAsync(svg, (200, 100), Medium, new Crop(0, 0, 200, 100), 0, Ct);
+        await Sidecar(stub).RenderSvgAsync(svg, null, Medium, null, 0, Ct);
+
+        Assert.Equal("http://pdf.test:8090/render/svg?longEdge=1568&pixels=1200000&bytes=409600&crop=0,0,200,100&width=200&height=100", stub.Seen[0].Request.RequestUri!.ToString());
+        Assert.Equal("http://pdf.test:8090/render/svg?longEdge=1568&pixels=1200000&bytes=409600", stub.Seen[1].Request.RequestUri!.ToString());
+        Assert.Equal(svg, stub.Seen[0].Body);
+        Assert.Equal((1548, 774, 200d, 100d), (picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
+    }
+
+    [Fact]
     public async Task An_image_that_was_transparent_says_so()
     {
         var jpeg = Jpeg(724, 1568);

@@ -41,9 +41,12 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             """,
         ["attachments"] = $"""
             attachments
-              Besides notes, a vault keeps images and PDFs: .png, .jpg, .jpeg, .gif, .webp and .pdf, up to
-              15 MB each. Nothing else is accepted. People upload them (the web app, Obsidian); the write,
+              Besides notes, a vault keeps images and PDFs: .png, .jpg, .jpeg, .gif, .webp, .svg and .pdf, up
+              to 15 MB each. Nothing else is accepted. People upload them (the web app, Obsidian); the write,
               edit and replace tools refuse an attachment path, since they only write text.
+              An SVG is the exception: write takes it whole, as for a note (no version creates it, the version
+              replaces it), once it is well-formed XML with an svg root; edit and replace refuse it. Draw it,
+              look at it with img, and write it again: cat prints its source after its line.
               A note links to one by its name with the extension: ![[shot.png]], ![alt](/Screens/shot.png),
               [[report.pdf]]; the rules are those of 'help links'.
 
@@ -51,7 +54,8 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 ls         lists it with its kind and size, an image with its pixel size:
                              shot.png  image 1440×3120 412 KB
                 cat        prints one line instead of bytes: shot.png: image (PNG), 1440×3120, 412 KB, and for a PDF
-                             paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB
+                             paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB; for an SVG the line,
+                             then its source
                 mv         moves or renames it (a folder move takes it along); links and embeds follow
                 rm         moves it to the trash ({NoteWriter.TrashRetention.Days} days) and says which links now lead nowhere
                 trash, restore, history   as for notes: an earlier version, or one from the trash, comes back
@@ -64,7 +68,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
                              1. /Work/paper.pdf p7  score 0.61
               What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
-              neither rg nor semsearch searches images, and rg not PDFs in a checkpoint; head, tail,
+              neither rg nor semsearch searches images (an SVG's source neither), and rg not PDFs in a checkpoint; head, tail,
               wc, sort and outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 

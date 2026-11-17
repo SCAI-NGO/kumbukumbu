@@ -45,7 +45,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
+        Attachments: vaults also hold images (an SVG among them, which you can draw: help attachments) and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day or a week (2026-11-12.md, 2026-W46.md); until ends it (an entry over days, or a time with an end), task: open makes it a to-do, upcoming: 7d shows it that early; calendar notifications is what's on in every vault, in the user's time zone; calendar set, move, close, reopen and unset change only those keys and leave a version (calendar set <note> --until 2026-11-22 gives an entry its end). On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
@@ -73,6 +73,8 @@ public static class Manual
         To replace: pass the version token you got from 'cat' (or from an earlier write or edit). If the note
         changed since, the write fails: cat it again and redo the change, so nobody's edit is lost.
         For small changes, appending or one section, use the edit tool instead; it doesn't resend the whole note.
+        An SVG image (a path ending in .svg) is written the same way, always whole: well-formed XML with an svg
+        root. Look at what you drew with sh 'img', read its source with 'cat', and write it again to correct it.
 
         Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 

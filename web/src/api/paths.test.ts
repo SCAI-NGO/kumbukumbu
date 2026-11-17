@@ -41,6 +41,12 @@ describe("attachment paths", () => {
     expect(isAttachment("/Work/x.webp")).toBe(true);
   });
 
+  it("calls an SVG an image, and inside a skill's folder a text file", () => {
+    expect(fileKindOf("/Work/diagram.SVG")).toBe("image");
+    expect(fileKindOf("/Skills/pdf/logo.svg")).toBe("text");
+    expect(fileKindOf("/Work/_skills/x/logo.svg")).toBe("text");
+  });
+
   it("keeps an attachment's extension in its title", () => {
     expect(titleOf("/Work/Screenshots/shot.png")).toBe("shot.png");
   });

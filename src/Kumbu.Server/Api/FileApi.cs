@@ -158,9 +158,10 @@ public static class FileApi
         var bytes = body.Bytes;
         if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
 
-        // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's.
+        // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's; an SVG's
+        // the writer reads itself, and no pixel count limits it, as it is rendered at the size asked for.
         (int, int)? dimensions = null;
-        if (AttachmentFormat.ForPath(filePath)!.Kind == AttachmentKind.Image)
+        if (AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } format && format != AttachmentFormat.Svg)
         {
             dimensions = ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
         }

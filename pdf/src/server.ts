@@ -117,6 +117,20 @@ const ROUTES: Record<string, Route> = {
         });
     };
   },
+  // An SVG with the size the server stored from its root: width and height, both or neither.
+  "/render/svg": (q, ms) => {
+    const [t, c, rotate] = [target(q), crop(q), turn(q)];
+    const size = q.has("width") || q.has("height") ? { width: integer(q, "width", 1, 2_147_483_647), height: integer(q, "height", 1, 2_147_483_647) } : undefined;
+    return async (body, slot) => {
+      const r = await slot.run<RenderedImage>({ kind: "svg", bytes: body, target: t, size, crop: c, rotate }, ms.renderMs);
+      return (res) =>
+        image(res, r, {
+          "X-Kumbu-Original-Width": r.originalWidth,
+          "X-Kumbu-Original-Height": r.originalHeight,
+          "X-Kumbu-Transparent": r.transparent ? 1 : 0,
+        });
+    };
+  },
   "/text-boxes": (q, ms) => {
     const pages = pageList(q, "pages", MAX_BOX_PAGES);
     return async (body, slot) => {

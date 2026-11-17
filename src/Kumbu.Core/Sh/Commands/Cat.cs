@@ -101,7 +101,7 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
                 {
                     // A note is never cut in the middle: its outline if that fits, else only a marker.
                     var (pathText, fragment) = SectionAddress.Split(arg);
-                    var outline = fragment is null && read.Version is not null && VaultPath.TryParse(pathText, out var whole)
+                    var outline = fragment is null && read.Version is not null && VaultPath.TryParse(pathText, out var whole) && whole.IsNote
                         ? header + OutlineOnly + "\n" + OutlineCommand.Render(whole, read.Output) + "\n"
                         : null;
                     if (outline is not null && output.Length + outline.Length <= limit)
@@ -188,6 +188,16 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
             return ShellResult.Ok(Encoding.UTF8.GetString(bytes)) with { Notice = version is null && marks is not null ? await marks.NoticeAsync([path], ct) : null };
         }
 
+        // An SVG's source after its line, for an agent to read and write again whole: the current one with the
+        // version write takes.
+        if (state.MediaType == AttachmentFormat.Svg.MediaType)
+        {
+            if (await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is not { } svg) return ShellResult.Error($"cat: {path.Value}: the file's content is missing");
+            using var source = new StreamReader(new MemoryStream(svg), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return ShellResult.Ok($"{AttachmentText.Line(path.Name, state)}\n{await source.ReadToEndAsync(ct)}")
+                with { Version = version is null ? new NoteVersion(path.Value, attachment.Version) : null };
+        }
+
         // No version block: a text tool can't write an attachment, so there is nothing to pass it to.
         return ShellResult.Ok(await AttachmentLineAsync(path, state, ct));
     }
@@ -202,8 +212,8 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
         if (result.IsError || result.Output.Length <= OutputLimit.MaxChars) return result;
         var (pathText, fragment) = SectionAddress.Split(arg);
         if (fragment is not null || !VaultPath.TryParse(pathText, out var path)) return result;
-        // A script's '#' comments are not headings; the output limit cuts a long text file as it does any output.
-        if (AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text) return result;
+        // A script's '#' comments are not headings; the output limit cuts a long text file as it does any output, an SVG too.
+        if (AttachmentFormat.ForPath(path) is { } kept && (kept.Kind == AttachmentKind.Text || kept == AttachmentFormat.Svg)) return result;
 
         var tokens = (result.Output.Length + OutputLimit.CharsPerToken - 1) / OutputLimit.CharsPerToken;
         var quoted = SectionLookup.Quote(path);
@@ -225,10 +235,10 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
     /// </summary>
     public async Task<ShellResult> AppendEmbedsAsync(string arg, ShellResult read, ShellResult shown, CancellationToken ct)
     {
-        // Errors, help, attachments and text files carry no version token: only a note gets the block.
+        // Errors, help, attachments and text files carry no version token, an SVG one but no Markdown: only a note gets the block.
         if (read.IsError || read.Version is null || shown.Parts is not null) return shown;
         var (pathText, fragment) = SectionAddress.Split(arg);
-        if (!VaultPath.TryParse(pathText, out var path)) return shown;
+        if (!VaultPath.TryParse(pathText, out var path) || !path.IsNote) return shown;
         var content = fragment is null ? read.Output : await notes.ReadAsync(path, ct);
         // Changed since it was read: its lines would not be the ones shown.
         if (content is null || VersionToken.Of(content) != read.Version.Token) return shown;

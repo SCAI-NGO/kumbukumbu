@@ -32,6 +32,7 @@ internal static class AttachmentText
         "image/jpeg" => "JPEG",
         "image/gif" => "GIF",
         "image/webp" => "WebP",
+        "image/svg+xml" => "SVG",
         AttachmentFormat.TextMediaType => "text",
         _ => "PDF",
     };

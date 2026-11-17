@@ -4,7 +4,11 @@
 // can neither stall the others nor leave state behind for the next. Memory outside the heaps
 // (decoded images, canvases) is bounded only by the container's limit, which kills the whole
 // process, jobs under way included. A bounded queue holds the rest; past it a job is refused at once.
+// An SVG runs in a child process instead: Skia draws it in one native call, which terminate() can't
+// interrupt (a few filters or a fan of <use> take minutes), and a process can be killed at its deadline.
 
+import { fork } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { Crop, Target } from "./steps.js";
 import { PdfError } from "./pdfjs.js";
@@ -13,6 +17,7 @@ export type Job =
   | { kind: "analyse"; bytes: Uint8Array; maxPages: number }
   | { kind: "page"; bytes: Uint8Array; page: number; target: Target; crop?: Crop; rotate: number }
   | { kind: "image"; bytes: Uint8Array; target: Target; crop?: Crop; rotate: number; frame?: number }
+  | { kind: "svg"; bytes: Uint8Array; target: Target; size?: { width: number; height: number }; crop?: Crop; rotate: number }
   | { kind: "boxes"; bytes: Uint8Array; pages: number[] }
   | { kind: "list"; bytes: Uint8Array; page: number }
   | { kind: "extract"; bytes: Uint8Array; page: number; n: number }
@@ -27,6 +32,32 @@ export type WorkerMessage =
 const FAILED = "The job failed.";
 
 type Pending = { job: Job; timeoutMs: number; extend?: (pages: number) => number; resolve: (v: unknown) => void; reject: (e: unknown) => void };
+
+/** A worker thread or, for an SVG, a child process: the pool's one view of both. */
+type Runner = {
+  on(event: "message", f: (m: WorkerMessage) => void): void;
+  on(event: "error" | "exit", f: () => void): void;
+  post(job: Job, transfer: ArrayBuffer[]): void;
+  stop(): Promise<unknown>;
+};
+
+const HEAP_MB = 384;
+
+function thread(entry: URL): Runner {
+  const worker = new Worker(entry, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB } });
+  return { on: (event: string, f: (...args: any[]) => void) => void worker.on(event, f), post: (job, transfer) => worker.postMessage(job, transfer), stop: () => worker.terminate() };
+}
+
+// SIGKILL ends it at once, inside a native call too; it prints nothing, as what it says may quote the file.
+function child(entry: URL): Runner {
+  const proc = fork(fileURLToPath(entry), [], { serialization: "advanced", execArgv: [`--max-old-space-size=${HEAP_MB}`], stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const exited = new Promise((resolve) => proc.once("exit", resolve));
+  return {
+    on: (event: string, f: (...args: any[]) => void) => void proc.on(event, f),
+    post: (job) => void proc.send(job),
+    stop: () => (proc.exitCode === null && proc.signalCode === null && proc.kill("SIGKILL"), exited),
+  };
+}
 
 const busy = () => new PdfError("The sidecar is busy; try again shortly.", "busy");
 const closing = () => new PdfError("The sidecar is shutting down.", "failed");
@@ -75,7 +106,7 @@ export class Pool {
   private readonly entry: URL;
   private readonly gate: Gate | undefined;
   private readonly waiting: Pending[] = [];
-  private readonly running = new Set<Worker>();
+  private readonly running = new Set<Runner>();
   private reserved = 0;
   private closed = false;
 
@@ -142,7 +173,7 @@ export class Pool {
   async close(): Promise<void> {
     this.closed = true;
     for (const p of this.waiting.splice(0)) p.reject(closing());
-    await Promise.all([...this.running].map((w) => w.terminate()));
+    await Promise.all([...this.running].map((w) => w.stop()));
   }
 
   private enqueue<T>(job: Job, timeoutMs: number, extend?: (pages: number) => number): Promise<T> {
@@ -158,7 +189,7 @@ export class Pool {
   }
 
   private start(p: Pending) {
-    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 384 } });
+    const worker = p.job.kind === "svg" ? child(this.entry) : thread(this.entry);
     this.running.add(worker);
     const started = Date.now();
     let settled = false;
@@ -174,8 +205,8 @@ export class Pool {
       f();
       // Never reused. An answered job's slot is free at once; a timed-out thread may still be inside
       // a native drawing call (terminate() takes effect when it returns), so its slot is free only
-      // when it has gone: live threads never exceed the workers.
-      void worker.terminate();
+      // when it has gone: live threads never exceed the workers. A child process goes at once.
+      void worker.stop();
       if (!timedOut) free();
     };
     const expire = () => settle(() => p.reject(new PdfError("The job took too long and was stopped.", "timeout")), true);
@@ -198,6 +229,6 @@ export class Pool {
     });
     const bytes = (p.job as { bytes?: Uint8Array }).bytes;
     const own = bytes && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer;
-    worker.postMessage(p.job, own ? [bytes.buffer as ArrayBuffer] : []);
+    worker.post(p.job, own ? [bytes.buffer as ArrayBuffer] : []);
   }
 }
