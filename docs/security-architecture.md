@@ -440,6 +440,8 @@ Verified against the document classes in `src/Kumbu.Server/Vaults/Documents.cs`,
 | `server` | a random instance secret that keys the invitation-code hashes (`Accounts/ServerSecret.cs`) |
 | Outside MongoDB | the ids of deleted users, in `<Kumbu:Deletions:Path>/deleted-users` (§6); in memory only, never written: open pairing codes with their copy of a user key (`Accounts/Pairings.cs:59`), sync tickets and export tickets by their SHA-256 (`Sync/SyncTickets.cs`, `Api/ExportTickets.cs`), the per-path change times of unlocked vaults behind the version list's `since` (`Vaults/UnlockedVault.cs:58–63`), each owner's counted storage (`Accounts/StorageQuota.cs`), and the WebDAV layer's state per share: parked files with their bytes, held notes and recent deletions (by path, with no credential of the share), and locks (`Dav/DavParking.cs`, `Dav/DavHolds.cs`, `Dav/DavLocks.cs`) |
 
+**The vault id in deep links.** After a write, the MCP tools print a link `<address>/n/<vault id>/<path>` that opens the note in the web app. The vault id is in the clear in `vaults` and `slots` already, so the link gives away nothing new: it names no key and opens nothing without a session, and the web app resolves it under the reader's own access, answering "Not here" alike for a missing note and for a vault the reader can't see.
+
 ## 6. Sessions, API keys, revocation and recovery
 
 ### Sign-in and sessions
