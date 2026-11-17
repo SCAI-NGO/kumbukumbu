@@ -311,7 +311,9 @@ test("calendar #12: the tag filter kumbu keeps #kumbu and #kumbu/sub in the week
   const t = today();
   await seedAs("tags/calendar/Tags", `/Work/${folder}/Tags`);
   const kept = ["Kumbu", "Kumbu sub"];
-  const titles = (page: Page) => page.getByRole("main").or(page.getByRole("dialog", { name: "What's on" })).getByRole("listitem").getByRole("link").allTextContents();
+  // What's on is a window over the (inert) shell, whose main may list notes too: each page is read in its own place.
+  const titles = (page: Page) =>
+    (new URL(page.url()).pathname === "/whats-on" ? page.getByRole("dialog", { name: "What's on" }) : page.getByRole("main")).getByRole("listitem").getByRole("link").allTextContents();
   const filter = async () => {
     await page.getByRole("search", { name: "Tag filter" }).getByLabel("Tag").fill("kumbu");
     await page.getByRole("search", { name: "Tag filter" }).getByRole("button", { name: "Filter" }).click();

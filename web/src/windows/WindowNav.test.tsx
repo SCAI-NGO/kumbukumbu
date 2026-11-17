@@ -29,6 +29,8 @@ afterEach(() => {
 const entries = [
   { to: "/settings/one", label: "One", match: "/settings/one" },
   { to: "/settings/two", label: "Two", match: "/settings/two" },
+  // An entry that opens on one of its tabs, and stays current on the others.
+  { to: "/settings/three/a", label: "Three", match: "/settings/three" },
 ];
 
 function Locker({ text }: { text: string }) {
@@ -36,7 +38,7 @@ function Locker({ text }: { text: string }) {
   return null;
 }
 
-function renderWindow(locker?: boolean) {
+function renderWindow(locker?: boolean, at = "/settings/one") {
   const page = (
     <InWindow.Provider value>
       <WindowFrame kind="navigated" title="Settings" nav={<WindowNav label="Settings" entries={entries} />}>
@@ -45,7 +47,7 @@ function renderWindow(locker?: boolean) {
       </WindowFrame>
     </InWindow.Provider>
   );
-  const router = createMemoryRouter([{ path: "/settings/*", element: page }, { path: "*", element: null }], { initialEntries: ["/settings/one"] });
+  const router = createMemoryRouter([{ path: "/settings/*", element: page }, { path: "*", element: null }], { initialEntries: [at] });
   render(<RouterProvider router={router} />);
   return router;
 }
@@ -58,6 +60,12 @@ describe("WindowNav", () => {
     expect(screen.getByRole("link", { name: "Two" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "One" })).not.toHaveAttribute("aria-current");
     expect(router.state.historyAction).toBe("REPLACE");
+  });
+
+  it("marks an entry current on any page under its prefix, not only the one it links to", () => {
+    renderWindow(false, "/settings/three/b");
+    expect(screen.getByRole("link", { name: "Three" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "One" })).not.toHaveAttribute("aria-current");
   });
 
   it("the phone tab opens and folds the pane", async () => {

@@ -5,6 +5,7 @@ import { noteUrl } from "../api/paths";
 import { useAllPublications } from "../api/publications";
 import { FormError } from "../components/form";
 import { useSession } from "../state/session";
+import { useInWindow } from "../windows/context";
 
 const snapshotTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -16,6 +17,8 @@ const snapshotTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "
 export default function PublicationsSection() {
   const publications = useAllPublications();
   const username = useSession((s) => s.user?.username);
+  // From the Settings window, the note takes the window's place in the history.
+  const inWindow = useInWindow();
   return (
     <>
       <p className="text-text-body">The notes of your vaults that anyone with their link can read, as their copy was made.</p>
@@ -25,7 +28,7 @@ export default function PublicationsSection() {
         <ul className="flex flex-col gap-2">
           {publications.data.map((p) => (
             <li key={p.path} className="flex flex-col">
-              <Link to={noteUrl(p.path)} className="break-words text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
+              <Link to={noteUrl(p.path)} replace={inWindow} className="break-words text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
                 {p.path}
               </Link>
               <span className="text-sm text-muted">
