@@ -38,7 +38,8 @@ public static class ImageMetadata
 
     /// <summary>
     /// An SVG with the elements and attributes of <see cref="SvgNamespaces"/> only, without <c>metadata</c>, comments,
-    /// processing instructions and the DTD; the drawing's text, styles and whitespace as they were.
+    /// processing instructions and the DTD; the drawing's text, styles and whitespace as they were. A reference keeps
+    /// only what lies inside the file (<see cref="Reference"/>).
     /// </summary>
     private static byte[]? Svg(ReadOnlySpan<byte> file)
     {
@@ -61,6 +62,11 @@ public static class ImageMetadata
         foreach (var element in root.DescendantsAndSelf())
         {
             element.Attributes().Where(a => a.IsNamespaceDeclaration ? !SvgNamespaces.Contains(a.Value) : !SvgNamespaces.Contains(a.Name.NamespaceName)).Remove();
+            foreach (var href in element.Attributes().Where(a => a.Name.LocalName == "href" && !a.IsNamespaceDeclaration).ToList())
+            {
+                if (Reference(href.Value) is { } kept) href.Value = kept;
+                else href.Remove();
+            }
         }
 
         // The root alone: what lies around it (the DTD, comments, processing instructions) stays behind.
@@ -71,6 +77,24 @@ public static class ImageMetadata
         }
 
         return stripped.ToArray();
+    }
+
+    /// <summary>
+    /// What an SVG's <c>href</c> keeps: a fragment (<c>#id</c>) as it is, an image embedded as a base64 <c>data:</c> URI
+    /// stripped as <see cref="Strip"/> strips the file; null for anything else, which goes: an editor's link to an
+    /// image on the author's disk names the folder it lies in (<c>/home/&lt;name&gt;/…</c>), and a published picture
+    /// fetches nothing from elsewhere anyway.
+    /// </summary>
+    private static string? Reference(string value)
+    {
+        if (value.StartsWith('#')) return value;
+        const string Base64 = ";base64,";
+        var marker = value.IndexOf(Base64, StringComparison.Ordinal);
+        if (!value.StartsWith("data:", StringComparison.Ordinal) || marker < 0) return null;
+        var mediaType = value[5..marker];
+        var bytes = new byte[value.Length - marker - Base64.Length];
+        if (!Convert.TryFromBase64String(value[(marker + Base64.Length)..], bytes, out var length)) return null;
+        return Strip(bytes.AsSpan(0, length), mediaType) is { } stripped ? $"data:{mediaType}{Base64}{Convert.ToBase64String(stripped)}" : null;
     }
 
     /// <summary>A big-endian TIFF block whose IFD0 holds the orientation alone.</summary>

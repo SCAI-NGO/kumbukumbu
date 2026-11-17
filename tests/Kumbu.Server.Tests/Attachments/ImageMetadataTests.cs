@@ -2,6 +2,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
+using System.Xml.Linq;
 using Kumbu.Server.Attachments;
 
 namespace Kumbu.Server.Tests.Attachments;
@@ -591,6 +592,34 @@ public class ImageMetadataTests
         var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip("<svg width=\"4\" height=\"4\"><!-- x --><rect width=\"4\" height=\"4\"/></svg>"u8, "image/svg+xml")!);
 
         Assert.Equal("<svg width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" /></svg>", stripped);
+    }
+
+    [Fact]
+    public void Svg_keeps_only_references_inside_itself_and_strips_the_images_it_embeds()
+    {
+        var photo = Convert.ToBase64String(JpegWithGps(6));
+        var inner = Convert.ToBase64String(Encoding.UTF8.GetBytes(InkscapeSvg));
+        var svg = $"""
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+              <image id="linked" xlink:href="/home/alice/plans/photo.png" width="4" height="4"/>
+              <image id="file" href="file:///home/alice/photo.png"/>
+              <image id="photo" href="data:image/jpeg;base64,{photo}"/>
+              <image id="drawing" href="data:image/svg+xml;base64,{inner}"/>
+              <image id="broken" href="data:image/png;base64,AAAA"/>
+              <image id="plain" href="data:image/svg+xml,%3Csvg%2F%3E"/>
+              <filter id="f"><feImage href="http://example.org/a.png"/></filter>
+              <use id="local" xlink:href="#linked"/>
+            </svg>
+            """;
+
+        var stripped = XDocument.Parse(Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(svg), "image/svg+xml")!));
+
+        string? Href(string id) => stripped.Descendants().Single(e => (string?)e.Attribute("id") == id).Attributes().SingleOrDefault(a => a.Name.LocalName == "href")?.Value;
+        foreach (var gone in new[] { "linked", "file", "broken", "plain" }) Assert.Null(Href(gone));
+        Assert.Null(stripped.Descendants().Single(e => e.Name.LocalName == "feImage").Attribute("href"));
+        Assert.Equal("#linked", Href("local"));
+        Assert.Equal(ImageMetadata.Strip(JpegWithGps(6), "image/jpeg"), Convert.FromBase64String(Href("photo")!["data:image/jpeg;base64,".Length..]));
+        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml"), Convert.FromBase64String(Href("drawing")!["data:image/svg+xml;base64,".Length..]));
     }
 
     [Fact]
