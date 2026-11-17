@@ -149,6 +149,7 @@ builder.Services.AddSingleton<AccountLimits>();
 builder.Services.AddSingleton<SyncTickets>();
 builder.Services.AddSingleton<ExportTickets>();
 builder.Services.AddSingleton<Pairings>();
+builder.Services.AddSingleton<UploadTickets>();
 builder.Services.AddSingleton<SyncHub>();
 builder.Services.AddSingleton<Notices>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
