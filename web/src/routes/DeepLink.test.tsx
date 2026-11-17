@@ -92,6 +92,19 @@ describe("DeepLink", () => {
     expect(await screen.findByText(sentence)).toBeInTheDocument();
   });
 
+  it("search_for_it_beats_the_remembered_note_on_a_fresh_load", async () => {
+    localStorage.setItem("kumbu.lastNote.u1", "/gartenarbeit/Roses.md");
+    api("gartenarbeit");
+    const router = renderApp("/n/nope/Gone.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Search for it" }));
+    expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    // Let the kept note's tree arrive: the start must not carry the reader off to it.
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(path(router)).toBe("/");
+    expect(screen.getByRole("dialog", { name: "Search" })).toBeInTheDocument();
+  });
+
   it("the_address_is_replaced", async () => {
     api("gartenarbeit");
     const router = renderApp(["/", "/n/v1/Roses.md"]);

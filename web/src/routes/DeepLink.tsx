@@ -4,6 +4,8 @@ import { findFolder, useTree, useVaults } from "../api/notes";
 import { fileKindOf, folderOf, noteUrl, titleOf, viewUrl } from "../api/paths";
 import { AuthScreen, primaryButtonClass } from "../components/form";
 import { useEditor } from "../state/editor";
+import { useSession } from "../state/session";
+import { settleStart } from "../shell/lastNote";
 
 /**
  * The page of a note's link, `/n/:vaultId/<path inside the vault>`. The id is the same for everyone with access to the
@@ -26,6 +28,7 @@ export default function DeepLink() {
 function NotHere({ name }: { name: string }) {
   const { setSearchQuery, setOverlay } = useEditor();
   const navigate = useNavigate();
+  const userId = useSession((s) => s.user?.id ?? null);
   return (
     <AuthScreen title="Not here" lead="This link leads to a note that isn't here: it was moved or removed, or it's in a vault you can't see right now.">
       <button
@@ -35,6 +38,8 @@ function NotHere({ name }: { name: string }) {
           setSearchQuery(name);
           setOverlay("search");
           // The search sheet lives in the shell: this page is outside it, so the shell is opened to show it.
+          // The start is decided: the note kept from the last visit must not take the shell from the search.
+          settleStart(userId);
           navigate("/", { replace: true });
         }}
       >
