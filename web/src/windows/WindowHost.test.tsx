@@ -139,6 +139,27 @@ describe("a window over the notes", () => {
     expect(noteReads(fetch)).toBe(reads);
   });
 
+  it("gives the focus to the top bar on closing, the drawer it was opened from being gone", async () => {
+    signedInApi();
+    renderApp(["/notes/Work/readme.md", "/notes/Work/inbox.md"]);
+    await screen.findByText("Text of /Work/inbox.md.");
+    await openConsoleFromDrawer();
+    expect(screen.getByRole("textbox", { name: "Command" })).toHaveFocus();
+    await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Console" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Open file tree" })).toHaveFocus();
+  });
+
+  it("gives the focus to the top bar on closing a window reached by a deep link, which no control opened", async () => {
+    signedInApi();
+    renderApp("/console");
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    await screen.findByRole("heading", { name: "Your vaults" });
+    await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Console" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Open file tree" })).toHaveFocus();
+  });
+
   it("doesn't jump to where the note was opened at again, as a window opens and closes", async () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;

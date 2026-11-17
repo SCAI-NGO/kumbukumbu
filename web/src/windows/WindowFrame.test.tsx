@@ -91,4 +91,9 @@ describe("WindowFrame", () => {
     expect(dialog.classList).toContain("relative");
     expect(dialog).not.toHaveTextContent("Security");
   });
+
+  it("sits above the shell's toasts (z-50), and its own dialogs above it", () => {
+    const dialog = renderFrame("navigated");
+    expect(dialog.parentElement).toHaveClass("fixed", "inset-0", "z-[55]");
+  });
 });

@@ -163,6 +163,13 @@ describe("Recent changes", () => {
     expect(await screen.findByText("Nothing matches that.")).toBeInTheDocument();
   });
 
+  it("opens with the focus in the field", async () => {
+    api(() => view([certificate]));
+    renderApp("/recent");
+    await page();
+    expect(screen.getByRole("searchbox", { name: "Find by name" })).toHaveFocus();
+  });
+
   it("the field is a 48 px target, its browser ✕ hidden, and Clear empties it", async () => {
     const { last } = api(() => view([certificate, sketch, garden]));
     renderApp("/recent");

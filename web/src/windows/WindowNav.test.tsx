@@ -68,6 +68,24 @@ describe("WindowNav", () => {
     expect(screen.getByRole("link", { name: "One" })).not.toHaveAttribute("aria-current");
   });
 
+  it("opens with the focus on the current entry, not on ✕", () => {
+    renderWindow(false, "/settings/two");
+    expect(screen.getByRole("link", { name: "Two" })).toHaveFocus();
+  });
+
+  it("keeps Tab inside the pane and the title bar while the content under the pane is out of reach", async () => {
+    desktop = false;
+    renderWindow();
+    const tab = screen.getByRole("button", { name: "Show navigation" });
+    await userEvent.click(tab);
+    expect(tab).toHaveFocus();
+    // The tab is the last control within reach: on from it is the window's first, ✕.
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(tab).toHaveFocus();
+  });
+
   it("the phone tab opens and folds the pane", async () => {
     desktop = false;
     const router = renderWindow();

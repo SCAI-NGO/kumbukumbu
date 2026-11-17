@@ -43,7 +43,8 @@ export default function WindowFrame({
   children: ReactNode;
 }) {
   const close = useCloseWindow();
-  const dialog = useDialog<HTMLDivElement>(close);
+  // Closed with nothing that opened it left (a deep link, a menu gone), the focus goes to the shell's top bar, not the page.
+  const dialog = useDialog<HTMLDivElement>(close, () => document.querySelector<HTMLElement>("[data-window-return]"));
   const titleId = useId();
   const desktop = useDesktop();
   const navOpen = useWindows((s) => s.navOpen);
@@ -51,7 +52,7 @@ export default function WindowFrame({
   const look = frame[light ? "light" : "robust"];
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
+    <div className="fixed inset-0 z-[55] flex items-center justify-center">
       <div aria-hidden className={`absolute inset-0 ${look.backdrop}`} onClick={light ? close : undefined} />
       <div
         ref={dialog}

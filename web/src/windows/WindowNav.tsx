@@ -58,6 +58,7 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
           replace
           aria-current={pathname.startsWith(e.match) ? "page" : undefined}
           aria-disabled={lock !== null ? "true" : undefined}
+          data-autofocus={pathname.startsWith(e.match) ? "" : undefined}
           onClick={(ev) => {
             if (lock !== null) ev.preventDefault();
             else if (!desktop) fold();
@@ -85,6 +86,7 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
         type="button"
         aria-label="Show navigation"
         aria-expanded={open}
+        data-autofocus={open ? undefined : ""}
         disabled={lock !== null}
         onClick={() => setOpen(!open)}
         className={`absolute top-1/2 z-30 flex h-[72px] w-12 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-line bg-surface-2 text-text focus-visible:outline-2 focus-visible:outline-accent disabled:text-muted disabled:opacity-50 ${open ? "left-[75%]" : "left-0"}`}

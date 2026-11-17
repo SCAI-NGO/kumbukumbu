@@ -86,6 +86,7 @@ export default function RecentPage() {
                 ref={field}
                 type="search"
                 aria-label="Find by name"
+                data-autofocus
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 placeholder="Find by name"
