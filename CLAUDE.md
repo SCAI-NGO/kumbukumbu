@@ -38,6 +38,8 @@ pnpm -C web build
 
 The search tests that need the real embedding model run with `KUMBU_MODEL_DIR` pointing at a folder holding `arctic-m/` (the server downloads it into its `models` volume on the first start).
 
+Against a shared mongod (`KUMBU_TEST_MONGO`, where Docker can't run) start it with `--replSet rs0`; the tests drop their databases when done. Where the open-file limit is low, add `--wiredTigerEngineConfigString "file_manager=(close_idle_time=5,close_scan_interval=5,close_handle_minimum=250)"` so WiredTiger closes idle files.
+
 ## Git and pull requests
 
 - A branch per change, a pull request, squash merge. Commit messages imperative and free-form ("Let the admin choose the default embedding provider"), no Conventional Commits prefix.

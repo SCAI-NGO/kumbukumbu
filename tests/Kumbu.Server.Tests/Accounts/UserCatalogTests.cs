@@ -338,7 +338,7 @@ public sealed class UserCatalogTests(MongoFixture fixture)
                 if (recording && e.CommandName == "find") found.Add(e.Command["find"].AsString);
             }
         });
-        var db = new MongoClient(settings).GetDatabase("t" + Guid.NewGuid().ToString("N"));
+        var db = TestDatabases.Create(settings);
         var users = Catalog(db);
         var (_, recoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
         var (inactive, inactiveKey) = await users.CreateAsync("dormant", Password, Roles.User, Ct);

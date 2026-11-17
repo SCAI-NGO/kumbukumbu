@@ -10,8 +10,8 @@ public sealed class MongoFixture : IAsyncLifetime
 
     public string ConnectionString => TestImages.ExternalMongo ?? _container!.GetConnectionString();
 
-    public IMongoDatabase NewDatabase() =>
-        new MongoClient(ConnectionString).GetDatabase("t" + Guid.NewGuid().ToString("N"));
+    /// <summary>A fresh database, dropped when the test that asked for it is done.</summary>
+    public IMongoDatabase NewDatabase() => TestDatabases.Create(ConnectionString);
 
     public async ValueTask InitializeAsync()
     {

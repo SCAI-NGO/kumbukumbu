@@ -45,8 +45,8 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <summary>The app's database, for tests that change it behind the server's back.</summary>
     public MongoDB.Driver.IMongoDatabase Database => new MongoDB.Driver.MongoClient(MongoConnectionString).GetDatabase(DatabaseName);
 
-    /// <summary>A fresh database on the app's MongoDB, beside the app's, for catalog-level tests in this collection.</summary>
-    public MongoDB.Driver.IMongoDatabase NewDatabase() => new MongoDB.Driver.MongoClient(MongoConnectionString).GetDatabase("t" + Guid.NewGuid().ToString("N"));
+    /// <summary>A fresh database on the app's MongoDB, beside the app's, for catalog-level tests in this collection; dropped when the test that asked for it is done.</summary>
+    public MongoDB.Driver.IMongoDatabase NewDatabase() => TestDatabases.Create(MongoConnectionString);
 
     public async ValueTask InitializeAsync()
     {
@@ -63,6 +63,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync();
+        await TestDatabases.DropAsync(Database);
         if (_mongo is not null)
         {
             await _mongo.DisposeAsync();
