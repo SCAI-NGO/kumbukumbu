@@ -20,7 +20,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     private const string Password = "correct horse battery staple";
 
     /// <summary>Every collection that holds a vault's documents under their "vault" field.</summary>
-    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash", "blobs", "pdf_analyses", "pdf_jobs", "publishing", "publications", "publication_files"];
+    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "links", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash", "blobs", "pdf_analyses", "pdf_jobs", "publishing", "publications", "publication_files"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

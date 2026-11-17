@@ -75,7 +75,7 @@ public static class GraphApi
 
         var etag = ETag(graphs);
         http.Response.Headers.ETag = etag;
-        if (http.Request.Headers.IfNoneMatch.Contains(etag)) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
+        if (EntityTags.NoneMatchNames(http.Request, new(etag))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
 
         var nodes = new List<GraphNodeView>();
         var edges = new List<int[]>();
@@ -114,7 +114,7 @@ public static class GraphApi
         if (g.IndexOf(note) is null) throw await NotInGraphAsync(store, note, ct);
         var etag = ETag([g]);
         http.Response.Headers.ETag = etag;
-        if (http.Request.Headers.IfNoneMatch.Contains(etag)) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
+        if (EntityTags.NoneMatchNames(http.Request, new(etag))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
 
         var local = GraphQueries.Local(g, note, d, direction, c, filter);
         var shown = new Dictionary<int, int>();

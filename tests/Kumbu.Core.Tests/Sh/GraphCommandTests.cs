@@ -136,6 +136,57 @@ public class GraphCommandTests
         Assert.Equal("/W/A.md and /W/B.md are not connected at all (no path of any length)", (await Run(sh, "graph --path /W/A.md /W/B.md --no-days")).Output);
     }
 
+    // A links one node of each kind the flags hide: a tagged note, a day note, an archived note, an attachment and a
+    // name nobody has.
+    private static Shell Kinds()
+    {
+        var store = new InMemoryNoteStore(
+            ("/W/A.md", "#t\n[[B]] [[2026-11-12]] [[Old]] ![[pic.png]] [[Nobody]]\n"),
+            ("/W/B.md", "#t\n"), ("/W/2026-11-12.md", "x\n"), ("/W/_archive/Old.md", "x\n"));
+        store.AddAttachment("/W/pic.png");
+        return TestShell.Of(store);
+    }
+
+    [Theory]
+    [InlineData("", "/W/2026-11-12.md|/W/B.md|/W/pic.png|Nobody")]
+    [InlineData("--no-days", "/W/B.md|/W/pic.png|Nobody")]
+    [InlineData("--no-attachments", "/W/2026-11-12.md|/W/B.md|Nobody")]
+    [InlineData("--no-ghosts", "/W/2026-11-12.md|/W/B.md|/W/pic.png")]
+    [InlineData("--archive", "/W/2026-11-12.md|/W/B.md|/W/_archive/Old.md|/W/pic.png|Nobody")]
+    [InlineData("--tag t", "/W/B.md|/W/pic.png|Nobody")]
+    public async Task Local_graph_takes_each_filter(string flags, string targets)
+    {
+        var result = await Run(Kinds(), $"graph /W/A.md --out {flags}");
+
+        Assert.False(result.IsError, result.Output);
+        var shown = result.Output.Split('\n').Skip(1)
+            .Select(l => l["1  /W/A.md -> ".Length..].Replace(" (embed)", "").Replace(" (no note)", ""))
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(targets.Split('|'), shown);
+    }
+
+    // From A to Z by four routes of two steps: through a day note, an archived note, a tagged note, and (never walked) an
+    // attachment and a name nobody has.
+    [Theory]
+    [InlineData("", "/W/A.md -> /W/2026-11-12.md -> /W/Z.md|/W/A.md -> /W/T.md -> /W/Z.md")]
+    [InlineData("--no-days", "/W/A.md -> /W/T.md -> /W/Z.md")]
+    [InlineData("--no-attachments", "/W/A.md -> /W/2026-11-12.md -> /W/Z.md|/W/A.md -> /W/T.md -> /W/Z.md")]
+    [InlineData("--no-ghosts", "/W/A.md -> /W/2026-11-12.md -> /W/Z.md|/W/A.md -> /W/T.md -> /W/Z.md")]
+    [InlineData("--archive", "/W/A.md -> /W/2026-11-12.md -> /W/Z.md|/W/A.md -> /W/T.md -> /W/Z.md|/W/A.md -> /W/_archive/Old.md -> /W/Z.md")]
+    [InlineData("--tag t", "/W/A.md -> /W/T.md -> /W/Z.md")]
+    public async Task Path_takes_each_filter(string flags, string paths)
+    {
+        var store = new InMemoryNoteStore(
+            ("/W/A.md", "[[2026-11-12]] [[Old]] [[T]] ![[pic.png]] [[Nobody]]\n"),
+            ("/W/2026-11-12.md", "[[Z]]\n"), ("/W/_archive/Old.md", "[[Z]]\n"), ("/W/T.md", "#t [[Z]]\n"), ("/W/Z.md", "[[pic.png]] [[Nobody]]\n"));
+        store.AddAttachment("/W/pic.png");
+
+        var result = await Run(TestShell.Of(store), $"graph --path /W/A.md /W/Z.md {flags}");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(paths.Split('|'), result.Output.Split('\n').Skip(1).Order(StringComparer.Ordinal));
+    }
+
     [Fact]
     public async Task Hubs_and_unresolved_name_their_own_way_to_narrow()
     {
