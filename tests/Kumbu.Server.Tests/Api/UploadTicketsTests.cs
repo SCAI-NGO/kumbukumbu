@@ -57,6 +57,29 @@ public sealed class UploadTicketsTests
     }
 
     [Fact]
+    public void Expired_ticket_is_zeroed_by_the_sweep_without_any_call()
+    {
+        var bearer = Bearer();
+        Issue(bearer);
+
+        _time.Advance(UploadTickets.Lifetime + TimeSpan.FromMinutes(1));
+
+        Assert.All(bearer, b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public void Dispose_zeroes_the_remaining_tickets()
+    {
+        var bearer = Bearer();
+        var token = Issue(bearer);
+
+        _tickets.Dispose();
+
+        Assert.All(bearer, b => Assert.Equal(0, b));
+        Assert.Null(_tickets.Take(token));
+    }
+
+    [Fact]
     public void Take_is_atomic()
     {
         var token = Issue(Bearer());

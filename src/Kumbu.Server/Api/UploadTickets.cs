@@ -19,8 +19,20 @@ public sealed record UploadTicket(byte[] Bearer, string? ConnectionId, string Pa
 /// memory only, never in MongoDB or a log, and the copy is zeroed whenever a ticket goes: expired, dropped by the cap,
 /// or done with (<see cref="Zero"/>). The token is 256 random bits and only its SHA-256 is kept as the key.
 /// </summary>
-public sealed class UploadTickets(TimeProvider time)
+public sealed class UploadTickets : IDisposable
 {
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
+
+    private readonly TimeProvider time;
+    private readonly ITimer _sweeper;
+
+    public UploadTickets(TimeProvider time)
+    {
+        this.time = time;
+        // An expired ticket goes within a minute, with its copy of the credential, whether or not anyone uploads again.
+        _sweeper = time.CreateTimer(_ => { lock (_issuing) Sweep(); }, null, SweepInterval, SweepInterval);
+    }
+
     public const int MaxPerHolder = 20;
 
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
@@ -82,6 +94,20 @@ public sealed class UploadTickets(TimeProvider time)
         foreach (var (key, ticket) in _tickets)
         {
             if (now >= ticket.ExpiresAt && _tickets.TryRemove(key, out var expired)) Zero(expired);
+        }
+
+        foreach (var (holder, queue) in _byHolder)
+        {
+            if (!queue.Any(_tickets.ContainsKey)) _byHolder.Remove(holder);
+        }
+    }
+
+    public void Dispose()
+    {
+        _sweeper.Dispose();
+        foreach (var key in _tickets.Keys)
+        {
+            if (_tickets.TryRemove(key, out var ticket)) Zero(ticket);
         }
     }
 
