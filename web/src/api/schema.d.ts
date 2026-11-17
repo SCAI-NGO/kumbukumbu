@@ -12982,6 +12982,7 @@ export interface components {
             unpublishable: string[];
         };
         VaultView: {
+            id: string;
             name: string;
             /** Format: int32 */
             notes: number | string;

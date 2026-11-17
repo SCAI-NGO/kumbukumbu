@@ -31,6 +31,27 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     private static string[] Strings(JsonNode? array, string field) => [.. array!.AsArray().Select(n => n![field]!.GetValue<string>())];
 
     [Fact]
+    public async Task Vault_list_carries_the_vault_id()
+    {
+        var alice = await RestClient.NewAsync(Api, "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, "Work");
+        await alice.ShareWithAsync(bob, "garten", MemberRole.Write);
+        var id = await alice.VaultIdAsync();
+
+        using var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Neu" });
+        var createdId = (await JsonAsync(created))["id"]!.GetValue<string>();
+
+        string IdOf(JsonNode list, string name) => list.AsArray().Single(v => v!["name"]!.GetValue<string>() == name)!["id"]!.GetValue<string>();
+        using var ownerList = await alice.GetAsync("/api/vaults");
+        using var memberList = await bob.GetAsync("/api/vaults");
+        using var afterList = await alice.GetAsync("/api/vaults");
+        Assert.Equal(id, IdOf(await JsonAsync(ownerList), "Gartenarbeit"));
+        Assert.Equal(id, IdOf(await JsonAsync(memberList), "garten"));
+        Assert.Equal(createdId, IdOf(await JsonAsync(afterList), "Neu"));
+        Assert.NotEqual(id, createdId);
+    }
+
+    [Fact]
     public async Task A_session_creates_vaults_and_lists_them_with_their_note_counts()
     {
         var user = await UserAsync();

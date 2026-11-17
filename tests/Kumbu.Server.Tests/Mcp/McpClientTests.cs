@@ -23,10 +23,10 @@ public sealed class McpClientTests(KumbuAppFactory app)
     private static string Text(CallToolResult result) =>
         Assert.IsType<TextContentBlock>(result.Content[0]).Text;
 
-    /// <summary>The second content block: "version of &lt;path&gt;: &lt;token&gt;".</summary>
+    /// <summary>The second content block: "version of &lt;path&gt;: &lt;token&gt;" (a link block may follow it).</summary>
     private static string Token(CallToolResult result)
     {
-        Assert.Equal(2, result.Content.Count);
+        Assert.True(result.Content.Count >= 2, "a version block follows the text");
         var text = Assert.IsType<TextContentBlock>(result.Content[1]).Text;
         Assert.StartsWith("\nversion of ", text, StringComparison.Ordinal);
         return text[(text.LastIndexOf(' ') + 1)..];

@@ -77,7 +77,8 @@ public class ReplacerTests
 
         var applied = await Run("/Work", "Hecate", "Selene", word: true, plan: Plan(preview));
 
-        Assert.Equal(ShellResult.Ok("replaced 3 occurrences in 2 notes"), applied);
+        Assert.Equal(ShellResult.Ok("replaced 3 occurrences in 2 notes"), applied with { Versions = null });
+        Assert.Equal(["/Work/a.md", "/Work/sub/b.md"], applied.Versions!.Select(v => v.Path).Order());
         Assert.Equal("Selene is the plan.\nHecates are many. Selene!\n", await Content("/Work/a.md"));
         Assert.Equal("About Selene.\n", await Content("/Work/sub/b.md"));
         Assert.Equal("Hecate elsewhere\n", await Content("/Ideas/d.md"));
