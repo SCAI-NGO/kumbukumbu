@@ -327,6 +327,22 @@ Good to know:
 - **Access tokens last an hour** by default and are refreshed by the app; `KUMBU_OAUTH_ACCESS_TOKEN_MINUTES` (5 to 1440) changes that. Every refresh replaces the refresh token too.
 - The details, from the consent to the tokens' slots: `docs/security-architecture.md`, §6 "Connections (OAuth)", with a diagram of the flow and of a connection's states.
 
+### Agents uploading files
+
+Notes are text, so an agent writes them with the `write` tool; an image or a PDF is a file, and an MCP call can't carry its bytes. The agent uploads in two steps, with an API key or a connection that may write to the vault:
+
+1. It calls the **`upload`** tool with the path the file is to have (`/Work/images/diagram.png`; PNG, JPEG, GIF, WebP, SVG or PDF, at most 15 MB, the format checked from the bytes) and, to replace a file that exists, its `version`. The answer is a one-time URL, `https://<your instance>/api/agent-upload/<token>`, and a `curl` line for it.
+2. It runs that line in a shell: `curl -sS -X PUT --data-binary @<local file> '<url>'`. The answer says the file is stored and gives the Markdown to put into a note (`![diagram](/Images/diagram.png)`) and a link that opens the file in Kumbu². The system skill `kumbu-binary-upload` teaches an agent both steps.
+
+The URL is the credential: it works once, for 10 minutes, for that one path, and stores the file as the key or connection that asked, with its rights and its name in the history. It is only kept in the server's memory; a restart ends every open URL. An agent has at most 20 open at a time (the oldest go), and a refusal ends "Ask for a new upload URL with the upload tool." Over plain `http` the PUT is refused and the URL spent (as for `/dav`; only a development server accepts it). A `429` doesn't spend the URL; every other failure does. A wrong or used URL counts as a wrong key against the address's limit (see "Security").
+
+- **Use the URL exactly as given.** An agent connected through a connection (claude.ai and the other apps above) works best with `KUMBU_PUBLIC_URL` set (see "The first admin"): without it the connection's access token is checked against the address the upload request arrives at, so a `curl` that reaches the server under another host name than the MCP call is refused.
+- **Behind a TLS-terminating proxy**, the server has to know that the request came over https, which is what `KUMBU_TRUSTED_PROXY` is for (see "Security" and "Behind Traefik"); without it every upload URL is refused and spent.
+- **The agent's shell must reach the Kumbu² host.** Only that host is needed. Where an agent runs in a sandbox, allow it there; if it can't connect, it says so and you can allow the host and let it ask for a new URL.
+  - **Claude Code on the web and claude.ai's cloud sessions:** the environment's settings (the environment menu in the session's title bar, then Edit), Network access: add the Kumbu² host under "Allowed domains", shown at the "Limited" level, and leave "Allow package managers" ticked ([Claude Code's docs](https://code.claude.com/docs/en/cloud-environments#network-access)).
+  - **Claude Code on your machine:** it has no network sandbox unless you turned its sandbox on; then add the host to `sandbox.network.allowedDomains` in its settings.
+  - **Grok:** allow the Kumbu² host in the network settings of Grok's code sandbox, if it offers them.
+
 ### WebDAV
 
 A **WebDAV share** puts your vaults into a file manager as a network drive, or syncs them with a tool that speaks WebDAV: each vault is a folder, notes are `.md` files, PDFs and images are files. Like an API key, it is made by you, in the web app only (Access → **WebDAV**, which asks for the password as making a key does), for the vaults you choose, each with `read`, `write` or `maintain`, and it can expire after 30, 90 or 365 days. A share never may publish. A vault shared with you can go into a share too, at most at your role; when your membership ends, the share loses that vault.
