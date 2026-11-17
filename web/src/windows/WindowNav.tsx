@@ -41,6 +41,12 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
     if (lock !== null) setOpen(false);
   }, [lock]);
 
+  const shown = !desktop && open;
+  useEffect(() => {
+    useWindows.setState({ navOpen: shown });
+    return () => useWindows.setState({ navOpen: false });
+  }, [shown]);
+
   const list = (
     <nav aria-label={label} className={desktop ? "flex h-full w-[220px] flex-none flex-col overflow-y-auto border-r border-line bg-surface-2 p-2" : "flex h-full w-3/4 flex-col overflow-y-auto border-r border-line bg-surface-2 p-2"}>
       {lock !== null && <p className="px-3 py-2 text-sm text-muted">{lock}</p>}
@@ -70,7 +76,7 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
       {open && (
         <>
           <div data-testid="nav-scrim" aria-hidden className="absolute inset-0 z-10 bg-black/40" onClick={fold} />
-          <div className="absolute inset-y-0 left-0 z-20 w-3/4">{list}</div>
+          <div className="absolute inset-y-0 left-0 z-20 w-3/4 motion-safe:animate-[k-slide-right_200ms_ease-out]">{list}</div>
         </>
       )}
       <button
@@ -80,7 +86,7 @@ export default function WindowNav({ label, entries }: { label: string; entries: 
         aria-expanded={open}
         disabled={lock !== null}
         onClick={() => setOpen(!open)}
-        className={`absolute top-1/2 z-30 flex h-[72px] w-12 -translate-y-1/2 items-center justify-start text-muted focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 ${open ? "left-[75%]" : "left-0"}`}
+        className={`absolute top-1/2 z-30 flex h-[72px] w-12 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-line bg-surface-2 text-text focus-visible:outline-2 focus-visible:outline-accent disabled:text-muted disabled:opacity-50 ${open ? "left-[75%]" : "left-0"}`}
       >
         <Chevron size={20} aria-hidden />
       </button>

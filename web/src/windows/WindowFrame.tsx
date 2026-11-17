@@ -4,7 +4,7 @@ import { useId, type ReactNode } from "react";
 import { useDesktop } from "../hooks/useDesktop";
 import { useDialog } from "../hooks/useDialog";
 import { useCloseWindow } from "./context";
-import type { WindowKind } from "./store";
+import { useWindows, type WindowKind } from "./store";
 
 /** Fixed per kind, so that moving inside a window never makes it jump; capped at the viewport less 32 px a side. */
 const size: Record<WindowKind, string> = {
@@ -46,6 +46,7 @@ export default function WindowFrame({
   const dialog = useDialog<HTMLDivElement>(close);
   const titleId = useId();
   const desktop = useDesktop();
+  const navOpen = useWindows((s) => s.navOpen);
   const light = kind === "light";
   const look = frame[light ? "light" : "robust"];
 
@@ -75,7 +76,7 @@ export default function WindowFrame({
         </div>
         <div className="relative flex min-h-0 flex-1">
           {nav}
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</div>
+          <div inert={navOpen} className={`min-h-0 min-w-0 flex-1 overflow-y-auto ${nav && !desktop ? "pl-12" : ""}`}>{children}</div>
         </div>
       </div>
     </div>

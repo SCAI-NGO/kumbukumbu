@@ -516,6 +516,11 @@ html {
     transform: translateY(100%);
   }
 }
+@keyframes k-slide-right {
+  from {
+    transform: translateX(-100%);
+  }
+}
 @keyframes k-in-up {
   from {
     transform: translateY(24px);

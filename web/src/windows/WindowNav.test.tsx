@@ -40,7 +40,7 @@ function renderWindow(locker?: boolean) {
   const page = (
     <InWindow.Provider value>
       <WindowFrame kind="navigated" title="Settings" nav={<WindowNav label="Settings" entries={entries} />}>
-        <p>Content</p>
+        <button type="button">Content control</button>
         {locker && <Locker text="Save the key first" />}
       </WindowFrame>
     </InWindow.Provider>
@@ -69,8 +69,11 @@ describe("WindowNav", () => {
 
     await userEvent.click(tab);
     expect(tab).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Content control", hidden: true }).closest("[inert]")).not.toBeNull();
+    expect(screen.getByRole("navigation", { name: "Settings" }).parentElement).toHaveClass("motion-safe:animate-[k-slide-right_200ms_ease-out]");
     await userEvent.click(screen.getByRole("link", { name: "Two" }));
     expect(tab).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Content control" }).closest("[inert]")).toBeNull();
     expect(router.state.location.pathname).toBe("/settings/two");
 
     await userEvent.click(tab);
@@ -99,6 +102,15 @@ describe("WindowNav", () => {
     expect(screen.getByRole("button", { name: "Show navigation" })).toBeDisabled();
     cleanup();
     expect(useWindows.getState().lock).toBeNull();
+  });
+
+  it("one lock ending leaves another's in place", () => {
+    const a = render(<InWindow.Provider value><Locker text="A" /></InWindow.Provider>);
+    expect(useWindows.getState().lock).toBe("A");
+    render(<InWindow.Provider value><Locker text="B" /></InWindow.Provider>);
+    expect(useWindows.getState().lock).toBe("B");
+    a.unmount();
+    expect(useWindows.getState().lock).toBe("B");
   });
 
   it("a lock outside a window does nothing", () => {

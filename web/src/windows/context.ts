@@ -45,6 +45,9 @@ export function useWindowLock(text: string | null): void {
   useEffect(() => {
     if (!inWindow || text === null) return;
     useWindows.setState({ lock: text });
-    return () => useWindows.setState({ lock: null });
+    return () => {
+      // Only the lock this caller set: another's, set since, stays.
+      if (useWindows.getState().lock === text) useWindows.setState({ lock: null });
+    };
   }, [inWindow, text]);
 }

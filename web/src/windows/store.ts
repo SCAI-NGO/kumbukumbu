@@ -23,9 +23,11 @@ interface WindowsState {
   inApp: boolean;
   /** Why the window mustn't be left unasked (a secret on show), or null. */
   lock: string | null;
+  /** The phone's navigation pane is open: the content under it is out of reach. */
+  navOpen: boolean;
 }
 
-export const useWindows = create<WindowsState>()(() => ({ behind: null, inApp: false, lock: null }));
+export const useWindows = create<WindowsState>()(() => ({ behind: null, inApp: false, lock: null, navOpen: false }));
 
 /** The app's routes, set by the router: whether a location is a window's, for code the router itself imports. */
 let routes: RouteObject[] = [];
