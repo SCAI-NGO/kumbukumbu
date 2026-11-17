@@ -438,4 +438,14 @@ public class CalendarCommandTests
         Assert.EndsWith("--checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'", help);
         Assert.Contains("\n  calendar <vault>                ", Manual.ToolDescription);
     }
+
+    [Fact]
+    public void TheToolDescriptionNamesEveryCalendarKeyAndHowToSetAnEnd()
+    {
+        // #222: agents read the sh tool's description, rarely 'help calendar'; an end they aren't told of they don't see.
+        var calendar = Manual.ToolDescription.Split('\n').Single(line => line.StartsWith("Calendar: "));
+        foreach (var key in new[] { "when", "until", "task", "upcoming" })
+            Assert.Contains(key, calendar);
+        Assert.Contains("calendar set <note> --until", calendar);
+    }
 }
