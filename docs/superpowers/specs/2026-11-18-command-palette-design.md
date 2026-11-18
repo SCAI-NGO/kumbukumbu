@@ -44,7 +44,7 @@ Each row shows its **name** on the left and, muted on the right, **where it is**
 
 | Group | Rows | Opens |
 |---|---|---|
-| Commands | Settings: Appearance, Vaults, Access (Keys, Connections, …), Skills (Installed, …), Calendar, Security, Data, About; Admin: Users, Invitations (admins only); Open: Recent, What's on, Console; Theme: Light, Dark, System | the route of the window (`web/src/router.tsx:132–169`), or the theme setting |
+| Commands | Settings: Appearance, Vaults, Access (Keys, Connections, …), Skills (Installed, …), Calendar, Security, Data, About; Admin: Users, Invitations (admins only); Open: Recent, What's on, Console; Colour scheme: one row per scheme | the route of the window (`web/src/router.tsx:132–169`), or the theme setting |
 | Vaults | each vault the session lists, and per vault "Board", "Calendar", "Gallery" | `/notes/:vault`, `/board/:vault`, `/calendar/:vault`, `/gallery/:vault` |
 | Notes | the notes of the vaults the session lists, outside `_archive/` | the note |
 | (last row) | "Search notes for ‘…’", always, once something is typed | the search sheet (`setOverlay("search")`) with the text as its query |
@@ -78,7 +78,7 @@ The web app shows both as one list, in the order added. The two lists are kept s
 
 **Stale entries.** A favourite whose note was moved, renamed or deleted, or whose vault is gone, is not shown. A move through Kumbu² should carry the favourite along where the server can see it (`mv` rewrites links already); where that isn't cheap, the web app drops a stale note favourite of a vault it lists the next time it writes the list. The server never drops entries as stale, so it can't take a hidden vault's entry for one.
 
-**API.** Session-only, as the calendar view is (a key or connection gets 403): `GET /api/account/favourites` answers both parts as one ordered list; `PUT` writes the whole list (a person's favourites are few, so no per-item calls). The server checks each entry it receives: known command ids only, vault ids the session lists, paths as any note path is checked. A cap of 200 entries.
+**API.** Session-only, as the calendar view is (a key or connection gets 403): `GET /api/account/favourites` answers both parts as one ordered list; `PUT` writes the whole list (a person's favourites are few, so no per-item calls). The server checks each entry it receives: command ids by their form only (lowercase, dotted, at most 64 characters), since the commands live in the web app and a list on the server would drift from it, and the web app ignores ids it doesn't know; vault ids the session lists, paths as any note path is checked. A cap of 200 entries.
 
 **A write while discreet vaults are hidden** (the builder check's question, settled by Claude, since it is the only way that keeps both decided rules, "no hint" and "back once shown"): the `PUT` replaces only what the session can see. The server opens the sealed list, keeps the entries of vaults this session doesn't list, as they were and where they were in the order, and puts the client's list in place of the rest; then it reseals, with a conditional write as `CalendarSettings` does for the views (`src/Kumbu.Server/Accounts/CalendarSettings.cs:108`), so two devices writing at once lose nothing. The kept entries count towards the cap, and the answer to an over-cap write says only that the list is full, with no count of what is hidden.
 
