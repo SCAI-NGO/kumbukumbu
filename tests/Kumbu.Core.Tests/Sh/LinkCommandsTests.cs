@@ -82,7 +82,7 @@ public class LinkCommandsTests
             1: [w](<welcome.md#Welcome>) → /Demo/welcome.md
             2: [p](plan.md) → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
             2: [n](nope.md) → not found
-            2: [r](report.docx) → attachment (not a note)
+            2: [r](report.docx) → not found
             2: [h](#Top) → this note
             """,
             (await sh("links /Demo/md.md")).Output);
