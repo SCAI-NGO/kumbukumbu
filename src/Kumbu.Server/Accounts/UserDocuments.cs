@@ -164,6 +164,11 @@ public sealed class UserDocument
     [BsonElement("calendarViews"), BsonIgnoreIfNull]
     public byte[]? CalendarViews { get; set; }
 
+    /// <summary>Her own TensorX key (BYOK), sealed under a key derived from the user key (<see cref="Accounts.EmbeddingsKeys"/>);
+    /// null until she saves one.</summary>
+    [BsonElement("embeddingsKey"), BsonIgnoreIfNull]
+    public byte[]? EmbeddingsKey { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

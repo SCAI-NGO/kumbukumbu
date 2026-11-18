@@ -112,6 +112,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<DiscreetVaults>();
+builder.Services.AddSingleton<EmbeddingsKeys>();
 builder.Services.AddSingleton<CalendarSettings>();
 // The server's zone for a caller without one of her own; tests replace it.
 builder.Services.AddSingleton(ServerZone.Instance);
