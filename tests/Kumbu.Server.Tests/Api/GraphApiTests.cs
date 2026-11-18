@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Tests.Discreet;
 
 namespace Kumbu.Server.Tests.Api;
@@ -173,6 +174,22 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         Assert.Equal(["audit", "budget", "plan"], Sorted(bare));
         using var bad = await user.GetAsync("/api/graph?path=Work");
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/graph?", "path=/Work/sub")]
+    [InlineData("/api/graph?", "tag=t")]
+    [InlineData("/api/graph/local?path=/Work/plan.md&", "tag=t")]
+    [InlineData("/api/graph/paths?from=/Work/plan.md&to=/Work/audit.md&", "tag=t")]
+    public async Task Filter_takes_at_most_fifty_paths_and_tags(string url, string pair)
+    {
+        var user = await WorkAsync();
+
+        using var fifty = await user.GetAsync(url + string.Join('&', Enumerable.Repeat(pair, GraphApi.MaxFilters)));
+        Assert.Equal(HttpStatusCode.OK, fifty.StatusCode);
+        using var more = await user.GetAsync(url + string.Join('&', Enumerable.Repeat(pair, GraphApi.MaxFilters + 1)));
+        Assert.Equal(HttpStatusCode.BadRequest, more.StatusCode);
+        Assert.Contains("at most 50", (await RestClient.JsonAsync(more))["error"]!.GetValue<string>());
     }
 
     [Fact]
