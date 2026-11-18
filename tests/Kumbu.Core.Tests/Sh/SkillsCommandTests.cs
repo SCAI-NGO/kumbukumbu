@@ -61,12 +61,13 @@ public class SkillsCommandTests
 
         Assert.False(result.IsError, result.Output);
         var lines = result.Output.Split('\n');
-        Assert.Equal(5, lines.Length);
+        Assert.Equal(6, lines.Length);
         Assert.StartsWith("create-skill (system): ", lines[0]);
         Assert.StartsWith("ingest-attachments (system): ", lines[1]);
-        Assert.StartsWith("project-memory (system): ", lines[2]);
-        Assert.Equal("write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.", lines[3]);
-        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.", lines[4]);
+        Assert.StartsWith("kumbu-binary-upload (system): ", lines[2]);
+        Assert.StartsWith("project-memory (system): ", lines[3]);
+        Assert.Equal("write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.", lines[4]);
+        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.", lines[5]);
     }
 
     [Fact]
@@ -83,8 +84,8 @@ public class SkillsCommandTests
 
         var lines = (await Run("skills ls")).Output.Split('\n');
 
-        Assert.EndsWith("Drafts release notes. [update available: Skills screen]", lines[4]);
-        Assert.DoesNotContain("update available", lines[3]);
+        Assert.EndsWith("Drafts release notes. [update available: Skills screen]", lines[5]);
+        Assert.DoesNotContain("update available", lines[4]);
     }
 
     [Fact]
@@ -96,7 +97,7 @@ public class SkillsCommandTests
         var lines = (await Run("skills ls")).Output.Split('\n');
         var found = (await Run("skills find \"release notes\"")).Output;
 
-        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[4]);
+        Assert.Equal("release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", lines[5]);
         Assert.DoesNotContain("update available", string.Join('\n', lines));
         Assert.StartsWith("1. release-notes (/Work/_skills/release-notes, last changed by claude, origin edited): Drafts release notes.", found);
     }
@@ -276,7 +277,7 @@ public class SkillsCommandTests
         Assert.Equal("/Skills/write-as-alice: ok", (await Run("skills check /Skills/write-as-alice")).Output);
         var all = await Run("skills check");
         Assert.False(all.IsError, all.Output);
-        Assert.Equal("create-skill: ok\ningest-attachments: ok\nproject-memory: ok\n/Skills/write-as-alice: ok\n/Work/_skills/release-notes: ok", all.Output);
+        Assert.Equal("create-skill: ok\ningest-attachments: ok\nkumbu-binary-upload: ok\nproject-memory: ok\n/Skills/write-as-alice: ok\n/Work/_skills/release-notes: ok", all.Output);
     }
 
     [Fact]
@@ -363,8 +364,10 @@ public class SkillsCommandTests
                 // Both say "notes" in their description and tie, in the order the system skills come.
                 "2. project-memory (system): " + Description("project-memory") + "  score 0.0481",
                 "3. ingest-attachments (system): " + Description("ingest-attachments") + "  score 0.0481",
+                // The upload skill says "notes" too, in its description.
+                "4. kumbu-binary-upload (system): " + Description("kumbu-binary-upload") + "  score 0.0469",
                 // Meaning alone, first in the vault Skills: 1/61.
-                "4. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
+                "5. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
             ],
             result.Output.Split('\n'));
     }

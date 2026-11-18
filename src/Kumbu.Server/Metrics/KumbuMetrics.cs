@@ -88,7 +88,7 @@ public static class KumbuMetrics
     public static readonly Counter RateLimited = Prometheus.Metrics.CreateCounter(
         "kumbu_http_rate_limited_total", "Requests answered 429, by route template.", new CounterConfiguration { LabelNames = ["endpoint"] });
 
-    public enum Tool { Sh, Write, Edit, Replace, Board }
+    public enum Tool { Sh, Write, Edit, Replace, Board, Upload }
 
     public enum ToolError { Invalid, Refused, NotFound, Conflict, Unavailable, Damaged, Other }
 
@@ -566,7 +566,8 @@ public static class KumbuMetrics
         Tool.Write => "write",
         Tool.Edit => "edit",
         Tool.Replace => "replace",
-        _ => "board",
+        Tool.Board => "board",
+        _ => "upload",
     };
 
     private static string Label(ToolError kind) => kind switch

@@ -149,6 +149,7 @@ builder.Services.AddSingleton<AccountLimits>();
 builder.Services.AddSingleton<SyncTickets>();
 builder.Services.AddSingleton<ExportTickets>();
 builder.Services.AddSingleton<Pairings>();
+builder.Services.AddSingleton<UploadTickets>();
 builder.Services.AddSingleton<SyncHub>();
 builder.Services.AddSingleton<Notices>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
@@ -232,7 +233,7 @@ builder.Services.AddMcpServer(o =>
         o.Filters.Message.OutgoingFilters.Add(HandshakeInstructions.Outgoing);
     })
     .WithHttpTransport()
-    .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
+    .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool), typeof(UploadTool)]);
 
 var app = builder.Build();
 if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>(), app.Services.GetRequiredService<Kumbu.Server.Sharing.Memberships>());
@@ -330,6 +331,7 @@ app.MapTagApi();
 app.MapConsoleApi();
 app.MapUploadApi();
 app.MapFileApi();
+app.MapAgentUploadApi();
 app.MapSyncApi();
 app.MapPairingApi();
 app.MapExportApi();

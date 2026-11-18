@@ -96,6 +96,17 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
         Assert.DoesNotContain("Keeps the diary", text);
     }
 
+    [Fact]
+    public async Task Lists_the_binary_upload_skill()
+    {
+        var (_, key) = await AliceAsync("Skills", "Work");
+
+        var text = await InstructionsAsync(key);
+
+        Assert.Contains("- kumbu-binary-upload (system): Put a file you have or made", text);
+        Assert.Contains("name: kumbu-binary-upload", Kumbu.Core.Skills.SystemSkills.Find("kumbu-binary-upload")!.Files[0].Content);
+    }
+
     /// <summary>As <c>skills ls</c>: "from" only where the sealed origin agrees with the frontmatter; a source the frontmatter
     /// alone claims is "unverified origin", one that disagrees with the sealed origin "origin edited".</summary>
     [Fact]
