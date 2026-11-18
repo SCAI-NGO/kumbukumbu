@@ -7,7 +7,7 @@ const extensions: Record<string, string> = { "image/jpeg": "jpg", "image/png": "
 
 /**
  * The extension a photo of media type `type` is stored with; null for any other format (HEIC, say), which keeps the
- * camera's own name and is refused by the upload with its usual sentence.
+ * camera's own name and is kept as a file.
  */
 export const extOf = (type: string): string | null => extensions[type] ?? null;
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { ACCEPT, MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, NOT_SUPPORTED, planUpload, toBatches, TOO_LARGE_FILE } from "./planUpload";
+import { MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, planUpload, toBatches, TOO_LARGE_FILE } from "./planUpload";
+
+const hidden = (name: string) => `'${name}' starts with '.', which hides it in Obsidian`;
 
 const entry = (path: string, size = 10) => ({ path, size });
 
@@ -12,16 +14,14 @@ describe("planUpload", () => {
     expect(skipped.map((s) => s.path)).toEqual(["Vault/.obsidian/x/.vaultkeep", "Vault/.git/x/.vaultkeep", ".vaultkeep"]);
   });
 
-  it("keeps .md and .markdown in any case as notes and lists everything else as skipped, with the reason", () => {
-    const { notes, skipped } = planUpload([entry("Vault/a.md"), entry("Vault/B.MD"), entry("Vault/notes/c.markdown"), entry("Vault/notes/.md"), entry("Vault/readme.txt")]);
+  it("keeps .md and .markdown in any case as notes and everything else as files", () => {
+    const { notes, files, skipped } = planUpload([entry("Vault/a.md"), entry("Vault/B.MD"), entry("Vault/notes/c.markdown"), entry("Vault/notes/.md"), entry("Vault/readme.txt")]);
     expect(notes.map((k) => k.path)).toEqual(["Vault/a.md", "Vault/B.MD", "Vault/notes/c.markdown"]);
-    expect(skipped).toEqual([
-      { path: "Vault/notes/.md", reason: NOT_SUPPORTED },
-      { path: "Vault/readme.txt", reason: NOT_SUPPORTED },
-    ]);
+    expect(files.map((k) => k.path)).toEqual(["Vault/readme.txt"]);
+    expect(skipped).toEqual([{ path: "Vault/notes/.md", reason: hidden(".md") }]);
   });
 
-  it("accepts the seven formats and refuses docx with the formats named", () => {
+  it("accepts every format, and skips a file whose name starts with a dot as the server would", () => {
     const { notes, files, skipped } = planUpload([
       entry("a.pdf"),
       entry("b.PNG"),
@@ -32,21 +32,17 @@ describe("planUpload", () => {
       entry("h.Svg"),
       entry("g.md"),
       entry("report.docx"),
+      entry("IMG_0001.HEIC"),
+      entry("Makefile"),
       entry(".png"),
+      entry("Vault/.DS_Store"),
     ]);
-    expect(files.map((f) => f.path)).toEqual(["a.pdf", "b.PNG", "c.jpg", "d.Jpeg", "e.gif", "f.webp", "h.Svg"]);
+    expect(files.map((f) => f.path)).toEqual(["a.pdf", "b.PNG", "c.jpg", "d.Jpeg", "e.gif", "f.webp", "h.Svg", "report.docx", "IMG_0001.HEIC", "Makefile"]);
     expect(notes.map((f) => f.path)).toEqual(["g.md"]);
     expect(skipped).toEqual([
-      { path: "report.docx", reason: "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)" },
-      { path: ".png", reason: NOT_SUPPORTED },
+      { path: ".png", reason: hidden(".png") },
+      { path: "Vault/.DS_Store", reason: hidden(".DS_Store") },
     ]);
-  });
-
-  it("a heic file is refused with the formats named", () => {
-    // iOS converts HEIC on pick when the input lists concrete types; one that still arrives (a folder, a drop) is refused.
-    expect(planUpload([entry("IMG_0001.HEIC")]).skipped).toEqual([{ path: "IMG_0001.HEIC", reason: NOT_SUPPORTED }]);
-    expect(NOT_SUPPORTED).toContain("(.pdf)");
-    expect(NOT_SUPPORTED).toContain("(.png, .jpg, .jpeg, .gif, .webp, .svg)");
   });
 
   it("an image over 15 MB is offered for shrinking, a PDF over 15 MB is refused naming 15 MB", () => {
@@ -55,6 +51,8 @@ describe("planUpload", () => {
       entry("photo.jpg", MAX_ATTACHMENT_BYTES + 1),
       entry("scan.pdf", MAX_ATTACHMENT_BYTES + 1),
       entry("map.svg", MAX_ATTACHMENT_BYTES + 1),
+      entry("data.xlsx", MAX_ATTACHMENT_BYTES + 1),
+      entry("IMG_0002.HEIC", MAX_ATTACHMENT_BYTES + 1),
     ]);
     expect(MAX_ATTACHMENT_BYTES).toBe(15 * 1024 * 1024);
     expect(files.map((f) => f.path)).toEqual(["fits.png"]);
@@ -63,15 +61,9 @@ describe("planUpload", () => {
     expect(skipped).toEqual([
       { path: "scan.pdf", reason: "larger than 15 MB, the limit for a file" },
       { path: "map.svg", reason: "larger than 15 MB, the limit for a file" },
+      { path: "data.xlsx", reason: "larger than 15 MB, the limit for a file" },
+      { path: "IMG_0002.HEIC", reason: "larger than 15 MB, the limit for a file" },
     ]);
-  });
-
-  it("the file input lists concrete types, not image/*", () => {
-    const types = ACCEPT.split(",");
-    expect(types).toEqual(expect.arrayContaining(".pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,application/pdf,image/png,image/jpeg,image/gif,image/webp,image/svg+xml".split(",")));
-    expect(types).toEqual(expect.arrayContaining([".md", ".markdown"]));
-    expect(types).toEqual(expect.arrayContaining([".py", ".sh", ".json", ".svg", ".html"]));
-    expect(types.filter((t) => t.endsWith("/*"))).toEqual([]);
   });
 
   it("skips anything under .obsidian/ or .trash/ at any depth", () => {
@@ -117,20 +109,11 @@ describe("toBatches", () => {
     expect(skipped).toEqual([{ path: "huge.md", reason: "larger than 1048576 bytes (1 MiB), the limit for a note" }]);
   });
 
-  it("sends a script picked into a skill folder", () =>
-    expect(planUpload([entry("run.py", 9)], { vault: "Work", folder: "_skills/pdf/scripts" }).files).toHaveLength(1));
-
-  it("sends a script of a picked folder below a skill folder, by its whole path", () =>
-    expect(planUpload([entry("scripts/run.py", 9)], { vault: "Skills", folder: "pdf" }).files).toHaveLength(1));
-
-  it("skips a script picked elsewhere", () =>
-    expect(planUpload([entry("run.py", 9)], { vault: "Work", folder: "" }).skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]));
-
-  it("skips a script without a place", () =>
-    expect(planUpload([entry("run.py", 9)]).skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]));
+  it("sends a script, in a skill folder or anywhere else", () =>
+    expect(planUpload([entry("run.py", 9), entry("scripts/run.py", 9)]).files).toHaveLength(2));
 
   it("skips a text file over 15 MB instead of offering to shrink it", () => {
-    const plan = planUpload([entry("run.py", MAX_ATTACHMENT_BYTES + 1)], { vault: "Work", folder: "_skills/x" });
+    const plan = planUpload([entry("run.py", MAX_ATTACHMENT_BYTES + 1)]);
     expect(plan.tooLarge).toEqual([]);
     expect(plan.skipped).toEqual([{ path: "run.py", reason: TOO_LARGE_FILE }]);
   });
