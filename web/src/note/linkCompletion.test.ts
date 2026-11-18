@@ -53,6 +53,35 @@ describe("linkQuery", () => {
   });
 });
 
+describe("linkQuery in code", () => {
+  const at = (text: string) => linkQuery(text.replace("|", ""), text.indexOf("|"));
+
+  it("offers nothing inside a fenced code block, with either fence, nor on its fence line", () => {
+    expect(at("```js\nfns[0](|\n```")).toBeNull();
+    expect(at("~~~~\n```\nfns[0](|")).toBeNull();
+    expect(at("```bash\nif [[ -f x|\n```")).toBeNull();
+    expect(at("```[[pl|")).toBeNull();
+  });
+
+  it("offers nothing inside a code span, and takes no [[ or ]( from one before the caret", () => {
+    expect(at("Call `a[0](|` here")).toBeNull();
+    expect(at("``x [[pl|`` y")).toBeNull();
+    expect(at("`[[x` and |")).toBeNull();
+    expect(at("`[x](` and |")).toBeNull();
+  });
+
+  it("completes a link after a closed fence and after a code span", () => {
+    expect(at("```\ncode\n```\nSee [[pl|")).toEqual({ kind: "note", start: 17, query: "pl" });
+    expect(at("```\n[[x\n```\n[y](pl|")).toEqual({ kind: "markdown", start: 16, query: "pl" });
+    expect(at("`a` [[pl|")).toEqual({ kind: "note", start: 4, query: "pl" });
+  });
+
+  it("completes a Markdown link straight after a word or ], as CommonMark reads one there", () => {
+    expect(at('d["a"](|')).toEqual({ kind: "markdown", start: 7, query: "" });
+    expect(at("[a][b](|")).toEqual({ kind: "markdown", start: 7, query: "" });
+  });
+});
+
 describe("linkTarget", () => {
   const all = ["/W/plan.md", "/W/a/status.md", "/W/b/status.md", "/W/x/a/status.md", "/W/Notes/Idea.md"];
 

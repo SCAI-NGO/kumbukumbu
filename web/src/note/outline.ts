@@ -5,7 +5,7 @@ import { linkLabel } from "./wikiLinks";
 export type Heading = { level: number; text: string; line: number };
 
 // A code span (`` `…` ``, its backticks paired by count), in which `%%` is text.
-const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
+export const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
 
 /** The text with its code spans blanked, so `%%` is found where it starts or ends a comment, at the same places. */
 const masked = (text: string) => text.replace(codeSpan, (span) => " ".repeat(span.length));
@@ -68,6 +68,12 @@ export function atxHeading(line: string, anyChar = false): { level: number; text
   return { level, text: line.slice(t, k < e && q < k ? q : e) };
 }
 
+/** The fence (```` ``` ````, `~~~~`) a line opens, none being open, or closes, the `open` one being open; else null. */
+export function fenceMarker(line: string, open: string | null): string | null {
+  const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+  return marker && (open === null || (marker[0] === open[0] && marker.length >= open.length)) ? marker : null;
+}
+
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
  * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
@@ -81,8 +87,8 @@ export function outline(body: string): Heading[] {
   let para: { start: number; text: string[] } | null = null;
   body.split("\n").forEach((source, i) => {
     // Fences are found on the source, comments or not: Markdown parses the code first, and a `%%` in it is text.
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source)?.[1];
-    if (marker && (fence === null || (marker[0] === fence[0] && marker.length >= fence.length))) {
+    const marker = fenceMarker(source, fence);
+    if (marker) {
       fence = fence === null ? marker : null;
       para = null;
       return;

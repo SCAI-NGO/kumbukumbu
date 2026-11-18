@@ -3,7 +3,7 @@ import type { TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf } from "../api/paths";
 import { wordMatch } from "../palette/filter";
 import { blockList } from "./blocks";
-import { outline } from "./outline";
+import { codeSpan, fenceMarker, outline } from "./outline";
 import { splitFrontmatter } from "./properties";
 
 /**
@@ -19,12 +19,35 @@ export type LinkQuery =
 
 /**
  * The link the caret is in, if any, on the caret's line and not closed yet: an open `[[` before a `|` (an alias is
- * past what the list offers) and before a second `#`; else a `](` whose `[text]` is on the line, before a `)`.
+ * past what the list offers) and before a second `#`; else a `](` whose `[text]` is on the line, before a `)`. None
+ * in code: in a fenced block, on its fence line, or in a code span of the caret's line (one spanning lines isn't
+ * seen), and no `[[` or `](` is taken from a code span before the caret.
  */
 export function linkQuery(value: string, caret: number): LinkQuery | null {
-  const line = value.slice(value.lastIndexOf("\n", caret - 1) + 1, caret);
-  const lineStart = caret - line.length;
-  const open = line.lastIndexOf("[[");
+  const lineStart = value.lastIndexOf("\n", caret - 1) + 1;
+  const lineEnd = value.indexOf("\n", caret);
+  const whole = value.slice(lineStart, lineEnd < 0 ? value.length : lineEnd);
+  const column = caret - lineStart;
+  let masked = whole;
+  for (const span of whole.matchAll(codeSpan)) {
+    const end = span.index + span[0].length;
+    if (span.index < column && column < end) return null;
+    masked = masked.slice(0, span.index) + " ".repeat(span[0].length) + masked.slice(end);
+  }
+  const at = lineQuery(whole.slice(0, column), masked.slice(0, column), lineStart);
+  if (!at) return null;
+  // Only now, with a link on the line, the text above is scanned for an open fence: this runs on every keystroke.
+  let fence: string | null = null;
+  for (const line of value.slice(0, lineStart).split("\n")) {
+    const marker = fenceMarker(line, fence);
+    if (marker) fence = fence === null ? marker : null;
+  }
+  return fence === null && !fenceMarker(whole, null) ? at : null;
+}
+
+/** `linkQuery` on the caret's line up to the caret, as written and with its code spans blanked (`hidden`). */
+function lineQuery(line: string, hidden: string, lineStart: number): LinkQuery | null {
+  const open = hidden.lastIndexOf("[[");
   const typed = open < 0 ? "" : line.slice(open + 2);
   if (open >= 0 && !/[[\]|]/.test(typed)) {
     const start = lineStart + open;
@@ -35,9 +58,9 @@ export function linkQuery(value: string, caret: number): LinkQuery | null {
     if (rest.startsWith("^")) return /[#^]/.test(rest.slice(1)) ? null : { kind: "block", start, note, query: rest.slice(1) };
     return rest.includes("#") ? null : { kind: "heading", start, note, query: rest };
   }
-  const close = line.lastIndexOf("](");
+  const close = hidden.lastIndexOf("](");
   // `]](` closes a wiki link, not a Markdown link's text.
-  if (close < 0 || !line.slice(0, close).includes("[") || line[close - 1] === "]") return null;
+  if (close < 0 || !hidden.slice(0, close).includes("[") || line[close - 1] === "]") return null;
   const destination = line.slice(close + 2);
   if (destination.includes(")")) return null;
   const start = lineStart + close + 2;
