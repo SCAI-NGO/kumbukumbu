@@ -25,7 +25,7 @@ public sealed class Ls(INoteReader notes) : ICommand
           _archive/ is the vault's archive (see 'help archive'); hiding it is about attention, not
           access: whoever may read the vault may read it.
 
-          -l              add what each entry weighs and when it last changed (UTC, as 'history' shows it): a note its
+          -l, --long      add what each entry weighs and when it last changed (UTC, as 'history' shows it): a note its
                           size, a folder the newest change below it, an attachment its summary; columns aligned
           --archive       (-a) list the vault's _archive/ too; -la and -al combine the two flags
 

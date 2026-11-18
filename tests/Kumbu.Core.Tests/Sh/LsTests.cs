@@ -4,6 +4,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
+using Microsoft.Extensions.Time.Testing;
 using Kumbu.Core.Tests.Fakes;
 
 namespace Kumbu.Core.Tests.Sh;
@@ -156,12 +157,34 @@ public class LsTests
     }
 
     [Fact]
-    public async Task Long_without_the_archive_leaves_its_time_out_of_the_folder()
+    public async Task Long_leaves_a_newer_archive_out_of_the_listing_unless_asked()
     {
-        var result = await RunOn(Timed(), "-l", "/");
+        var store = Timed();
 
-        Assert.Equal("Work/", result.Output);
-        Assert.DoesNotContain("2026-12-01", (await RunOn(Timed(), "-l", "/Work")).Output);
+        var without = (await RunOn(store, "-l", "/Work")).Output;
+        var with = (await RunOn(store, "-la", "/Work")).Output;
+
+        Assert.DoesNotContain("_archive/", without);
+        Assert.DoesNotContain("2026-12-01", without);
+        Assert.Contains("_archive/       2026-12-01 00:00 UTC", with);
+    }
+
+    [Fact]
+    public async Task Long_on_a_checkpoint_shows_the_checkpoints_time_for_notes_and_the_note_itself()
+    {
+        var store = Timed();
+        var time = new FakeTimeProvider(new DateTime(2026, 11, 20, 8, 15, 0, DateTimeKind.Utc));
+        var writer = new NoteWriter(store, time, new FixedCaller(Writers.Dev));
+        var shell = new Shell(store, writer, new NoteMover(store, time, new FixedCaller(Writers.Dev)), new Checkpoints(store, writer, new Plans()));
+        await shell.RunAsync("mkcp /Work before", CancellationToken.None);
+        time.Advance(TimeSpan.FromDays(1));
+
+        Assert.Equal(
+            "a.md       1 B  2026-11-20 08:15 UTC\nprojects/       2026-11-20 08:15 UTC",
+            (await shell.RunAsync("ls -l --checkpoint before /Work", CancellationToken.None)).Output);
+        Assert.Equal(
+            "/Work/projects/x.md  3 B  2026-11-20 08:15 UTC",
+            (await shell.RunAsync("ls -l --checkpoint before /Work/projects/x.md", CancellationToken.None)).Output);
     }
 
     [Fact]
