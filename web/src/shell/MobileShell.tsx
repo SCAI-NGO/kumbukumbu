@@ -434,6 +434,11 @@ export default function MobileShell() {
               {renameProblem}
             </p>
           )}
+          {favourites.error && (
+            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+              {favourites.error}
+            </p>
+          )}
           {marking.error && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
               {errorText(marking.error)}
@@ -454,12 +459,13 @@ export default function MobileShell() {
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
                       ...copyItems(path, noteNamesInVault, true, copied.copy),
                       // Once the list is read: a change before would replace it. The change lets go of the vault's favourites whose note is gone.
-                      ...(favourites.ready
+                      // None for an archived note: the server takes none.
+                      ...(favourites.ready && !inVault(path).startsWith("_archive/")
                         ? [
                             {
                               label: favourites.has(noteFavourite(path)) ? "Remove from favourites" : "Add to favourites",
                               icon: Star,
-                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), noteTree.data]])) : []),
+                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), { tree: noteTree.data, at: noteTree.dataUpdatedAt }]])) : []),
                             },
                           ]
                         : []),

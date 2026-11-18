@@ -94,13 +94,14 @@ describe("the shell", () => {
   });
 
   it.each([
-    ["drops a favourite of the vault whose note is gone", 0, [{ kind: "note", vault: "Work", path: "inbox.md" }]],
-    ["keeps it while the tree has notes that don't open", 1, [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "inbox.md" }]],
-  ])("the note menu's star %s", async (_, damaged, put) => {
+    ["drops a favourite of the vault whose note is gone", 0, "2026-11-01T09:00:00Z", [{ kind: "note", vault: "Work", path: "inbox.md" }]],
+    ["keeps it while the tree has notes that don't open", 1, "2026-11-01T09:00:00Z", [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "inbox.md" }]],
+    ["keeps one added after the tree was read", 0, new Date(Date.now() + 60_000).toISOString(), [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "inbox.md" }]],
+  ])("the note menu's star %s", async (_, damaged, added, put) => {
     const puts: unknown[] = [];
     signedInApi({
       "GET /api/vaults/Work/tree": () => json(200, { ...workTree, damaged }),
-      "GET /api/account/favourites": () => json(200, { favourites: [{ kind: "note", vault: "Work", path: "gone.md", added: "2026-11-18T09:00:00Z" }] }),
+      "GET /api/account/favourites": () => json(200, { favourites: [{ kind: "note", vault: "Work", path: "gone.md", added }] }),
       "PUT /api/account/favourites": async (r) => {
         const { favourites } = (await r.json()) as { favourites: Record<string, unknown>[] };
         puts.push(favourites);
@@ -112,6 +113,27 @@ describe("the shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Add to favourites" }));
     await waitFor(() => expect(puts).toEqual([put]));
+  });
+
+  it("the note menu says why a star could not be kept", async () => {
+    signedInApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [] }),
+      "PUT /api/account/favourites": () => json(400, { error: "Your favourites are full (200)." }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to favourites" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your favourites are full (200).");
+  });
+
+  it("the note menu of an archived note has no star", async () => {
+    signedInApi({ "GET /api/account/favourites": () => json(200, { favourites: [] }) });
+    renderApp("/notes/Work/_archive/old.md");
+    await screen.findByRole("heading", { name: "old" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await screen.findByRole("menuitem", { name: "History" });
+    expect(screen.queryByRole("menuitem", { name: "Add to favourites" })).not.toBeInTheDocument();
   });
 
   it("shows the note's place and title, and switches between Read and Write", async () => {

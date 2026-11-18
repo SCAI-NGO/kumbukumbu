@@ -75,14 +75,24 @@ export function noteRows(vault: string, root: TreeFolder): Row[] {
   return rows;
 }
 
+/** A vault's tree as read, and when (`dataUpdatedAt`). */
+export type ReadTree = { tree: TreeView; at: number };
+
+// Allowed for the clocks of two devices: a favourite another device added shortly before the tree was read may be later.
+const SKEW = 5 * 60_000;
+
 /**
  * The keys of note favourites whose note was moved, renamed or deleted: those of a vault whose tree is loaded (`trees`)
- * and lacks it. A vault without a loaded tree (still loading, failed, not listed: a hidden one's) keeps its entries;
- * so does one whose tree leaves out notes that don't open (`damaged`), as the note may be one of them.
+ * and lacks it, added more than five minutes before the tree was read. A vault without a loaded tree (still loading,
+ * failed, not listed: a hidden one's) keeps its entries; so does one whose tree leaves out notes that don't open
+ * (`damaged`), as the note may be one of them; and so does one added since, by another device, to a note the tree
+ * doesn't have yet.
  */
-export function staleNotes(favourites: Favourite[], trees: ReadonlyMap<string, TreeView>): string[] {
+export function staleNotes(favourites: Favourite[], trees: ReadonlyMap<string, ReadTree>): string[] {
   return favourites.flatMap((f) => {
-    const tree = f.kind === "note" && f.vault ? trees.get(f.vault) : undefined;
-    return tree && Number(tree.damaged) === 0 && !treeHas(tree.root, `/${f.vault}/${f.path}`) ? [favouriteKey(f)] : [];
+    const read = f.kind === "note" && f.vault ? trees.get(f.vault) : undefined;
+    return read && Number(read.tree.damaged) === 0 && Date.parse(f.added) < read.at - SKEW && !treeHas(read.tree.root, `/${f.vault}/${f.path}`)
+      ? [favouriteKey(f)]
+      : [];
   });
 }

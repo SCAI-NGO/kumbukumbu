@@ -59,14 +59,20 @@ describe("noteRows", () => {
 
 describe("staleNotes", () => {
   const work = folder("/Work", [note("/Work/plan.md")], [folder("/Work/_archive", [note("/Work/_archive/old.md")])]);
-  const f = (vault: string, path: string) => ({ kind: "note", vault, path, added: "2026-11-18T09:00:00Z" });
+  const read = Date.parse("2026-11-18T10:00:00Z");
+  const f = (vault: string, path: string, added = "2026-11-18T09:00:00Z") => ({ kind: "note", vault, path, added });
 
   it("names the note favourites missing from their vault's loaded tree, and nothing else", () => {
     const list = [f("Work", "plan.md"), f("Work", "gone.md"), f("Work", "_archive/old.md"), f("Home", "x.md"), { kind: "vault", vault: "Gone", added: "2026-11-18T09:00:00Z" }];
-    expect(staleNotes(list, new Map([["Work", { damaged: 0, root: work }]]))).toEqual(["note:Work/gone.md"]);
+    expect(staleNotes(list, new Map([["Work", { tree: { damaged: 0, root: work }, at: read }]]))).toEqual(["note:Work/gone.md"]);
   });
 
   it("names none of a tree that leaves out notes that don't open", () => {
-    expect(staleNotes([f("Work", "gone.md")], new Map([["Work", { damaged: 1, root: work }]]))).toEqual([]);
+    expect(staleNotes([f("Work", "gone.md")], new Map([["Work", { tree: { damaged: 1, root: work }, at: read }]]))).toEqual([]);
+  });
+
+  it("names none added later than five minutes before the tree was read: another device's may not be in it yet", () => {
+    const list = [f("Work", "new.md", "2026-11-18T09:55:01Z"), f("Work", "late.md", "2026-11-18T10:03:00Z"), f("Work", "old.md", "2026-11-18T09:54:59Z")];
+    expect(staleNotes(list, new Map([["Work", { tree: { damaged: 0, root: work }, at: read }]]))).toEqual(["note:Work/old.md"]);
   });
 });

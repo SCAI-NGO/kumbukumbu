@@ -33,13 +33,14 @@ const vault = (name: string, discreet = false) => ({ name, notes: 2, embeddings:
 /** Work, and while `shown` the discreet Tagebuch; the favourites are kept as the server would, and written back as they are put. */
 function signedInApi({
   shown = false,
-  favourites = [] as FavouriteInput[],
+  favourites = [] as (FavouriteInput & { added?: string })[],
   workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response>,
   homeTree = null as (() => Response) | null,
 } = {}) {
   const at = { shown };
-  let held: Favourite[] = favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" }));
+  let held: Favourite[] = favourites.map((f) => ({ added: "2026-11-01T09:00:00Z", ...f }));
   const puts: FavouriteInput[][] = [];
+  const answer = { put: null as Response | null };
   const fetch = fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
     "GET /api/vaults": () => json(200, [vault("Work"), ...(homeTree ? [vault("Home")] : []), ...(at.shown ? [vault("Tagebuch", true)] : [])]),
@@ -67,11 +68,12 @@ function signedInApi({
     "PUT /api/account/favourites": async (r) => {
       const body = (await r.json()) as { favourites: FavouriteInput[] };
       puts.push(body.favourites);
+      if (answer.put) return answer.put;
       held = body.favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" }));
       return json(200, { favourites: held });
     },
   });
-  return { fetch, puts, at };
+  return { fetch, puts, at, answer };
 }
 
 const palette = () => screen.getByRole("dialog", { name: "Favourites and commands" });
@@ -345,6 +347,53 @@ describe("rows", () => {
     await waitFor(() => expect(options()).toContain("plan, Work"));
     await toggleAppearance();
     await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "plan.md" }, { kind: "command", id: "settings.appearance" }]]));
+  });
+
+  it("a favourite added after the tree was read and missing from it is kept: another device starred it", async () => {
+    const { puts } = signedInApi({ favourites: [{ kind: "note", vault: "Work", path: "new.md", added: new Date().toISOString() }] });
+    await openPalette();
+    await waitFor(() => expect(options()).toContain("inbox, Work"));
+    await toggleAppearance();
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "new.md" }, { kind: "command", id: "settings.appearance" }]]));
+  });
+
+  it("the highlight stays on its row when Ctrl+D moves it to the favourites", async () => {
+    signedInApi();
+    const router = await openPalette();
+    await userEvent.type(field(), "work");
+    await waitFor(() => expect(options()).toContain("plan, Work"));
+    while (highlighted() !== "plan, Work") await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Control>}d{/Control}");
+    await waitFor(() => expect(options()[0]).toBe("plan, Work"));
+    expect(highlighted()).toBe("plan, Work");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/plan.md"));
+  });
+
+  it("in the empty palette, Ctrl+D twice on a favourite stars it again, not its neighbour", async () => {
+    const { puts } = signedInApi({ favourites: [{ kind: "note", vault: "Work", path: "inbox.md" }, { kind: "command", id: "settings.vaults" }] });
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["inbox, Work", "Vaults, Settings"]));
+    expect(highlighted()).toBe("inbox, Work");
+    await userEvent.keyboard("{Control>}d{/Control}");
+    // Off the favourites, it stands under Recent.
+    await waitFor(() => expect(options()).toEqual(["Vaults, Settings", "inbox, Work"]));
+    expect(highlighted()).toBe("inbox, Work");
+    await userEvent.keyboard("{Control>}d{/Control}");
+    await waitFor(() => expect(puts).toHaveLength(2));
+    expect(puts[1]).toEqual([{ kind: "command", id: "settings.vaults" }, { kind: "note", vault: "Work", path: "inbox.md" }]);
+  });
+
+  it("says why a star could not be kept, under the field, until the next change", async () => {
+    const { answer } = signedInApi();
+    answer.put = json(400, { error: "Your favourites are full (200)." });
+    await openPalette();
+    await within(palette()).findByText("Star anything here to keep it on top.");
+    await toggleAppearance();
+    expect(await within(palette()).findByRole("status")).toHaveTextContent("Your favourites are full (200).");
+    answer.put = null;
+    await userEvent.keyboard("{Control>}d{/Control}");
+    await waitFor(() => expect(within(palette()).queryByRole("status")).not.toBeInTheDocument());
   });
 
   it("a favourite of a vault whose tree hasn't loaded is kept", async () => {

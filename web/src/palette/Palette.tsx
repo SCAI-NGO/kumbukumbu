@@ -17,13 +17,13 @@ import { applyScheme } from "../theme/apply";
 import { useCloseWindow } from "../windows/context";
 import { useWindows } from "../windows/store";
 import { filterRows } from "./filter";
-import { commandRows, noteRows, staleNotes, vaultRows, type Row } from "./rows";
+import { commandRows, noteRows, staleNotes, vaultRows, type ReadTree, type Row } from "./rows";
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 // Structurally shared by the query: the same trees give the same array, so the rows are built again only when one changes.
 // A tree whose last read failed counts as not loaded: nothing is taken as gone from it.
-const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r) => (r.isSuccess ? r.data : undefined));
+const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r): ReadTree | undefined => (r.isSuccess ? { tree: r.data, at: r.dataUpdatedAt } : undefined));
 // Opened again within a minute, the palette takes the trees it read as they are, rather than asking for every vault's again.
 const FRESH = 60_000;
 
@@ -31,7 +31,7 @@ const FRESH = 60_000;
  * Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists; and
  * the loaded trees by vault, which say which note favourites are gone.
  */
-function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeView> } {
+function useRows(): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -44,7 +44,7 @@ function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeView> } {
       rows: [
         ...commandRows({ admin, shared, marketplaces }),
         ...vaultRows(vaults ?? []),
-        ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].root) : [])),
+        ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].tree.root) : [])),
       ],
       trees: new Map((vaults ?? []).flatMap((v, i) => (trees[i] ? [[v.name, trees[i]] as const] : []))),
     }),
@@ -75,7 +75,8 @@ export default function Palette() {
   const desktop = useDesktop();
   const id = useId();
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  // By its key, not its place: a star moves a row to the favourites, or off them.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const { rows, trees } = useRows();
   const favourites = useFavourites();
   // Each change lets go of the note favourites whose note is gone, in the same write.
@@ -103,7 +104,9 @@ export default function Palette() {
 
   const searchLabel = `Search notes for ‘${typed}’`;
   const entries: (Row | null)[] = [...sections.flatMap((s) => s.rows), ...(typed ? [null] : [])];
-  const at = Math.min(active, entries.length - 1);
+  const keyOf = (entry: Row | null) => entry?.key ?? "search";
+  // The first row where none is chosen, or the chosen one is gone.
+  const at = entries.length ? Math.max(0, entries.findIndex((e) => keyOf(e) === activeKey)) : -1;
   const optionId = (i: number) => `${id}-option-${i}`;
 
   useEffect(() => {
@@ -125,13 +128,17 @@ export default function Palette() {
     // While an IME composes, Enter and the arrows are the IME's.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      if (entries.length) setActive((at + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
+      if (entries.length) setActiveKey(keyOf(entries[(at + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length]));
     } else if (e.key === "Enter") {
       if (at >= 0) run(entries[at]);
     } else if (withMod(e, "d")) {
       // Caught here only, as a browser's bookmark is: the highlighted row's star.
+      // The highlight goes with the row, wherever the star moves it.
       const row = entries[at];
-      if (row) toggle(row.favourite);
+      if (row) {
+        setActiveKey(row.key);
+        toggle(row.favourite);
+      }
     } else return;
     e.preventDefault();
   };
@@ -150,7 +157,7 @@ export default function Palette() {
         aria-label={row ? (row.place ? `${row.name}, ${row.place}` : row.name) : searchLabel}
         onPointerDown={keepFocus}
         onMouseDown={keepFocus}
-        onMouseMove={() => !highlighted && setActive(i)}
+        onMouseMove={() => !highlighted && setActiveKey(keyOf(row))}
         onClick={() => run(row)}
         className={`group flex min-h-11 cursor-pointer items-center gap-2 rounded-[8px] pr-1 pl-3 ${highlighted ? "bg-accent/15" : ""}`}
       >
@@ -209,29 +216,37 @@ export default function Palette() {
     </div>
   );
   const field = (
-    <label className="flex h-12 flex-none items-center gap-2.5 rounded-full border border-line bg-surface-2 px-4 focus-within:outline-2 focus-within:outline-accent">
-      <Search size={20} strokeWidth={1.9} aria-hidden className="flex-none text-muted" />
-      <input
-        type="text"
-        role="combobox"
-        aria-label="Find a command, vault or note"
-        aria-expanded
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={at >= 0 ? optionId(at) : undefined}
-        data-autofocus
-        // On the field only: Enter on ✕ is ✕'s.
-        onKeyDown={onKeyDown}
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setActive(0);
-        }}
-        placeholder="Commands, vaults, notes"
-        autoComplete="off"
-        className="min-w-0 flex-1 bg-transparent text-[16px] text-text outline-none placeholder:text-muted"
-      />
-    </label>
+    <>
+      <label className="flex h-12 flex-none items-center gap-2.5 rounded-full border border-line bg-surface-2 px-4 focus-within:outline-2 focus-within:outline-accent">
+        <Search size={20} strokeWidth={1.9} aria-hidden className="flex-none text-muted" />
+        <input
+          type="text"
+          role="combobox"
+          aria-label="Find a command, vault or note"
+          aria-expanded
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={at >= 0 ? optionId(at) : undefined}
+          data-autofocus
+          // On the field only: Enter on ✕ is ✕'s.
+          onKeyDown={onKeyDown}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActiveKey(null);
+          }}
+          placeholder="Commands, vaults, notes"
+          autoComplete="off"
+          className="min-w-0 flex-1 bg-transparent text-[16px] text-text outline-none placeholder:text-muted"
+        />
+      </label>
+      {/* A star that could not be kept, until the next change. */}
+      {favourites.error && (
+        <p role="status" className="px-4 pt-1.5 text-sm text-muted">
+          {favourites.error}
+        </p>
+      )}
+    </>
   );
 
   return createPortal(
