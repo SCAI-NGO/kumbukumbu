@@ -10,7 +10,9 @@ using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -153,6 +155,26 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         using var byAgent = await SaveKeyAsync(user, Key, bearer);
 
         Assert.Equal(HttpStatusCode.Forbidden, byAgent.StatusCode);
+        Assert.False((await KeyViewAsync(user))["keySaved"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_remembered_session_saves_a_key_only_with_its_password_window_open()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var api = Api().WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        _apis.Add(api);
+        var user = await RestClient.NewAsync(api, remember: true);
+        time.Advance(TimeSpan.FromMinutes(31));
+
+        using var closed = await SaveKeyAsync(user, Key);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, closed.StatusCode);
+        Assert.Equal("password-required", (await RestClient.JsonAsync(closed))["type"]?.GetValue<string>());
         Assert.False((await KeyViewAsync(user))["keySaved"]!.GetValue<bool>());
     }
 

@@ -31,7 +31,8 @@ public static class EmbeddingsKeyApi
     {
         var account = app.MapGroup("/api/account").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/embeddings-key", GetAsync).Errors(401, 403);
-        account.MapPut("/embeddings-key", SetAsync).Errors(400, 401, 403, 503);
+        // A key decides whose TensorX account the text goes to: a stolen remembered session must not point it at its own.
+        account.MapPut("/embeddings-key", SetAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 503);
         account.MapDelete("/embeddings-key", RemoveAsync).Errors(401, 403, 503);
     }
 

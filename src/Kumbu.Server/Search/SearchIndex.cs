@@ -98,7 +98,6 @@ public sealed class SearchIndex : BackgroundService
         }
     }
 
-
     /// <summary>Queues what a search found stale, but not a note or PDF whose last attempt at its current version, under
     /// the current scheme, failed: each search would send it to the provider again. A write (a new version), another
     /// scheme or the next unlock tries it again.</summary>
