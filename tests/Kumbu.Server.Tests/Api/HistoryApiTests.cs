@@ -155,7 +155,8 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, nothingThere.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, noNote.StatusCode);
+        // A path without .md names a file, and none is there.
+        Assert.Equal(HttpStatusCode.NotFound, noNote.StatusCode);
     }
 
     [Fact]
