@@ -1,6 +1,6 @@
 # BYOK embeddings — design
 
-Approved by the maintainer on: _pending_. Size: small (server and one settings section).
+Approved by Chris on 2026-11-18. Size: small (server and one settings section).
 
 ## Why
 
