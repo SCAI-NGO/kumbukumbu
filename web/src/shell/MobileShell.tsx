@@ -8,6 +8,7 @@ import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, u
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { PointMenu } from "../components/PointMenu";
 import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
@@ -37,6 +38,7 @@ import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { useNoteActions } from "./useNoteActions";
+import { useNoteMenuKey } from "./useNoteMenuKey";
 import DateDialog from "../calendar/DateDialog";
 import { useFlagging } from "../flags/FlagMenu";
 import { ShellRedirect } from "../windows/context";
@@ -320,6 +322,7 @@ export default function MobileShell() {
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
   const noteActions = useNoteActions(path, { onMove: setMoving, onDelete: setDeleting, onDate: setDating, onFlag: flagging.open });
+  const noteMenu = useNoteMenuKey(path);
   if (!path && recentPaths.length && !overview) return <ShellRedirect to={noteUrl(recentPaths[0])} />;
   if (keptThere) return <ShellRedirect to={noteUrl(kept!)} />;
 
@@ -436,6 +439,8 @@ export default function MobileShell() {
           )}
         </LoadBoundary>
       )}
+      {/* Outside the dock, which Write mode hides. */}
+      {noteMenu && <PointMenu label="Note actions" items={noteActions.items} at={noteMenu.at} onClose={noteMenu.close} />}
       {noteActions.dialogs}
       {vaultSheet && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setVaultSheet(null)} />}>

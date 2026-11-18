@@ -23,6 +23,41 @@ function belowOnlyHeading(text: string): number | null {
   return heading && text.slice(heading[0].length).trim() === "" ? heading[0].length : null;
 }
 
+/** What a line of the textarea's text wraps by; the rest of its look doesn't move the caret. */
+const MIRRORED = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight", "tabSize", "textIndent", "textTransform", "wordSpacing"] as const;
+
+/**
+ * Where the caret (the selection's moving end) stands on screen: a textarea doesn't say, so its text up to there is laid
+ * out again in a hidden copy over it, with a mark at the end.
+ */
+function caretOf(area: HTMLTextAreaElement) {
+  const style = getComputedStyle(area);
+  const box = area.getBoundingClientRect();
+  const mirror = document.createElement("div");
+  for (const key of MIRRORED) mirror.style[key] = style[key];
+  // The text's own width: inside the border and without the scrollbar.
+  Object.assign(mirror.style, {
+    position: "fixed",
+    left: `${box.left + area.clientLeft}px`,
+    top: `${box.top + area.clientTop}px`,
+    width: `${area.clientWidth}px`,
+    boxSizing: "border-box",
+    visibility: "hidden",
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+  });
+  const head = area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd;
+  mirror.textContent = area.value.slice(0, head);
+  const mark = document.createElement("span");
+  mark.dataset.caret = "";
+  mark.textContent = "\u200b";
+  mirror.append(mark);
+  document.body.append(mirror);
+  const at = mark.getBoundingClientRect();
+  mirror.remove();
+  return { left: at.left - area.scrollLeft, top: at.top - area.scrollTop, bottom: at.bottom - area.scrollTop };
+}
+
 /**
  * Write mode (MOBILE_EDITOR §4, §7): the raw Markdown in a plain textarea (16 px, so iOS doesn't zoom), saved as
  * the user types. Nothing leaves Write mode, the note or the page while text is unsaved without saving it first;
@@ -119,6 +154,11 @@ export default function MarkdownEditor({
     // A note that is only its heading (a day note, an entry made on a day): the caret on the line below, to write there.
     const below = area ? belowOnlyHeading(area.value) : null;
     if (below !== null) area!.setSelectionRange(below, below);
+  }, []);
+
+  useEffect(() => {
+    useEditor.getState().setCaretAt(() => caretOf(textarea.current!));
+    return () => useEditor.getState().setCaretAt(null);
   }, []);
 
   useEffect(() => {
