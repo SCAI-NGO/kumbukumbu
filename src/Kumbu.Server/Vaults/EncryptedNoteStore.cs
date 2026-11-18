@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
@@ -68,6 +69,14 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => new Note(n.Path, n.Content))];
+
+    /// <summary>From the working set, so no more than the listing costs.</summary>
+    public async Task<IReadOnlyList<NoteStamp>> ListNoteStampsAsync(VaultPath dir, CancellationToken ct)
+    {
+        var below = await NotesUnderAsync(dir, ct);
+        var own = dir.IsRoot ? null : await GetAsync(dir, ct);
+        return [.. (own is null ? below : below.Prepend(own)).Select(n => new NoteStamp(n.Path, Encoding.UTF8.GetByteCount(n.Content), n.LastWriteAt))];
+    }
 
     /// <summary>The vault's graph from its working set (graph backend spec §4.4), in the caller's names; a vault the
     /// caller doesn't have is an empty graph, as the reader's default has it.</summary>
@@ -1132,7 +1141,7 @@ public sealed class EncryptedNoteStore(
         batch.Creates.Sum(n => Bytes(n.Content)) + batch.Replaces.Sum(r => Bytes(r.Next.Content))
         + RecordBytes * (batch.AttachmentCreates.Count + batch.AttachmentReplaces.Count + batch.AttachmentRestores.Count);
 
-    private static long Bytes(string text) => System.Text.Encoding.UTF8.GetByteCount(text);
+    private static long Bytes(string text) => Encoding.UTF8.GetByteCount(text);
 
     /// <summary>Every caller checks the entry first (<see cref="WriterRef.RequireStorable"/>): it throws inside the
     /// transaction, so a write path that forgets a reference is refused whole (collab design §8.1, fail closed).</summary>

@@ -8,7 +8,7 @@ Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes
 
 The server offers five MCP tools. `sh` is a shell over your notes:
 
-- `ls [path]` lists a directory (no path lists the vaults, and says if vaults don't open with the token or notes are damaged); a vault's archive, `_archive/`, only with `--archive` (see "The archive")
+- `ls [-l] [-a|--archive] [path]` lists a directory (`-l` adds each note's size and the time of its current version, a folder's newest change below it; no path lists the vaults, and says if vaults don't open with the token or notes are damaged); a vault's archive, `_archive/`, only with `-a` or `--archive` (see "The archive")
 - `cat <path>` prints a note, with its **version token** in a separate block (`cat <path> <path>…` prints several, each under a `==> path <==` header with a token each; a note that no longer fits the call's budget prints its outline); `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`), `cat "<path>#^id"` one block that carries the marker `^id`; the notes a note embeds with `![[Note]]` follow below a marked line
 - `outline <path>` lists a note's headings with line ranges and sizes
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`, and the text of PDFs as `path:p7: text` (page 7); without a path it searches every vault; `-g <glob>` keeps only paths matching it, `-g '!<glob>'` drops those that do (ripgrep's rules, repeatable: `rg -n Kumbu /SWE -g '!**/Memory/**'`)

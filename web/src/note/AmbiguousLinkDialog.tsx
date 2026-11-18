@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { folderOf, noteUrl, titleOf } from "../api/paths";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import { useInWindow } from "../windows/context";
 
 /** The notes a link could mean, each with its folder to tell them apart; following one closes the dialog. */
 export default function AmbiguousLinkDialog({
@@ -22,6 +23,8 @@ export default function AmbiguousLinkDialog({
   stateOf?: (path: string) => unknown;
 }) {
   const dialog = useDialog<HTMLDivElement>(onClose);
+  // From a window, the note takes the window's place in the history.
+  const inWindow = useInWindow();
   // Not inside the note's text: a dialog there would sit in a paragraph.
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -40,6 +43,7 @@ export default function AmbiguousLinkDialog({
             <li key={path}>
               <Link
                 to={hrefOf(path)}
+                replace={inWindow}
                 state={stateOf?.(path)}
                 onClick={onClose}
                 className="flex min-h-11 min-w-0 flex-col justify-center rounded-[8px] px-2 py-1 focus-visible:outline-2 focus-visible:outline-accent"

@@ -49,14 +49,15 @@ public class HelpTests
     }
 
     [Theory]
-    [InlineData("ls", "ls [--archive] [path]", "ls [--archive] [path]")]
+    [InlineData("ls", "ls [-l] [-a|--archive] [path]", "ls [-l] [-a|--archive] [path]")]
     [InlineData("tags", "tags [--archive] [path]", "tags [--archive] [tag] [path]")]
     [InlineData("backlinks", "backlinks [--archive] [--unlinked] <path>", "backlinks [--archive] <path>")]
     public async Task The_readers_that_hide_the_archive_take_archive(string command, string help, string usage)
     {
         var details = (await Run($"help {command}")).Output;
         Assert.StartsWith(help, details);
-        Assert.Contains("\n  --archive ", details);
+        // ls has a short form too, written as its -l is: "-a, --archive".
+        Assert.Matches(@"\n  (-a, )?--archive ", details);
         Assert.Contains($"\n  {usage} ", Manual.ToolDescription);
         Assert.Contains($"\n  {usage} ", (await Run("help")).Output);
     }

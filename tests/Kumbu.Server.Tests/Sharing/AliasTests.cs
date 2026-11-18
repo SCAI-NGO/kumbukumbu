@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
@@ -50,6 +51,26 @@ public sealed class AliasTests(KumbuAppFactory app)
         using var response = await user.GetAsync("/api/vaults");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return [.. (await RestClient.JsonAsync(response)).AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal)];
+    }
+
+    [Fact]
+    public async Task Note_stamps_carry_utf8_sizes_the_last_write_and_the_callers_names()
+    {
+        var (alice, bob, _) = await SharedAsync();
+        await alice.CreateAsync("Beete/b.md", "Tomäten\n");
+        var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(bob.User.Id, bob.UserKey));
+        VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
+
+        var all = (await store.ListNoteStampsAsync(P("/garten"), Ct)).OrderBy(n => n.Path.Value, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(["/garten/Beete/b.md", "/garten/a.md"], all.Select(n => n.Path.Value));
+        Assert.Equal([9L, 8L], all.Select(n => n.Size));
+        foreach (var stamp in all) Assert.Equal((await store.GetAsync(stamp.Path, Ct))!.LastWriteAt, stamp.At);
+
+        // The note at the path itself, and a folder's notes only.
+        var own = Assert.Single(await store.ListNoteStampsAsync(P("/garten/a.md"), Ct));
+        Assert.Equal(("/garten/a.md", 8L), (own.Path.Value, own.Size));
+        Assert.Equal(["/garten/Beete/b.md"], (await store.ListNoteStampsAsync(P("/garten/Beete"), Ct)).Select(n => n.Path.Value));
     }
 
     [Fact]
