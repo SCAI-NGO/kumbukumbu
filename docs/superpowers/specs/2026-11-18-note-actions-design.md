@@ -75,7 +75,7 @@ While a note is shown or edited, the palette has a group **Note** before Command
 
 ## Left to the builder
 
-- The exact menu positioning at the caret (CodeMirror's coordinates for the selection head), flipping above when there is no room below.
+- The exact menu positioning at the caret (Write mode is a plain textarea, so the caret's position is measured with a mirror element of the same styles; corrected after the build, the first draft assumed CodeMirror), flipping above when there is no room below.
 - How the menu's items become one source for the dock, the keyboard menu and the palette (a hook returning `{ label, icon, onSelect, … }[]` is the obvious shape).
 - The notice's component, following the shell's existing notices.
 

@@ -6,7 +6,7 @@
 
 **Architecture:** All in the web app. A pure module makes the copy's text and name; one hook builds the note's menu items for the dock, the keyboard menu and the palette alike; a point-positioned menu shares the dock menu's list; the palette gains a Note group of rows that run a function.
 
-**Tech Stack:** React 19, TypeScript, Tailwind, Zustand, TanStack Query, CodeMirror 6, Vitest.
+**Tech Stack:** React 19, TypeScript, Tailwind, Zustand, TanStack Query, Vitest (Write mode is a plain textarea).
 
 **Spec:** `docs/superpowers/specs/2026-11-18-note-actions-design.md` (read it first). Stacked on the command palette (`docs/superpowers/specs/2026-11-18-command-palette-design.md`, branch `claude/trusting-davinci-0ml2g8`, #237).
 
@@ -76,7 +76,7 @@
 
 **Interfaces:**
 - Consumes: Task 2's `useNoteActions(path).items`.
-- Produces: `PointMenu({ label, items, at: { left: number; top: number }, onClose(): void })` — the same list as `Menu`, fixed at a point, flipping above or left where there is no room; focus on the first item; Esc and a click outside close it and call `onClose`. The caret's coordinates come from CodeMirror (`view.coordsAtPos(view.state.selection.main.head)`), exposed by the editor through the editor store or a ref the shell can read.
+- Produces: `PointMenu({ label, items, at: { left: number; top: number }, onClose(): void })` — the same list as `Menu`, fixed at a point, flipping above or left where there is no room; focus on the first item; Esc and a click outside close it and call `onClose`. The caret's coordinates are measured in the Write-mode textarea with a mirror element (corrected after the build: there is no CodeMirror).
 
 - [ ] **Step 1: Write the failing tests:** `shift_f10_in_read_mode_opens_the_note_menu_at_the_dock_button` (anchored at the ⋯ button's rect), `context_menu_key_too`, `shift_f10_in_write_mode_opens_at_the_caret`, `esc_returns_focus_to_the_editor_at_the_same_caret`, `not_over_a_dialog_or_the_palette`, `nothing_without_an_open_note`, `items_fit_the_mode` (no "Find in note" in Write mode), `point_menu_flips_where_there_is_no_room`.
 - [ ] **Step 2: Run** → FAIL.
