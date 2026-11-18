@@ -147,7 +147,13 @@ Once published, the dialog shows the link and Copy, as today. Below that are **U
 
 ## Left to the builder
 
-- How the record stores the bundle: entries per note under the one code and key.
-- How links to a note taken out turn into plain text: rendered at read time from the current set, or rewritten in the stored copies.
-- How existing publications migrate.
-- The wording, within the UX review's lines.
+Answered while building (2026-11-18):
+
+- **The record and the copy:** the publication entry gains `Depth`, `Without` (stored paths) and `Members` (id, path, version per note but the start). The copy stays one sealed blob: the start note's `Title` and `Markdown` as before, plus `Notes` (id, title, Markdown, depth, the copy's files each note's `f/n` names) and `Edges` ([from, to] ids). Images are numbered across the copy and copied once.
+- **Links to a note taken out** are rewritten in the stored copy at once (`FairCopies.Unlink`, which skips code), in the same transaction as the mark, the move or the removal; the files only that note used are deleted, the others keep their indices.
+- **Migration:** none. The new fields are optional; a copy or entry without them is a single note, and a walk that takes only the start note stores exactly what was stored before.
+- **The reader** gets every note at once with the copy (texts are small; images still come one by one). A link to a heading scrolls to it; a link to a block lands at the top of its note.
+- **The preview** is `GET /api/publication-previews/{vault}/{path}`; `PUT` takes an optional JSON body (none keeps the publication's walk).
+- **Update copy** of a bundle in the web app always shows the list first (not only when the set changed): one flow, and the owner sees what goes out each time.
+- **Who prunes:** whoever's batch removes a note of a copy or moves it under a mark (a member's, a share's): it only reduces what is out. Only the start note keeps the owner-only rule.
+- **A mark on an image** of a bundle withdraws the whole copy, as it does for a single note today; pruning by image is left for later.
