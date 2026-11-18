@@ -109,6 +109,27 @@ public class SystemSkillsTests
         Assert.Contains("say that the pictures need pdfimages with write access", text);
     }
 
+    // A long source read whole loses its first chapters from context before the notes are written.
+    [Fact]
+    public void Ingest_attachments_writes_a_long_pdf_chapter_by_chapter()
+    {
+        var text = Skill("ingest-attachments");
+        Assert.Contains("one note up to 30 pages, a folder beyond", text);
+        Assert.Contains("plan the chapters or topics from `pdf info <pdf>`", text);
+        Assert.Contains("read its pages, store its pictures, write its note, and only then go on", text);
+        Assert.Contains("The overview note comes last, from the chapter notes written", text);
+    }
+
+    [Fact]
+    public void Ingest_attachments_marks_what_it_reads_into_the_source()
+    {
+        var text = Skill("ingest-attachments");
+        Assert.Contains("> [!described]", text);
+        Assert.Contains("text, tables and numbers from the source stay plain", text);
+        Assert.Contains("anything looked up elsewhere names where it came from", text);
+        Assert.Contains("what the source said from what was read into it", text);
+    }
+
     [Fact]
     public async Task An_embed_written_as_ingest_attachments_says_resolves()
     {
