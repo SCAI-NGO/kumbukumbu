@@ -80,7 +80,9 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   const ownNote = !!noteVault && noteVault.owner == null;
   // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20), and what is published.
   const publications = usePublications(noteVault?.name ?? "", ownNote).data;
+  // Not in Write mode: publishing, as History's restore and Add property, acts on the saved text while unsaved text is on screen.
   const mayPublish =
+    mode === "read" &&
     ownNote && publishEnabled === true && publications !== undefined && !publications.publications.some((p) => p.path === path) && publishableAsNote(noteVault, path ?? "");
   const marking = useMarking(publications?.publications.map((p) => p.path));
   const publishingActions =
@@ -111,8 +113,12 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
 
   const items: MenuItem[] = path
     ? [
-        ...(mode === "read" ? [{ label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") }] : []),
-        { label: "History", icon: History, onSelect: () => setHistory(path) },
+        ...(mode === "read"
+          ? [
+              { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
+              { label: "History", icon: History, onSelect: () => setHistory(path) },
+            ]
+          : []),
         ...copyItems(path, noteNamesInVault, true, copied.copy),
         // Once the list is read: a change before would replace it. The change lets go of the vault's favourites whose note is gone.
         // None for an archived note: the server takes none.
@@ -135,7 +141,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
               { label: "Delete note", icon: Trash2, onSelect: () => shell.onDelete({ kind: "note", path }) },
               ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path) }] : []),
               ...calendarItems(path, dated, shell.onDate, removeDate, switchTask),
-              ...(boxless ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
+              ...(boxless && mode === "read" ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
             ]
           : []),
       ]

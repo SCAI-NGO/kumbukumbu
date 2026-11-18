@@ -62,7 +62,7 @@ While a note is shown or edited, the palette has a group **Note** before Command
 
 - **Write mode:** the menu opens at the caret, as a context menu, so hand and eye stay with the text; Esc closes it and the caret is where it was.
 - **Read mode:** it opens the dock's ⋯ menu, the same menu where the mouse knows it.
-- The same items in both, only those that fit the mode ("Find in note" needs Read mode).
+- The same items in both, only those that fit the mode: "Find in note", "History", "Publish…" and "Add property…" in Read mode only. Why: "Find in note" searches the rendered note; the other three act on the saved text (History restores over it, Publish sends it, Add property writes into it) while Write mode may hold unsaved text on screen. Leaving them out of Write mode is the smaller safe change than saving first; Duplicate saves first because its anti-goal is losing that text.
 - Not over a dialog (`topDialog()`), not while the palette or another menu is open, not without an open note.
 - The context-menu key alone opens it; with the browser's own context menu it is the browser's when the key isn't caught (the key's `keydown` is prevented while a note is open).
 

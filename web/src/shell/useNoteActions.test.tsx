@@ -33,11 +33,18 @@ const view = (path: string, content: string, version: string) => ({ path, conten
  * The server: the open note `/Work/inbox.md` with `content`, saved over by its own PUT; a PUT of any other note is a
  * copy, created unless `taken` says the name is taken. `events` records the inbox's reads and writes and the copies, in order.
  */
-function server({ taken = (_: string): boolean => false, failSave = false, vaults = [{ name: "Work", notes: 1, embeddings: "internal" }] as unknown[] } = {}) {
-  const state = { content: ORIGINAL, version: "v1", events: [] as string[], copies: [] as { path: string; body: Record<string, unknown> }[] };
+function server({
+  taken = (_: string): boolean => false,
+  failSave = false,
+  vaults = [{ name: "Work", notes: 1, embeddings: "internal" }] as unknown[],
+  content = ORIGINAL,
+  publish = false,
+} = {}) {
+  const state = { content, version: "v1", events: [] as string[], copies: [] as { path: string; body: Record<string, unknown> }[] };
   fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, publishEnabled: publish }),
     "GET /api/vaults": () => json(200, vaults),
+    ...(publish ? { "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }) } : {}),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => json(200, tree("Work")),
     "GET /api/vaults/Shared/tree": () => json(200, tree("Shared")),
@@ -125,6 +132,20 @@ describe("the note's actions", () => {
       "Flag",
       "Add to calendar…",
     ]);
+  });
+
+  it("write_mode_offers_nothing_that_acts_on_the_saved_text", async () => {
+    server({ content: "# inbox\n\nText.", publish: true });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Work/inbox.md", queryClient);
+    await screen.findByRole("heading", { name: "inbox" });
+    const actions = actionsBeside(queryClient);
+    const offered = () => actions.result.current.items.map((i) => i.label);
+    await waitFor(() => expect(offered()).toEqual(expect.arrayContaining(["History", "Publish…", "Add property…"])));
+    await userEvent.click(await screen.findByRole("button", { name: "Write" }));
+    await waitFor(() => expect(useEditor.getState().mode).toBe("write"));
+    expect(offered()).toContain("Duplicate");
+    for (const label of ["Find in note", "History", "Publish…", "Add property…"]) expect(offered()).not.toContain(label);
   });
 
   it("no_duplicate_under_archive_or_without_write", async () => {

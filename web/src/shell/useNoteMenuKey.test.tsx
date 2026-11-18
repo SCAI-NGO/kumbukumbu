@@ -148,8 +148,9 @@ describe("the note's menu from the keyboard", () => {
     shiftF10();
     const menu = await screen.findByRole("menu", { name: "Note actions" });
     const labels = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
-    expect(labels).toContain("History");
+    expect(labels).toContain("Duplicate");
     expect(labels).not.toContain("Find in note");
+    expect(labels).not.toContain("History");
   });
 
   it("the_browser_menu_after_the_key_is_kept_away_but_not_a_later_right_click", async () => {
