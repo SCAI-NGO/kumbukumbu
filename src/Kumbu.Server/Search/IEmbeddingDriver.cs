@@ -68,7 +68,6 @@ public sealed class EmbeddingProviders
     public const string Internal = "internal";
 
     private readonly Dictionary<string, EmbeddingProvider> _byName;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, EmbeddingProvider> _byRoute = new(StringComparer.Ordinal);
 
     public EmbeddingProviders(IEnumerable<EmbeddingProvider> providers, ByokDrivers? byok = null)
     {
@@ -97,13 +96,15 @@ public sealed class EmbeddingProviders
     /// <summary>
     /// The provider that embeds <paramref name="vault"/> now: the one its meta names, or, for a vault on
     /// <see cref="Search.Byok.Provider"/>, one named by its route (<see cref="ByokDrivers.Route"/>) with the driver of the
-    /// owner's key. Null for a provider that isn't configured (any more), or a BYOK vault the instance can't embed.
+    /// owner's key; the internal one for a vault known to be discreet, whose text stays on this server whatever its meta
+    /// says. Null for a provider that isn't configured (any more), or a BYOK vault the instance can't embed.
     /// </summary>
     public EmbeddingProvider? Resolve(UnlockedVault vault)
     {
         if (vault.EmbeddingProvider != Search.Byok.Provider) return Get(vault.EmbeddingProvider);
+        if (vault.Discreet) return InternalProvider;
         if (Byok is not { } byok || vault.EmbeddingKey is not { } key) return null;
-        return _byRoute.GetOrAdd(ByokDrivers.Route(key), route => new EmbeddingProvider(route, Search.Byok.Preset.Label!, Search.Byok.Preset.Description, byok.For(key)));
+        return new EmbeddingProvider(ByokDrivers.Route(key), Search.Byok.Preset.Label!, Search.Byok.Preset.Description, byok.For(key));
     }
 
     /// <summary>What the index queues and the search groups <paramref name="vault"/> by: one queue and one query per

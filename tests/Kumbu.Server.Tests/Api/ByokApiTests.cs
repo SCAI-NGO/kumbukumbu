@@ -7,12 +7,14 @@ using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Discreet;
 using Kumbu.Server.Tests.Search;
 using Kumbu.Server.Tests.Sharing;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -82,6 +84,16 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         using var list = await user.GetAsync("/api/embeddings");
         return (await RestClient.JsonAsync(list)).AsArray().SingleOrDefault(p => p!["name"]!.GetValue<string>() == Byok.Provider);
     }
+
+    /// <summary>The copy of the key in the vault's stored meta, as its owner's key opens it; null for none.</summary>
+    private static async Task<string?> StoredCopyAsync(RestClient owner, string vault)
+    {
+        var catalog = owner.Api.Services.GetRequiredService<VaultCatalog>();
+        var access = (await catalog.OpenForUserAsync(owner.User.Id, owner.UserKey, Ct)).Single(a => a.Name == vault);
+        return access.Vault.OpenMeta((await catalog.Vaults.Find(d => d.Id == access.Id).FirstAsync(Ct)).Meta).EmbeddingsKey;
+    }
+
+    private static Task<HttpResponseMessage> RemoveKeyAsync(RestClient user) => user.SendAsync(HttpMethod.Delete, "/api/account/embeddings-key");
 
     private async Task<RestClient> WithKeyAsync(string vault = "Garten")
     {
@@ -235,11 +247,145 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.NotEmpty(_tensorx.Keys);
         Assert.All(_tensorx.Keys, k => Assert.Equal(NewKey, k));
 
-        using var removed = await user.SendAsync(HttpMethod.Delete, "/api/account/embeddings-key");
+        using var removed = await RemoveKeyAsync(user);
 
         Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
         Assert.Equal("internal", await ProviderOfAsync(user, "Garten"));
+        Assert.Null(await StoredCopyAsync(user, "Garten"));
         Assert.False((await KeyViewAsync(user))["keySaved"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Removing_the_key_during_a_re_encryption_leaves_the_vault_no_copy_that_works()
+    {
+        var user = await WithKeyAsync();
+        using (await ChooseAsync(user, "Garten", Byok.Provider))
+        {
+        }
+
+        var catalog = user.Api.Services.GetRequiredService<VaultCatalog>();
+        var id = await user.VaultIdAsync();
+        // The run stops after its start: the vault stays in its two-key period, where nothing writes its meta.
+        catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.RekeyAsync(id, user.User.Id, user.UserKey, Ct));
+        }
+        finally
+        {
+            catalog.RekeyFaultAt = null;
+        }
+
+        // Opening her vaults resumes the run in the background: it is held before its finish until the key is gone.
+        var removedYet = new TaskCompletionSource();
+        catalog.RekeyFaultAt = p => p == "before-finish" ? removedYet.Task : Task.CompletedTask;
+        try
+        {
+            using (var removed = await RemoveKeyAsync(user))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+            }
+        }
+        finally
+        {
+            removedYet.SetResult();
+        }
+
+        Assert.False((await KeyViewAsync(user))["keySaved"]!.GetValue<bool>());
+        for (var until = DateTime.UtcNow.AddSeconds(10); catalog.IsRekeying(id) && DateTime.UtcNow < until; await Task.Delay(50, Ct))
+        {
+        }
+
+        // Resumed here should the background not have run it; a run after a finished one only re-encrypts again.
+        catalog.RekeyFaultAt = null;
+        await catalog.RekeyAsync(id, user.User.Id, user.UserKey, Ct);
+
+        Assert.Equal("internal", await ProviderOfAsync(user, "Garten"));
+        Assert.Null(await StoredCopyAsync(user, "Garten"));
+    }
+
+    [Fact]
+    public async Task Removing_the_key_while_byok_is_off_takes_it_out_of_the_vaults_too()
+    {
+        var user = await WithKeyAsync();
+        using (await ChooseAsync(user, "Garten", Byok.Provider))
+        {
+        }
+
+        var off = user.On(Api(byok: false));
+        using (var removed = await RemoveKeyAsync(off))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        }
+
+        var on = user.On(Api());
+        Assert.Equal("internal", await ProviderOfAsync(on, "Garten"));
+        Assert.Null(await StoredCopyAsync(on, "Garten"));
+    }
+
+    [Fact]
+    public async Task Replacing_the_key_moves_no_vault_that_was_on_internal()
+    {
+        var user = await WithKeyAsync();
+
+        using (await SaveKeyAsync(user, NewKey))
+        {
+        }
+
+        Assert.Equal("internal", await ProviderOfAsync(user, "Garten"));
+        Assert.Null(await StoredCopyAsync(user, "Garten"));
+    }
+
+    [Fact]
+    public async Task The_status_tells_when_tensorx_refused_the_key()
+    {
+        var user = await WithKeyAsync();
+        using (await ChooseAsync(user, "Garten", Byok.Provider))
+        {
+        }
+
+        Assert.Null((await KeyViewAsync(user))["refusedAt"]?.GetValue<DateTimeOffset?>());
+        _tensorx.Refused.Add(Key);
+        await user.CreateAsync("hens.md", "# Hens\n\nThe hens laid eggs today.\n");
+
+        DateTimeOffset? refusedAt = null;
+        for (var until = DateTime.UtcNow.AddSeconds(10); refusedAt is null && DateTime.UtcNow < until; await Task.Delay(50, Ct))
+        {
+            refusedAt = (await KeyViewAsync(user))["refusedAt"]?.GetValue<DateTimeOffset>();
+        }
+
+        Assert.NotNull(refusedAt);
+    }
+
+    [Fact]
+    public async Task A_new_vault_takes_the_provider_asked_for_in_its_one_request()
+    {
+        var user = await WithKeyAsync();
+        _tensorx.Keys.Clear();
+
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Ideen", provider = "internal" });
+        using var unknown = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Pläne", provider = "nowhere" });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("internal", (await RestClient.JsonAsync(created))["embeddings"]!.GetValue<string>());
+        Assert.Null(await StoredCopyAsync(user, "Ideen"));
+        var ideen = RestClient.Existing(user.Api, user.User, user.UserKey, user.Session, "Ideen");
+        await ideen.CreateAsync("hens.md", "# Hens\n\nThe hens laid eggs today.\n");
+        await IndexedAsync(user);
+        Assert.Empty(_tensorx.Keys);
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        using var list = await user.GetAsync("/api/vaults");
+        Assert.DoesNotContain((await RestClient.JsonAsync(list)).AsArray(), v => v!["name"]!.GetValue<string>() == "Pläne");
+    }
+
+    [Fact]
+    public async Task A_new_vault_on_tensorx_needs_the_key()
+    {
+        var user = await RestClient.NewAsync(Api());
+
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Ideen", provider = Byok.Provider });
+
+        Assert.Equal(HttpStatusCode.BadRequest, created.StatusCode);
     }
 
     [Fact]
@@ -284,8 +430,81 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         }
 
         Assert.Equal("internal", await ProviderOfAsync(w.Alice, "Tagebuch"));
+        Assert.Null(await StoredCopyAsync(w.Alice, "Tagebuch"));
         using var again = await ChooseAsync(w.Alice, "Tagebuch", Byok.Provider);
         Assert.Equal(HttpStatusCode.BadRequest, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task Marking_a_vault_discreet_while_byok_is_off_takes_it_off_tensorx_for_good()
+    {
+        var w = await HiddenWorld.NewAsync(Api());
+        using (await SaveKeyAsync(w.Alice, Key))
+        {
+        }
+
+        using (await ChooseAsync(w.Alice, "Tagebuch", Byok.Provider))
+        {
+        }
+
+        await w.RevealAsync();
+        var off = w.Alice.On(Api(byok: false));
+        using (var marked = await off.SendAsync(HttpMethod.Put, "/api/account/discreet/vaults/Tagebuch", new { discreet = true }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, marked.StatusCode);
+        }
+
+        var on = w.Alice.On(Api());
+        Assert.Equal("internal", await ProviderOfAsync(on, "Tagebuch"));
+        Assert.Null(await StoredCopyAsync(on, "Tagebuch"));
+    }
+
+    [Fact]
+    public async Task A_hidden_discreet_vault_on_tensorx_runs_on_internal_and_loses_its_copy_on_removal()
+    {
+        var w = await HiddenWorld.NewAsync(Api());
+        using (await SaveKeyAsync(w.Alice, Key))
+        {
+        }
+
+        using (await ChooseAsync(w.Alice, "Tagebuch", Byok.Provider))
+        {
+        }
+
+        // Marked discreet without passing the endpoint that takes it off TensorX (another process, before this version).
+        await w.HideAsync();
+        using (await w.Alice.GetAsync("/api/vaults"))
+        {
+        }
+
+        var catalog = w.Api.Services.GetRequiredService<VaultCatalog>();
+        var tagebuch = catalog.OpenVaults.Single(v => v.Id == w.TagebuchId);
+        Assert.Equal("internal", w.Api.Services.GetRequiredService<SearchIndex>().Providers.RouteOf(tagebuch));
+
+        using (var removed = await RemoveKeyAsync(w.Alice))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        }
+
+        Assert.Null(await StoredCopyAsync(w.Alice, "Tagebuch"));
+    }
+
+    [Fact]
+    public async Task A_member_cannot_put_a_shared_vault_on_tensorx()
+    {
+        var alice = await RestClient.NewAsync(Api(), "Gartenarbeit");
+        var bob = await RestClient.NewAsync(alice.Api, "Work");
+        using (await SaveKeyAsync(bob, NewKey))
+        {
+        }
+
+        await alice.ShareWithAsync(bob, "garten");
+
+        using var chosen = await ChooseAsync(bob, "garten", Byok.Provider);
+
+        Assert.Equal(HttpStatusCode.NotFound, chosen.StatusCode);
+        Assert.Equal("internal", await ProviderOfAsync(alice, "Gartenarbeit"));
+        Assert.Null(await StoredCopyAsync(alice, "Gartenarbeit"));
     }
 
     [Fact]

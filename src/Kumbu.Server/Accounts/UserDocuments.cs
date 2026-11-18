@@ -169,6 +169,12 @@ public sealed class UserDocument
     [BsonElement("embeddingsKey"), BsonIgnoreIfNull]
     public byte[]? EmbeddingsKey { get; set; }
 
+    /// <summary>The id of that key, random and new with every key saved, in the clear: a vault's copy of the key carries
+    /// it, and is used only while it is this one (<see cref="Vaults.VaultCatalog"/>), so that the server can tell a copy
+    /// she replaced or removed without her user key. Null while she has no key.</summary>
+    [BsonElement("embeddingsKeyId"), BsonIgnoreIfNull]
+    public string? EmbeddingsKeyId { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

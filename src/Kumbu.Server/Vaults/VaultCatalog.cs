@@ -1206,15 +1206,28 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     public string DefaultEmbeddingProvider => options.Value.Embeddings.Default;
 
     /// <summary>
-    /// The provider a vault runs on, from its meta, and the owner's key with it. A vault on BYOK while the admin no longer
-    /// offers it, or without a key, runs on the internal model: it should never be left without search by meaning
-    /// because of a switch its owner didn't touch. Its meta keeps the choice and the key, so offering BYOK again restores it.
+    /// The provider a vault runs on, from its meta and <paramref name="ownerKeyId"/>, the id of its owner's key now
+    /// (<see cref="OwnerKeyIdAsync"/>); with it the key and, for a copy that is still hers, its id. A copy of a key she
+    /// replaced or removed counts for nothing. A vault on BYOK while the admin no longer offers it, or without a live
+    /// copy, runs on the internal model: it should never be left without search by meaning because of a switch its owner
+    /// didn't touch. Its meta keeps a live copy, so offering BYOK again restores it.
     /// </summary>
-    private (string Provider, string? Key) Provider(VaultMeta meta)
+    private (string Provider, string? Key, string? KeyId) Provider(VaultMeta meta, string? ownerKeyId)
     {
         var provider = meta.Embeddings ?? DefaultEmbeddingProvider;
-        if (provider != Search.Byok.Provider) return (provider, null);
-        return options.Value.Embeddings.ByokOffered && meta.EmbeddingsKey is { } key ? (provider, key) : (Search.EmbeddingProviders.Internal, null);
+        var keyId = meta.EmbeddingsKey is not null && meta.EmbeddingsKeyId is { } id && id == ownerKeyId ? id : null;
+        if (provider != Search.Byok.Provider) return (provider, null, null);
+        return options.Value.Embeddings.ByokOffered && keyId is not null ? (provider, meta.EmbeddingsKey, keyId) : (Search.EmbeddingProviders.Internal, null, keyId);
+    }
+
+    /// <summary>The id of the key of the vault's owner (<see cref="Accounts.UserDocument.EmbeddingsKeyId"/>), read
+    /// without her user key; null if she has none. Asked only for a meta that holds a copy.</summary>
+    private async Task<string?> OwnerKeyIdAsync(string vaultId, VaultMeta meta, CancellationToken ct)
+    {
+        if (meta.EmbeddingsKey is null) return null;
+        var f = Builders<SlotDocument>.Filter;
+        var owner = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Vault, vaultId) & f.Exists(s => s.Owner)).Project(s => s.Owner).FirstOrDefaultAsync(ct);
+        return owner is null ? null : await Users.Find(u => u.Id == owner).Project(u => u.EmbeddingsKeyId).FirstOrDefaultAsync(ct);
     }
 
     /// <summary>
@@ -1223,11 +1236,55 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// working set follows. The search index re-embeds the vault afterwards (<see cref="Search.SearchIndex.CatchUp"/>).
     /// </summary>
     internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, CancellationToken ct) =>
-        await SetEmbeddingProviderAsync(vault, provider, null, ct);
+        await SetEmbeddingProviderAsync(vault, provider, null, null, ct);
 
-    /// <summary>As above, with the owner's own key for <see cref="Search.Byok.Provider"/>; any other provider takes none,
-    /// and the copy in the meta goes.</summary>
-    internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, string? key, CancellationToken ct)
+    /// <summary>As above, with the owner's own key and its id for <see cref="Search.Byok.Provider"/>; any other provider
+    /// takes none, and the copy in the meta goes.</summary>
+    internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, string? key, string? keyId, CancellationToken ct)
+    {
+        var byok = provider == Search.Byok.Provider;
+        await ChangeEmbeddingsAsync(vault, meta => meta with { Embeddings = provider, EmbeddingsKey = byok ? key : null, EmbeddingsKeyId = byok ? keyId : null }, ct);
+    }
+
+    /// <summary>
+    /// Takes the vault off its owner's own key, decided from the stored meta rather than the working set, which shows
+    /// internal while BYOK is switched off: a choice of TensorX and any copy of the key go, and the vault is on internal.
+    /// Nothing is written for a meta that has neither.
+    /// </summary>
+    internal Task LeaveByokAsync(UnlockedVault vault, CancellationToken ct) =>
+        ChangeEmbeddingsAsync(
+            vault,
+            meta => meta.Embeddings == Search.Byok.Provider || meta.EmbeddingsKey is not null
+                ? meta with { Embeddings = Search.EmbeddingProviders.Internal, EmbeddingsKey = null, EmbeddingsKeyId = null }
+                : null,
+            ct);
+
+    /// <summary>
+    /// Follows a change of the owner's key in a vault whose copy is of her previous key (BYOK spec, Replace and Remove):
+    /// the copy becomes <paramref name="key"/> under <paramref name="keyId"/>, or, with null, goes (<see cref="LeaveByokAsync"/>).
+    /// A vault whose meta can't be written now (being re-encrypted, busy, gone) isn't waited for: its copy carries an id
+    /// that is no longer her key's, so it is dead already and goes at the next unlock; the working set leaves TensorX
+    /// at once. True if the vault ran on TensorX before and doesn't now.
+    /// </summary>
+    internal async Task<bool> FollowEmbeddingKeyAsync(UnlockedVault vault, string? key, string? keyId, CancellationToken ct)
+    {
+        var before = vault.EmbeddingProvider;
+        try
+        {
+            if (key is null) await LeaveByokAsync(vault, ct);
+            else await SetEmbeddingProviderAsync(vault, Search.Byok.Provider, key, keyId, ct);
+        }
+        catch (Exception e) when (e is VaultBusyException or VaultDeletedException)
+        {
+            (vault.EmbeddingProvider, vault.EmbeddingKey, vault.EmbeddingKeyId) = (Search.EmbeddingProviders.Internal, null, null);
+        }
+
+        return before == Search.Byok.Provider && vault.EmbeddingProvider != Search.Byok.Provider;
+    }
+
+    /// <summary>The stored meta sealed again as <paramref name="change"/> has it (null: left as it is), under the vault's
+    /// gate and conditional on the bytes read; then the working set follows.</summary>
+    private async Task ChangeEmbeddingsAsync(UnlockedVault vault, Func<VaultMeta, VaultMeta?> change, CancellationToken ct)
     {
         CheckWritable(vault);
         await vault.Gate.WaitAsync(ct);
@@ -1239,15 +1296,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             var doc = await Vaults.Find(v => v.Id == vault.Id).FirstOrDefaultAsync(ct) ?? throw new VaultDeletedException();
             // The stored meta, not this object's: it may be older than a rename, and sealing from it would lose the name.
             var meta = OpenStoredMeta(vault, doc.Meta);
+            if (change(meta) is not { } changed) return;
             if (MetaFaultAt is { } fault) await fault("before-provider-write");
             var f = Builders<VaultDocument>.Filter;
             var result = await Vaults.UpdateOneAsync(
                 f.Eq(v => v.Id, vault.Id) & f.Eq(v => v.Meta, doc.Meta),
-                Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(meta with { Embeddings = provider, EmbeddingsKey = provider == Search.Byok.Provider ? key : null })),
+                Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(changed)),
                 cancellationToken: ct);
             if (result.MatchedCount == 0) throw VaultBusyException.Just();
-            vault.EmbeddingProvider = provider;
-            vault.EmbeddingKey = provider == Search.Byok.Provider ? key : null;
+            (vault.EmbeddingProvider, vault.EmbeddingKey, vault.EmbeddingKeyId) = (changed.Embeddings ?? DefaultEmbeddingProvider, changed.EmbeddingsKey, changed.EmbeddingsKeyId);
             vault.DisplayName = meta.DisplayName;
         }
         finally
@@ -1518,14 +1575,25 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             // Never chosen: the instance's default, so the vault follows it when the admin changes it.
-            var (provider, key) = Provider(meta);
+            var (provider, key, keyId) = Provider(meta, await OwnerKeyIdAsync(id, meta, ct));
 
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.
             // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
-            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, EmbeddingKey = key, DisplayName = meta.DisplayName, Kind = doc.Kind };
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, EmbeddingKey = key, DisplayName = meta.DisplayName, Kind = doc.Kind };
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
+            // A dead copy (of a key the owner replaced or removed meanwhile) goes now; should another writer come
+            // between, the next unlock tries again. It counts for nothing either way.
+            if (meta.EmbeddingsKey is not null && keyId is null)
+            {
+                var dead = meta.Embeddings == Search.Byok.Provider ? meta with { Embeddings = Search.EmbeddingProviders.Internal } : meta;
+                await Vaults.UpdateOneAsync(
+                    Builders<VaultDocument>.Filter.Eq(v => v.Id, id) & Builders<VaultDocument>.Filter.Eq(v => v.Meta, doc.Meta),
+                    Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(dead with { EmbeddingsKey = null, EmbeddingsKeyId = null })),
+                    cancellationToken: ct);
+            }
+
             if (LoadBetweenReads is { } between) await between(id);
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();

@@ -32,7 +32,7 @@ public sealed class EmbeddingsKeysTests(MongoFixture fixture)
 
         await keys.SetAsync("u1", UserKey, Key, Ct);
 
-        Assert.Equal(Key, await keys.GetAsync("u1", UserKey, Ct));
+        Assert.Equal(Key, (await keys.GetAsync("u1", UserKey, Ct))?.Key);
         var stored = await _db.GetCollection<UserDocument>("users").Find(u => u.Id == "u1").Project(u => u.EmbeddingsKey).FirstAsync(Ct);
         Assert.NotNull(stored);
         Assert.DoesNotContain(Key, Encoding.Latin1.GetString(stored), StringComparison.Ordinal);
@@ -50,6 +50,26 @@ public sealed class EmbeddingsKeysTests(MongoFixture fixture)
 
         Assert.Null(await keys.GetAsync("u1", other, Ct));
         await Assert.ThrowsAsync<CredentialsChangedException>(() => keys.SetAsync("u1", other, "sk-someone-else-0002", Ct));
-        Assert.Equal(Key, await keys.GetAsync("u1", UserKey, Ct));
+        Assert.Equal(Key, (await keys.GetAsync("u1", UserKey, Ct))?.Key);
+    }
+
+    [Fact]
+    public async Task Each_saved_key_has_a_new_random_id_in_the_clear_and_removal_clears_it()
+    {
+        var keys = await WithUserAsync();
+        var users = _db.GetCollection<UserDocument>("users");
+
+        var first = await keys.SetAsync("u1", UserKey, Key, Ct);
+        var again = await keys.SetAsync("u1", UserKey, Key, Ct);
+
+        Assert.NotNull(first);
+        Assert.NotEqual(first, again);
+        Assert.DoesNotContain(Key, again!, StringComparison.Ordinal);
+        Assert.Equal(again, await users.Find(u => u.Id == "u1").Project(u => u.EmbeddingsKeyId).FirstAsync(Ct));
+        var saved = await keys.GetAsync("u1", UserKey, Ct);
+        Assert.Equal((Key, again), (saved?.Key, saved?.Id));
+
+        Assert.Null(await keys.SetAsync("u1", UserKey, null, Ct));
+        Assert.Null(await users.Find(u => u.Id == "u1").Project(u => u.EmbeddingsKeyId).FirstAsync(Ct));
     }
 }

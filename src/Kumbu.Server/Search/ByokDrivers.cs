@@ -32,6 +32,15 @@ public sealed class ByokDrivers(IHttpClientFactory http, ILoggerFactory logs, Ti
 
     public IEmbeddingDriver For(string key) => _drivers.GetOrAdd(Route(key), route => Make(key, route));
 
+    /// <summary>Forgets the driver of a key replaced or removed, and when TensorX refused it, so the process holds
+    /// nothing of a key nobody uses; should another account use the same key, its next request makes a new driver.</summary>
+    public void Drop(string key)
+    {
+        var route = Route(key);
+        _drivers.TryRemove(route, out _);
+        _refused.TryRemove(route, out _);
+    }
+
     /// <summary>When TensorX last refused the key (401 or 403) since this process started; null if it didn't, or a check
     /// accepted it since.</summary>
     public DateTimeOffset? RefusedAt(string key) => _refused.TryGetValue(Route(key), out var at) ? at : null;

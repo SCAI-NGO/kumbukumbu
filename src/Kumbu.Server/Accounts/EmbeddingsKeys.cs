@@ -6,11 +6,15 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
+/// <summary>Her TensorX key and its id (<see cref="UserDocument.EmbeddingsKeyId"/>).</summary>
+public sealed record SavedKey(string Key, string Id);
+
 /// <summary>
 /// The user's own TensorX key (BYOK spec, "How the key is kept"), on her user document, sealed under a key derived from
 /// the user key as the discreet list is (<see cref="DiscreetVaults"/>), and sealed again when the user key changes
 /// (<see cref="UserKeyRotation"/>). Each vault that uses it holds a copy in its own meta; this one is what the settings
-/// show and what a new vault starts with.
+/// show and what a new vault starts with. A copy counts only while it carries the key's current id, so a key replaced
+/// or removed is dead in every vault at once, also in those the change couldn't write.
 /// </summary>
 public sealed class EmbeddingsKeys(IMongoDatabase db, ILogger<EmbeddingsKeys> log)
 {
@@ -18,27 +22,32 @@ public sealed class EmbeddingsKeys(IMongoDatabase db, ILogger<EmbeddingsKeys> lo
 
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
-    /// <summary>Her key; null for none, or when it doesn't open (logged by the exception's type only).</summary>
-    public async Task<string?> GetAsync(string userId, byte[] userKey, CancellationToken ct)
+    /// <summary>Her key with its id; null for none, or when it doesn't open (logged by the exception's type only).</summary>
+    public async Task<SavedKey?> GetAsync(string userId, byte[] userKey, CancellationToken ct)
     {
-        var sealedKey = await Users.Find(u => u.Id == userId).Project(u => u.EmbeddingsKey).FirstOrDefaultAsync(ct);
-        var key = Open(userId, userKey, sealedKey, out var failure);
+        var saved = await Users.Find(u => u.Id == userId).Project(u => new { u.EmbeddingsKey, u.EmbeddingsKeyId }).FirstOrDefaultAsync(ct);
+        var key = Open(userId, userKey, saved?.EmbeddingsKey, out var failure);
         if (failure is not null) log.LogWarning("The embeddings key of user {UserId} does not open: {Reason}", userId, failure);
-        return key;
+        return key is null || saved?.EmbeddingsKeyId is not { } id ? null : new SavedKey(key, id);
     }
 
-    /// <summary>Saves her key, or with null removes it; only while <paramref name="userKey"/> is the one in force
-    /// (<see cref="CredentialsChangedException"/> otherwise), so a key sealed under a key a rotation just replaced is never
-    /// written.</summary>
-    public async Task SetAsync(string userId, byte[] userKey, string? key, CancellationToken ct)
+    /// <summary>Saves her key under a new id and returns the id, or with null removes key and id; only while
+    /// <paramref name="userKey"/> is the one in force (<see cref="CredentialsChangedException"/> otherwise), so a key
+    /// sealed under a key a rotation just replaced is never written.</summary>
+    public async Task<string?> SetAsync(string userId, byte[] userKey, string? key, CancellationToken ct)
     {
         var f = Builders<UserDocument>.Filter;
         var u = Builders<UserDocument>.Update;
+        // Random, not derived from the key: the id is in the clear, and saving the same key again still kills the old copies.
+        var id = key is null ? null : Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var written = await Users.UpdateOneAsync(
             f.Eq(d => d.Id, userId) & f.Eq(d => d.KeyId, UserCatalog.KeyId(userKey, userId)),
-            key is null ? u.Unset(d => d.EmbeddingsKey) : u.Set(d => d.EmbeddingsKey, Seal(userId, userKey, key)),
+            key is null
+                ? u.Unset(d => d.EmbeddingsKey).Unset(d => d.EmbeddingsKeyId)
+                : u.Set(d => d.EmbeddingsKey, Seal(userId, userKey, key)).Set(d => d.EmbeddingsKeyId, id),
             cancellationToken: ct);
         if (written.MatchedCount == 0) throw new CredentialsChangedException();
+        return id;
     }
 
     /// <summary>The key in <paramref name="sealedKey"/>; null for none, and null with <paramref name="failure"/> naming the

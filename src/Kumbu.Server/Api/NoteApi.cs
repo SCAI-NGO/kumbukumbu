@@ -80,7 +80,9 @@ public sealed record EmbeddingProviderView(string Name, string Label, string? De
 /// <summary><c>provider</c>: the name of one of <c>GET /api/embeddings</c>, <c>internal</c> for the model on this server.</summary>
 public sealed record SetEmbeddingsRequest(string Provider);
 
-public sealed record CreateVaultRequest(string Name);
+/// <summary><c>provider</c>: as for <c>PUT /api/vaults/{vault}/embeddings</c>; missing, TensorX with her own key when she
+/// saved one, else this server's default.</summary>
+public sealed record CreateVaultRequest(string Name, string? Provider = null);
 
 /// <summary>The name the owner sees her vault under from now on; the vault's stored paths keep the name it was made with.</summary>
 public sealed record RenameVaultRequest(string Name);
@@ -284,7 +286,7 @@ public static class NoteApi
         if (index.Providers.Byok is { } byok)
         {
             // Her own key: offered to a person signed in; an agent's key doesn't bring the user key to open it with.
-            var key = caller.User is { } user && caller.UserKey is { } userKey ? await keys.GetAsync(user.Id, userKey, ct) : null;
+            var key = caller.User is { } user && caller.UserKey is { } userKey ? (await keys.GetAsync(user.Id, userKey, ct))?.Key : null;
             var driver = key is null ? null : byok.For(key);
             list.Add(new EmbeddingProviderView(
                 Byok.Provider, Byok.Preset.Label!, Byok.Preset.Description, true, driver?.State == SemanticState.Ready,
@@ -310,22 +312,17 @@ public static class NoteApi
         // other owner-only endpoints.
         if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         var unlocked = access.Vault;
-        string? key = null;
-        if (body.Provider == Byok.Provider && index.Providers.Byok is not null)
+        // BYOK spec, "Decisions": never for a vault she keeps discreet.
+        if (body.Provider == Byok.Provider && (caller.Session?.IsDiscreet(access.Id) == true || unlocked.Discreet))
         {
-            // BYOK spec, "Decisions": her own key, and never for a vault she keeps discreet.
-            if (caller.Session?.IsDiscreet(access.Id) == true) throw ApiErrors.BadRequest("A discreet vault's text stays on this server: it can't use TensorX.");
-            key = await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) ?? throw ApiErrors.BadRequest("Save your TensorX key in Settings, Vaults first.");
-        }
-        else if (index.Providers.Get(body.Provider) is null)
-        {
-            throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
+            throw ApiErrors.BadRequest("A discreet vault's text stays on this server: it can't use TensorX.");
         }
 
-        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider || unlocked.EmbeddingKey != key)
+        var key = await ChosenKeyAsync(body.Provider, caller, index, keys, ct);
+        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider || unlocked.EmbeddingKey != key?.Key || unlocked.EmbeddingKeyId != key?.Id)
         {
             var changed = !unlocked.Pending && unlocked.EmbeddingProvider != body.Provider;
-            await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, key, ct);
+            await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, key?.Key, key?.Id, ct);
             index.CatchUp(unlocked);
             // The members' event (collab design §8.5); the name of the provider stays in the sealed meta.
             if (changed && await catalog.IsSharedAsync(null, unlocked.Id, ct))
@@ -413,12 +410,39 @@ public static class NoteApi
             caller.Session?.IsDiscreet(access.Id) ?? false);
     }
 
+    /// <summary>
+    /// The key for <paramref name="provider"/>: her own, with its id, for <see cref="Byok.Provider"/> where it is offered
+    /// (400 without one saved), null for a provider of this server; 400 for any other name.
+    /// </summary>
+    private static async Task<SavedKey?> ChosenKeyAsync(string provider, RequestCaller caller, SearchIndex index, EmbeddingsKeys keys, CancellationToken ct)
+    {
+        if (provider == Byok.Provider && index.Providers.Byok is not null)
+        {
+            return await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) ?? throw ApiErrors.BadRequest("Save your TensorX key in Settings, Vaults first.");
+        }
+
+        if (index.Providers.Get(provider) is null)
+        {
+            throw ApiErrors.BadRequest($"This server has no embedding provider '{provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
+        }
+
+        return null;
+    }
+
     private static async Task<Created<VaultView>> CreateVaultAsync(
         CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, SearchIndex index, EmbeddingsKeys keys, CancellationToken ct)
     {
         var name = VaultNames.Check(body.Name);
-        UnlockedVault created;
+        // The provider before the vault, so that one refused leaves no vault. BYOK spec, "Decisions": unless she asks
+        // for another, with her own key saved a new vault starts on TensorX, whose embeddings rank better.
+        var provider = body.Provider;
+        var key = provider is null ? null : await ChosenKeyAsync(provider, caller, index, keys, ct);
+        if (provider is null && index.Providers.Byok is not null && await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) is { } saved)
+        {
+            (provider, key) = (Byok.Provider, saved);
+        }
 
+        UnlockedVault created;
         try
         {
             created = await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
@@ -429,10 +453,9 @@ public static class NoteApi
             throw;
         }
 
-        // BYOK spec, "Decisions": with her own key saved, a new vault starts on TensorX, whose embeddings rank better.
-        if (index.Providers.Byok is not null && await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) is { } key)
+        if (provider is not null && (provider != created.EmbeddingProvider || key is not null))
         {
-            await catalog.SetEmbeddingProviderAsync(created, Byok.Provider, key, ct);
+            await catalog.SetEmbeddingProviderAsync(created, provider, key?.Key, key?.Id, ct);
             index.CatchUp(created);
         }
 

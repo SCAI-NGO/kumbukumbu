@@ -124,19 +124,22 @@ public static class DiscreetApi
 
         // Every vault the session opens but Skills, should the list not open (Decision 2).
         var all = visible.Concat(session.Hidden).Where(v => !v.IsSkillsVault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
-        // A discreet vault's text stays on this server (BYOK spec): her own vault leaves TensorX first, and its members are
+        // A discreet vault's text stays on this server (BYOK spec): her own vault leaves TensorX first, decided from its
+        // stored meta, so that a choice and a copy of the key kept while BYOK is switched off go too. Its members are
         // told the provider changed, as for any switch.
-        if (body.Discreet && access.IsOwner && access.Vault.EmbeddingProvider == Search.Byok.Provider)
+        if (body.Discreet && access.IsOwner && access.Membership is null)
         {
-            await catalog.SetEmbeddingProviderAsync(access.Vault, Search.EmbeddingProviders.Internal, ct);
+            var wasOn = access.Vault.EmbeddingProvider == Search.Byok.Provider;
+            await catalog.LeaveByokAsync(access.Vault, ct);
             index.CatchUp(access.Vault);
-            if (await catalog.IsSharedAsync(null, access.Id, ct))
+            if (wasOn && await catalog.IsSharedAsync(null, access.Id, ct))
             {
                 await Sharing.VaultEvents.RecordAsync(db, access.Id, Sharing.VaultEvents.ProviderChanged, null, catalog.Now, ct);
             }
         }
 
         await discreet.SetAsync(user.Id, caller.UserKey!, access.Id, body.Discreet, all, ct);
+        if (access.IsOwner && access.Membership is null) access.Vault.Discreet = body.Discreet;
         await hub.DiscreetChangedAsync(user.Id, access.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }

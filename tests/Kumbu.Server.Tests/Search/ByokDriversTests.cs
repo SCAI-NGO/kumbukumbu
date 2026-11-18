@@ -125,4 +125,18 @@ public sealed class ByokDriversTests
 
         Assert.Null(drivers.RefusedAt(KeyA));
     }
+
+    [Fact]
+    public async Task A_dropped_key_leaves_neither_its_driver_nor_its_refusal()
+    {
+        var (drivers, handler) = Make();
+        handler.Refused.Add(KeyA);
+        var old = drivers.For(KeyA);
+        await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => old.EmbedAsync(["hens"], query: false, Ct));
+
+        drivers.Drop(KeyA);
+
+        Assert.NotSame(old, drivers.For(KeyA));
+        Assert.Null(drivers.RefusedAt(KeyA));
+    }
 }
