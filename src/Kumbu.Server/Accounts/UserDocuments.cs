@@ -164,6 +164,17 @@ public sealed class UserDocument
     [BsonElement("calendarViews"), BsonIgnoreIfNull]
     public byte[]? CalendarViews { get; set; }
 
+    /// <summary>Her own TensorX key (BYOK), sealed under a key derived from the user key (<see cref="Accounts.EmbeddingsKeys"/>);
+    /// null until she saves one.</summary>
+    [BsonElement("embeddingsKey"), BsonIgnoreIfNull]
+    public byte[]? EmbeddingsKey { get; set; }
+
+    /// <summary>The id of that key, random and new with every key saved, in the clear: a vault's copy of the key carries
+    /// it, and is used only while it is this one (<see cref="Vaults.VaultCatalog"/>), so that the server can tell a copy
+    /// she replaced or removed without her user key. Null while she has no key.</summary>
+    [BsonElement("embeddingsKeyId"), BsonIgnoreIfNull]
+    public string? EmbeddingsKeyId { get; set; }
+
     /// <summary>Her favourite commands, each <c>&lt;id&gt;@&lt;ticks added&gt;</c> (<see cref="Accounts.Favourites"/>); null
     /// until she keeps one. Plain, as the zone: a command names no vault.</summary>
     [BsonElement("favourites"), BsonIgnoreIfNull]

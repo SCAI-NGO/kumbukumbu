@@ -7,7 +7,7 @@ public static class Manual
         Shell over Kumbu² — a Markdown second brain. Top-level directories are vaults.
 
         Commands:
-          ls [--archive] [path]           list a directory (directories end with '/'); no path lists the vaults
+          ls [-l] [-a|--archive] [path]   list a directory (directories end with '/'); -l adds sizes and times; no path lists the vaults
           cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block, followed by its link into the web app (show it to the user)
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
@@ -40,7 +40,7 @@ public static class Manual
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
-          publish ls|add|update|rm <note> share one note as a read-only copy behind a secret link
+          publish ls|add|update|rm <note> share a note, with --depth N the notes it links to, as a read-only copy behind a secret link; show the person the list it prints before publishing more than one note
           skills ls|find|cat|copy|check   the user's skills: find one for the task, read and follow it (help skills)
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command

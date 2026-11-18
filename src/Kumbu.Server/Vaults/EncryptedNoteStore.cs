@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
@@ -68,6 +69,14 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => new Note(n.Path, n.Content))];
+
+    /// <summary>From the working set, so no more than the listing costs.</summary>
+    public async Task<IReadOnlyList<NoteStamp>> ListNoteStampsAsync(VaultPath dir, CancellationToken ct)
+    {
+        var below = await NotesUnderAsync(dir, ct);
+        var own = dir.IsRoot ? null : await GetAsync(dir, ct);
+        return [.. (own is null ? below : below.Prepend(own)).Select(n => new NoteStamp(n.Path, Encoding.UTF8.GetByteCount(n.Content), n.LastWriteAt))];
+    }
 
     /// <summary>The vault's graph from its working set (graph backend spec §4.4), in the caller's names; a vault the
     /// caller doesn't have is an empty graph, as the reader's default has it.</summary>
@@ -611,7 +620,8 @@ public sealed class EncryptedNoteStore(
             }
         }
 
-        var groups = vaults.GroupBy(v => v.Vault.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+        // By route: per provider, and per key for vaults on people's own keys (EmbeddingProviders.RouteOf).
+        var groups = vaults.GroupBy(v => index.Providers.RouteOf(v.Vault), StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
         if (groups.Count == 0 && unavailable.Count == 0)
         {
             var driver = index.Providers.InternalProvider.Driver;
@@ -629,7 +639,7 @@ public sealed class EncryptedNoteStore(
         var scheme = index.Bound.Scheme;
         var searched = false;
         // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
-        var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
+        var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.First().Vault, query, ct)));
         foreach (var (group, (state, reason, vector)) in groups.Zip(queries))
         {
             if (vector is null)
@@ -639,7 +649,7 @@ public sealed class EncryptedNoteStore(
             }
 
             searched = true;
-            var model = index.Providers.Get(group.Key)!.Driver.ModelKey;
+            var model = index.Providers.Resolve(group.First().Vault)!.Driver.ModelKey;
             foreach (var access in group)
             {
                 var vault = access.Vault;
@@ -740,11 +750,11 @@ public sealed class EncryptedNoteStore(
         scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
 
     /// <summary>The query's vector by one provider, or why there is none.</summary>
-    private async Task<(Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector)> EmbedQueryAsync(string provider, string query, CancellationToken ct)
+    private async Task<(Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector)> EmbedQueryAsync(UnlockedVault vault, string query, CancellationToken ct)
     {
-        if (index!.Providers.Get(provider)?.Driver is not { } driver)
+        if (index!.Providers.Resolve(vault)?.Driver is not { } driver)
         {
-            return (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider '{provider}' isn't configured on this server any more (the vault's owner can pick another)", null);
+            return (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider '{vault.EmbeddingProvider}' isn't configured on this server any more (the vault's owner can pick another)", null);
         }
 
         if (driver.State != Kumbu.Core.Search.SemanticState.Ready) return (driver.State, driver.Reason ?? "search by meaning isn't available", null);
@@ -1132,7 +1142,7 @@ public sealed class EncryptedNoteStore(
         batch.Creates.Sum(n => Bytes(n.Content)) + batch.Replaces.Sum(r => Bytes(r.Next.Content))
         + RecordBytes * (batch.AttachmentCreates.Count + batch.AttachmentReplaces.Count + batch.AttachmentRestores.Count);
 
-    private static long Bytes(string text) => System.Text.Encoding.UTF8.GetByteCount(text);
+    private static long Bytes(string text) => Encoding.UTF8.GetByteCount(text);
 
     /// <summary>Every caller checks the entry first (<see cref="WriterRef.RequireStorable"/>): it throws inside the
     /// transaction, so a write path that forgets a reference is refused whole (collab design §8.1, fail closed).</summary>

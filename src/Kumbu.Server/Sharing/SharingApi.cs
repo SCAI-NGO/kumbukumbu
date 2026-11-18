@@ -290,7 +290,8 @@ public static class SharingApi
     private static async Task<NoContent> ProviderSeenAsync(
         string id, ProviderSeenRequest body, RequestCaller caller, Memberships memberships, Search.SearchIndex index, CancellationToken ct)
     {
-        if (index.Providers.Get(body.Provider) is null) throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'.");
+        var byok = body.Provider == Search.Byok.Provider && index.Providers.Byok is not null;
+        if (!byok && index.Providers.Get(body.Provider) is null) throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'.");
         if (await caller.HidesMembershipAsync(id, ct)) throw new MembershipNotFoundException();
         await memberships.ProviderSeenAsync(caller.User!.Id, id, body.Provider, ct);
         return TypedResults.NoContent();

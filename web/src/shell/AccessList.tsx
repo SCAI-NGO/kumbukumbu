@@ -15,6 +15,7 @@ import {
   type MemberAccess,
   type Role,
 } from "../api/sharing";
+import { useListFilter, type Status } from "../components/ListFilter";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { timeText } from "../components/Sheet";
@@ -29,7 +30,7 @@ const kindLabels: Record<string, string> = { key: "API key", connection: "App", 
  * Who opened Bob's link and waits for the owner: the one place she sees a member's username (collab design §4.2).
  * The display name comes quoted from the server, as free text someone typed.
  */
-function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: string; member: MemberAccess; onGrant(): void; onDecline(): void; pending: boolean }) {
+function Redeemed({ vault, member, onGrant, onDecline, pending, first }: { vault: string; member: MemberAccess; onGrant(): void; onDecline(): void; pending: boolean; first: boolean }) {
   const membership = useMembership(vault, member.id, true);
   const redeemer = membership.data?.redeemer;
   return (
@@ -41,10 +42,11 @@ function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: strin
         </p>
       )}
       <div className="flex gap-2">
-        <button type="button" onClick={onGrant} disabled={!redeemer || pending} className={secondaryButtonClass}>
+        {/* Initial focus as before the filter came: Grant when it can be pressed, Decline only when Grant can't. */}
+        <button type="button" onClick={onGrant} disabled={!redeemer || pending} data-autofocus={(first && !!redeemer && !pending) || undefined} className={secondaryButtonClass}>
           Grant access
         </button>
-        <button type="button" onClick={onDecline} disabled={pending} className={secondaryButtonClass}>
+        <button type="button" onClick={onDecline} disabled={pending} data-autofocus={(first && (!redeemer || pending)) || undefined} className={secondaryButtonClass}>
           Decline
         </button>
       </div>
@@ -234,7 +236,7 @@ function MaintainDialog({ vault, member, onClose }: { vault: string; member: Mem
 }
 
 /** One person: her role, what she connected, and what the owner can do now. */
-function Member({ vault, member, onRevoke }: { vault: string; member: MemberAccess; onRevoke(): void }) {
+function Member({ vault, member, first, onRevoke }: { vault: string; member: MemberAccess; first: boolean; onRevoke(): void }) {
   const id = useId();
   const change = useMembershipChange(vault);
   const [raising, setRaising] = useState(false);
@@ -252,7 +254,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
             Invited as {roleLabels[role] ?? member.role}
             {member.expiresAt ? `; the link works until ${timeText(member.expiresAt)}` : ""}.
           </p>
-          <button type="button" onClick={() => change.mutate({ kind: "withdraw", id: member.id })} disabled={change.isPending} className={`${secondaryButtonClass} self-start`}>
+          <button type="button" onClick={() => change.mutate({ kind: "withdraw", id: member.id })} disabled={change.isPending} data-autofocus={first || undefined} className={`${secondaryButtonClass} self-start`}>
             Withdraw
           </button>
         </>
@@ -262,6 +264,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
           vault={vault}
           member={member}
           pending={change.isPending}
+          first={first}
           onGrant={() => change.mutate({ kind: "confirm", id: member.id })}
           onDecline={() => change.mutate({ kind: "decline", id: member.id })}
         />
@@ -276,6 +279,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
               id={`${id}-role`}
               value={role}
               disabled={change.isPending}
+              data-autofocus={first || undefined}
               onChange={(e) => {
                 const to = e.target.value as Role;
                 if (to === "maintain") setRaising(true);
@@ -314,6 +318,14 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
   );
 }
 
+const memberStatuses: Status[] = [
+  { value: "invited", label: "Invited" },
+  { value: "confirm", label: "To confirm" },
+  { value: "member", label: "Member" },
+];
+const memberName = (m: MemberAccess) => m.label;
+const memberStatus = (m: MemberAccess) => (m.status === "active" ? "member" : m.redeemedAt ? "confirm" : "invited");
+
 /** The owner's view of who her vault is shared with, and the way to invite someone (collab design §8.6, §10.1). */
 export default function AccessList({ vault, onClose }: { vault: string; onClose(): void }) {
   const id = useId();
@@ -326,6 +338,13 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
   const [done, setDone] = useState<string | null>(null);
   const members = access.data?.members ?? [];
   const left = access.data?.left ?? [];
+  const { visible, bar } = useListFilter(members, {
+    name: memberName,
+    status: memberStatus,
+    statuses: memberStatuses,
+    searchLabel: "Filter by name",
+    noun: "members",
+  });
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
       <div
@@ -342,11 +361,13 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
         {access.isError && <FormError>{errorText(access.error)}</FormError>}
         {done && <p role="status" className="text-text-body">{done}</p>}
         {access.data && members.length === 0 && <p className="text-text-body">{vault} isn't shared with anyone.</p>}
+        {bar}
         {members.length > 0 && (
           <ul aria-label="Members" className="flex flex-col gap-2">
-            {members.map((m) => (
+            {visible.map((m, i) => (
               <Member
                 key={m.id}
+                first={i === 0}
                 vault={vault}
                 member={m}
                 onRevoke={() => {

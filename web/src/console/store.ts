@@ -5,7 +5,9 @@ import { useSession } from "../state/session";
 /** A piece of a command's answer, as the scrollback shows it. */
 export type Output =
   | { kind: "text"; text: string; error?: boolean }
-  | { kind: "image"; src: string; alt: string };
+  | { kind: "image"; src: string; alt: string }
+  /** A note `p` shows, read as the note view reads it; `at` is a section's heading or a block's `^id`. */
+  | { kind: "note"; path: string; at: string | null };
 
 /** A command and what it answered. */
 export interface Entry {

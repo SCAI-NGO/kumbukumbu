@@ -24,26 +24,34 @@ internal sealed class ShellPublisher(
         var lines = new List<PublicationLine>();
         foreach (var (access, scope) in scopes)
         {
-            lines.AddRange((await publications.ListAsync(access, store, scope, null, ct)).Select(s => new PublicationLine(s.Note, s.SnapshotAt, s.Older)));
+            lines.AddRange((await publications.ListAsync(access, store, scope, null, ct)).Select(s => new PublicationLine(s.Note, s.SnapshotAt, s.Older, s.Notes)));
         }
 
         return lines;
     }
 
-    public async Task<PublishOutcome> AddAsync(VaultPath note, CancellationToken ct)
+    public async Task<PublishOutcome> AddAsync(VaultPath note, PublishWalk options, CancellationToken ct)
     {
         var access = await AccessAsync(note, ct);
+        if (options.DryRun)
+        {
+            var preview = await publications.PreviewAsync(access, store, note, options.Depth ?? 0, options.Without ?? [], ct);
+            return new PublishOutcome(
+                null, default, [.. preview.Plain.Where(p => p != PublishOutcome.PdfsNotYet)], preview.Plain.Contains(PublishOutcome.PdfsNotYet),
+                [.. preview.Notes.Select(n => n.Path)], [.. preview.LeftOut.Select(l => new LeftOutNote(l.Path, l.Reason))], DryRun: true);
+        }
+
         // The dev token has no user; its access may never publish, so Publications refuses it before the id is used.
         var (by, byRef) = Writer(access);
-        var published = await publications.PublishAsync(access, store, note, caller.User?.Id ?? "", by, byRef, BaseUrl, ct);
+        var published = await publications.PublishAsync(access, store, note, caller.User?.Id ?? "", by, byRef, BaseUrl, ct, options.Depth ?? 0, options.Without);
         return Outcome(published.Link, published);
     }
 
-    public async Task<PublishOutcome> UpdateAsync(VaultPath note, CancellationToken ct)
+    public async Task<PublishOutcome> UpdateAsync(VaultPath note, PublishWalk options, CancellationToken ct)
     {
         var access = await AccessAsync(note, ct);
         var (by, byRef) = Writer(access);
-        var updated = await publications.UpdateAsync(access, store, note, by, byRef, BaseUrl, ct);
+        var updated = await publications.UpdateAsync(access, store, note, by, byRef, BaseUrl, ct, options.Depth, options.Without);
         return Outcome(null, updated);
     }
 
@@ -63,7 +71,8 @@ internal sealed class ShellPublisher(
     /// <summary>The server's list ends in <see cref="PublishOutcome.PdfsNotYet"/> when PDFs were left out; the shell
     /// gets that as a fact.</summary>
     private static PublishOutcome Outcome(string? link, PublishedNote made) =>
-        new(link, made.SnapshotAt, [.. made.Plain.Where(p => p != PublishOutcome.PdfsNotYet)], made.Plain.Contains(PublishOutcome.PdfsNotYet));
+        new(link, made.SnapshotAt, [.. made.Plain.Where(p => p != PublishOutcome.PdfsNotYet)], made.Plain.Contains(PublishOutcome.PdfsNotYet),
+            made.Notes?.Select(n => n.Path).ToList(), made.LeftOut?.Select(l => new LeftOutNote(l.Path, l.Reason)).ToList(), made.Added, made.Removed);
 
     private string BaseUrl => Publications.BaseUrl(http.HttpContext!, options.Value);
 

@@ -330,4 +330,45 @@ public sealed partial class PublishShellTests(KumbuAppFactory app)
         Assert.Contains(log.Lines, l => l.StartsWith("Trace ", StringComparison.Ordinal) || l.StartsWith("Debug ", StringComparison.Ordinal));
         Assert.DoesNotContain(log.Lines, l => l.Contains(code, StringComparison.Ordinal) || l.Contains(ShareCode.Format(code), StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task Publish_add_with_depth_takes_the_linked_notes_and_dry_run_publishes_nothing()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Plan.md", "[[Budget]] [[Salaries]]");
+        await alice.CreateAsync("Budget.md", "b");
+        await alice.CreateAsync("Salaries.md", "s");
+        var key = await alice.KeyAsync("Claude", KeyRight.Write, mayPublish: true);
+        using (var marked = await alice.SendAsync(HttpMethod.Put, "/api/unpublishable/Work/Salaries.md")) Assert.True(marked.IsSuccessStatusCode);
+
+        var dry = await alice.ShAsync("publish add /Work/Plan.md --depth 1 --dry-run", key);
+        Assert.False(dry.IsError, dry.Text);
+        Assert.Equal("would publish /Work/Plan.md with 2 notes; nothing was published\nnotes:\n  /Work/Plan.md\n  /Work/Budget.md\nleft out:\n  /Work/Salaries.md  marked unpublishable", dry.Text);
+        Assert.Equal("no published notes below /Work", (await alice.ShAsync("publish ls /Work", key)).Text);
+
+        var added = await alice.ShAsync("publish add /Work/Plan.md --depth 1", key);
+        Assert.False(added.IsError, added.Text);
+        Assert.Contains("notes:\n  /Work/Plan.md\n  /Work/Budget.md", added.Text);
+        Assert.EndsWith("notes: 2", (await alice.ShAsync("publish ls /Work", key)).Text);
+    }
+
+    [Fact]
+    public async Task A_key_without_may_publish_neither_publishes_a_bundle_nor_tries_one()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Plan.md", "[[Budget]]");
+        await alice.CreateAsync("Budget.md", "b");
+        var key = await alice.KeyAsync("Claude", KeyRight.Write);
+
+        foreach (var command in new[] { "publish add /Work/Plan.md --depth 1", "publish add /Work/Plan.md --depth 1 --dry-run" })
+        {
+            var refused = await alice.ShAsync(command, key);
+
+            Assert.True(refused.IsError, command);
+            Assert.StartsWith("publish add: this key may not publish in Work", refused.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Budget", refused.Text, StringComparison.Ordinal);
+        }
+
+        Assert.Equal((false, "no published notes below /Work"), await alice.ShAsync("publish ls /Work", key));
+    }
 }

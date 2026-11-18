@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 
@@ -27,6 +28,11 @@ public sealed class CheckpointView(Checkpoint checkpoint, IReadOnlyList<Note> no
 
     public Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<Note>>([.. notes.Where(n => Checkpoint.IsBelow(n.Path, dir))]);
+
+    /// <summary>A checkpoint keeps no times of its notes: they carry the checkpoint's, as its attachments do.</summary>
+    public Task<IReadOnlyList<NoteStamp>> ListNoteStampsAsync(VaultPath dir, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NoteStamp>>([.. notes.Where(n => n.Path == dir || Checkpoint.IsBelow(n.Path, dir))
+            .Select(n => new NoteStamp(n.Path, Encoding.UTF8.GetByteCount(n.Content), checkpoint.CreatedAt))]);
 
     public Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([checkpoint.Vault]);
 

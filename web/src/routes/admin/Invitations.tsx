@@ -6,6 +6,7 @@ import { api, call } from "../../api/client";
 import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../../components/form";
+import { useListFilter, type Status } from "../../components/ListFilter";
 import { useDialog } from "../../hooks/useDialog";
 import { useIsAdmin } from "./AdminOnly";
 import InvitationReveal from "./InvitationReveal";
@@ -16,6 +17,14 @@ type Invitation = components["schemas"]["AdminInvitationView"];
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const date = (iso: string) => day.format(new Date(iso));
 const stateText: Record<string, string> = { open: "Open", used: "Used", expired: "Expired", revoked: "Revoked" };
+const invitationStatuses: Status[] = [
+  { value: "open", label: "Open" },
+  { value: "used", label: "Used" },
+  { value: "expired", label: "Expired" },
+  { value: "revoked", label: "Revoked" },
+];
+const invitationName = (i: Invitation) => i.note ?? "";
+const invitationState = (i: Invitation) => i.state;
 const forWhom = (role: string) => `for ${role === "admin" ? "an admin" : "a user"}`;
 
 /** The invitations made so far, and the way to make another. */
@@ -25,6 +34,13 @@ export default function Invitations() {
   // The link lives here, in component state only, until the reveal is done.
   const [link, setLink] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<Invitation | null>(null);
+  const { visible, bar } = useListFilter(invitations.data ?? [], {
+    name: invitationName,
+    status: invitationState,
+    statuses: invitationStatuses,
+    searchLabel: "Filter by note",
+    noun: "invitations",
+  });
 
   if (link) {
     return <InvitationReveal link={link} onDone={() => setLink(null)} />;
@@ -38,9 +54,10 @@ export default function Invitations() {
 
       {invitations.isError && <FormError>{errorText(invitations.error)}</FormError>}
       {invitations.data?.length === 0 && <p className="text-muted">No invitations yet.</p>}
+      {bar}
       {invitations.data && invitations.data.length > 0 && (
         <ul className="flex flex-col gap-3">
-          {invitations.data.map((invitation) => (
+          {visible.map((invitation) => (
             <li
               key={invitation.id}
               aria-label={`Invitation ${forWhom(invitation.role)}`}

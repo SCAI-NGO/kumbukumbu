@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useLinks, useNote } from "../api/notes";
+import { useErrorTextFor } from "../discreet/errorText";
+import { useGoneWithVaults } from "../discreet/state";
 import { useDesktop } from "../hooks/useDesktop";
+import { blockSource, findBlock } from "../note/blocks";
+import { maskedBody } from "../note/comments";
+import MarkdownView from "../note/MarkdownView";
+import { Properties } from "../note/NoteView";
+import { section } from "../note/outline";
+import { splitFrontmatter } from "../note/properties";
 import WindowFrame from "../windows/WindowFrame";
 import { useCloseWindow } from "../windows/context";
 import { consoleSchemes, keepConsoleScheme, phosphor, storedConsoleScheme, type ConsoleScheme } from "./crt";
@@ -199,6 +208,7 @@ function EntryView({ entry, withPath, crt, onImage }: { entry: Entry | Running; 
 }
 
 function OutputView({ output, crt, onImage }: { output: Output; crt: boolean; onImage(): void }) {
+  if (output.kind === "note") return <Peek path={output.path} at={output.at} crt={crt} onShown={onImage} />;
   if (output.kind === "image") {
     return (
       <div data-line>
@@ -226,6 +236,80 @@ function OutputView({ output, crt, onImage }: { output: Output; crt: boolean; on
       </span>
       <span>Error:</span> {output.text}
     </div>
+  );
+}
+
+const noop = () => {};
+
+// On a phosphor screen the note's colours are the screen's: headings and links in its full colour, the text a little
+// dimmer, so they stand out; lines and boxes in the dimmed one.
+const phosphorNote = {
+  "--text": "var(--crt-fg)",
+  "--text-body": "color-mix(in srgb, var(--crt-fg) 80%, var(--crt-bg))",
+  "--accent-text": "var(--crt-fg)",
+  "--accent": "var(--crt-fg)",
+  "--on-accent": "var(--crt-bg)",
+  "--muted": "var(--crt-dim)",
+  "--dim": "var(--crt-dim)",
+  "--line": "var(--crt-dim)",
+  "--warning": "var(--crt-fg)",
+  "--surface": "var(--crt-bg)",
+  "--surface-2": "var(--crt-bg)",
+  "--highlight": "var(--crt-dim)",
+} as CSSProperties;
+
+/** A note `p` shows. Of a discreet vault hidden again, nothing of it stays: no text, path or vault, and no more reads. */
+function Peek(props: { path: string; at: string | null; crt: boolean; onShown(): void }) {
+  const gone = useGoneWithVaults(props.path);
+  if (gone) {
+    return (
+      <div data-line className={props.crt ? "text-(--crt-dim)" : "text-muted"}>
+        (a note that's hidden again)
+      </div>
+    );
+  }
+  return <PeekedNote {...props} />;
+}
+
+/**
+ * The note as the note view reads and renders it (the same query, renderer and sanitising), whole however long, under
+ * its path: its links as the server resolves them, task boxes disabled, Mermaid as code, and no note created from a
+ * link to a missing one, as the console never writes; tags only name themselves. A section or a block keeps the note's lines, which its links
+ * go by.
+ */
+function PeekedNote({ path, at, crt, onShown }: { path: string; at: string | null; crt: boolean; onShown(): void }) {
+  const note = useNote(path);
+  const links = useLinks(path, note.data?.version);
+  const errorFor = useErrorTextFor(path);
+  const content = note.data?.content;
+  const shown = useMemo(() => {
+    if (content === undefined) return null;
+    const { body, mask } = maskedBody(content);
+    const frontmatter = at === null ? splitFrontmatter(content).frontmatter : null;
+    const block = at?.startsWith("^") ? at.slice(1) : null;
+    const found = block === null ? null : findBlock(content, block);
+    const source = block !== null ? found && blockSource(body, found) : at === null ? body : section(body, at);
+    return { source, mask, frontmatter };
+  }, [content, at]);
+  // The log follows the newest answer; this one comes after its entry, and may end in an error after loading.
+  useLayoutEffect(onShown, [shown, note.isError, onShown]);
+
+  let state: Output | null = null;
+  if (note.isError) state = { kind: "text", text: `p: ${errorFor(note.error)}`, error: true };
+  else if (shown === null) state = { kind: "text", text: "Loading …" };
+  else if (shown.source === null) state = { kind: "text", text: `p: ${path}: no ${at!.startsWith("^") ? `block ${at}` : `heading “${at}”`}`, error: true };
+  return (
+    <>
+      <PathLine cwd={at === null ? path : `${path}#${at}`} crt={crt} />
+      {state ? (
+        <OutputView output={state} crt={crt} onImage={onShown} />
+      ) : (
+        <div data-peek style={crt ? phosphorNote : undefined} className="my-2 font-sans">
+          {shown!.frontmatter !== null && <Properties yaml={shown!.frontmatter} changed={null} still />}
+          <MarkdownView source={shown!.source!} mask={shown!.mask} links={links.data} tasksDisabled onToggleTask={noop} path={path} diagramsAsCode tagsStill />
+        </div>
+      )}
+    </>
   );
 }
 

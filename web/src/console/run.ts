@@ -7,7 +7,13 @@ import { useConsole, type Output, type Running } from "./store";
 import { tokenise } from "./tokenise";
 
 /** The commands the console answers itself (console design §6). */
-const local = new Set(["cd", "pwd", "clear", "exit"]);
+const local = new Set(["cd", "pwd", "clear", "exit", "p"]);
+
+/** The console's words for ls; the shell has none of them. */
+const shortcuts: Record<string, string> = { l: "ls -l", la: "ls -a", lsa: "ls -la" };
+
+/** `line` with a shortcut as its first word written out, the rest kept as typed; in a later stage it stays. */
+const expand = (line: string) => line.replace(/^\s*(l|la|lsa)(?=[\s|]|$)/, (_, word: string) => shortcuts[word]);
 
 let nextId = 1;
 
@@ -42,7 +48,8 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
   const { cwd, generation } = store;
   const entry: Running = { id: nextId++, cwd, typed: line };
   const done = (output: Output[]) => useConsole.getState().add({ ...entry, output });
-  const stages = tokenise(line);
+  const expanded = expand(line);
+  const stages = tokenise(expanded);
 
   // Only as the first word of a line of one stage; a line that doesn't tokenise goes to the shell for its error.
   const inPipeline = stages && stages.length > 1 ? stages.find((stage) => local.has(stage[0])) : undefined;
@@ -50,7 +57,7 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
 
   // `..` alone is `cd ..`, as in zsh and fish.
   const [name, ...args] = stages?.length !== 1 ? [] : stages[0].length === 1 && stages[0][0] === ".." ? ["cd", ".."] : stages[0];
-  if (local.has(name) && args.length > (name === "cd" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
+  if (local.has(name) && args.length > (name === "cd" || name === "p" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
   if (name === "pwd") return done([text(cwd)]);
   if (name === "clear") return useConsole.setState({ entries: [] });
   if (name === "exit") {
@@ -73,7 +80,17 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
     });
   }
 
-  const sent = resolveLine(line, cwd);
+  if (name === "p") {
+    if (args.length === 0) return done([error("p: missing note")]);
+    const path = resolvePath(args[0], cwd);
+    // A section (plan.md#Goals) or a block (plan.md#^goal) of a note; the view reads the whole note, as the note view.
+    const at = path.indexOf(".md#");
+    const note = at < 0 ? path : path.slice(0, at + 3);
+    if (!note.endsWith(".md")) return done([error(`p: ${path}: not a note`)]);
+    return done([{ kind: "note", path: note, at: at < 0 ? null : path.slice(at + 4) }]);
+  }
+
+  const sent = resolveLine(expanded, cwd);
   const intro = name === "help" && args.length === 0 ? [text(helpBlock)] : [];
   return ask({ call: "sh", command: sent }, { ...entry, sent }, generation, signal, (view) =>
     useConsole.getState().add({ ...entry, sent, output: [...intro, ...shown(view, sent)] }),

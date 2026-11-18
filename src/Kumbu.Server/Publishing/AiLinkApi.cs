@@ -129,10 +129,31 @@ public static class AiLinkApi
     internal static string Markdown(PublishedCopy copy, string fileBase)
     {
         var types = copy.Files.ToDictionary(f => f.Index, f => f.MediaType);
-        var text = new StringBuilder()
-            .Append("# ").Append(copy.Title.ReplaceLineEndings(" ")).Append("\n\n")
-            .Append(CultureInfo.InvariantCulture, $"A published note, snapshot of {copy.SnapshotAt:yyyy-MM-dd HH:mm} UTC; links to other notes are plain text.\n\n");
-        var source = copy.Markdown;
+        var text = new StringBuilder().Append("# ").Append(copy.Title.ReplaceLineEndings(" ")).Append("\n\n");
+        if (copy.Notes is not { Count: > 1 } notes)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"A published note, snapshot of {copy.SnapshotAt:yyyy-MM-dd HH:mm} UTC; links to other notes are plain text.\n\n");
+            return Body(text, copy.Markdown, n => n, types, fileBase).ToString();
+        }
+
+        // A bundle (Publish 2.0): every note under its own heading, links between them to those headings.
+        text.Append(CultureInfo.InvariantCulture,
+            $"A published note with {notes.Count - 1} linked {(notes.Count == 2 ? "note" : "notes")}, snapshot of {copy.SnapshotAt:yyyy-MM-dd HH:mm} UTC; links between them point to the headings below, links to other notes are plain text.\n\n");
+        var ids = notes.Select(n => n.Id).ToHashSet();
+        foreach (var note in notes)
+        {
+            if (note.Id != 0) text.Append("\n\n---\n\n# ").Append(note.Title.ReplaceLineEndings(" ")).Append(CultureInfo.InvariantCulture, $" {{#n{note.Id}}}\n\n");
+            var markdown = FairCopies.Relink(note.Markdown, (id, _) => ids.Contains(id) ? $"#n{id}" : "");
+            Body(text, markdown, n => n < note.Files.Count ? note.Files[n] : null, types, fileBase);
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary><paramref name="source"/> byte for byte but for its embeds of files: <c>f/n</c> as the copy's file
+    /// <paramref name="file"/> names, pointing to <paramref name="fileBase"/>, or left out.</summary>
+    private static StringBuilder Body(StringBuilder text, string source, Func<int, int?> file, Dictionary<int, string> types, string fileBase)
+    {
         // Where each line starts, split on '\n' as MarkdownLink.Parse splits it: a '\r' stays where it is.
         List<int> lineStarts = [0];
         for (var i = 0; i < source.Length; i++)
@@ -143,10 +164,10 @@ public static class AiLinkApi
         var done = 0;
         foreach (var link in MarkdownLink.Parse(source))
         {
-            if (!link.Embed || FileIndex(link.Destination) is not { } n) continue;
+            if (!link.Embed || FileIndex(link.Destination) is not { } local) continue;
             var start = lineStarts[link.Line] + link.Start;
             text.Append(source, done, start - done);
-            if (types.TryGetValue(n, out var type))
+            if (file(local) is { } n && types.TryGetValue(n, out var type))
             {
                 text.Append(link.Raw, 0, link.Raw.Length - link.Rest.Length - link.Destination.Length)
                     .Append(CultureInfo.InvariantCulture, $"{fileBase}/{n}").Append(link.Rest).Append(" (").Append(type).Append(')');
@@ -155,7 +176,7 @@ public static class AiLinkApi
             done = start + link.Raw.Length;
         }
 
-        return text.Append(source, done, source.Length - done).ToString();
+        return text.Append(source, done, source.Length - done);
     }
 
     /// <summary><c>f/&lt;n&gt;</c>, bare or in angle brackets, as the page reads both.</summary>

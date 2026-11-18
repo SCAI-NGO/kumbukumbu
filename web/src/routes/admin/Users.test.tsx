@@ -64,6 +64,21 @@ describe("Admin users", () => {
     expect(within(card("Root")).getByText("Primary admin")).toBeInTheDocument();
   });
 
+  it("filters users by name and status", async () => {
+    api(admin, { "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { active: false })]) });
+    renderApp("/admin/users");
+    const search = await screen.findByRole("searchbox", { name: "Filter by name" });
+    await userEvent.type(search, "bob");
+    expect(screen.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Bob"]);
+
+    await userEvent.clear(search);
+    expect(search).toHaveValue("");
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    await userEvent.click(screen.getByRole("radio", { name: "Deactivated 1" }));
+    expect(screen.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Bob"]);
+    expect(screen.getByText("Showing 1 of 3")).toBeInTheDocument();
+  });
+
   it("shows used / limit and sets an override", async () => {
     const MB = 1024 ** 2;
     const GB = 1024 ** 3;

@@ -16,7 +16,12 @@ public sealed record ReaderCodeRequest(string Code);
 
 /// <summary>The published copy: its title, its filtered Markdown, when the snapshot was taken, its files, each read
 /// through <c>GET /api/s/files/{index}</c>, and its copy id, which the page sends with each (<see cref="ReaderApi.CopyHeader"/>).</summary>
-public sealed record ReaderView(string Title, string Markdown, DateTime SnapshotAt, ReaderFileView[] Files, string Copy);
+/// <para><c>notes</c>: a bundle's notes in walk order, the start (id 0) first, each with its files' indices in the copy
+/// (<c>files[n]</c> is what its <c>f/n</c> shows); null for a single note. Links between them are <c>#kn-id</c>.</para>
+public sealed record ReaderView(string Title, string Markdown, DateTime SnapshotAt, ReaderFileView[] Files, string Copy, ReaderNoteView[]? Notes = null);
+
+/// <summary>A note of a bundle as its reader gets it; how it links to the others stays the server's (never the edges).</summary>
+public sealed record ReaderNoteView(int Id, string Title, string Markdown, int Depth, int[] Files);
 
 /// <summary>A file of the copy: its index and media type, never its name in the vault.</summary>
 public sealed record ReaderFileView(int Index, string MediaType);
@@ -180,5 +185,6 @@ public static class ReaderApi
     private static CookieOptions CookieOptions() => new() { Path = CookiePath, Secure = true, SameSite = SameSiteMode.Strict, HttpOnly = true };
 
     private static ReaderView View(string code, PublishedCopy copy) =>
-        new(copy.Title, copy.Markdown, copy.SnapshotAt, [.. copy.Files.Select(f => new ReaderFileView(f.Index, f.MediaType))], ShareCode.CopyId(code));
+        new(copy.Title, copy.Markdown, copy.SnapshotAt, [.. copy.Files.Select(f => new ReaderFileView(f.Index, f.MediaType))], ShareCode.CopyId(code),
+            copy.Notes is null ? null : [.. copy.Notes.Select(n => new ReaderNoteView(n.Id, n.Title, n.Markdown, n.Depth, [.. n.Files]))]);
 }

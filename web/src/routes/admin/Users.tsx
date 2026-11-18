@@ -8,6 +8,7 @@ import { storageText } from "../../api/storage";
 import type { components } from "../../api/schema";
 import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, inputClass, secondaryButtonClass } from "../../components/form";
+import { useListFilter, type Status } from "../../components/ListFilter";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../../components/SharedVaultsChoice";
 import { useSession } from "../../state/session";
 import { useIsAdmin } from "./AdminOnly";
@@ -20,6 +21,13 @@ const date = (iso: string) => day.format(new Date(iso));
 const roleText: Record<string, string> = { user: "User", admin: "Admin", primary_admin: "Primary admin" };
 
 const GB = 1024 ** 3;
+
+const userStatuses: Status[] = [
+  { value: "active", label: "Active" },
+  { value: "deactivated", label: "Deactivated" },
+];
+const userName = (u: AdminUser) => `${u.display} ${u.username}`;
+const userStatus = (u: AdminUser) => (u.active ? "active" : "deactivated");
 
 /** Everyone on the server, as metadata only: no note, no vault name. */
 export default function Users() {
@@ -37,6 +45,13 @@ export default function Users() {
     enabled: useIsAdmin() === true,
   });
   const restored = deletions.data?.restored ?? [];
+  const { visible, bar } = useListFilter(users.data ?? [], {
+    name: userName,
+    status: userStatus,
+    statuses: userStatuses,
+    searchLabel: "Filter by name",
+    noun: "users",
+  });
 
   return (
     <>
@@ -59,9 +74,10 @@ export default function Users() {
         </div>
       )}
       {users.isError && <FormError>{errorText(users.error)}</FormError>}
+      {bar}
       {users.data && (
         <ul className="flex flex-col gap-3">
-          {users.data.map((user) => (
+          {visible.map((user) => (
             <UserItem
               key={user.id}
               user={user}

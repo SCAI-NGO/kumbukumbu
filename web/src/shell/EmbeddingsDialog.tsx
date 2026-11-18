@@ -73,13 +73,15 @@ export default function EmbeddingsDialog({
           {providers.map((p) => (
             <label
               key={p.name}
-              className={`flex min-h-11 cursor-pointer items-start gap-3 rounded-[12px] border p-3 ${p.name === chosen ? "border-accent bg-accent/10" : "border-line bg-surface-2"}`}
+              className={`flex min-h-11 items-start gap-3 rounded-[12px] border p-3 ${p.needsKey ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${p.name === chosen ? "border-accent bg-accent/10" : "border-line bg-surface-2"}`}
             >
               <input
                 type="radio"
                 name={`${id}-provider`}
                 value={p.name}
                 checked={p.name === chosen}
+                // Her own key's provider, before she saved one: the server would refuse it.
+                disabled={p.needsKey}
                 onChange={() => setChosen(p.name)}
                 className="mt-1 size-4 flex-none accent-accent"
               />
@@ -91,7 +93,8 @@ export default function EmbeddingsDialog({
                   )}
                 </span>
                 <span className="text-sm text-muted">{p.external ? p.description || "An external service." : "Nothing leaves this server."}</span>
-                {!p.available && p.reason && <span className="text-sm text-muted">Not available right now: {sentence(p.reason)}</span>}
+                {p.needsKey && p.reason && <span className="text-sm text-muted">{sentence(p.reason.charAt(0).toUpperCase() + p.reason.slice(1))}</span>}
+                {!p.needsKey && !p.available && p.reason && <span className="text-sm text-muted">Not available right now: {sentence(p.reason)}</span>}
               </span>
             </label>
           ))}

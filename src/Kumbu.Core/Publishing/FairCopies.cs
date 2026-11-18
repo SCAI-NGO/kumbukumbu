@@ -22,6 +22,10 @@ public static partial class FairCopies
 {
     public const string FilePrefix = "f/";
 
+    /// <summary>A link to another note of the same copy (Publish 2.0): <c>#kn-3</c>, or <c>#kn-3/Heading</c> with the
+    /// heading or block it lands on, encoded.</summary>
+    public const string NoteLinkPrefix = "#kn-";
+
     // Past this many passes, comments go wherever they stand, code or not; past twice as many, everything from the
     // first comment that opens goes.
     private const int CommentPasses = 8;
@@ -35,14 +39,17 @@ public static partial class FairCopies
     /// attachment: the attachment an embed's target names (by LinkResolver's rules), or null.
     /// mayCopy: whether that attachment goes with the copy (an image, not unpublishable, its bytes usable).
     /// ownOrigin: the server's own origin ("https://kumbu.example.org"), whose links count as vault links; null for none.
-    public static FairCopy Make(VaultPath note, string content, Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? ownOrigin = null)
+    /// noteLink: the id within the copy of the note a link's target names (without its #subpath; an empty target, as in
+    /// <c>[[#Heading]]</c>, names the note itself), or null: then the link is plain text, as without it.
+    public static FairCopy Make(
+        VaultPath note, string content, Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? ownOrigin = null, Func<string, int?>? noteLink = null)
     {
         var lines = Body(content).Lines;
         content = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var code = CodeLines(lines);
         var own = Own.Of(ownOrigin);
         var (references, definitions) = References(lines, code, own);
-        var copier = new Copier(attachment, mayCopy, own, references);
+        var copier = new Copier(attachment, mayCopy, own, references, noteLink);
 
         var title = StripMd(note.Name);
         var start = 0;
@@ -91,6 +98,75 @@ public static partial class FairCopies
         var markdown = Lines.Join(result);
         if (result.Count > 0 && content.EndsWith('\n')) markdown += "\n";
         return new FairCopy(title, markdown, copier.Files, copier.Plain);
+    }
+
+    /// <summary>
+    /// The copy <paramref name="markdown"/> with every link and embed to a note of the copy that <paramref name="keep"/>
+    /// refuses as its text (a note that left the copy, publish 2.0 decision 3). Code stays byte for byte: outside it,
+    /// only <see cref="Make"/> wrote such links, as a vault link the copy doesn't resolve is plain text.
+    /// </summary>
+    public static string Unlink(string markdown, Func<int, bool> keep) => Relink(markdown, (id, _) => keep(id) ? null : "");
+
+    /// <summary>
+    /// The copy <paramref name="markdown"/> with each link or embed to a note of the copy as <paramref name="target"/>
+    /// says, given the note's id and the link's subpath (still encoded): null keeps it as it is, an empty string makes it
+    /// its text, anything else is its new destination. Outside code, as <see cref="Unlink"/>.
+    /// </summary>
+    public static string Relink(string markdown, Func<int, string, string?> target) =>
+        OutsideCode(markdown, text => NoteLinkRegex().Replace(text, m =>
+        {
+            var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
+            if (to is null) return m.Value;
+            // Only the brackets the copy escaped in the text: any other escape stays, so the text reads as it did.
+            if (to.Length == 0) return Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value);
+            return $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({to})";
+        }));
+
+    /// <summary>The ids of the notes the copy <paramref name="markdown"/> links to or embeds, outside code.</summary>
+    public static IReadOnlySet<int> NoteIds(string markdown)
+    {
+        var ids = new HashSet<int>();
+        OutsideCode(markdown, text =>
+        {
+            foreach (Match m in NoteLinkRegex().Matches(text)) ids.Add(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture));
+            return text;
+        });
+        return ids;
+    }
+
+    /// <summary><paramref name="change"/> applied to each stretch of <paramref name="markdown"/> outside fenced code and
+    /// code spans, paragraph by paragraph, as <see cref="Make"/> reads them.</summary>
+    private static string OutsideCode(string markdown, Func<string, string> change)
+    {
+        var lines = markdown.Split('\n');
+        var code = CodeLines(lines);
+        var result = new StringBuilder();
+        for (var i = 0; i < lines.Length;)
+        {
+            if (code[i] || lines[i].Trim().Length == 0)
+            {
+                result.Append(lines[i]);
+                if (++i < lines.Length) result.Append('\n');
+                continue;
+            }
+
+            var end = i + 1;
+            while (end < lines.Length && !code[end] && lines[end].Trim().Length > 0) end++;
+            var paragraph = string.Join('\n', lines[i..end]);
+            var spans = CodeSpans(paragraph);
+            var at = 0;
+            foreach (var (start, stop) in spans.OrderBy(sp => sp.Key))
+            {
+                result.Append(change(paragraph[at..start])).Append(paragraph[start..stop]);
+                at = stop;
+            }
+
+            result.Append(change(paragraph[at..]));
+            i = end;
+            if (i < lines.Length) result.Append('\n');
+        }
+
+        return result.ToString();
     }
 
     /// <summary>
@@ -797,8 +873,25 @@ public static partial class FairCopies
         }
     }
 
-    private sealed class Copier(Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, Own? own, Dictionary<string, string> references)
+    private sealed class Copier(Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, Own? own, Dictionary<string, string> references, Func<string, int?>? noteLink)
     {
+        /// <summary>Where a link to <paramref name="target"/> (and <paramref name="subpath"/>) goes within the copy, or
+        /// null when its note isn't in it.</summary>
+        public string? NoteHref(string target, string subpath)
+        {
+            if (noteLink is null || (target.Trim().Length == 0 && subpath.Length == 0) || noteLink(target.Trim().Length == 0 ? "" : target) is not { } id) return null;
+            return NoteLinkPrefix + id + (subpath.Length > 0 ? "/" + Uri.EscapeDataString(subpath) : "");
+        }
+
+        /// <summary><see cref="NoteHref"/> for a Markdown link's destination, which is percent-encoded.</summary>
+        public string? MarkdownNoteHref(string destination)
+        {
+            var hash = destination.IndexOf('#');
+            return hash >= 0
+                ? NoteHref(MarkdownLink.Decode(destination[..hash]), MarkdownLink.Decode(destination[(hash + 1)..]))
+                : NoteHref(MarkdownLink.Decode(destination), "");
+        }
+
         private readonly Dictionary<VaultPath, int> _numbers = [];
 
         public List<VaultPath> Files { get; } = [];
@@ -859,6 +952,7 @@ public static partial class FairCopies
             var shown = alias.Length > 0 ? Inline(alias, flat: true)
                 : target.Length == 0 ? subpath.TrimStart('^')
                 : StripMd(target.TrimEnd('/').Split('/')[^1]);
+            if (copy && NoteHref(target, subpath) is { } href) return ($"{(embed ? "!" : "")}[{Escape(shown)}]({href})", true);
             return embed && target.Length > 0 ? Embed(target, "", shown, copy) : (shown, false);
         }
 
@@ -884,8 +978,9 @@ public static partial class FairCopies
             return (alt.Length > 0 ? alt : plain ?? (attached ? name : StripMd(name)), false);
         }
 
-        private static string Escape(string text) => text.Replace("[", "\\[").Replace("]", "\\]");
     }
+
+    private static string Escape(string text) => text.Replace("[", "\\[").Replace("]", "\\]");
 
     /// <summary>One text's constructs, found once: code spans, autolinks and HTML tags, matching brackets, wikilinks.</summary>
     private sealed class Scanner
@@ -986,7 +1081,21 @@ public static partial class FairCopies
                     if (kind == Kind.Web && Mentions(QueryOf(link.Destination) + "\n" + link.Title, _copier.Own)) kind = Kind.Own;
                     // In a table row GFM would split a kept destination or title at its '|', and read what follows anew.
                     if (kind == Kind.Web && (link.Destination.Contains('|') || link.Title.Contains('|'))) kind = Kind.Other;
-                    if (plain || (!link.Embed && kind != Kind.Web))
+                    if (!plain && kind == Kind.Vault && _copier.MarkdownNoteHref(link.Destination) is { } href)
+                    {
+                        if (link.Embed)
+                        {
+                            o.Append($"![{Escape(_copier.Alt(this, link.Open + 1, link.Close))}]({href})", kept: true);
+                            p = link.End;
+                        }
+                        else
+                        {
+                            o.Append("[", kept: true);
+                            limits.Push((link.Close, link.End, $"]({href})", true));
+                            p = textStart = link.Open + 1;
+                        }
+                    }
+                    else if (plain || (!link.Embed && kind != Kind.Web))
                     {
                         limits.Push((link.Close, link.End, "", false));
                         p = textStart = link.Open + 1;
@@ -1447,4 +1556,7 @@ public static partial class FairCopies
 
     [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
+
+    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)")]
+    private static partial Regex NoteLinkRegex();
 }
