@@ -6,7 +6,6 @@ import type { TreeFolder } from "../api/notes";
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { NOT_SUPPORTED } from "../upload/planUpload";
 import { fakeApi, json, renderApp, user } from "../test/app";
 
 const note = (path: string) => ({ name: path.split("/").at(-1)!, path, size: 10, kind: "note", mediaType: "text/markdown" });
@@ -122,14 +121,13 @@ describe("Take photo", () => {
     await waitFor(() => expect(puts).toEqual(["/api/files/Work/Drafts/Photo 2026-11-14 093005 2.jpg"]));
   });
 
-  it("a HEIC photo is refused with the upload's sentence", async () => {
+  it("a HEIC photo keeps the camera's name and is kept as a file", async () => {
     pointer(true);
     const { puts } = api();
     await takePhoto(new File(["heic"], "IMG_0002.HEIC", { type: "image/heic" }));
     const upload = await screen.findByRole("dialog", { name: "Upload" });
-    expect(await within(upload).findByText("IMG_0002.HEIC")).toBeInTheDocument();
-    expect(within(upload).getByText(NOT_SUPPORTED)).toBeInTheDocument();
-    expect(puts).toEqual([]);
+    expect(await within(upload).findByText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(puts).toEqual(["/api/files/Work/Drafts/IMG_0002.HEIC"]);
   });
   // The camera can take its time: the vault may be hidden, or another one chosen, before the photo comes back.
   it("a photo that comes back after its vault was hidden is dropped", async () => {

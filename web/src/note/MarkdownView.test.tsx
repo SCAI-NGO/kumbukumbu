@@ -428,6 +428,26 @@ describe("MarkdownView: attachments", () => {
     await userEvent.click(picture);
     expect(onCreateMissing).not.toHaveBeenCalled();
   });
+
+  it("shows a file, embedded or linked, as a chip with a download, never as an image", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    showRouted("![[data.xlsx]]\n\nSee [[Makefile]].", [link(1, "![[data.xlsx]]", "attachment", "/Work/data.xlsx"), link(3, "[[Makefile]]", "attachment", "/Work/Makefile")]);
+    expect(document.querySelector("img")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open the file data.xlsx" })).toHaveAttribute("href", "/view/Work/data.xlsx");
+    expect(screen.getByRole("link", { name: "Open the file Makefile" })).toHaveAttribute("href", "/view/Work/Makefile");
+
+    await userEvent.click(screen.getByRole("button", { name: "Download data.xlsx" }));
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe("/api/files/Work/data.xlsx?download=1");
+    click.mockRestore();
+  });
+
+  it("offers to create a missing link's note unless it names an image or PDF, dots in its name or not", async () => {
+    const onCreateMissing = vi.fn();
+    showRouted("[[Project v1.2]] [[report.docx]]", [link(1, "[[Project v1.2]]", "not_found"), link(1, "[[report.docx]]", "not_found")], onCreateMissing);
+    await userEvent.click(screen.getByRole("button", { name: "Create the note “Project v1.2”" }));
+    expect(onCreateMissing).toHaveBeenCalledWith("Project v1.2");
+    expect(screen.getByRole("button", { name: "Create the note “report.docx”" })).toBeInTheDocument();
+  });
 });
 
 describe("tags in the text", () => {

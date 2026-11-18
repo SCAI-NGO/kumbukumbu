@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readDirectory, readEntry, type ZipEntry } from "./zipReader";
-import { isSkillTextFile, MARKER } from "../api/paths";
-import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
+import { MARKER } from "../api/paths";
+import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
 export interface ImportNote {
@@ -11,7 +11,7 @@ export interface ImportNote {
 }
 
 /**
- * An image or PDF to import, at its path below the vault. Its bytes stay in the ZIP until it is sent: `read` reads and
+ * A file to import (an image, a PDF or any other), at its path below the vault. Its bytes stay in the ZIP until it is sent: `read` reads and
  * unpacks them (again) each time, so no more than one file's bytes are in memory at once.
  */
 export interface ImportFile {
@@ -57,15 +57,14 @@ function noteName(name: string): string | null {
 
 /**
  * Why a path below the vault isn't imported, in the server's words and order (`UploadApi.Target`, then the dot rule of
- * `NoteNames.Problem`); null for a note, an image, a PDF or a skill folder's text file. The server checks again.
+ * `NoteNames.Problem`); null for a note or any other file. The server checks again.
  */
-function reasonAgainst(relative: string, vault: string): string | null {
+function reasonAgainst(relative: string): string | null {
   const segments = relative.split("/");
   if (relative.includes("\\")) return "folders are separated by '/', not '\\'";
   if (relative.startsWith("/")) return "an absolute path; paths are relative to the folder uploaded into";
   if (segments.some((s) => s === "" || s === "." || s === "..")) return "empty, '.' and '..' segments aren't allowed";
   if (segments.slice(0, -1).some((s) => /^\.(obsidian|trash)$/i.test(s))) return OBSIDIAN;
-  if (!noteName(segments.at(-1)!) && !isAttachmentName(segments.at(-1)!) && !isSkillTextFile(vault, relative)) return NOT_SUPPORTED;
   const hidden = segments.find((s) => s.startsWith("."));
   if (hidden) return `'${hidden}' starts with '.', which hides it in Obsidian`;
   return null;
@@ -131,8 +130,12 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
   const seen = new Map<string, number>();
   for (const e of entries) seen.set(e.name, (seen.get(e.name) ?? 0) + 1);
   const whole = zipName.replace(/\.zip$/i, "").normalize("NFC").trim();
-  // One vault when an entry at the root is a note or file: a folder per vault has nothing but folders there.
-  const single = entries.some((e) => isFile(e) && !nameOf(e.name).includes("/") && reasonAgainst(nameOf(e.name), whole) === null);
+  // One vault when an entry at the root is a note, an image or a PDF: a folder per vault has nothing but folders
+  // there, or an export's MISSING.txt.
+  const single = entries.some((e) => {
+    const name = nameOf(e.name);
+    return isFile(e) && !name.includes("/") && reasonAgainst(name) === null && (noteName(name) !== null || isAttachmentName(name));
+  });
   // Keyed as the server tells vaults apart; the first spelling met names the vault.
   const vaults = new Map<string, { vault: ImportVault; paths: Set<string> }>();
   const vaultOf = (name: string) => {
@@ -170,7 +173,7 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
     const note = noteName(relative.split("/").at(-1)!);
     const reason =
       (seen.get(entry.name)! > 1 ? TWICE : null) ??
-      reasonAgainst(relative, vault) ??
+      reasonAgainst(relative) ??
       (note && entry.originalSize > MAX_NOTE_BYTES ? TOO_LARGE : null) ??
       (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_FILE : null) ??
       (entry.compression !== 0 && entry.compression !== 8 ? UNREADABLE : null);

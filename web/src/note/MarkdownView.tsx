@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
-import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, CornerDownRight, Download, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ComponentPropsWithoutRef, type MouseEvent, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { useLinks, useNote } from "../api/notes";
-import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
+import { fileKindOf, fileUrl, inVault, isAttachment, namesKnownFormat, noteUrl, titleOf, vaultOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import { download } from "../data/exportUrl";
 import { useErrorTextFor } from "../discreet/errorText";
 import { remarkHideBlockIds } from "../reader/blockIds";
 import { drawing } from "../reader/diagramSize";
@@ -229,16 +230,31 @@ function AttachmentChip({ path }: { path: string }) {
     </>
   );
   const chip = "inline-flex max-w-full items-center gap-1 rounded-[6px] border border-line bg-surface-2 px-1.5 align-bottom font-mono text-[0.85em]";
-  return (
+  const open = (
     <Link
       to={checkpointLink ? checkpointLink(path) : viewUrl(path)}
       replace={inWindow}
       state={{ paths: attachments } satisfies LightboxState}
-      aria-label={`Open the ${kind === "pdf" ? "PDF" : kind === "text" ? "file" : "image"} ${name}`}
+      aria-label={`Open the ${kind === "pdf" ? "PDF" : kind === "image" ? "image" : "file"} ${name}`}
       className={`${chip} text-accent-text focus-visible:outline-2 focus-visible:outline-accent`}
     >
       {content}
     </Link>
+  );
+  // A file has nothing to show, only to download: today's, straight from the chip; a checkpoint's from the lightbox.
+  if (kind !== "file" || checkpointLink) return open;
+  return (
+    <span className="inline-flex max-w-full items-center gap-0.5 align-bottom">
+      {open}
+      <button
+        type="button"
+        aria-label={`Download ${name}`}
+        onClick={() => download(`${fileUrl(vaultOf(path), inVault(path))}?download=1`)}
+        className="inline-flex size-6 flex-none items-center justify-center rounded-[6px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <Download size={14} strokeWidth={2} aria-hidden />
+      </button>
+    </span>
   );
 }
 
@@ -290,7 +306,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       }
       // A missing image or PDF looks the same, but is no note to create: it comes by upload. Nor is one where
       // nothing may be written (the console).
-      if (isAttachment(link.target) || !onCreateMissing) {
+      if (namesKnownFormat(link.target) || !onCreateMissing) {
         return (
           <span className={missingClass}>
             {children}

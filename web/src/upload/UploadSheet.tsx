@@ -10,7 +10,7 @@ import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { collectFromDrop, collectFromInput, contentsOf, soleFolder, type Picked } from "./collectFiles";
 import ConflictList from "./ConflictList";
-import { ACCEPT, isAttachmentName, MAX_ATTACHMENT_BYTES, planUpload, toBatches, TOO_LARGE_FILE, type Skipped, type UploadFile } from "./planUpload";
+import { MAX_ATTACHMENT_BYTES, planUpload, toBatches, TOO_LARGE_FILE, type Skipped, type UploadFile } from "./planUpload";
 import { putFile } from "./putFile";
 import { shrinkImage, ShrinkError, shrinkType, shrunkName, type ShrinkType } from "./shrinkImage";
 import { useHoldUpdates } from "../update/apply";
@@ -188,7 +188,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
 
   async function take(picked: Picked[], start = false) {
     setView({ kind: "reading" });
-    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })), { vault, folder: inVault });
+    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })));
     let notes: UploadFile[];
     try {
       notes = await Promise.all(plan.notes.map(async (k) => ({ path: k.path, content: await k.file.text() })));
@@ -202,7 +202,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
       files: plan.files,
       markers: plan.markers,
       skipped: [...plan.skipped, ...skipped],
-      withFiles: picked.some((p) => isAttachmentName(p.path.slice(p.path.lastIndexOf("/") + 1))),
+      withFiles: plan.files.length + plan.tooLarge.length > 0 || plan.skipped.some((s) => s.reason === TOO_LARGE_FILE),
       start,
     };
     if (plan.tooLarge.length) setView({ kind: "shrink", images: plan.tooLarge, type: shrinkType() });
@@ -412,7 +412,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
             )}
             <div className="flex flex-wrap gap-2.5">
               <label className={pickButtonClass}>
-                <input type="file" multiple accept={ACCEPT} className="sr-only" onChange={(e) => pick(collectFromInput(e.target.files ?? []))} />
+                <input type="file" multiple className="sr-only" onChange={(e) => pick(collectFromInput(e.target.files ?? []))} />
                 <FilePlus size={18} aria-hidden className="text-muted" />
                 Choose files
               </label>
