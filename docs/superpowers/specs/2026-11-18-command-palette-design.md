@@ -87,6 +87,7 @@ The web app shows both as one list, in the order added. The two lists are kept s
 - The exact command ids and labels, from the routes and tabs at build time.
 - The cap, the sealing label and the document fields, following `CalendarSettings`.
 - Whether the palette loads the trees of vaults it hasn't loaded yet when it opens (React Query caches them), and how it stays fast with many vaults.
+  Settled: it reads a vault's tree (`GET /api/vaults/{vault}/tree`, taken from the cache within a minute) when that vault holds a note favourite, at once, and every other listed vault's once something is typed (why: the empty palette shows no note of a tree but a favourite, and a palette opened for a command then asks for no tree at all).
 - How a move carries a note favourite along, or the simpler drop of stale entries.
 
 ## Tests
