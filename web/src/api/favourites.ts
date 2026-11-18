@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, call, HttpError } from "./client";
+import { api, call } from "./client";
 import type { components } from "./schema";
 
 export type Favourite = components["schemas"]["FavouriteView"];
@@ -28,14 +28,14 @@ export function useFavourites() {
     mutationKey: key,
     // One at a time, in the order made: the last write is the one that stands.
     scope: { id: "favourites" },
-    mutationFn: ({ next }: { next: Favourite[]; before: Favourite[] }) => call(api.PUT("/api/account/favourites", { body: { favourites: next.map(input) } })),
+    mutationFn: ({ next }: { next: Favourite[] }) => call(api.PUT("/api/account/favourites", { body: { favourites: next.map(input) } })),
+    // Only the last write of a run says what the list is: an earlier answer would show a state already left.
     onSuccess: (view) => {
-      if (queryClient.isMutating({ mutationKey: key }) <= 1) queryClient.setQueryData(key, view.favourites);
+      if (queryClient.isMutating({ mutationKey: key }) <= 1 && queryClient.getQueryData(key) !== undefined) queryClient.setQueryData(key, view.favourites);
     },
-    onError: (error, { before }) => {
-      queryClient.setQueryData(key, before);
-      // Someone else wrote meanwhile: what the list is now is for the server to say.
-      if (error instanceof HttpError && error.status === 409) void queryClient.invalidateQueries({ queryKey: key });
+    // After a failure the server is the truth, not what this tab last showed: read it again once no write is pending.
+    onError: () => {
+      if (queryClient.isMutating({ mutationKey: key }) <= 1) void queryClient.invalidateQueries({ queryKey: key });
     },
   });
 
@@ -46,7 +46,7 @@ export function useFavourites() {
     const next = to(before);
     void queryClient.cancelQueries({ queryKey: key });
     queryClient.setQueryData(key, next);
-    write.mutate({ next, before });
+    write.mutate({ next });
   };
 
   const keys = new Set(list.map(favouriteKey));

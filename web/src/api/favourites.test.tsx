@@ -159,4 +159,57 @@ describe("useFavourites", () => {
     expect(queryClient.getQueryData(["favourites"])).toBeUndefined();
     stop();
   });
+
+  it("reads again once every write has failed", async () => {
+    let reads = 0;
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: reads++ === 0 ? [] : [{ ...palette, added }] }),
+      "PUT /api/account/favourites": () => json(400, { error: "No." }),
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => {
+      result.current.toggle(plan);
+      result.current.toggle({ kind: "vault", vault: "Work" });
+    });
+    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance"]));
+  });
+
+  it("ends with the answer of the write that succeeded after one that failed", async () => {
+    let puts = 0;
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [] }),
+      "PUT /api/account/favourites": async (r) => {
+        const body = (await r.json()) as { favourites: object[] };
+        return puts++ === 0 ? json(400, { error: "No." }) : json(200, { favourites: body.favourites.map((f) => ({ ...f, added })) });
+      },
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => {
+      result.current.toggle(plan);
+      result.current.toggle(palette);
+    });
+    await waitFor(() => expect(puts).toBe(2));
+    await waitFor(() => expect(result.current.list.map(favouriteKey)).toEqual(["note:Work/projects/plan.md", "command:settings.appearance"]));
+  });
+
+  it("does not write an answer into a cache that was cleared meanwhile", async () => {
+    let release: () => void = () => {};
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [] }),
+      "PUT /api/account/favourites": () => new Promise<Response>((r) => (release = () => r(json(200, { favourites: [{ ...plan, added }] })))),
+    });
+    const { result, queryClient, unmount } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.toggle(plan));
+    unmount();
+    await act(() => queryClient.resetQueries({ queryKey: ["favourites"] }));
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(queryClient.getQueryData(["favourites"])).toBeUndefined();
+  });
 });
