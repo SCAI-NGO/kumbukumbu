@@ -433,4 +433,82 @@ public sealed class BundleTests(KumbuAppFactory app)
 
         Assert.Null(await Store.OpenCopyAsync(CodeOf(published), Ct));
     }
+
+    // Task 5: over REST, the bar, the reader and the AI link.
+
+    [Fact]
+    public async Task The_api_previews_publishes_with_expected_and_answers_409_with_the_new_list()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]] [[C]]"), ("B.md", "b"), ("C.md", "c"));
+
+        using (var preview = await alice.GetAsync("/api/publication-previews/Work/A.md?depth=1&without=C.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+            var json = await RestClient.JsonAsync(preview);
+            Assert.Equal(["/Work/A.md", "/Work/B.md"], json["notes"]!.AsArray().Select(n => n!["path"]!.GetValue<string>()));
+            Assert.Equal("without", json["leftOut"]![0]!["reason"]!.GetValue<string>());
+        }
+
+        using (var changed = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 1, expected = new[] { "A.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
+            Assert.Equal(3, (await RestClient.JsonAsync(changed))["preview"]!["notes"]!.AsArray().Count);
+        }
+
+        using (var published = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 1, without = new[] { "C.md" }, expected = new[] { "A.md", "B.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+            Assert.Equal(2, (await RestClient.JsonAsync(published))["notes"]!.AsArray().Count);
+        }
+
+        using (var list = await alice.GetAsync("/api/vaults/Work/publications"))
+        {
+            var json = await RestClient.JsonAsync(list);
+            Assert.Equal("/Work/B.md", json["bundled"]![0]!["path"]!.GetValue<string>());
+            Assert.Equal("/Work/A.md", json["bundled"]![0]!["start"]!.GetValue<string>());
+            Assert.Equal(2, json["publications"]![0]!["notes"]!.GetValue<int>());
+            Assert.Equal(1, json["publications"]![0]!["depth"]!.GetValue<int>());
+            Assert.Equal("/Work/C.md", json["publications"]![0]!["without"]![0]!.GetValue<string>());
+        }
+
+        using (var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0 }))
+        {
+            Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+            var json = await RestClient.JsonAsync(updated);
+            Assert.Equal(["/Work/A.md"], json["notes"]!.AsArray().Select(n => n!.GetValue<string>()));
+            Assert.Equal(["/Work/B.md"], json["removed"]!.AsArray().Select(n => n!.GetValue<string>()));
+        }
+
+        using var bad = await alice.GetAsync("/api/publication-previews/Work/A.md?depth=9");
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_reader_gets_every_note_of_the_bundle_in_walk_order_and_no_edges()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "[[C]]"), ("C.md", "c"));
+        var published = await PublishAsync(alice, "/Work/A.md", 2);
+        using var reader = new ReaderApiTests.Reader(Api, "203.0.113.71");
+
+        using var read = await reader.PostAsync(CodeOf(published));
+
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        var json = await RestClient.JsonAsync(read);
+        Assert.Equal(["A", "B", "C"], json["notes"]!.AsArray().Select(n => n!["title"]!.GetValue<string>()));
+        Assert.Equal([0, 1, 2], json["notes"]!.AsArray().Select(n => n!["depth"]!.GetValue<int>()));
+        Assert.DoesNotContain("edges", json.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("[B](#kn-1)", json["markdown"]!.GetValue<string>().TrimEnd());
+    }
+
+    [Fact]
+    public async Task The_ai_link_text_carries_the_whole_bundle()
+    {
+        var copy = new PublishedCopy("A", "See [B](#kn-1/Big%20idea) and [C](#kn-9).", DateTime.UnixEpoch, [new PublishedCopyFile(0, "image/png")],
+            [new PublishedBundleNote(0, "A", "See [B](#kn-1/Big%20idea) and [C](#kn-9).", 0, []), new PublishedBundleNote(1, "B", "![x](f/0) back to [A](#kn-0)", 1, [0])], [[0, 1]]);
+
+        var text = AiLinkApi.Markdown(copy, "https://k.example/s/t/T/files");
+
+        Assert.Contains("See [B](#n1) and C.", text);
+        Assert.Contains("\n\n---\n\n# B {#n1}\n\n![x](https://k.example/s/t/T/files/0) (image/png) back to [A](#n0)", text);
+    }
 }

@@ -105,10 +105,21 @@ public static partial class FairCopies
     /// refuses as its text (a note that left the copy, publish 2.0 decision 3). Code stays byte for byte: outside it,
     /// only <see cref="Make"/> wrote such links, as a vault link the copy doesn't resolve is plain text.
     /// </summary>
-    public static string Unlink(string markdown, Func<int, bool> keep) =>
-        OutsideCode(markdown, text => NoteLinkRegex().Replace(text, m => keep(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture))
-            ? m.Value
-            : Regex.Replace(m.Groups[1].Value, @"\\(.)", "$1")));
+    public static string Unlink(string markdown, Func<int, bool> keep) => Relink(markdown, (id, _) => keep(id) ? null : "");
+
+    /// <summary>
+    /// The copy <paramref name="markdown"/> with each link or embed to a note of the copy as <paramref name="target"/>
+    /// says, given the note's id and the link's subpath (still encoded): null keeps it as it is, an empty string makes it
+    /// its text, anything else is its new destination. Outside code, as <see cref="Unlink"/>.
+    /// </summary>
+    public static string Relink(string markdown, Func<int, string, string?> target) =>
+        OutsideCode(markdown, text => NoteLinkRegex().Replace(text, m =>
+        {
+            var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
+            if (to is null) return m.Value;
+            if (to.Length == 0) return Regex.Replace(m.Groups[1].Value, @"\\(.)", "$1");
+            return $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({to})";
+        }));
 
     /// <summary>The ids of the notes the copy <paramref name="markdown"/> links to or embeds, outside code.</summary>
     public static IReadOnlySet<int> NoteIds(string markdown)
@@ -1545,6 +1556,6 @@ public static partial class FairCopies
     [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
 
-    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/[^)\s]*)?\)")]
+    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)")]
     private static partial Regex NoteLinkRegex();
 }

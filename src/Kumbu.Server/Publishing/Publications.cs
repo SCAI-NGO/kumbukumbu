@@ -31,8 +31,11 @@ public sealed record PublishedNote(
 
 /// <summary>A published note as the caller may see it: for a member only <see cref="Note"/> (publish spec §3.10);
 /// <see cref="Link"/> only when asked for, and only for the owner; <see cref="ToString"/> leaves it out.</summary>
+/// <para>For the owner also <see cref="Notes"/>, how many notes the copy holds, and the <see cref="Depth"/> and
+/// <see cref="Without"/> an update walks with (Publish 2.0).</para>
 public sealed record PublicationState(
-    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null)
+    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null,
+    int? Notes = null, int? Depth = null, IReadOnlyList<VaultPath>? Without = null)
 {
     public override string ToString() =>
         $"PublicationState {{ Note = {Note}, SnapshotAt = {SnapshotAt:O}, Older = {Older}, ChangedAt = {ChangedAt:O}, PublishedBy = {PublishedBy} }}";
@@ -569,6 +572,17 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
         return states;
     }
 
+    /// <summary>Every note published inside a bundle at or below <paramref name="under"/> but its start, with the start
+    /// (Publish 2.0 decision 7); a member learns as much as of a note published alone.</summary>
+    public async Task<IReadOnlyList<(VaultPath Note, VaultPath Start)>> BundledAsync(VaultAccess access, VaultPath under, CancellationToken ct)
+    {
+        var scope = under.IsRoot ? null : access.ToVault(under).Value;
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        return [.. record.Publications.Where(p => p.Kind is null)
+            .SelectMany(p => (p.Members ?? []).Where(m => scope is null || Covered([scope], m.Note)).Select(m => (access.ToCaller(Parse(m.Note)), access.ToCaller(Parse(p.Note)))))
+            .OrderBy(b => b.Item1.Value, StringComparer.Ordinal).ThenBy(b => b.Item2.Value, StringComparer.Ordinal)];
+    }
+
     public async Task<PublicationState?> StateAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, string? linkBase, CancellationToken ct) =>
         Find((await store.ReadAsync(null, access.Vault, ct)).Record, access.ToVault(note)) is { } entry ? await StateOfAsync(access, notes, entry, linkBase, ct) : null;
 
@@ -613,7 +627,8 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
 
         return new PublicationState(
             shown, entry.SnapshotAt, older, older && changed.Count > 0 ? changed.Max() : null, entry.By,
-            linkBase is null ? null : ShareCode.Link(linkBase, entry.Code));
+            linkBase is null ? null : ShareCode.Link(linkBase, entry.Code),
+            1 + (entry.Members?.Count ?? 0), entry.Depth ?? 0, [.. (entry.Without ?? []).Select(w => access.ToCaller(Parse(w)))]);
     }
 
     /// <summary>

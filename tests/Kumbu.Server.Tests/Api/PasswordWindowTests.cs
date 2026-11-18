@@ -190,6 +190,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/publications"] = Reading,
         ["GET /api/vaults/{vault}/publications"] = Reading,
         ["GET /api/publications/{vault}/{**path}"] = Reading,
+        ["GET /api/publication-previews/{vault}/{**path}"] = Reading,
         ["POST /api/publications/{vault}/{**path}"] = "guarded inline: the password in the body, else the window (publish decision 9)",
         ["DELETE /api/publications/{vault}/{**path}"] = "withdrawing reduces what is out: never guarded",
         ["PUT /api/unpublishable/{vault}/{**path}"] = "a mark reduces what can go out: never guarded",

@@ -12,19 +12,43 @@ using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server.Publishing;
 
-/// <summary><c>password</c>: the owner's, as for an invitation; without it the password window must be open.</summary>
-public sealed record PublishRequest(string? Password = null);
+/// <summary><c>password</c>: the owner's, as for an invitation; without it the password window must be open.
+/// <c>depth</c> (0 to 5), <c>without</c> (notes left out, paths in the vault) and <c>expected</c> (the notes the preview
+/// showed, paths in the vault): Publish 2.0; with <c>expected</c>, a walk that takes other notes publishes nothing (409).</summary>
+public sealed record PublishRequest(string? Password = null, int Depth = 0, string[]? Without = null, string[]? Expected = null);
+
+/// <summary>An update's walk: a depth or notes left out other than the publication's own, and the notes the preview
+/// showed; all optional.</summary>
+public sealed record UpdateRequest(int? Depth = null, string[]? Without = null, string[]? Expected = null);
+
+/// <summary>A note of a publication's preview, its path in the vault and the depth it was first reached at.</summary>
+public sealed record PreviewNoteView(string Path, string Title, int Depth);
+
+/// <summary>A note the walk left behind: <c>reason</c> is <c>unpublishable</c>, <c>behind</c> (reached only through a
+/// note that stays out) or <c>without</c> (left out by the owner).</summary>
+public sealed record PreviewLeftOutView(string Path, string Reason);
+
+/// <summary>What a publication would take (Publish 2.0): the notes, the start first; those left behind; the embeds
+/// that become plain text; the images' size; past the note limit or the size limit.</summary>
+public sealed record PublicationPreviewView(PreviewNoteView[] Notes, PreviewLeftOutView[] LeftOut, string[] Plain, long Bytes, bool TooMany, bool TooLarge);
+
+/// <summary>The 409 of a publication whose notes changed since the preview: nothing went out; the walk as it is now.</summary>
+public sealed record BundleChangedView(string Message, PublicationPreviewView Preview);
+
+/// <summary>A note published inside a bundle, and the bundle's start note.</summary>
+public sealed record BundledView(string Path, string Start);
 
 /// <summary>The copy just made: <c>link</c> holds the code in its fragment (an update gives the same link);
 /// <c>plain</c>, the embeds that became plain text.</summary>
-public sealed record PublishedView(string Link, DateTime SnapshotAt, string[] Plain);
+public sealed record PublishedView(string Link, DateTime SnapshotAt, string[] Plain, string[]? Notes = null, string[]? Added = null, string[]? Removed = null);
 
 /// <summary>A published note. For a member only <c>path</c>, the rest null (publish spec §3.10); <c>link</c> only on
 /// the owner's read of the one note.</summary>
-public sealed record PublicationView(string Path, DateTime? SnapshotAt, bool? Older, DateTime? ChangedAt, string? PublishedBy, string? Link);
+public sealed record PublicationView(
+    string Path, DateTime? SnapshotAt, bool? Older, DateTime? ChangedAt, string? PublishedBy, string? Link, int? Notes = null, int? Depth = null, string[]? Without = null);
 
 /// <summary>A vault's publications and, for its owner, its unpublishable notes and folders.</summary>
-public sealed record VaultPublicationsView(PublicationView[] Publications, string[] Unpublishable);
+public sealed record VaultPublicationsView(PublicationView[] Publications, string[] Unpublishable, BundledView[]? Bundled = null);
 
 /// <summary>A publication of one of the owner's own vaults, for the overview; never the link.</summary>
 public sealed record PublicationOverviewView(string Path, DateTime SnapshotAt, bool Older, DateTime? ChangedAt, string PublishedBy);
@@ -43,6 +67,7 @@ public static class PublicationApi
         api.MapGet("/publications", OverviewAsync).Errors(401, 403, 503);
         api.MapGet("/vaults/{vault}/publications", VaultAsync).Errors(401, 403, 404, 503);
         api.MapGet("/publications/{vault}/{**path}", ReadAsync).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/publication-previews/{vault}/{**path}", PreviewAsync).Errors(400, 401, 403, 404, 503);
         api.MapPost("/publications/{vault}/{**path}", PublishAsync).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapPut("/publications/{vault}/{**path}", UpdateAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/publications/{vault}/{**path}", WithdrawAsync).Errors(400, 401, 403, 404, 409, 503);
@@ -67,7 +92,8 @@ public static class PublicationApi
         var access = await AccessAsync(store, vault, ct);
         var states = await publications.ListAsync(access, store, VaultPath.Root.Child(access.Name), null, ct);
         var marks = await publications.MarksAsync(access, ct);
-        return TypedResults.Ok(new VaultPublicationsView([.. states.Select(View)], [.. marks.Select(m => m.Value)]));
+        var bundled = await publications.BundledAsync(access, VaultPath.Root.Child(access.Name), ct);
+        return TypedResults.Ok(new VaultPublicationsView([.. states.Select(View)], [.. marks.Select(m => m.Value)], [.. bundled.Select(b => new BundledView(b.Note.Value, b.Start.Value))]));
     }
 
     /// <summary>The one read that carries the link; <see cref="Publications"/> gives it to the owner alone.</summary>
@@ -79,9 +105,18 @@ public static class PublicationApi
         return TypedResults.Ok(View(state));
     }
 
+    /// <summary>What publishing the note to <paramref name="depth"/> without <paramref name="without"/> would take; nothing
+    /// is written (Publish 2.0 decision 2).</summary>
+    private static async Task<Ok<PublicationPreviewView>> PreviewAsync(
+        string vault, string? path, Publications publications, EncryptedNoteStore store, CancellationToken ct, int depth = 0, string[]? without = null)
+    {
+        var (access, note) = await NoteAsync(store, vault, path, ct);
+        return TypedResults.Ok(View(await publications.PreviewAsync(access, store, note, depth, Paths(vault, without), ct)));
+    }
+
     /// <summary>The password is checked as an invitation's, before the note is read; given, it opens the window. The
     /// switch and a member are refused first, as <see cref="Publications"/> would: no prompt, no password check spent.</summary>
-    private static async Task<Created<PublishedView>> PublishAsync(
+    private static async Task<Results<Created<PublishedView>, Conflict<BundleChangedView>>> PublishAsync(
         string vault, string? path, PublishRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits,
         Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options, CancellationToken ct)
     {
@@ -100,7 +135,12 @@ public static class PublicationApi
         PublishedNote published;
         try
         {
-            published = await publications.PublishAsync(access, store, note, caller.User!.Id, by, byRef, Publications.BaseUrl(http, options.Value), ct);
+            published = await publications.PublishAsync(
+                access, store, note, caller.User!.Id, by, byRef, Publications.BaseUrl(http, options.Value), ct, body.Depth, Paths(vault, body.Without), Expected(vault, body.Expected));
+        }
+        catch (BundleChangedException e)
+        {
+            return TypedResults.Conflict(Changed(e));
         }
         // The shell's sentence names `publish update`; the web app's button is Update copy.
         catch (PublishRefusedException e) when (e.Kind == ShellErrorKind.Conflict && e.Message.StartsWith($"{note} is already published", StringComparison.Ordinal))
@@ -111,14 +151,62 @@ public static class PublicationApi
         return TypedResults.Created((string?)null, View(published));
     }
 
-    private static async Task<Ok<PublishedView>> UpdateAsync(
-        string vault, string? path, HttpContext http, RequestCaller caller, Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options,
-        CancellationToken ct)
+    private static async Task<Results<Ok<PublishedView>, Conflict<BundleChangedView>>> UpdateAsync(
+        string vault, string? path, HttpContext http, RequestCaller caller, Publications publications, EncryptedNoteStore store,
+        IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var (access, note) = await NoteAsync(store, vault, path, ct);
         var (by, byRef) = Writer(caller, access);
-        return TypedResults.Ok(View(await publications.UpdateAsync(access, store, note, by, byRef, Publications.BaseUrl(http, options.Value), ct)));
+        var body = await UpdateBodyAsync(http, ct);
+        try
+        {
+            return TypedResults.Ok(View(await publications.UpdateAsync(
+                access, store, note, by, byRef, Publications.BaseUrl(http, options.Value), ct,
+                body?.Depth, body?.Without is null ? null : Paths(vault, body.Without), Expected(vault, body?.Expected))));
+        }
+        catch (BundleChangedException e)
+        {
+            return TypedResults.Conflict(Changed(e));
+        }
     }
+
+    /// <summary>The optional body of an update: none, as before Publish 2.0, keeps the publication's walk. Read by hand,
+    /// as a body parameter would make routing refuse a <c>PUT</c> without one.</summary>
+    private static async Task<UpdateRequest?> UpdateBodyAsync(HttpContext http, CancellationToken ct)
+    {
+        if (http.Request.ContentLength is null or 0 && !http.Request.HasJsonContentType()) return null;
+        if (!http.Request.HasJsonContentType()) throw new ApiException(StatusCodes.Status415UnsupportedMediaType, "Send the body as JSON (Content-Type: application/json).");
+        if (http.Request.ContentLength > 64 * 1024) throw new ApiException(StatusCodes.Status413PayloadTooLarge, "The request body is too large.");
+        try
+        {
+            return await http.Request.ReadFromJsonAsync<UpdateRequest>(ct);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            throw ApiErrors.BadRequest("The request body is missing, not JSON, or lacks a required field.");
+        }
+    }
+
+    /// <summary>Paths in the vault (<c>Plan.md</c>, as the API's other paths) as note paths; at most as many as a
+    /// publication may take.</summary>
+    private static List<VaultPath> Paths(string vault, string[]? paths)
+    {
+        if (paths is null) return [];
+        if (paths.Length > MaxListed) throw ApiErrors.BadRequest($"At most {MaxListed} notes can be named.");
+        return [.. paths.Select(p => ApiPaths.Parse(vault, p, note: true))];
+    }
+
+    private static List<string>? Expected(string vault, string[]? paths) => paths is null ? null : [.. Paths(vault, paths).Select(p => p.Value)];
+
+    private const int MaxListed = 1000;
+
+    private static BundleChangedView Changed(BundleChangedException e) =>
+        new("Something changed in the vault since the list was shown: check the list again.", View(e.Now));
+
+    private static PublicationPreviewView View(BundlePreview p) => new(
+        [.. p.Notes.Select(n => new PreviewNoteView(n.Path.Value, n.Title, n.Depth))],
+        [.. p.LeftOut.Select(l => new PreviewLeftOutView(l.Path.Value, l.Reason))],
+        [.. p.Plain], p.Bytes, p.TooMany, p.TooLarge);
 
     private static async Task<NoContent> WithdrawAsync(
         string vault, string? path, RequestCaller caller, Publications publications, EncryptedNoteStore store, CancellationToken ct)
@@ -170,9 +258,11 @@ public static class PublicationApi
         access.Membership is null ? (caller.WriterIn(access.Name), caller.ReferenceIn(access.Name)) : ("", caller.Reference);
 
     private static PublicationView View(PublicationState s) =>
-        new(s.Note.Value, s.SnapshotAt, s.Older, s.ChangedAt, s.PublishedBy, s.Link);
+        new(s.Note.Value, s.SnapshotAt, s.Older, s.ChangedAt, s.PublishedBy, s.Link, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)]);
 
-    private static PublishedView View(PublishedNote p) => new(p.Link, p.SnapshotAt, [.. p.Plain]);
+    private static PublishedView View(PublishedNote p) => new(
+        p.Link, p.SnapshotAt, [.. p.Plain], p.Notes is null ? null : [.. p.Notes.Select(n => n.Path.Value)],
+        p.Added is null ? null : [.. p.Added.Select(a => a.Value)], p.Removed is null ? null : [.. p.Removed.Select(r => r.Value)]);
 
     private static ApiException NoVault(string vault) => ApiErrors.NotFound($"You have no vault named '{vault}'.");
 
