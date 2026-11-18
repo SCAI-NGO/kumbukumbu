@@ -352,8 +352,18 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
     if (reading?.path !== path || reading.line !== line) setReading({ path, line });
   }, [path]);
   useEffect(() => {
-    if (panel && mode === "read" && note.data) readAt();
+    if (!panel || mode !== "read" || !note.data) return;
+    readAt();
+    // The text moves without a scroll too: late images, diagrams and maths, a resized window, the tree folding away.
+    if (!article.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(readAt);
+    observer.observe(article.current);
+    return () => observer.disconnect();
   }, [panel, mode, note.data, readAt]);
+  // The outline is the panel's once it shows (a window widened past 1280 px): the sheet goes, and stays gone.
+  useEffect(() => {
+    if (panel && useEditor.getState().noteTool === "outline") useEditor.getState().setNoteTool(null);
+  }, [panel]);
   useEffect(
     () => () => {
       if (useEditor.getState().reading?.path === path) useEditor.getState().setReading(null);
@@ -618,7 +628,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
         )}
         {note.data && !panel && <BacklinksList path={path} />}
       </div>
-      {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
+      {noteTool === "outline" && note.data && !panel && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
       {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );

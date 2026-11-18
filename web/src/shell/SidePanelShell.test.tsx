@@ -16,6 +16,14 @@ const storageKey = "kumbu.sidePanelCollapsed";
 
 /** The window's width: wide (from 1280 px), desktop (from 1024 px) or a phone's. */
 let width: "wide" | "desktop" | "phone" = "wide";
+/** What follows the window's width, told when it changes. */
+const listeners = new Set<() => void>();
+/** The window resized to `to`. */
+const resize = (to: typeof width) =>
+  act(() => {
+    width = to;
+    for (const l of listeners) l();
+  });
 
 function signedIn() {
   fakeApi({
@@ -43,6 +51,7 @@ async function open() {
 
 beforeEach(() => {
   width = "wide";
+  listeners.clear();
   localStorage.clear();
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
@@ -51,8 +60,8 @@ beforeEach(() => {
       return false;
     },
     media: query,
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (_: string, l: () => void) => listeners.add(l),
+    removeEventListener: (_: string, l: () => void) => listeners.delete(l),
   }));
 });
 
@@ -121,6 +130,19 @@ describe("the side panel in the shell", () => {
     expect(screen.getByRole("dialog", { name: "Outline" })).toBeInTheDocument();
   });
 
+  it("closes the outline sheet when the window widens to show the panel, so the outline isn't there twice", async () => {
+    width = "desktop";
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Outline" }));
+    expect(screen.getByRole("dialog", { name: "Outline" })).toBeInTheDocument();
+    resize("wide");
+    expect(panel()).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Outline" })).not.toBeInTheDocument();
+    expect(useEditor.getState().noteTool).toBeNull();
+    resize("desktop");
+    expect(screen.queryByRole("dialog", { name: "Outline" })).not.toBeInTheDocument();
+  });
+
   it("jumps in Read mode to the heading clicked in its outline", async () => {
     await open();
     await userEvent.click(within(panel()).getByRole("tab", { name: "Outline" }));
@@ -158,6 +180,19 @@ describe("the side panel's outline", () => {
     const area = await writing();
     await userEvent.type(area, "\n\n## New", { initialSelectionStart: content.length, initialSelectionEnd: content.length });
     await waitFor(() => expect(entries().map((b) => b.textContent)).toEqual(["Plan", "Goals", "Risks", "New"]));
+  });
+
+  it("tells what follows the writing only when the text or the caret's line changed", async () => {
+    const area = await writing();
+    caretTo(area, content.indexOf("- one"));
+    const live = useEditor.getState().live;
+    expect(live).toMatchObject({ path: "/Work/plan.md", text: content, caretLine: 7 });
+    // Further along the same line, and a selection event without a move: nothing new to tell.
+    caretTo(area, content.indexOf("- one") + 2);
+    caretTo(area, content.indexOf("- one") + 2);
+    expect(useEditor.getState().live).toBe(live);
+    caretTo(area, content.indexOf("None yet."));
+    expect(useEditor.getState().live).toMatchObject({ caretLine: 11 });
   });
 
   it("marks the heading at or above the caret's line while writing", async () => {
@@ -205,6 +240,48 @@ describe("the side panel's outline", () => {
     Object.assign(tops, { Goals: -300, Risks: 100 });
     fireEvent.scroll(scroller);
     await waitFor(() => expect(marked()).toBe("Goals"));
+  });
+
+  it("follows the note's text growing or shrinking in Read mode (late images, a resize), and stops observing it once gone", async () => {
+    const observers: { callback: () => void; targets: Element[]; disconnected: boolean }[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        o: (typeof observers)[number];
+        constructor(callback: () => void) {
+          this.o = { callback, targets: [], disconnected: false };
+          observers.push(this.o);
+        }
+        observe(target: Element) {
+          this.o.targets.push(target);
+        }
+        unobserve() {}
+        disconnect() {
+          this.o.disconnected = true;
+        }
+      },
+    );
+    await open();
+    await userEvent.click(within(panel()).getByRole("tab", { name: "Outline" }));
+    const article = screen.getByRole("article");
+    const scroller = article.parentElement!;
+    const tops: Record<string, number> = { Plan: 40, Goals: 300, Risks: 600 };
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === scroller) return { top: 64, bottom: 800 } as DOMRect;
+      if (/^H[1-6]$/.test(this.tagName) && this.textContent! in tops) return { top: tops[this.textContent!], bottom: tops[this.textContent!] + 30 } as DOMRect;
+      return rect.call(this);
+    });
+    const observer = observers.find((o) => o.targets.includes(article) && !o.disconnected)!;
+    expect(observer).toBeDefined();
+    act(() => observer.callback());
+    await waitFor(() => expect(marked()).toBe("Plan"));
+    // An image above Goals came in late and pushed the text up past the top.
+    Object.assign(tops, { Plan: -500, Goals: 20, Risks: 400 });
+    act(() => observer.callback());
+    await waitFor(() => expect(marked()).toBe("Goals"));
+    cleanup();
+    expect(observer.disconnected).toBe(true);
   });
 });
 

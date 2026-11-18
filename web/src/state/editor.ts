@@ -265,6 +265,8 @@ function forgotten(s: EditorState, vault: string, keepDraft: boolean): Partial<E
     selectedFolder: outside(s.selectedFolder) ? s.selectedFolder : null,
     refused: outside(s.refused?.path) ? s.refused : null,
     scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
+    live: outside(s.live?.path) ? s.live : null,
+    reading: outside(s.reading?.path) ? s.reading : null,
     activeVault: s.activeVault === vault ? null : s.activeVault,
     expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
   };

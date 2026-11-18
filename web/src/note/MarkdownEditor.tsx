@@ -179,7 +179,10 @@ export default function MarkdownEditor({
     const area = textarea.current;
     if (!area) return;
     const caretLine = (area.value.slice(0, headOf(area)).match(/\n/g)?.length ?? 0) + 1;
-    useEditor.getState().setLive({ path, text: area.value, caretLine });
+    // It runs on every change and every selection event, often both for one keystroke: unchanged, nothing to tell.
+    const { live, setLive } = useEditor.getState();
+    if (live?.path === path && live.text === area.value && live.caretLine === caretLine) return;
+    setLive({ path, text: area.value, caretLine });
   }, [path]);
   useEffect(publish, [publish, value]);
   useEffect(() => () => useEditor.getState().setLive(null), []);

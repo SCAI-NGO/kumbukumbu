@@ -31,7 +31,7 @@ function Marked({ text, marks }: Pick<Mention, "text" | "marks">) {
 
 /**
  * "Unlinked mentions": lines in other notes that name this one without linking it. Closed, and not asked, until opened.
- * Below "Linked from" (`linked`) close to it; else, at the note's bottom, set off by a gap and a rule, in the side panel (`panel`) at its top.
+ * Right below "Linked from" (`linked`); otherwise set off from the note's text by a gap and a rule, or at the top of the side panel (`panel`).
  */
 export default function UnlinkedMentions({ path, linked = false, panel = false }: { path: string; linked?: boolean; panel?: boolean }) {
   // Open for one path only: a change of note closes it again.

@@ -15,7 +15,7 @@ export const sidePanelToggleId = "side-panel-toggle";
 /**
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), the palette's star, its outline, and Read / Write.
  * Write only where the caller may change the note (`writable`); `refusal` says why not. With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
- * With `sidePanel` (wide windows, a note open), its toggle closes the bar, and the outline is in the panel instead.
+ * With `sidePanel` (wide windows, a note open), the panel's toggle comes last in the bar, and the outline is in the panel instead of the top bar.
  */
 export default function TopBar({
   path,
