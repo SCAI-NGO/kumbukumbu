@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
+import { applyScheme } from "../../theme/apply";
 import { fakeApi, json, renderApp, user } from "../../test/app";
 
 function api(overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
@@ -113,6 +114,17 @@ describe("Settings: Appearance", () => {
     api();
     renderApp("/settings/appearance");
     expect(await screen.findByLabelText("Kumbu")).toBeChecked();
+  });
+
+  it("follows a scheme chosen elsewhere while it is open: the palette's", async () => {
+    mockSystem(false);
+    api();
+    renderApp("/settings/appearance");
+    expect(await screen.findByLabelText("Follow the system")).toBeChecked();
+    act(() => applyScheme("kumbu"));
+    expect(screen.getByLabelText("Kumbu")).toBeChecked();
+    act(() => applyScheme(null));
+    expect(screen.getByLabelText("Follow the system")).toBeChecked();
   });
 
   it("asks for the password before downloads of several files go without it", async () => {
