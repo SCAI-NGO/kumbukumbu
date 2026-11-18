@@ -737,6 +737,19 @@ describe("[[ completion of headings and blocks", () => {
     expect(editorBox().value).toBe(`${source}\n## Fresh\n[[#Fresh]]`);
   });
 
+  it("takes a note it has read before from the cache, without reading it again", async () => {
+    const fetch = withRoadmap().fetch;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["note", ROADMAP], noteView(ROADMAP, roadmap, "r1"));
+    const { u } = await openInWrite(queryClient);
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    await u.type(editorBox(), "{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}[[roadmap#^");
+    expect(await screen.findByRole("listbox", { name: "Blocks to link" })).toBeInTheDocument();
+    const asked = fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname);
+    expect(asked.filter((p) => p.includes("roadmap"))).toEqual([]);
+  });
+
   it("says Loading… while the note loads, and offers nothing for a name no note has", async () => {
     let answer!: () => void;
     const fetch = withRoadmap(() => new Promise((resolve) => (answer = () => resolve(json(200, noteView(ROADMAP, roadmap, "r1")))))).fetch;

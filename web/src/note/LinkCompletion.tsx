@@ -64,8 +64,9 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     if (!at || at.kind === "note" || at.kind === "markdown") return null;
     return at.note === "" ? path : linkedNote(at.kind === "markdownHeading" ? decoded(at.note) : at.note, all, path);
   }, [all, at, path]);
-  // Another note is read as the note view reads it, so it comes from the cache when it was open before.
-  const other = useNote(target !== path ? target : null);
+  // Another note is read as the note view reads it, so it comes from the cache when it was open before; and only
+  // then, as reading it again would replace the text a view of it (the split view's other pane) shows.
+  const other = useNote(target !== path ? target : null, { cached: true });
   const content = target === path ? own : other.data?.content;
   const loading = target !== null && target !== path && other.isPending;
 
