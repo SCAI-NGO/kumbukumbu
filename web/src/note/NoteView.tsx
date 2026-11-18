@@ -113,10 +113,10 @@ function keepCentred(article: HTMLElement, target: HTMLElement): () => void {
 }
 
 /**
- * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. Write mode: the
- * editor with its toolbar, in place of the dock.
+ * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it, unless the side
+ * panel beside it shows them (`panel`). Write mode: the editor with its toolbar, in place of the dock.
  */
-export default function NoteView({ path }: { path: string }) {
+export default function NoteView({ path, panel = false }: { path: string; panel?: boolean }) {
   const note = useNote(path);
   const mode = useEditor((s) => s.mode);
   const errorFor = useErrorTextFor(path);
@@ -594,7 +594,7 @@ export default function NoteView({ path }: { path: string }) {
             />
           </article>
         )}
-        {note.data && <BacklinksList path={path} />}
+        {note.data && !panel && <BacklinksList path={path} />}
       </div>
       {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
       {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}

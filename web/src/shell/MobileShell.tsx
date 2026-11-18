@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNote, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -12,7 +12,9 @@ import { PointMenu } from "../components/PointMenu";
 import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { useSidePanelCollapsed } from "../hooks/useSidePanel";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
+import { useWide } from "../hooks/useWide";
 import { useSyncSocket } from "../hooks/useSyncSocket";
 import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPill";
 import { useTellOpenNote } from "../discreet/openNote";
@@ -20,6 +22,7 @@ import { NO_SUCH_NOTE, useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
+import SidePanel, { sidePanelId } from "../note/SidePanel";
 import NoteBar from "./NoteBar";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
@@ -35,7 +38,7 @@ import NewVaultDialog from "./NewVaultDialog";
 import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
-import TopBar, { sidebarToggleId } from "./TopBar";
+import TopBar, { sidePanelToggleId, sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { useNoteActions } from "./useNoteActions";
 import { useNoteMenuKey } from "./useNoteMenuKey";
@@ -137,6 +140,13 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
       )}
     </div>
   );
+}
+
+/** The side panel beside the open note: the note as saved, a heading clicked comes into view as from the outline sheet. */
+function NoteSidePanel({ path, hidden }: { path: string; hidden: boolean }) {
+  const note = useNote(path);
+  const jump = (line: number) => useEditor.getState().setScrollTarget({ path, line });
+  return <SidePanel path={path} hidden={hidden} text={note.data?.content ?? ""} currentLine={0} onJump={jump} />;
 }
 
 /** The signed-in app: top bar, the note (or the vaults), the dock, and the drawer and sheets over them. */
@@ -263,6 +273,17 @@ export default function MobileShell() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [docked, toggleSidebar]);
 
+  // From 1280 px on, the side panel sits beside the open note, collapsed or expanded: its links and its outline are there
+  // and nowhere else. Not for a note on its way out, nor one whose path isn't shown (as for the top bar).
+  const wide = useWide();
+  const [panelCollapsed, setPanelCollapsed] = useSidePanelCollapsed();
+  const shownNote = gone || (unnamed && missing) ? null : path;
+  const sidePanel = wide && !!shownNote;
+  const toggleSidePanel = useCallback(() => {
+    if (!panelCollapsed && document.getElementById(sidePanelId)?.contains(document.activeElement)) document.getElementById(sidePanelToggleId)?.focus();
+    setPanelCollapsed(!panelCollapsed);
+  }, [panelCollapsed, setPanelCollapsed]);
+
   usePaletteShortcut();
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
@@ -347,7 +368,13 @@ export default function MobileShell() {
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       {framed && <DiscreetFrame />}
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
-      <TopBar path={gone || (unnamed && missing) ? null : path} writable={!readOnlyNote && !renaming} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar
+        path={shownNote}
+        writable={!readOnlyNote && !renaming}
+        refusal={refusal}
+        sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null}
+        sidePanel={sidePanel ? { expanded: !panelCollapsed, toggle: toggleSidePanel } : null}
+      />
       {framed && (
         <div className="flex-none px-3 pt-2">
           <DiscreetPill />
@@ -374,7 +401,7 @@ export default function MobileShell() {
                 {noteChanges && (
                   <NoteBar onRename={renaming ? null : () => setMoving({ kind: "note", path })} onDelete={() => setDeleting({ kind: "note", path })} />
                 )}
-                <NoteView key={path} path={path} />
+                <NoteView key={path} path={path} panel={sidePanel} />
               </>
             ) : keptPending ? (
               <div className="flex-1" />
@@ -404,6 +431,7 @@ export default function MobileShell() {
             />
           )}
         </div>
+        {sidePanel && <NoteSidePanel path={shownNote!} hidden={panelCollapsed} />}
       </div>
 
       {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}

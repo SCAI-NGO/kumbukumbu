@@ -14,12 +14,27 @@ const tabs: { id: SidePanelTab; label: string }[] = [
 const tabClass = (on: boolean) =>
   `flex min-h-11 flex-1 items-center justify-center rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
 
+/** The panel's id, for its toggle in the top bar. */
+export const sidePanelId = "side-panel";
+
 /**
  * Beside the note on wide windows: its links (what links here, unlinked mentions) and its outline, a tab each, the
  * last one chosen remembered. `text` is the note as it stands (the editor's while writing), `currentLine` the
- * 1-based source line the reader is at: the last heading at or above it is marked.
+ * 1-based source line the reader is at: the last heading at or above it is marked. `hidden` while collapsed.
  */
-export default function SidePanel({ path, text, currentLine, onJump }: { path: string; text: string; currentLine: number; onJump(line: number): void }) {
+export default function SidePanel({
+  path,
+  text,
+  currentLine,
+  onJump,
+  hidden = false,
+}: {
+  path: string;
+  text: string;
+  currentLine: number;
+  onJump(line: number): void;
+  hidden?: boolean;
+}) {
   const id = useId();
   const [tab, setTab] = useSidePanelTab();
   const refs = useRef<Partial<Record<SidePanelTab, HTMLButtonElement | null>>>({});
@@ -39,7 +54,7 @@ export default function SidePanel({ path, text, currentLine, onJump }: { path: s
   };
 
   return (
-    <aside aria-label="Side panel" className="flex w-[300px] flex-none flex-col border-l border-line bg-surface">
+    <aside id={sidePanelId} aria-label="Side panel" hidden={hidden} className="flex w-[300px] flex-none flex-col border-l border-line bg-surface">
       <div role="tablist" onKeyDown={onKeyDown} className="m-3 flex flex-none gap-1 rounded-[12px] border border-line p-1">
         {tabs.map((t) => (
           <button
