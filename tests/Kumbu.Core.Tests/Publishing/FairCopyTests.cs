@@ -544,6 +544,20 @@ public class FairCopyTests
     public void An_embed_of_a_bundle_note_stays_an_embed() => Assert.Equal("![Plan](#kn-3)", Bundled("![[Plan]]"));
 
     [Fact]
+    public void An_embed_of_a_section_keeps_its_subpath()
+    {
+        Assert.Equal("![Plan](#kn-3/Big%20idea)", Bundled("![[Plan#Big idea]]"));
+        Assert.Equal("![Plan](#kn-3/%5Eb1)", Bundled("![[Plan#^b1]]"));
+    }
+
+    [Fact]
+    public void A_link_to_a_heading_of_the_note_itself_links_within_the_copy()
+    {
+        Assert.Equal("See [Big idea](#kn-7/Big%20idea).", FairCopies.Make(Note, "See [[#Big idea]].", InFolder, _ => true, null, t => t.Length == 0 ? 7 : null).Markdown);
+        Assert.Equal("See Big idea.", Text("See [[#Big idea]]."));
+    }
+
+    [Fact]
     public void A_note_not_in_the_bundle_stays_plain_text()
     {
         Assert.Equal("See Elsewhere and here.", Bundled("See [[Elsewhere]] and [here](Elsewhere.md)."));
@@ -556,6 +570,8 @@ public class FairCopyTests
     {
         Assert.Equal("a [b](#kn-4/x) c", FairCopies.Unlink("[a](#kn-3) [b](#kn-4/x) ![c](#kn-3)", id => id != 3));
         Assert.Equal("a ] b", FairCopies.Unlink(@"[a \] b](#kn-3)", _ => false));
+        // Only the brackets the copy escaped in a link's text; any other escape stays, so the text reads as it did.
+        Assert.Equal(@"a \*b\* [c] \\ d", FairCopies.Unlink(@"[a \*b\* \[c\] \\ d](#kn-3)", _ => false));
     }
 
     [Fact]

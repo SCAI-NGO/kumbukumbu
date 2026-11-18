@@ -493,6 +493,30 @@ describe("snapshotText", () => {
       expect(fetch.mock.calls[0][1]?.method ?? "GET").toBe("GET");
     });
 
+    it("shows an embedded section alone", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const sections = {
+        ...copy("![Plan](#kn-1/Big%20idea)"),
+        notes: [
+          { id: 0, title: "Questions on routing", markdown: "![Plan](#kn-1/Big%20idea)", depth: 0, files: [] },
+          { id: 1, title: "Plan", markdown: "Opening words.\n\n## Big idea\n\nThink big.\n\n### Detail\n\nSmall print.\n\n## Later\n\nNot now.", depth: 1, files: [] },
+        ],
+      };
+      stubFetch({ "GET /api/s": () => json(200, sections) });
+
+      render(<Reader />);
+
+      expect(await screen.findByText("Think big.")).toBeInTheDocument();
+      expect(screen.getByText("Small print.")).toBeInTheDocument();
+      expect(screen.queryByText("Opening words.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Not now.")).not.toBeInTheDocument();
+    });
+
+    it("keeps a link's escapes but the brackets when its note left the copy", () => {
+      const left = { ...bundle, notes: [{ ...bundle.notes[0], markdown: "See [a \\*b\\* \\[c\\]](#kn-7)." }, bundle.notes[1]] };
+      expect(copyMarkdown(left).split("\n")[2]).toBe("See a \\*b\\* [c].");
+    });
+
     it("copies the whole bundle as Markdown", () => {
       expect(copyMarkdown(bundle)).toBe(
         "# Questions on routing\n\nSee [Plan](#n1), Gone and ![Budget](#n2).\n\n---\n\n# Plan {#n1}\n\n## Big idea\n\nBack to [the start](#n0).\n\n---\n\n# Budget {#n2}\n\nSpend less. ![Plan](#n1)",

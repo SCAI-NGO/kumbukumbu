@@ -39,8 +39,8 @@ public static partial class FairCopies
     /// attachment: the attachment an embed's target names (by LinkResolver's rules), or null.
     /// mayCopy: whether that attachment goes with the copy (an image, not unpublishable, its bytes usable).
     /// ownOrigin: the server's own origin ("https://kumbu.example.org"), whose links count as vault links; null for none.
-    /// noteLink: the id within the copy of the note a link's target names (without its #subpath), or null: then the
-    /// link is plain text, as without it.
+    /// noteLink: the id within the copy of the note a link's target names (without its #subpath; an empty target, as in
+    /// <c>[[#Heading]]</c>, names the note itself), or null: then the link is plain text, as without it.
     public static FairCopy Make(
         VaultPath note, string content, Func<string, VaultPath?> attachment, Func<VaultPath, bool> mayCopy, string? ownOrigin = null, Func<string, int?>? noteLink = null)
     {
@@ -117,7 +117,8 @@ public static partial class FairCopies
         {
             var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
             if (to is null) return m.Value;
-            if (to.Length == 0) return Regex.Replace(m.Groups[1].Value, @"\\(.)", "$1");
+            // Only the brackets the copy escaped in the text: any other escape stays, so the text reads as it did.
+            if (to.Length == 0) return Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value);
             return $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({to})";
         }));
 
@@ -878,7 +879,7 @@ public static partial class FairCopies
         /// null when its note isn't in it.</summary>
         public string? NoteHref(string target, string subpath)
         {
-            if (noteLink is null || target.Trim().Length == 0 || noteLink(target) is not { } id) return null;
+            if (noteLink is null || (target.Trim().Length == 0 && subpath.Length == 0) || noteLink(target.Trim().Length == 0 ? "" : target) is not { } id) return null;
             return NoteLinkPrefix + id + (subpath.Length > 0 ? "/" + Uri.EscapeDataString(subpath) : "");
         }
 
@@ -951,7 +952,7 @@ public static partial class FairCopies
             var shown = alias.Length > 0 ? Inline(alias, flat: true)
                 : target.Length == 0 ? subpath.TrimStart('^')
                 : StripMd(target.TrimEnd('/').Split('/')[^1]);
-            if (copy && NoteHref(target, embed ? "" : subpath) is { } href) return ($"{(embed ? "!" : "")}[{Escape(shown)}]({href})", true);
+            if (copy && NoteHref(target, subpath) is { } href) return ($"{(embed ? "!" : "")}[{Escape(shown)}]({href})", true);
             return embed && target.Length > 0 ? Embed(target, "", shown, copy) : (shown, false);
         }
 

@@ -93,16 +93,63 @@ function NoteLinkTo({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
-/** `![x](#kn-3)`: note 3 shown in place, one level deep; inside it an embed of a note is a link to it. */
+const fence = /^ {0,3}(`{3,}|~{3,})/;
+const atx = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+// A heading's text as it reads, near enough: links by their text, emphasis and code marks gone.
+const headingText = (md: string) =>
+  md
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~=]/g, "")
+    .trim()
+    .toLowerCase();
+
+/**
+ * The part of a note an embed names (`![[Plan#Big idea]]`): its heading and what lies under it, to the next heading of
+ * the same or a higher level; for a block (`^b1`), the paragraph that ends with it. Code is no heading. Null when the
+ * note has no such part.
+ */
+export function sectionOf(markdown: string, subpath: string): string | null {
+  const lines = markdown.split("\n");
+  let open: string | null = null;
+  const outside = lines.map((line) => {
+    const f = fence.exec(line)?.[1];
+    if (open === null && f) open = f[0];
+    else if (open !== null && f?.[0] === open) {
+      open = null;
+      return false;
+    }
+    return open === null;
+  });
+  if (subpath.startsWith("^")) {
+    const id = subpath.slice(1);
+    const at = lines.findIndex((line, i) => outside[i] && line.trimEnd().endsWith(` ^${id}`));
+    if (at < 0) return null;
+    let [from, to] = [at, at];
+    while (from > 0 && outside[from - 1] && lines[from - 1].trim()) from--;
+    while (to + 1 < lines.length && outside[to + 1] && lines[to + 1].trim()) to++;
+    return lines.slice(from, to + 1).join("\n");
+  }
+  const wanted = subpath.trim().toLowerCase();
+  const level = (i: number) => (outside[i] ? (atx.exec(lines[i])?.[1].length ?? 0) : 0);
+  const at = lines.findIndex((line, i) => level(i) > 0 && headingText(atx.exec(line)![2]) === wanted);
+  if (at < 0) return null;
+  let end = at + 1;
+  while (end < lines.length && !(level(end) > 0 && level(end) <= level(at))) end++;
+  return lines.slice(at, end).join("\n");
+}
+
+/** `![x](#kn-3)`: note 3 shown in place, one level deep, or only the part of it the embed names (`#kn-3/Heading`);
+ * inside it an embed of a note is a link to it. */
 function EmbeddedNote({ src, alt }: { src: string; alt: string }) {
   const bundle = useContext(Bundle);
   const target = noteLink(src);
   const note = target && bundle?.notes.get(target.id);
   if (!bundle || !note) return <>{alt}</>;
-  if (bundle.embedded) return <NoteLinkTo href={src}>{alt || note.title}</NoteLinkTo>;
+  const part = target.heading ? sectionOf(note.markdown, target.heading) : note.markdown;
+  if (bundle.embedded || part === null) return <NoteLinkTo href={src}>{alt || note.title}</NoteLinkTo>;
   return (
     <Bundle.Provider value={{ ...bundle, embedded: true }}>
-      <NoteMarkdown note={note} />
+      <NoteMarkdown note={{ ...note, markdown: part }} />
     </Bundle.Provider>
   );
 }
@@ -181,7 +228,8 @@ export const copyMarkdown = (copy: ReaderCopy) => {
   const ids = new Set(copy.notes.map((n) => n.id));
   const relink = (markdown: string) =>
     markdown.replace(/(!?)\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:\/[^)\s]*)?\)/g, (_, bang: string, text: string, id: string) =>
-      ids.has(Number(id)) ? `${bang}[${text}](#n${id})` : text.replace(/\\(.)/g, "$1"),
+      // A note that left the copy: its text, with only the brackets unescaped that the copy escaped.
+      ids.has(Number(id)) ? `${bang}[${text}](#n${id})` : text.replace(/\\(.)/g, (escape, c: string) => (c === "[" || c === "]" ? c : escape)),
     );
   return copy.notes.map((n) => (n.id === 0 ? `# ${copy.title}\n\n${relink(n.markdown)}` : `\n\n---\n\n# ${n.title} {#n${n.id}}\n\n${relink(n.markdown)}`)).join("");
 };
