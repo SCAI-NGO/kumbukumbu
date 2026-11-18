@@ -88,6 +88,14 @@ public class CatEmbedsTests
     }
 
     [Fact]
+    public async Task A_section_embed_finds_its_heading_as_obsidian_links_it()
+    {
+        const string content = "# Plan\n\n![[Notes#C notes x]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Notes.md", "# Notes\n\n## C# notes | x\n\nsharp\n"));
+        Assert.Equal("\n" + Header + "\n[line 3: ![[Notes#C notes x]] → /Work/Pump/Notes.md#C notes x]\n## C# notes | x\n\nsharp", Appendix(result, content));
+    }
+
+    [Fact]
     public async Task An_attachment_embed_gets_its_description()
     {
         const string content = "# Plan\n\n![[shot.png]]\n";

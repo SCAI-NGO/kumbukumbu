@@ -77,23 +77,31 @@ public static partial class SectionAddress
 
     /// <summary>
     /// The headings an address matches: those whose chain ends with the address's segments. Exact text
-    /// first; if nothing matches exactly, ignoring case.
+    /// first; if nothing matches exactly, ignoring case; then as Obsidian writes a heading into a link
+    /// (<see cref="Linked"/>), ignoring case.
     /// </summary>
     public static IReadOnlyList<Heading> Resolve(IReadOnlyList<Heading> headings, IReadOnlyList<AddressSegment> segments)
     {
-        foreach (var comparison in new[] { StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase })
+        foreach (var (form, comparison) in new (Func<string, string>, StringComparison)[]
         {
-            var matches = headings.Where(h => Matches(h, segments, comparison)).ToList();
+            (t => t, StringComparison.Ordinal), (t => t, StringComparison.OrdinalIgnoreCase), (Linked, StringComparison.OrdinalIgnoreCase),
+        })
+        {
+            var matches = headings.Where(h => Matches(h, segments, form, comparison)).ToList();
             if (matches.Count > 0) return matches;
         }
 
         return [];
     }
 
+    /// <summary>A heading's text as Obsidian (and the web app's link completion) writes it after a link's '#':
+    /// without '# | ^ [ ]' and "%%", runs of whitespace as one space ("C# notes | x" is "C notes x").</summary>
+    private static string Linked(string text) => WhitespaceRegex().Replace(LinkUnsafeRegex().Replace(text, ""), " ").Trim();
+
     /// <summary>A note path with a section address, as it would be typed in sh.</summary>
     public static string Display(VaultPath path, Heading heading) => path.Value + heading.Address;
 
-    private static bool Matches(Heading heading, IReadOnlyList<AddressSegment> segments, StringComparison comparison)
+    private static bool Matches(Heading heading, IReadOnlyList<AddressSegment> segments, Func<string, string> form, StringComparison comparison)
     {
         var chain = heading.Chain().ToList();
         if (chain.Count < segments.Count) return false;
@@ -101,7 +109,7 @@ public static partial class SectionAddress
         {
             var segment = segments[segments.Count - 1 - i];
             var h = chain[i];
-            if (!string.Equals(segment.Text, h.Text, comparison)) return false;
+            if (!string.Equals(form(segment.Text), form(h.Text), comparison)) return false;
             if (segment.Index is { } index && index != Math.Max(h.Index, 1)) return false;
         }
 
@@ -110,4 +118,10 @@ public static partial class SectionAddress
 
     [GeneratedRegex(@"\[(\d+)\]$")]
     private static partial Regex IndexRegex();
+
+    [GeneratedRegex(@"%%|[#|^\[\]]")]
+    private static partial Regex LinkUnsafeRegex();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRegex();
 }

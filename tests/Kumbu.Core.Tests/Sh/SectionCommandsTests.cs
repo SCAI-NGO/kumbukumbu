@@ -28,7 +28,7 @@ public class SectionCommandsTests
 
         """;
 
-    private static readonly Shell Sh = TestShell.Of(("/W/plan.md", Plan), ("/W/flat.md", "no headings\n"), ("/W/My Note.md", "# Ä\nx\n"));
+    private static readonly Shell Sh = TestShell.Of(("/W/plan.md", Plan), ("/W/flat.md", "no headings\n"), ("/W/My Note.md", "# Ä\nx\n"), ("/W/c.md", "## C# notes | x\nsharp\n"));
 
     private static Task<ShellResult> Run(string line) => Sh.RunAsync(line, CancellationToken.None);
 
@@ -72,6 +72,7 @@ public class SectionCommandsTests
     [Theory]
     [InlineData("cat /W/plan.md#Plan#Notes[2]", "## Notes\nb")]
     [InlineData("cat \"/W/My Note.md#ä\"", "# Ä\nx")]
+    [InlineData("cat \"/W/c.md#C notes x\"", "## C# notes | x\nsharp")]
     [InlineData("cat /W/plan.md#Plan | head -n 1", "# Plan")]
     [InlineData("wc -l /W/plan.md#Goals", "3 /W/plan.md#Goals")]
     [InlineData("head -n 2 /W/plan.md#Goals", "## Goals\n- fast")]

@@ -20,6 +20,11 @@ public class SectionAddressTests
         # C# basics
         # Array[2]
         # Q\#A
+        # C# notes | x
+        # C basics
+        # Draft [v2] ^x 50%% off
+        # A|B
+        # A^B
         """;
 
     private static readonly IReadOnlyList<Heading> Headings = Outline.Parse(Lines.Split(Note));
@@ -50,6 +55,19 @@ public class SectionAddressTests
     [InlineData(@"Q\#A", @"#Q\#A")]
     [InlineData("Plan#Notes[1]", "#Plan#Notes")]
     public void ResolvesToOneHeading(string fragment, string address) => Assert.Equal([address], Resolve(fragment));
+
+    // Obsidian writes a heading into a link without '# | ^ [ ]' and '%%': a further pass matches that form.
+    [Theory]
+    [InlineData("C notes x", @"#C\# notes | x")]
+    [InlineData("c NOTES x", @"#C\# notes | x")]
+    [InlineData("Draft v2 x 50 off", "#Draft [v2] ^x 50%% off")]
+    [InlineData("QA", @"#Q\#A")]
+    [InlineData("C basics", "#C basics")]
+    [InlineData("c basics", "#C basics")]
+    public void ResolvesAHeadingAsObsidianLinksIt(string fragment, string address) => Assert.Equal([address], Resolve(fragment));
+
+    [Fact]
+    public void AmbiguousInTheLinkedForm() => Assert.Equal(["#A|B", "#A^B"], Resolve("AB"));
 
     [Fact]
     public void AmbiguousAddressesMatchSeveral() => Assert.Equal(
