@@ -118,6 +118,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "PUT /api/publications/{vault}/{**path}",
         "POST /api/skills/shared",
         "POST /api/skills/shared/{id}/update",
+        "PUT /api/account/embeddings-key",
     ];
 
     private const string Reading = "reading: the session reads anyway";
@@ -192,6 +193,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/publications"] = Reading,
         ["GET /api/vaults/{vault}/publications"] = Reading,
         ["GET /api/publications/{vault}/{**path}"] = Reading,
+        ["GET /api/publication-previews/{vault}/{**path}"] = Reading,
         ["POST /api/publications/{vault}/{**path}"] = "guarded inline: the password in the body, else the window (publish decision 9)",
         ["DELETE /api/publications/{vault}/{**path}"] = "withdrawing reduces what is out: never guarded",
         ["PUT /api/unpublishable/{vault}/{**path}"] = "a mark reduces what can go out: never guarded",
@@ -208,6 +210,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/skills/shared"] = Reading,
         ["DELETE /api/skills/shared/{id}"] = "withdrawing a skill's link reduces what is out: never guarded, as a note's",
         ["DELETE /api/account/skills-notice"] = "dismissing the notice of a renamed vault grants nothing",
+        ["GET /api/account/embeddings-key"] = "reading: only the key's last four characters, never the key (BYOK spec)",
+        ["DELETE /api/account/embeddings-key"] = "removing the key brings its vaults back to this server: it reduces what goes out",
         ["POST /api/account/discreet/pin"] = OwnPassword,
         ["POST /api/account/discreet/reveal"] = "the PIN is its check, limited and counted; it shows only vaults the session already opens",
         ["POST /api/account/discreet/hide"] = "hiding vaults grants nothing",

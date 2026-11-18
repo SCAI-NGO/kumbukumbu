@@ -20,15 +20,22 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Publishing;
 
 /// <summary>A new publication's link, shown once. Not logged: <see cref="ToString"/> leaves the link out.</summary>
-public sealed record PublishedNote(string Link, DateTime SnapshotAt, IReadOnlyList<string> Plain)
+/// <param name="Notes">The notes the copy holds, the start first; <paramref name="LeftOut"/>, the ones the walk left
+/// behind; <paramref name="Added"/> and <paramref name="Removed"/>, what an update changed in the set.</param>
+public sealed record PublishedNote(
+    string Link, DateTime SnapshotAt, IReadOnlyList<string> Plain,
+    IReadOnlyList<BundleNoteLine>? Notes = null, IReadOnlyList<BundleLeftOut>? LeftOut = null, IReadOnlyList<VaultPath>? Added = null, IReadOnlyList<VaultPath>? Removed = null)
 {
     public override string ToString() => $"PublishedNote {{ SnapshotAt = {SnapshotAt:O}, Plain = [{string.Join(", ", Plain)}] }}";
 }
 
 /// <summary>A published note as the caller may see it: for a member only <see cref="Note"/> (publish spec §3.10);
 /// <see cref="Link"/> only when asked for, and only for the owner; <see cref="ToString"/> leaves it out.</summary>
+/// <para>For the owner also <see cref="Notes"/>, how many notes the copy holds, and the <see cref="Depth"/> and
+/// <see cref="Without"/> an update walks with (Publish 2.0).</para>
 public sealed record PublicationState(
-    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null)
+    VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null,
+    int? Notes = null, int? Depth = null, IReadOnlyList<VaultPath>? Without = null)
 {
     public override string ToString() =>
         $"PublicationState {{ Note = {Note}, SnapshotAt = {SnapshotAt:O}, Older = {Older}, ChangedAt = {ChangedAt:O}, PublishedBy = {PublishedBy} }}";
@@ -52,7 +59,7 @@ public sealed record SkillPublicationState(string Id, VaultPath Folder, DateTime
 /// the vault's record and the owner's vault event together. Paths in and out are in the caller's view; the record
 /// holds them as the vault stores them. The code is never logged.
 /// </summary>
-internal sealed class Publications(VaultCatalog catalog, PublicationStore store, IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time)
+internal sealed partial class Publications(VaultCatalog catalog, PublicationStore store, IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time)
 {
     public const string PdfsNotYet = PublishOutcome.PdfsNotYet;
 
@@ -90,10 +97,17 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     internal static bool Covered(IReadOnlyList<string> marks, string path) =>
         marks.Any(m => path.StartsWith(m, StringComparison.Ordinal) && (path.Length == m.Length || path[m.Length] == '/'));
 
+    /// <summary>
+    /// Publishes <paramref name="note"/> with the notes it reaches to <paramref name="depth"/> links, without
+    /// <paramref name="without"/> (Publish 2.0). With <paramref name="expected"/> (the sorted paths a preview showed)
+    /// nothing goes out unless the walk takes exactly those notes: <see cref="BundleChangedException"/> then.
+    /// </summary>
     public async Task<PublishedNote> PublishAsync(
-        VaultAccess access, EncryptedNoteStore notes, VaultPath note, string ownerId, string by, WriterRef byRef, string baseUrl, CancellationToken ct)
+        VaultAccess access, EncryptedNoteStore notes, VaultPath note, string ownerId, string by, WriterRef byRef, string baseUrl, CancellationToken ct,
+        int depth = 0, IReadOnlyList<VaultPath>? without = null, IReadOnlyList<string>? expected = null)
     {
         Check(access, publishing: true);
+        CheckDepth(depth);
         var stored = access.ToVault(note);
         RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
@@ -106,29 +120,36 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             }
 
             RequireNotMarked(record, stored, note);
-            var made = await MakeAsync(access, notes, current, record, baseUrl, ct);
+            var walk = await CheckedWalkAsync(access, notes, record, note, depth, without ?? [], expected, ct);
+            var made = await MakeAnyAsync(access, notes, current, record, walk, baseUrl, ct);
             var (code, key, at) = (ShareCode.New(), VaultCrypto.NewKey(), Now);
-            var entry = new PublicationEntry(NewId(), stored.Value, code, key, at, current.Version, made.Files, by, Ref(byRef));
+            var entry = new PublicationEntry(
+                NewId(), stored.Value, code, key, at, current.Version, made.Made.Files, by, Ref(byRef),
+                Depth: depth == 0 ? null : depth, Without: StoredWithout(access, without), Members: made.Members);
+            var log = LogEntry(PublishingKinds.Published, stored, at, by, byRef, null) with { Notes = made.Members is null ? null : walk.Notes.Count };
             var next = record with
             {
                 Publications = [.. record.Publications, entry],
-                Log = Appended(record.Log, LogEntry(PublishingKinds.Published, stored, at, by, byRef, null)),
+                Log = Appended(record.Log, log),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Bytes, ct);
+                await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
-            if (written) return new PublishedNote(ShareCode.Link(baseUrl, code), at, made.Plain);
+            if (written) return new PublishedNote(ShareCode.Link(baseUrl, code), at, made.Made.Plain, walk.Notes, walk.LeftOut, [], []);
         }
     }
 
-    /// <summary>A new copy under the same code, lookup and key (decision 15).</summary>
+    /// <summary>A new copy under the same code, lookup and key (decision 15): the walk again, to the entry's depth and
+    /// without its notes unless <paramref name="depth"/> or <paramref name="without"/> say otherwise.</summary>
     public async Task<PublishedNote> UpdateAsync(
-        VaultAccess access, EncryptedNoteStore notes, VaultPath note, string by, WriterRef byRef, string baseUrl, CancellationToken ct)
+        VaultAccess access, EncryptedNoteStore notes, VaultPath note, string by, WriterRef byRef, string baseUrl, CancellationToken ct,
+        int? depth = null, IReadOnlyList<VaultPath>? without = null, IReadOnlyList<string>? expected = null)
     {
         Check(access, publishing: true);
+        if (depth is { } d) CheckDepth(d);
         var stored = access.ToVault(note);
         RequireNotInSkillPlace(access.Vault, stored, note);
         for (var attempt = 1; ; attempt++)
@@ -137,21 +158,37 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             var (doc, record) = await store.ReadAsync(null, access.Vault, ct);
             var entry = Find(record, stored) ?? throw NotPublished(note);
             RequireNotMarked(record, stored, note);
-            var made = await MakeAsync(access, notes, current, record, baseUrl, ct);
+            var newDepth = depth ?? entry.Depth ?? 0;
+            var newWithout = without ?? [.. (entry.Without ?? []).Select(w => access.ToCaller(Parse(w)))];
+            var walk = await CheckedWalkAsync(access, notes, record, note, newDepth, newWithout, expected, ct);
+            var made = await MakeAnyAsync(access, notes, current, record, walk, baseUrl, ct);
             var at = Now;
-            var updated = entry with { SnapshotAt = at, NoteVersion = current.Version, Files = made.Files, By = by, ByRef = Ref(byRef) };
+            var before = new[] { entry.Note }.Concat((entry.Members ?? []).Select(m => m.Note)).ToHashSet(StringComparer.Ordinal);
+            var after = walk.Notes.Select(n => access.ToVault(n.Path).Value).ToHashSet(StringComparer.Ordinal);
+            VaultPath[] added = [.. after.Except(before).Order(StringComparer.Ordinal).Select(p => access.ToCaller(Parse(p)))];
+            VaultPath[] removed = [.. before.Except(after).Order(StringComparer.Ordinal).Select(p => access.ToCaller(Parse(p)))];
+            var updated = entry with
+            {
+                SnapshotAt = at, NoteVersion = current.Version, Files = made.Made.Files, By = by, ByRef = Ref(byRef),
+                Depth = newDepth == 0 ? null : newDepth, Without = StoredWithout(access, newWithout), Members = made.Members,
+            };
+            var bundled = made.Members is not null || entry.Members is not null;
+            var log = LogEntry(PublishingKinds.Updated, stored, at, by, byRef, null) with
+            {
+                Notes = bundled ? walk.Notes.Count : null, Added = bundled ? added.Length : null, Removed = bundled ? removed.Length : null,
+            };
             var next = record with
             {
                 Publications = [.. record.Publications.Select(p => p.Id == entry.Id ? updated : p)],
-                Log = Appended(record.Log, LogEntry(PublishingKinds.Updated, stored, at, by, byRef, null)),
+                Log = Appended(record.Log, log),
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Bytes, ct);
+                await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
-            if (written) return new PublishedNote(ShareCode.Link(baseUrl, entry.Code), at, made.Plain);
+            if (written) return new PublishedNote(ShareCode.Link(baseUrl, entry.Code), at, made.Made.Plain, walk.Notes, walk.LeftOut, added, removed);
         }
     }
 
@@ -267,6 +304,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                 Withdrawn = WithdrawnWith(record.Withdrawn, withdrawn.Where(p => p.Kind == PublicationKinds.Skill).Select(p => p.Note)),
                 Log = Appended(record.Log, [.. logged]),
             };
+            // A note inside a bundle leaves its copy at once, the bundle stays (Publish 2.0 decision 3).
+            var pruning = next.Publications.Where(p => p.Members?.Any(m => Covered(marks, m.Note)) == true).ToList();
             var copies = new List<ObjectId>();
             var written = await WriteAsync(access, attempt, async session =>
             {
@@ -277,7 +316,15 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                     await EventAsync(session, access, log, ct);
                 }
 
-                await store.WriteAsync(session, access.Vault, doc, next, ct);
+                var final = next;
+                foreach (var entry in pruning)
+                {
+                    var leaving = entry.Members!.Where(m => Covered(marks, m.Note)).Select(m => m.Note).ToHashSet(StringComparer.Ordinal);
+                    (final, var log) = await PrunedRecordAsync(session, final, entry, leaving, WithdrawalReasons.Unpublishable, at, by, byRef, ct);
+                    await EventAsync(session, access, log, ct);
+                }
+
+                await store.WriteAsync(session, access.Vault, doc, final, ct);
             }, ct);
             if (!written) continue;
             await store.DeleteAiLinksAsync(copies, CancellationToken.None);
@@ -326,6 +373,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
         var kept = new List<PublicationEntry>();
         var withdrawn = new List<(PublicationEntry Entry, string Reason)>();
+        var pruning = new List<(string Id, HashSet<string> Leaving, string Reason)>();
         foreach (var entry in record.Publications)
         {
             var files = entry.Files.Select(f => f with { Path = moved.GetValueOrDefault(f.Path, f.Path) }).ToList();
@@ -342,7 +390,30 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             // A skill is shared as a whole, by link; a note that lands in a skill's place is no longer a note publication.
             else if (note != entry.Note && InSkillPlace(access.Vault, Parse(note))) withdrawn.Add((entry, WithdrawalReasons.Removed));
             else if (Newly(entry.Note, note) || entry.Files.Zip(files).Any(f => Newly(f.First.Path, f.Second.Path))) withdrawn.Add((entry, WithdrawalReasons.Unpublishable));
-            else kept.Add(note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files });
+            else
+            {
+                var stays = note == entry.Note && files.SequenceEqual(entry.Files) ? entry : entry with { Note = note, Files = files };
+                // A bundle's other notes follow their moves; one removed, moved under a mark or into a skill's place
+                // leaves the copy at once, with whatever it alone reached (Publish 2.0 decision 3).
+                if (entry.Members is { Count: > 0 } members)
+                {
+                    var leaving = new HashSet<string>(StringComparer.Ordinal);
+                    var removed = false;
+                    List<BundleMember> after = [];
+                    foreach (var member in members)
+                    {
+                        var to = moved.GetValueOrDefault(member.Note, member.Note);
+                        if (trashed.Contains(member.Note)) (removed, _) = (true, leaving.Add(to));
+                        else if ((to != member.Note && InSkillPlace(access.Vault, Parse(to))) || Newly(member.Note, to)) leaving.Add(to);
+                        after.Add(to == member.Note ? member : member with { Note = to });
+                    }
+
+                    if (!after.SequenceEqual(members)) stays = stays with { Members = after };
+                    if (leaving.Count > 0) pruning.Add((stays.Id, leaving, removed ? WithdrawalReasons.Removed : WithdrawalReasons.Unpublishable));
+                }
+
+                kept.Add(stays);
+            }
         }
 
         // A skill's link goes whoever changes its folder (Decision 31); only a note's publication holds the write back.
@@ -370,7 +441,7 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
                 [.. record.Withdrawn.Select(Stays).OfType<string>()],
                 withdrawn.Where(w => w.Entry.Kind == PublicationKinds.Skill).Select(w => Stays(w.Entry.Note) ?? w.Entry.Note)),
         };
-        if (withdrawn.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)
+        if (withdrawn.Count == 0 && pruning.Count == 0 && marks.SequenceEqual(record.Unpublishable) && kept.SequenceEqual(record.Publications)
             && next.SkillCodes.SequenceEqual(record.SkillCodes) && next.Origins.SequenceEqual(record.Origins)
             && next.Updates.SequenceEqual(record.Updates) && next.Skipped.SequenceEqual(record.Skipped) && next.Withdrawn.SequenceEqual(record.Withdrawn))
         {
@@ -386,7 +457,14 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
             await EventAsync(session, access, log, ct);
         }
 
-        await store.WriteAsync(session, access.Vault, doc, next with { Log = Appended(record.Log, [.. logged]) }, ct);
+        var final = next with { Log = Appended(record.Log, [.. logged]) };
+        foreach (var (id, leaving, reason) in pruning)
+        {
+            (final, var log) = await PrunedRecordAsync(session, final, final.Publications.Single(p => p.Id == id), leaving, reason, at, by, byRef, ct);
+            await EventAsync(session, access, log, ct);
+        }
+
+        await store.WriteAsync(session, access.Vault, doc, final, ct);
         return copies;
     }
 
@@ -494,6 +572,40 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         return states;
     }
 
+    /// <summary>Every note published inside a bundle at or below <paramref name="under"/> but its start, with the start
+    /// for the owner (Publish 2.0 decision 7). A member learns as much as of a note published alone: that it is
+    /// published, once, with no start, as the start would tell her which of her notes link to it.</summary>
+    public async Task<IReadOnlyList<(VaultPath Note, VaultPath? Start)>> BundledAsync(VaultAccess access, VaultPath under, CancellationToken ct)
+    {
+        var scope = under.IsRoot ? null : access.ToVault(under).Value;
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        var owner = IsOwner(access);
+        return [.. record.Publications.Where(p => p.Kind is null)
+            .SelectMany(p => (p.Members ?? []).Where(m => scope is null || Covered([scope], m.Note))
+                .Select(m => (Note: access.ToCaller(Parse(m.Note)), Start: owner ? access.ToCaller(Parse(p.Note)) : (VaultPath?)null)))
+            .Distinct()
+            .OrderBy(b => b.Note.Value, StringComparer.Ordinal).ThenBy(b => b.Start?.Value, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Refuses a note of <paramref name="without"/> that the walk from <paramref name="note"/> to <paramref name="depth"/>,
+    /// with nothing left out, doesn't take, and the start itself: the publisher leaves out only notes the list showed her
+    /// (over HTTP; <c>sh publish</c> keeps its own rule).
+    /// </summary>
+    internal async Task RequireInWalkAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, int depth, IReadOnlyList<VaultPath> without, CancellationToken ct)
+    {
+        if (without.Count == 0) return;
+        Check(access, publishing: true);
+        CheckDepth(depth);
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        var walk = await WalkAsync(access, notes, record, note, depth, [], ct);
+        var taken = walk.Notes.Skip(1).Select(n => n.Path.Value).ToHashSet(StringComparer.Ordinal);
+        if (without.FirstOrDefault(w => !taken.Contains(w.Value)) is { } stray)
+        {
+            throw new PublishRefusedException($"{stray} is not among the notes {note} takes at depth {depth}; leave out only notes the list shows", ShellErrorKind.Invalid);
+        }
+    }
+
     public async Task<PublicationState?> StateAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, string? linkBase, CancellationToken ct) =>
         Find((await store.ReadAsync(null, access.Vault, ct)).Record, access.ToVault(note)) is { } entry ? await StateOfAsync(access, notes, entry, linkBase, ct) : null;
 
@@ -510,6 +622,14 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         {
             older = true;
             if (current is not null) changed.Add(current.LastWriteAt);
+        }
+
+        foreach (var member in entry.Members ?? [])
+        {
+            var now = await notes.GetAsync(access.ToCaller(Parse(member.Note)), ct);
+            if (now?.Version == member.Version) continue;
+            older = true;
+            if (now is not null) changed.Add(now.LastWriteAt);
         }
 
         foreach (var file in entry.Files)
@@ -530,7 +650,8 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
 
         return new PublicationState(
             shown, entry.SnapshotAt, older, older && changed.Count > 0 ? changed.Max() : null, entry.By,
-            linkBase is null ? null : ShareCode.Link(linkBase, entry.Code));
+            linkBase is null ? null : ShareCode.Link(linkBase, entry.Code),
+            1 + (entry.Members?.Count ?? 0), entry.Depth ?? 0, [.. (entry.Without ?? []).Select(w => access.ToCaller(Parse(w)))]);
     }
 
     /// <summary>

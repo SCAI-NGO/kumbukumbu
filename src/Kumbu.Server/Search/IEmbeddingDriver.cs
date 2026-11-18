@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Search;
+using Kumbu.Server.Vaults;
 
 namespace Kumbu.Server.Search;
 
@@ -68,22 +69,47 @@ public sealed class EmbeddingProviders
 
     private readonly Dictionary<string, EmbeddingProvider> _byName;
 
-    public EmbeddingProviders(IEnumerable<EmbeddingProvider> providers)
+    public EmbeddingProviders(IEnumerable<EmbeddingProvider> providers, ByokDrivers? byok = null)
     {
+        Byok = byok;
         All = [.. providers];
         _byName = All.ToDictionary(p => p.Name, StringComparer.Ordinal);
         if (!_byName.ContainsKey(Internal)) throw new ArgumentException("The internal provider is missing", nameof(providers));
     }
 
     /// <summary>The internal driver alone, or with external ones (tests).</summary>
-    public static EmbeddingProviders Of(IEmbeddingDriver internalDriver, params EmbeddingProvider[] external) =>
-        new([new EmbeddingProvider(Internal, "On this server", null, internalDriver), .. external]);
+    public static EmbeddingProviders Of(IEmbeddingDriver internalDriver, params EmbeddingProvider[] external) => Of(internalDriver, null, external);
+
+    /// <summary>As above, with the drivers of people's own keys when the instance offers BYOK.</summary>
+    public static EmbeddingProviders Of(IEmbeddingDriver internalDriver, ByokDrivers? byok, params EmbeddingProvider[] external) =>
+        new([new EmbeddingProvider(Internal, "On this server", null, internalDriver), .. external], byok);
 
     /// <summary>The internal driver and a driver for each configured provider; the options were validated at startup.</summary>
-    public static EmbeddingProviders FromOptions(IEmbeddingDriver internalDriver, KumbuOptions options, IHttpClientFactory http, ILoggerFactory logs) =>
-        Of(internalDriver, [.. options.Embeddings.Providers
+    public static EmbeddingProviders FromOptions(IEmbeddingDriver internalDriver, KumbuOptions options, IHttpClientFactory http, ILoggerFactory logs, ByokDrivers? byok = null) =>
+        Of(internalDriver, options.Embeddings.ByokOffered ? byok : null, [.. options.Embeddings.Providers
             .OrderBy(p => p.Key, StringComparer.Ordinal)
             .Select(p => new EmbeddingProvider(p.Key, p.Value.Label ?? p.Key, p.Value.Description, EmbeddingDrivers.Create(p.Key, p.Value, http, logs)))]);
+
+    /// <summary>The drivers of people's own keys; null when the instance doesn't offer BYOK.</summary>
+    public ByokDrivers? Byok { get; }
+
+    /// <summary>
+    /// The provider that embeds <paramref name="vault"/> now: the one its meta names, or, for a vault on
+    /// <see cref="Search.Byok.Provider"/>, one named by its route (<see cref="ByokDrivers.Route"/>) with the driver of the
+    /// owner's key; the internal one for a vault known to be discreet, whose text stays on this server whatever its meta
+    /// says. Null for a provider that isn't configured (any more), or a BYOK vault the instance can't embed.
+    /// </summary>
+    public EmbeddingProvider? Resolve(UnlockedVault vault)
+    {
+        if (vault.EmbeddingProvider != Search.Byok.Provider) return Get(vault.EmbeddingProvider);
+        if (vault.Discreet) return InternalProvider;
+        if (Byok is not { } byok || vault.EmbeddingKey is not { } key) return null;
+        return new EmbeddingProvider(ByokDrivers.Route(key), Search.Byok.Preset.Label!, Search.Byok.Preset.Description, byok.For(key));
+    }
+
+    /// <summary>What the index queues and the search groups <paramref name="vault"/> by: one queue and one query per
+    /// provider, and per key for BYOK.</summary>
+    public string RouteOf(UnlockedVault vault) => Resolve(vault)?.Name ?? vault.EmbeddingProvider;
 
     /// <summary>Internal first, then the external ones by name.</summary>
     public IReadOnlyList<EmbeddingProvider> All { get; }

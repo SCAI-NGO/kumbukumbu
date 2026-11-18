@@ -160,6 +160,7 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         }
 
         if (name == EmbeddingProviders.Internal) yield return $"{key}: '{EmbeddingProviders.Internal}' is the internal model's name (Kumbu:Search:Model)";
+        if (name == Byok.Provider) yield return $"{key}: '{Byok.Provider}' is the name of the provider for people's own keys (Kumbu:Embeddings:Byok)";
 
         if (provider.Driver == EmbeddingDrivers.Onnx)
         {

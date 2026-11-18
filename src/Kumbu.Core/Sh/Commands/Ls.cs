@@ -9,14 +9,14 @@ public sealed class Ls(INoteReader notes) : ICommand
 {
     public string Name => "ls";
 
-    private static readonly Option[] Spec = [new(null, "archive")];
+    private static readonly Option[] Spec = [new('l', "long"), new('a', "archive")];
 
-    public string Usage => "ls [--archive] [path]";
+    public string Usage => "ls [-l] [-a|--archive] [path]";
 
     public string Summary => "list a directory; no path lists the vaults";
 
     public string Help => """
-        ls [--archive] [path]
+        ls [-l] [-a|--archive] [path]
           List a directory. Directories end with '/'. Without a path, list the vaults; a vault shared
           with you shows its owner and what you may do in it: garten/ (shared by "Alice", read).
           A note's path lists just that path. An attachment (an image or a PDF) is listed with its
@@ -25,16 +25,34 @@ public sealed class Ls(INoteReader notes) : ICommand
           _archive/ is the vault's archive (see 'help archive'); hiding it is about attention, not
           access: whoever may read the vault may read it.
 
-          --archive   list the vault's _archive/ too
+          -l, --long      add what each entry weighs and when it last changed (UTC, as 'history' shows it): a note its
+                          size, a folder the newest change below it, an attachment its summary; columns aligned
+          -a, --archive   list the vault's _archive/ too; -la and -al combine the two flags
 
           ls
           ls /Demo/projects
+          ls -l /Demo
           ls /Demo | wc -l
         """;
 
     public bool ReadsInput => false;
 
     private static string LevelText(AccessLevel level) => level.ToString().ToLowerInvariant();
+
+    private static string TimeText(DateTime? at) => at is { } t ? "  " + History.Time(t) : "";
+
+    /// <summary>The -l lines: name, size or summary, time, each column as wide as its widest entry.</summary>
+    private static List<string> Columns(List<string> keys, Dictionary<string, (string Plain, string Info, DateTime? At)> entries)
+    {
+        var nameWidth = keys.Max(k => k.Length);
+        var infoWidth = keys.Max(k => entries[k].Info.Length);
+        return [.. keys.Select(k =>
+        {
+            var (_, info, at) = entries[k];
+            var line = k.PadRight(nameWidth) + (infoWidth > 0 ? "  " + info.PadRight(infoWidth) : "") + TimeText(at);
+            return line.TrimEnd();
+        })];
+    }
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
@@ -83,10 +101,17 @@ public sealed class Ls(INoteReader notes) : ICommand
 
         if (below.Count == 0 && files.Count == 0)
         {
-            if (await notes.ReadAsync(dir, ct) is not null) return ShellResult.Ok(dir.Value);
+            if (await notes.ReadAsync(dir, ct) is not null)
+            {
+                if (!options.Has("long")) return ShellResult.Ok(dir.Value);
+                var own = (await notes.ListNoteStampsAsync(dir, ct)).Single(n => n.Path == dir);
+                return ShellResult.Ok($"{dir.Value}  {AttachmentText.Size(own.Size)}{TimeText(own.At)}");
+            }
+
             if (await StoreAttachments.GetAsync(notes, dir, ct) is { } attachment)
             {
-                return ShellResult.Ok($"{dir.Value}  {AttachmentText.Summary(attachment.Current)}");
+                var summary = $"{dir.Value}  {AttachmentText.Summary(attachment.Current)}";
+                return ShellResult.Ok(options.Has("long") ? summary + TimeText(attachment.LastWriteAt) : summary);
             }
 
             return ShellResult.Error($"ls: cannot access '{dir.Value}': No such file or directory");
@@ -97,26 +122,32 @@ public sealed class Ls(INoteReader notes) : ICommand
         below = archive ? below : below.Where(n => !ArchiveFolder.Contains(n)).ToList();
         files = archive ? files : files.Where(f => !ArchiveFolder.Contains(f.Path)).ToList();
 
-        // Sorted by name; an attachment's line adds what it is after its name.
-        var entries = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Sorted by name; an attachment's line adds what it is after its name. -l adds each entry's size or summary
+        // and time, a folder's time being the newest below it.
+        var entries = new Dictionary<string, (string Plain, string Info, DateTime? At)>(StringComparer.Ordinal);
         var depth = dir.Segments.Count;
-        foreach (var note in below)
+        var detailed = options.Has("long");
+        var stamps = detailed ? (await notes.ListNoteStampsAsync(dir, ct)).ToDictionary(n => n.Path) : [];
+        void Add(VaultPath path, string plain, string info, DateTime? at)
         {
-            var name = note.Segments[depth];
-            var entry = note.Segments.Count > depth + 1 ? name + "/" : name;
-            entries[entry] = entry;
+            var name = path.Segments[depth];
+            var folder = path.Segments.Count > depth + 1;
+            var key = folder ? name + "/" : name;
+            var newest = entries.TryGetValue(key, out var known) && known.At is { } seen && (at is not { } now || seen > now) ? seen : at;
+            entries[key] = folder ? (key, "", newest) : (plain, info, at);
         }
 
-        foreach (var file in files)
+        foreach (var note in below)
         {
-            var name = file.Path.Segments[depth];
-            if (file.Path.Segments.Count > depth + 1) entries[name + "/"] = name + "/";
-            else entries[name] = $"{name}  {AttachmentText.Summary(file.Current)}";
+            stamps.TryGetValue(note, out var stamp);
+            Add(note, note.Segments[depth], stamp is null ? "" : AttachmentText.Size(stamp.Size), stamp?.At);
         }
+
+        foreach (var file in files) Add(file.Path, $"{file.Path.Segments[depth]}  {AttachmentText.Summary(file.Current)}", AttachmentText.Summary(file.Current), file.LastWriteAt);
 
         var keys = entries.Keys.ToList();
         keys.Sort(TextOrder.Default);
-        var sorted = keys.Select(k => entries[k]).ToList();
+        var sorted = detailed ? Columns(keys, entries) : keys.Select(k => entries[k].Plain).ToList();
         if (damaged > 0) sorted.Add(Damage.Summary(damaged));
         return ShellResult.Ok(string.Join('\n', sorted));
     }

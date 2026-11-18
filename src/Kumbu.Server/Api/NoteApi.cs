@@ -73,13 +73,16 @@ public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps, in
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
-/// switched off, or failing). <c>default</c>: the provider of every vault whose owner never chose one.</summary>
-public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason, bool Default);
+/// switched off, or failing). <c>default</c>: the provider of every vault whose owner never chose one. <c>needsKey</c>:
+/// the provider for the person's own TensorX key (<c>tensorx-byok</c>), while she has saved none.</summary>
+public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason, bool Default, bool NeedsKey);
 
 /// <summary><c>provider</c>: the name of one of <c>GET /api/embeddings</c>, <c>internal</c> for the model on this server.</summary>
 public sealed record SetEmbeddingsRequest(string Provider);
 
-public sealed record CreateVaultRequest(string Name);
+/// <summary><c>provider</c>: as for <c>PUT /api/vaults/{vault}/embeddings</c>; missing, TensorX with her own key when she
+/// saved one, else this server's default.</summary>
+public sealed record CreateVaultRequest(string Name, string? Provider = null);
 
 /// <summary>The name the owner sees her vault under from now on; the vault's stored paths keep the name it was made with.</summary>
 public sealed record RenameVaultRequest(string Name);
@@ -273,11 +276,25 @@ public static class NoteApi
         return TypedResults.Ok(views.ToArray());
     }
 
-    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index, VaultCatalog catalog) =>
-        TypedResults.Ok(index.Providers.All
+    private static async Task<Ok<EmbeddingProviderView[]>> ListEmbeddingProviders(
+        SearchIndex index, VaultCatalog catalog, RequestCaller caller, EmbeddingsKeys keys, CancellationToken ct)
+    {
+        var list = index.Providers.All
             .Select(p => new EmbeddingProviderView(
-                p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason, p.Name == catalog.DefaultEmbeddingProvider))
-            .ToArray());
+                p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason, p.Name == catalog.DefaultEmbeddingProvider, false))
+            .ToList();
+        if (index.Providers.Byok is { } byok)
+        {
+            // Her own key: offered to a person signed in; an agent's key doesn't bring the user key to open it with.
+            var key = caller.User is { } user && caller.UserKey is { } userKey ? (await keys.GetAsync(user.Id, userKey, ct))?.Key : null;
+            var driver = key is null ? null : byok.For(key);
+            list.Add(new EmbeddingProviderView(
+                Byok.Provider, Byok.Preset.Label!, Byok.Preset.Description, true, driver?.State == SemanticState.Ready,
+                key is null ? "save your TensorX key in Settings, Vaults first" : driver!.Reason, false, key is null));
+        }
+
+        return TypedResults.Ok(list.ToArray());
+    }
 
     /// <summary>
     /// The owner points a vault at another embedding provider (her sessions only; a member's session answers 404). The
@@ -286,7 +303,7 @@ public static class NoteApi
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
         string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller,
-        MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
+        MongoDB.Driver.IMongoDatabase db, EmbeddingsKeys keys, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
@@ -295,15 +312,17 @@ public static class NoteApi
         // other owner-only endpoints.
         if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         var unlocked = access.Vault;
-        if (index.Providers.Get(body.Provider) is null)
+        // BYOK spec, "Decisions": never for a vault she keeps discreet.
+        if (body.Provider == Byok.Provider && (caller.Session?.IsDiscreet(access.Id) == true || unlocked.Discreet))
         {
-            throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
+            throw ApiErrors.BadRequest("A discreet vault's text stays on this server: it can't use TensorX.");
         }
 
-        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider)
+        var key = await ChosenKeyAsync(body.Provider, caller, index, keys, ct);
+        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider || unlocked.EmbeddingKey != key?.Key || unlocked.EmbeddingKeyId != key?.Id)
         {
             var changed = !unlocked.Pending && unlocked.EmbeddingProvider != body.Provider;
-            await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
+            await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, key?.Key, key?.Id, ct);
             index.CatchUp(unlocked);
             // The members' event (collab design §8.5); the name of the provider stays in the sealed meta.
             if (changed && await catalog.IsSharedAsync(null, unlocked.Id, ct))
@@ -391,11 +410,39 @@ public static class NoteApi
             caller.Session?.IsDiscreet(access.Id) ?? false);
     }
 
-    private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
+    /// <summary>
+    /// The key for <paramref name="provider"/>: her own, with its id, for <see cref="Byok.Provider"/> where it is offered
+    /// (400 without one saved), null for a provider of this server; 400 for any other name.
+    /// </summary>
+    private static async Task<SavedKey?> ChosenKeyAsync(string provider, RequestCaller caller, SearchIndex index, EmbeddingsKeys keys, CancellationToken ct)
+    {
+        if (provider == Byok.Provider && index.Providers.Byok is not null)
+        {
+            return await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) ?? throw ApiErrors.BadRequest("Save your TensorX key in Settings, Vaults first.");
+        }
+
+        if (index.Providers.Get(provider) is null)
+        {
+            throw ApiErrors.BadRequest($"This server has no embedding provider '{provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
+        }
+
+        return null;
+    }
+
+    private static async Task<Created<VaultView>> CreateVaultAsync(
+        CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, SearchIndex index, EmbeddingsKeys keys, CancellationToken ct)
     {
         var name = VaultNames.Check(body.Name);
-        UnlockedVault created;
+        // The provider before the vault, so that one refused leaves no vault. BYOK spec, "Decisions": unless she asks
+        // for another, with her own key saved a new vault starts on TensorX, whose embeddings rank better.
+        var provider = body.Provider;
+        var key = provider is null ? null : await ChosenKeyAsync(provider, caller, index, keys, ct);
+        if (provider is null && index.Providers.Byok is not null && await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) is { } saved)
+        {
+            (provider, key) = (Byok.Provider, saved);
+        }
 
+        UnlockedVault created;
         try
         {
             created = await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
@@ -406,7 +453,13 @@ public static class NoteApi
             throw;
         }
 
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(created.Id, name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
+        if (provider is not null && (provider != created.EmbeddingProvider || key is not null))
+        {
+            await catalog.SetEmbeddingProviderAsync(created, provider, key?.Key, key?.Id, ct);
+            index.CatchUp(created);
+        }
+
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(created.Id, name, 0, created.EmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>

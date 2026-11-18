@@ -348,6 +348,23 @@ describe("the shell", () => {
     expect(drawer()).toBeInTheDocument();
   });
 
+  it("offers the person's own TensorX key only once it is saved", async () => {
+    const byok = { name: "tensorx-byok", label: "TensorX (your own key)", description: "As TensorX states: EU (Ireland), zero data retention", external: true, available: false, reason: "save your TensorX key in Settings, Vaults first", default: false, needsKey: true };
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal" }]),
+      "GET /api/embeddings": () => json(200, [internalProvider, byok]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+
+    const radio = await within(dialog).findByRole("radio", { name: /TensorX \(your own key\)/ });
+    expect(radio).toBeDisabled();
+    expect(dialog).toHaveTextContent("Save your TensorX key in Settings, Vaults first.");
+  });
+
   it("marks the provider that is the server's default", async () => {
     signedInApi({
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "tensorx" }]),
@@ -597,6 +614,36 @@ describe("the shell", () => {
     expect(body).toEqual({ name: "Ideas" });
     expect(useEditor.getState().activeVault).toBe("Ideas");
     expect(within(drawer()).getByRole("button", { name: "Switch vault: Ideas" })).toBeInTheDocument();
+  });
+
+  it("says a new vault goes to TensorX with the person's own key, and keeps it on this server when unticked", async () => {
+    let vaults: { name: string; notes: number; embeddings?: string }[] = [];
+    const created: unknown[] = [];
+    signedInApi({
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/account/embeddings-key": () => json(200, { offered: true, keySaved: true, last4: "abcd", refusedAt: null }),
+      "POST /api/vaults": async (r) => {
+        created.push(await r.json());
+        vaults = [{ name: "Ideas", notes: 0, embeddings: "internal" }];
+        return json(201, vaults[0]);
+      },
+      "PUT /api/vaults/Ideas/embeddings": () => {
+        throw new Error("the provider goes with the create, in one request");
+      },
+      "GET /api/vaults/Ideas/tree": () => json(200, { damaged: 0, root: { name: "Ideas", path: "/Ideas", folders: [], notes: [] } }),
+    });
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Create your first vault" }));
+    const dialog = screen.getByRole("dialog", { name: "New vault" });
+    const box = await within(dialog).findByRole("checkbox", { name: "Search by meaning with TensorX (your own key)" });
+    expect(box).toBeChecked();
+    expect(dialog).toHaveTextContent("Its text and the searches that include it go to TensorX.");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Ideas");
+    await userEvent.click(box);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create vault" }));
+
+    expect(await screen.findByRole("dialog", { name: "File tree" })).toBeInTheDocument();
+    expect(created).toEqual([{ name: "Ideas", provider: "internal" }]);
   });
 
   it("shows the server's sentence when a vault can't be created", async () => {
