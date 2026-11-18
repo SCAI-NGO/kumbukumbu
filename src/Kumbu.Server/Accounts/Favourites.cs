@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Buffers.Text;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -37,67 +38,74 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
     public const int Cap = 200;
 
     private const string SealedLabel = "kumbu/v1/favourites";
-    private const int Attempts = 3;
 
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
     /// <summary>For tests: runs between reading the favourites and writing them.</summary>
     internal Func<Task>? BeforeWrite { get; set; }
 
-    /// <summary>All her favourites, in the order added; none for a user who is gone, and none bound to a vault when they don't open.</summary>
-    public async Task<IReadOnlyList<StoredFavourite>> ReadAsync(string userId, byte[] userKey, CancellationToken ct)
+    /// <summary>All her favourites, in the order added, and their <see cref="VersionOf">version</see>; none for a user who is
+    /// gone, and none bound to a vault when they don't open.</summary>
+    public async Task<(IReadOnlyList<StoredFavourite> Entries, string Version)> ReadAsync(string userId, byte[] userKey, CancellationToken ct)
     {
         var user = await Users.Find(u => u.Id == userId).Project(u => new { u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
-        return user is null ? [] : Ordered(OpenCommands(userId, user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed));
+        return user is null
+            ? ([], VersionOf(null, null))
+            : (Ordered(OpenCommands(userId, user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed)), VersionOf(user.Favourites, user.FavouritesSealed));
     }
 
     /// <summary>
     /// Puts <paramref name="visible"/> in place of what a session that lists <paramref name="listedVaultIds"/> sees: her
     /// commands and the entries of those vaults. The entries of every other vault (a hidden discreet vault's, or one that is
     /// gone) stay as they were: nothing is dropped as stale. An entry she already had keeps its <c>Added</c>; a new one is
-    /// added now. At most <see cref="Cap"/> in all, else <see cref="FavouritesFullException"/>. As
-    /// <see cref="CalendarSettings.SetViewAsync"/>: conditional on what was read (tried again up to three times, then
-    /// <see cref="FavouritesConflictException"/>) and on <paramref name="userKey"/> being the one in force
-    /// (<see cref="CredentialsChangedException"/> if not). Answers all of them as written, in the order added.
+    /// added now. At most <see cref="Cap"/> in all, else <see cref="FavouritesFullException"/>. Only over the list
+    /// <paramref name="version"/> names, and conditional on it still being there when written, else
+    /// <see cref="FavouritesConflictException"/>: a list read before another device's write would put back what that write
+    /// changed. And only under the <paramref name="userKey"/> in force (<see cref="CredentialsChangedException"/> if not).
+    /// Answers all of them as written, in the order added, with their new version.
     /// </summary>
-    public async Task<IReadOnlyList<StoredFavourite>> ReplaceVisibleAsync(
-        string userId, byte[] userKey, IReadOnlySet<string> listedVaultIds, IReadOnlyList<StoredFavourite> visible, CancellationToken ct)
+    public async Task<(IReadOnlyList<StoredFavourite> Entries, string Version)> ReplaceVisibleAsync(
+        string userId, byte[] userKey, string version, IReadOnlySet<string> listedVaultIds, IReadOnlyList<StoredFavourite> visible, CancellationToken ct)
     {
         var keyId = UserCatalog.KeyId(userKey, userId);
         var f = Builders<UserDocument>.Filter;
-        for (var attempt = 0; attempt < Attempts; attempt++)
+        var user = await Users.Find(u => u.Id == userId).Project(u => new { u.KeyId, u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
+        if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
+        if (VersionOf(user.Favourites, user.FavouritesSealed) != version) throw new FavouritesConflictException();
+        var before = OpenCommands(userId, user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
+        var kept = before.Where(b => b.VaultId is { } id && !listedVaultIds.Contains(id));
+        var now = time.GetUtcNow();
+        var given = new List<StoredFavourite>();
+        foreach (var v in visible)
         {
-            var user = await Users.Find(u => u.Id == userId).Project(u => new { u.KeyId, u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
-            if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
-            var before = OpenCommands(userId, user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
-            var kept = before.Where(b => b.VaultId is { } id && !listedVaultIds.Contains(id));
-            var now = time.GetUtcNow();
-            var given = new List<StoredFavourite>();
-            foreach (var v in visible)
-            {
-                if (given.Any(v.SameAs)) continue;
-                given.Add(v with { Added = before.FirstOrDefault(v.SameAs)?.Added ?? now });
-            }
-
-            // In the order added; where several were added at once, kept ones where they were and new ones as given.
-            var after = kept.Concat(given).OrderBy(a => a.Added).ThenBy(a => IndexIn(before, a)).ToList();
-            if (after.Count > Cap) throw new FavouritesFullException();
-            var commands = after.Where(a => a.Kind == Command).ToList();
-            var bound = after.Where(a => a.Kind != Command).ToList();
-
-            if (BeforeWrite is { } hook) await hook();
-            var written = await Users.UpdateOneAsync(
-                f.Eq(u => u.Id, userId) & f.Eq(u => u.KeyId, keyId)
-                    & f.Eq(u => u.Favourites, user.Favourites) & f.Eq(u => u.FavouritesSealed, user.FavouritesSealed),
-                Builders<UserDocument>.Update
-                    .Set(u => u.Favourites, [.. commands.Select(c => $"{c.CommandId}@{c.Added.UtcTicks.ToString(CultureInfo.InvariantCulture)}")])
-                    .Set(u => u.FavouritesSealed, Seal(userId, userKey, bound)),
-                cancellationToken: ct);
-            if (written.MatchedCount == 1) return Ordered(commands, bound);
+            if (given.Any(v.SameAs)) continue;
+            given.Add(v with { Added = before.FirstOrDefault(v.SameAs)?.Added ?? now });
         }
 
-        throw new FavouritesConflictException();
+        // In the order added; where several were added at once, kept ones where they were and new ones as given.
+        var after = kept.Concat(given).OrderBy(a => a.Added).ThenBy(a => IndexIn(before, a)).ToList();
+        if (after.Count > Cap) throw new FavouritesFullException();
+        var commands = after.Where(a => a.Kind == Command).ToList();
+        var bound = after.Where(a => a.Kind != Command).ToList();
+        string[] plain = [.. commands.Select(c => $"{c.CommandId}@{c.Added.UtcTicks.ToString(CultureInfo.InvariantCulture)}")];
+        var sealedList = Seal(userId, userKey, bound);
+
+        if (BeforeWrite is { } hook) await hook();
+        var written = await Users.UpdateOneAsync(
+            f.Eq(u => u.Id, userId) & f.Eq(u => u.KeyId, keyId)
+                & f.Eq(u => u.Favourites, user.Favourites) & f.Eq(u => u.FavouritesSealed, user.FavouritesSealed),
+            Builders<UserDocument>.Update.Set(u => u.Favourites, plain).Set(u => u.FavouritesSealed, sealedList),
+            cancellationToken: ct);
+        if (written.MatchedCount != 1) throw new FavouritesConflictException();
+        return (Ordered(commands, bound), VersionOf(plain, sealedList));
     }
+
+    /// <summary>
+    /// The version of both stored parts, as stored: what a write names to say which list it changes. The sealed part is
+    /// sealed afresh on every write, so the version tells nothing of what it holds, a hidden vault's entries included.
+    /// </summary>
+    private static string VersionOf(string[]? commands, byte[]? sealedList) =>
+        Base64Url.EncodeToString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new object?[] { commands, sealedList })));
 
     private static int IndexIn(List<StoredFavourite> before, StoredFavourite entry) =>
         before.FindIndex(entry.SameAs) is var i and >= 0 ? i : int.MaxValue;
@@ -165,5 +173,5 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
 /// cap: what a session hides must leave no trace.</summary>
 public sealed class FavouritesFullException() : Exception($"Your favourites are full ({Favourites.Cap}).");
 
-/// <summary>The favourites kept changing under <see cref="Favourites.ReplaceVisibleAsync"/>; nothing was written.</summary>
-public sealed class FavouritesConflictException() : Exception("Your favourites kept changing; try again.");
+/// <summary>The favourites changed since the list the write was made from was read; nothing was written.</summary>
+public sealed class FavouritesConflictException() : Exception("Your favourites changed elsewhere; try again.");

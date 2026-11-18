@@ -13,19 +13,20 @@ namespace Kumbu.Server.Api;
 /// the <c>path</c> inside it (<c>projects/plan.md</c>).</summary>
 public sealed record FavouriteInput(string Kind, string? Id = null, string? Vault = null, string? Path = null);
 
-/// <summary>The whole list the session sees, in place of what it saw before.</summary>
-public sealed record FavouritesRequest(IReadOnlyList<FavouriteInput?> Favourites);
+/// <summary>The whole list the session sees, in place of what it saw before; <c>version</c> as the list it was made from answered.</summary>
+public sealed record FavouritesRequest(IReadOnlyList<FavouriteInput?> Favourites, string Version);
 
 /// <summary>A favourite as <see cref="FavouriteInput"/>, with when it was <c>added</c>.</summary>
 public sealed record FavouriteView(
     string Kind,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Id,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Vault,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Path,
-    DateTimeOffset Added);
+    DateTimeOffset Added,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Id = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Vault = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Path = null);
 
-/// <summary>The favourites in the order added: those of the vaults the session lists, and the commands.</summary>
-public sealed record FavouritesView(IReadOnlyList<FavouriteView> Favourites);
+/// <summary>The favourites in the order added: those of the vaults the session lists, and the commands; <c>version</c>
+/// names the list, for the next write.</summary>
+public sealed record FavouritesView(IReadOnlyList<FavouriteView> Favourites, string Version);
 
 /// <summary>A person's favourites for the web app's palette (command palette spec, "Favourites: storage"): only what the
 /// session's store lists is answered or replaced, so a hidden discreet vault's favourites leave no trace and come back once
@@ -43,7 +44,8 @@ public static partial class FavouritesApi
     private static async Task<Ok<FavouritesView>> ReadAsync(RequestCaller caller, Favourites favourites, CancellationToken ct)
     {
         var names = await ListedAsync(caller, ct);
-        return TypedResults.Ok(View(await favourites.ReadAsync(caller.User!.Id, caller.UserKey!, ct), names));
+        var (entries, version) = await favourites.ReadAsync(caller.User!.Id, caller.UserKey!, ct);
+        return TypedResults.Ok(View(entries, version, names));
     }
 
     private static async Task<Ok<FavouritesView>> ReplaceAsync(FavouritesRequest body, RequestCaller caller, Favourites favourites, CancellationToken ct)
@@ -54,7 +56,9 @@ public static partial class FavouritesApi
         var visible = body.Favourites.Select(f => Stored(f, ids)).ToList();
         try
         {
-            return TypedResults.Ok(View(await favourites.ReplaceVisibleAsync(caller.User!.Id, caller.UserKey!, names.Keys.ToHashSet(StringComparer.Ordinal), visible, ct), names));
+            var (entries, version) = await favourites.ReplaceVisibleAsync(
+                caller.User!.Id, caller.UserKey!, body.Version, names.Keys.ToHashSet(StringComparer.Ordinal), visible, ct);
+            return TypedResults.Ok(View(entries, version, names));
         }
         catch (FavouritesFullException e)
         {
@@ -96,10 +100,10 @@ public static partial class FavouritesApi
     }
 
     /// <summary>The favourites of the listed vaults and the commands, each vault by its name.</summary>
-    private static FavouritesView View(IReadOnlyList<StoredFavourite> stored, Dictionary<string, string> names) =>
+    private static FavouritesView View(IReadOnlyList<StoredFavourite> stored, string version, Dictionary<string, string> names) =>
         new([.. stored
             .Where(s => s.VaultId is null || names.ContainsKey(s.VaultId))
-            .Select(s => new FavouriteView(s.Kind, s.CommandId, s.VaultId is null ? null : names[s.VaultId], s.Path, s.Added))]);
+            .Select(s => new FavouriteView(s.Kind, s.Added, s.CommandId, s.VaultId is null ? null : names[s.VaultId], s.Path))], version);
 
     [GeneratedRegex(@"^[a-z][a-z0-9-]*(\.[a-z0-9-]+){0,3}$")]
     private static partial Regex CommandId();

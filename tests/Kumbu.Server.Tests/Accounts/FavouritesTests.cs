@@ -48,8 +48,15 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
 
     private static object In(string kind, string vault) => new { kind, vault };
 
-    private static Task<HttpResponseMessage> PutAsync(RestClient user, params object[] favourites) =>
-        user.SendAsync(HttpMethod.Put, Url, new { favourites });
+    /// <summary>Writes from the list as it is now: with the version a read answers.</summary>
+    private static async Task<HttpResponseMessage> PutAsync(RestClient user, params object[] favourites) =>
+        await user.SendAsync(HttpMethod.Put, Url, new { favourites, version = await VersionAsync(user) });
+
+    private static async Task<string> VersionAsync(RestClient user)
+    {
+        using var response = await user.GetAsync(Url);
+        return (await JsonAsync(response))["version"]!.GetValue<string>();
+    }
 
     /// <summary>The list a write or a read answered, each entry as <c>kind id-or-vault[/path]</c> with its <c>added</c>.</summary>
     private static async Task<(string Entry, string Added)[]> ListOfAsync(HttpResponseMessage response)
@@ -233,7 +240,9 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
         await WriteAsync(w.Alice, Command("settings.appearance"));
         await w.HideAsync();
 
-        using var response = await w.Alice.SendContentAsync(HttpMethod.Put, Url, new StringContent(json, Encoding.UTF8, "application/json"));
+        var body = JsonNode.Parse(json)!.AsObject();
+        body["version"] = await VersionAsync(w.Alice);
+        using var response = await w.Alice.SendContentAsync(HttpMethod.Put, Url, new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         if (sentence is not null) Assert.Equal(sentence, await ErrorAsync(response));
@@ -287,7 +296,7 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
         var key = await alice.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
 
         using var read = await alice.GetAsync(Url, bearer: key);
-        using var write = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = Array.Empty<object>() }, bearer: key);
+        using var write = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = Array.Empty<object>(), version = "v" }, bearer: key);
 
         Assert.Equal((HttpStatusCode.Forbidden, HttpStatusCode.Forbidden), (read.StatusCode, write.StatusCode));
         Assert.Equal(["command settings.appearance"], await EntriesAsync(alice));
@@ -321,7 +330,47 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Concurrent_writes_keep_both()
+    public async Task A_write_from_a_list_read_before_another_write_is_409()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        var before = await VersionAsync(alice);
+        // Another device writes after this one read the list.
+        await WriteAsync(alice, In("board", "Work"));
+
+        using var stale = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = new[] { Command("admin.users") }, version = before });
+
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal("Your favourites changed elsewhere; try again.", await ErrorAsync(stale));
+        Assert.Equal(["board Work"], await EntriesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_write_with_the_current_version_is_taken_and_answers_the_next()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+
+        using var written = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = new[] { Command("admin.users") }, version = await VersionAsync(alice) });
+
+        Assert.Equal(["command admin.users"], (await ListOfAsync(written)).Select(f => f.Entry));
+        var answered = (await JsonAsync(written))["version"]!.GetValue<string>();
+        Assert.Equal(await VersionAsync(alice), answered);
+        using var next = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = Array.Empty<object>(), version = answered });
+        Assert.Empty(await ListOfAsync(next));
+    }
+
+    [Fact]
+    public async Task A_write_without_a_version_is_refused()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+
+        using var response = await alice.SendAsync(HttpMethod.Put, Url, new { favourites = new[] { Command("admin.users") } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(await ReadAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_write_over_a_concurrent_one_is_409_and_the_next_keeps_both()
     {
         var w = await HiddenWorld.NewAsync(Api);
         await w.HideAsync();
@@ -331,22 +380,26 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
         {
             if (Interlocked.Exchange(ref once, 1) == 1) return;
             // Another device, which shows Tagebuch, writes between this write's read and its write.
+            var (_, version) = await favourites.ReadAsync(w.Alice.User.Id, w.Alice.UserKey, Ct);
             await favourites.ReplaceVisibleAsync(
-                w.Alice.User.Id, w.Alice.UserKey, new HashSet<string> { w.TagebuchId },
+                w.Alice.User.Id, w.Alice.UserKey, version, new HashSet<string> { w.TagebuchId },
                 [new StoredFavourite("board", null, w.TagebuchId, null, _time.GetUtcNow())], Ct);
         };
         try
         {
-            await WriteAsync(w.Alice, Command("admin.users"));
+            using var response = await PutAsync(w.Alice, Command("admin.users"));
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         }
         finally
         {
             favourites.BeforeWrite = null;
         }
 
+        // Read again and written again, as the web app does.
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await WriteAsync(w.Alice, Command("admin.users"));
         await w.RevealAsync();
-        // Both added at the same instant: commands come first.
-        Assert.Equal(["command admin.users", "board Tagebuch"], await EntriesAsync(w.Alice));
+        Assert.Equal(["board Tagebuch", "command admin.users"], await EntriesAsync(w.Alice));
     }
 
     [Fact]
