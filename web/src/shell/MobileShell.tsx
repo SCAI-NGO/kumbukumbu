@@ -27,6 +27,7 @@ import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { usePaletteShortcut } from "../palette/usePaletteShortcut";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
 import { forgetLastNote, keepLastNote, lastNote, ordinary, settleStart, startSettled, treeHas } from "./lastNote";
@@ -67,6 +68,7 @@ const ArchiveSheet = lazy(() => import("./ArchiveSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 const PublishDialog = lazy(() => import("./PublishDialog"));
+const Palette = lazy(() => import("../palette/Palette"));
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -278,6 +280,8 @@ export default function MobileShell() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [docked, toggleSidebar]);
 
+  usePaletteShortcut();
+
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
   // Only then: after signing out, the store is empty while this URL is still shown for a moment.
   // Nor while the discreet vaults are being hidden: the note's URL is on its way out.
@@ -468,6 +472,13 @@ export default function MobileShell() {
         <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>
             <SearchSheet />
+          </Suspense>
+        </LoadBoundary>
+      )}
+      {overlay === "palette" && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
+          <Suspense>
+            <Palette />
           </Suspense>
         </LoadBoundary>
       )}
