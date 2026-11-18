@@ -90,9 +90,11 @@ builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
 // The internal model and the external providers the admin configured; each vault uses one of them.
+// People's own TensorX keys (Kumbu:Embeddings:Byok), a driver per key, used only while the instance offers BYOK.
+builder.Services.AddSingleton(sp => new ByokDrivers(sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
     sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
-    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
+    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<ByokDrivers>()));
 // The tokenizer chunks are bounded by, before the index that waits for it.
 builder.Services.AddHttpClient(ChunkTokenizer.HttpClientName);
 builder.Services.AddSingleton<ChunkTokenizer>();
@@ -110,6 +112,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<DiscreetVaults>();
+builder.Services.AddSingleton<EmbeddingsKeys>();
 builder.Services.AddSingleton<CalendarSettings>();
 // The server's zone for a caller without one of her own; tests replace it.
 builder.Services.AddSingleton(ServerZone.Instance);
@@ -254,6 +257,11 @@ if (bootstrapCommand)
     return await BootstrapAdmin.ExecuteAsync(app.Services.GetRequiredService<BootstrapAdmin>(), options.PublicUrl, Console.Out, Console.Error, CancellationToken.None);
 }
 
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Embeddings is { Byok: true, ByokOffered: false })
+{
+    app.Logger.LogInformation("Kumbu:Embeddings:Byok is ignored: with an external default (Kumbu:Embeddings:Default) the instance pays for everyone's embeddings");
+}
+
 // Without ICU (globalization-invariant mode, or an image without libicu) .NET compares by code point.
 if (!TextOrder.IsCultureAware)
 {
@@ -325,6 +333,7 @@ app.MapGraphApi();
 app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();
+app.MapEmbeddingsKeyApi();
 app.MapFlagApi();
 app.MapRecentApi();
 app.MapTagApi();

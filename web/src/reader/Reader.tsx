@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkHideBlockIds } from "./blockIds";
-import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReadResult } from "./readerApi";
+import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReaderNote, type ReadResult } from "./readerApi";
 import { snapshotText, untilText } from "./snapshot";
 
 type State = { kind: "loading" } | { kind: "failed" } | ReadResult;
@@ -46,14 +46,112 @@ function CopiedImage({ copy, index, alt }: { copy: string; index: number; alt: s
   return src ? <img src={src} alt={alt} onError={() => setBroken(true)} className="my-3 max-w-full rounded-[8px]" /> : null;
 }
 
-/** The copy's id and the indices of its files: an `f/<n>` that names none of them is no image. */
-const Files = createContext<{ copy: string; indices: ReadonlySet<number> }>({ copy: "", indices: new Set() });
+/** The copy's id and the indices of its files: an `f/<n>` that names none of them is no image. In a bundle, `map[n]`
+ * is the copy's file the note's own `f/n` shows. */
+const Files = createContext<{ copy: string; indices: ReadonlySet<number>; map?: readonly number[] }>({ copy: "", indices: new Set() });
+
+/** A bundle's notes by id, how to go to one, and whether this is an embedded note (whose embeds stay links). */
+const Bundle = createContext<{ notes: ReadonlyMap<number, ReaderNote>; go(id: number, heading: string): void; embedded: boolean } | null>(null);
+
+/** `#kn-3` or `#kn-3/Big%20idea`: a link to note 3 of the copy, at a heading (Publish 2.0). */
+export const noteLink = (href: string | undefined) => {
+  const m = href === undefined ? null : /^#kn-(\d+)(?:\/(.*))?$/.exec(href);
+  if (!m) return null;
+  let heading = "";
+  try {
+    heading = decodeURIComponent(m[2] ?? "");
+  } catch {
+    heading = "";
+  }
+  return { id: Number(m[1]), heading };
+};
 
 // Only the copy's own files (`f/<n>`): an image from anywhere else would tell a third party who reads, and when.
 function CopyImage({ src, alt }: { src?: string; alt?: string }) {
   const files = useContext(Files);
-  const index = src === undefined ? undefined : /^f\/(\d+)$/.exec(src)?.[1];
-  return index !== undefined && files.indices.has(Number(index)) ? <CopiedImage copy={files.copy} index={Number(index)} alt={alt ?? ""} /> : null;
+  const local = src === undefined ? undefined : /^f\/(\d+)$/.exec(src)?.[1];
+  const index = local === undefined ? undefined : files.map ? files.map[Number(local)] : Number(local);
+  return index !== undefined && files.indices.has(index) ? <CopiedImage copy={files.copy} index={index} alt={alt ?? ""} /> : null;
+}
+
+/** A link to another note of the copy: it goes there within the page; one to a note that left the copy is its text. */
+function NoteLinkTo({ href, children }: { href: string; children: ReactNode }) {
+  const bundle = useContext(Bundle);
+  const target = noteLink(href);
+  if (!bundle || !target || !bundle.notes.has(target.id)) return <>{children}</>;
+  return (
+    <a
+      href={`#/${target.id}`}
+      onClick={(e) => {
+        e.preventDefault();
+        bundle.go(target.id, target.heading);
+      }}
+      className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
+    >
+      {children}
+    </a>
+  );
+}
+
+const fence = /^ {0,3}(`{3,}|~{3,})/;
+const atx = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+// A heading's text as it reads, near enough: links by their text, emphasis and code marks gone.
+const headingText = (md: string) =>
+  md
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~=]/g, "")
+    .trim()
+    .toLowerCase();
+
+/**
+ * The part of a note an embed names (`![[Plan#Big idea]]`): its heading and what lies under it, to the next heading of
+ * the same or a higher level; for a block (`^b1`), the paragraph that ends with it. Code is no heading. Null when the
+ * note has no such part.
+ */
+export function sectionOf(markdown: string, subpath: string): string | null {
+  const lines = markdown.split("\n");
+  let open: string | null = null;
+  const outside = lines.map((line) => {
+    const f = fence.exec(line)?.[1];
+    if (open === null && f) open = f[0];
+    else if (open !== null && f?.[0] === open) {
+      open = null;
+      return false;
+    }
+    return open === null;
+  });
+  if (subpath.startsWith("^")) {
+    const id = subpath.slice(1);
+    const at = lines.findIndex((line, i) => outside[i] && line.trimEnd().endsWith(` ^${id}`));
+    if (at < 0) return null;
+    let [from, to] = [at, at];
+    while (from > 0 && outside[from - 1] && lines[from - 1].trim()) from--;
+    while (to + 1 < lines.length && outside[to + 1] && lines[to + 1].trim()) to++;
+    return lines.slice(from, to + 1).join("\n");
+  }
+  const wanted = subpath.trim().toLowerCase();
+  const level = (i: number) => (outside[i] ? (atx.exec(lines[i])?.[1].length ?? 0) : 0);
+  const at = lines.findIndex((line, i) => level(i) > 0 && headingText(atx.exec(line)![2]) === wanted);
+  if (at < 0) return null;
+  let end = at + 1;
+  while (end < lines.length && !(level(end) > 0 && level(end) <= level(at))) end++;
+  return lines.slice(at, end).join("\n");
+}
+
+/** `![x](#kn-3)`: note 3 shown in place, one level deep, or only the part of it the embed names (`#kn-3/Heading`);
+ * inside it an embed of a note is a link to it. */
+function EmbeddedNote({ src, alt }: { src: string; alt: string }) {
+  const bundle = useContext(Bundle);
+  const target = noteLink(src);
+  const note = target && bundle?.notes.get(target.id);
+  if (!bundle || !note) return <>{alt}</>;
+  const part = target.heading ? sectionOf(note.markdown, target.heading) : note.markdown;
+  if (bundle.embedded || part === null) return <NoteLinkTo href={src}>{alt || note.title}</NoteLinkTo>;
+  return (
+    <Bundle.Provider value={{ ...bundle, embedded: true }}>
+      <NoteMarkdown note={{ ...note, markdown: part }} />
+    </Bundle.Provider>
+  );
 }
 
 const remarkPlugins = [remarkGfm, remarkHideBlockIds];
@@ -85,9 +183,12 @@ const components: Components = {
       <table className="border-collapse text-[15px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left" {...props} />
     </div>
   ),
-  // Only web and mail links; a web link opens in a new tab that learns nothing of this page. Any other link is its text.
+  // Only web and mail links; a web link opens in a new tab that learns nothing of this page. A link to another note of
+  // the copy goes there. Any other link is its text.
   a: ({ href, children }) =>
-    webLink(href) ? (
+    noteLink(href) ? (
+      <NoteLinkTo href={href!}>{children}</NoteLinkTo>
+    ) : webLink(href) ? (
       <a
         href={href}
         {...(href!.startsWith("mailto:") ? {} : { target: "_blank" })}
@@ -99,11 +200,48 @@ const components: Components = {
     ) : (
       <>{children}</>
     ),
-  img: ({ src, alt }) => <CopyImage src={typeof src === "string" ? src : undefined} alt={alt} />,
+  img: ({ src, alt }) =>
+    typeof src === "string" && noteLink(src) ? <EmbeddedNote src={src} alt={alt ?? ""} /> : <CopyImage src={typeof src === "string" ? src : undefined} alt={alt} />,
 };
 
-/** The copy as one Markdown text, title first, for pasting into an AI's chat: its fetch tools can't read this page. */
-export const copyMarkdown = (copy: ReaderCopy) => `# ${copy.title}\n\n${copy.markdown}`;
+/** One note of a bundle, its files as its own `f/n` name them. */
+function NoteMarkdown({ note }: { note: ReaderNote }) {
+  const files = useContext(Files);
+  return (
+    <Files.Provider value={{ ...files, map: note.files }}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components} urlTransform={keepNoteLinks}>
+        {note.markdown}
+      </ReactMarkdown>
+    </Files.Provider>
+  );
+}
+
+/** react-markdown's own check, but a link within the copy (`#kn-3`) stays as it is: it is relative, and only read here. */
+const keepNoteLinks = (url: string) => (noteLink(url) ? url : defaultUrlTransform(url));
+
+/**
+ * The copy as one Markdown text, title first, for pasting into an AI's chat: its fetch tools can't read this page. A
+ * bundle's notes each under their own heading, links between them to those headings, as the AI link gives them.
+ */
+export const copyMarkdown = (copy: ReaderCopy) => {
+  if (!copy.notes || copy.notes.length < 2) return `# ${copy.title}\n\n${copy.markdown}`;
+  const ids = new Set(copy.notes.map((n) => n.id));
+  const relink = (markdown: string) =>
+    markdown.replace(/(!?)\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:\/[^)\s]*)?\)/g, (_, bang: string, text: string, id: string) =>
+      // A note that left the copy: its text, with only the brackets unescaped that the copy escaped.
+      ids.has(Number(id)) ? `${bang}[${text}](#n${id})` : text.replace(/\\(.)/g, (escape, c: string) => (c === "[" || c === "]" ? c : escape)),
+    );
+  return copy.notes.map((n) => (n.id === 0 ? `# ${copy.title}\n\n${relink(n.markdown)}` : `\n\n---\n\n# ${n.title} {#n${n.id}}\n\n${relink(n.markdown)}`)).join("");
+};
+
+// The page's CSP takes no inline style: the contents are indented by class.
+const indent = ["", "pl-3", "pl-6", "pl-9", "pl-12", "pl-15"];
+
+/** The note the address names after the code was read (`#/3`), so a reload stays on it. */
+const noteInAddress = () => {
+  const m = /^#\/(\d+)$/.exec(location.hash);
+  return m ? Number(m[1]) : 0;
+};
 
 /** What a copy did, said for a few seconds (the app's `useCopied`, which this page can't import). */
 function useSaid() {
@@ -173,6 +311,41 @@ function Copy({ copy }: { copy: ReaderCopy }) {
   const [made, setMade] = useState<Made | null>(null);
   const pending = useRef(false);
   const latest = useRef(0);
+  const notes = useMemo(() => new Map((copy.notes ?? []).map((n) => [n.id, n])), [copy.notes]);
+  const [current, setCurrent] = useState(() => (notes.has(noteInAddress()) ? noteInAddress() : 0));
+  const [contents, setContents] = useState(false);
+  const [heading, setHeading] = useState("");
+  const article = useRef<HTMLElement>(null);
+  // Back and forward go between the notes of the copy.
+  useEffect(() => {
+    if (notes.size === 0) return;
+    const back = () => setCurrent(notes.has(noteInAddress()) ? noteInAddress() : 0);
+    addEventListener("popstate", back);
+    return () => removeEventListener("popstate", back);
+  }, [notes]);
+  // To the heading a link names, or to the top of the note.
+  useEffect(() => {
+    const target = heading
+      ? [...(article.current?.querySelectorAll("h2, h3, h4, h5, h6") ?? [])].find((h) => h.textContent?.trim() === heading.replace(/^\^.*/, "").trim())
+      : null;
+    (target ?? article.current)?.scrollIntoView?.({ block: "start" });
+  }, [current, heading]);
+  const bundle = useMemo(
+    () =>
+      notes.size === 0
+        ? null
+        : {
+            notes,
+            embedded: false,
+            go: (id: number, at: string) => {
+              history.pushState(null, "", `#/${id}`);
+              setContents(false);
+              setHeading(at);
+              setCurrent(id);
+            },
+          },
+    [notes],
+  );
   // Not disabled while it waits, so the focus stays on it; a press meanwhile does nothing.
   const make = () => {
     if (pending.current) return;
@@ -184,12 +357,18 @@ function Copy({ copy }: { copy: ReaderCopy }) {
     };
     makeAiLink(copy.copy).then(settle, () => settle({ kind: "failed" }));
   };
+  const note = notes.get(current);
   return (
-    <article>
-      <h1 className="text-[28px] leading-tight font-bold text-text">{copy.title}</h1>
+    <article ref={article}>
+      <h1 className="text-[28px] leading-tight font-bold text-text">{note && current !== 0 ? note.title : copy.title}</h1>
       <p className="mt-1 mb-4 font-mono text-[12px] text-muted">{snapshotText(copy.snapshotAt)}</p>
       <div className="mb-6 flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3">
+          {bundle && (
+            <button type="button" aria-expanded={contents} onClick={() => setContents((c) => !c)} className={buttonClass}>
+              Contents
+            </button>
+          )}
           <button type="button" onClick={() => void markdown.copyText(copyMarkdown(copy))} className={buttonClass}>
             Copy as Markdown
           </button>
@@ -198,13 +377,40 @@ function Copy({ copy }: { copy: ReaderCopy }) {
           </button>
           {markdown.saying}
         </div>
+        {bundle && contents && (
+          <nav aria-label="Contents">
+            <ol className="flex flex-col gap-1 rounded-[10px] border border-line bg-surface p-3">
+              {[...notes.values()].map((n) => (
+                <li key={n.id} className={indent[Math.min(n.depth, 5)]}>
+                  <a
+                    href={`#/${n.id}`}
+                    aria-current={n.id === current ? "page" : undefined}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      bundle.go(n.id, "");
+                    }}
+                    className="text-accent-text underline decoration-accent/45 underline-offset-[3px] aria-[current=page]:font-bold"
+                  >
+                    {n.title}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+        )}
         <AiLinkMade made={made} />
       </div>
       <div className="text-[16px] leading-[1.6] break-words text-text-body">
         <Files.Provider value={files}>
-          <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
-            {copy.markdown}
-          </ReactMarkdown>
+          {bundle && note ? (
+            <Bundle.Provider value={bundle}>
+              <NoteMarkdown note={note} />
+            </Bundle.Provider>
+          ) : (
+            <ReactMarkdown remarkPlugins={remarkPlugins} skipHtml components={components}>
+              {copy.markdown}
+            </ReactMarkdown>
+          )}
         </Files.Provider>
       </div>
     </article>
@@ -277,7 +483,7 @@ export default function Reader() {
     // Once, even when React runs effects twice: the second run would find the fragment gone.
     if (started.current) return;
     started.current = true;
-    const code = location.hash.slice(1);
+    const code = location.hash.startsWith("#/") ? "" : location.hash.slice(1);
     if (code) {
       // Out of the address bar, the history and any later copy of the URL before the code goes anywhere.
       history.replaceState(null, "", location.pathname + location.search);

@@ -62,9 +62,12 @@ internal sealed record SkippedUpdate(string Path, string Hash);
 /// whose Note is the skill's folder, NoteVersion the copy's <see cref="PublishedSkillCopy.Hash"/> and Files every file
 /// of the folder; null for a note. Not logged: <see cref="ToString"/> leaves out the code and the key.
 /// </summary>
+/// <param name="Depth">How many links deep the publication goes (Publish 2.0); null, 0: the note alone, as before.</param>
+/// <param name="Without">The notes the owner took out of the bundle (stored paths), kept across updates.</param>
+/// <param name="Members">Every note of the bundle but the start, with its id in the copy and the version copied.</param>
 internal sealed record PublicationEntry(
     string Id, string Note, string Code, byte[] Key, DateTime SnapshotAt, string NoteVersion, IReadOnlyList<PublishedFile> Files, string By, WriterRefPayload ByRef,
-    string? Kind = null)
+    string? Kind = null, int? Depth = null, IReadOnlyList<string>? Without = null, IReadOnlyList<BundleMember>? Members = null)
 {
     public override string ToString() => $"PublicationEntry {{ Id = {Id}, Note = {Note}, SnapshotAt = {SnapshotAt:O}, Files = {Files.Count}, Kind = {Kind} }}";
 }
@@ -76,9 +79,15 @@ internal static class PublicationKinds
 
 internal sealed record PublishedFile(string Path, string Version);
 
+/// <summary>A note of a bundle other than its start (id 0): its id in the copy, its stored path, the version copied.</summary>
+internal sealed record BundleMember(int Id, string Note, string Version);
+
 /// <summary>An entry of the record's log: a publication, an update or a withdrawal, and why (<see cref="WithdrawalReasons"/>),
 /// or a removal that was kept (<see cref="PublishingKinds.Kept"/>).</summary>
-internal sealed record PublishingLogEntry(string Id, string Kind, string Note, DateTime At, string By, WriterRefPayload ByRef, string? Reason);
+/// <param name="Notes">A bundle's notes after the change; null for a single note.</param>
+/// <param name="Added">Notes an update took in; <paramref name="Removed"/>, the ones that left.</param>
+internal sealed record PublishingLogEntry(
+    string Id, string Kind, string Note, DateTime At, string By, WriterRefPayload ByRef, string? Reason, int? Notes = null, int? Added = null, int? Removed = null);
 
 internal static class PublishingKinds
 {
@@ -96,7 +105,15 @@ internal static class WithdrawalReasons
 
 /// <summary>What a reader sees, sealed under the publication key: the filtered Markdown, its title, when it was taken
 /// and the files it embeds, by index, without their names in the vault (a copy that stored one opens all the same).</summary>
-internal sealed record PublishedCopy(string Title, string Markdown, DateTime SnapshotAt, IReadOnlyList<PublishedCopyFile> Files);
+/// <param name="Notes">A bundle's notes in walk order, the start (id 0, also <paramref name="Title"/> and
+/// <paramref name="Markdown"/>) first; null for a single note.</param>
+/// <param name="Edges">The links between them as [from, to] ids: kept for a graph of the copy, never served yet.</param>
+internal sealed record PublishedCopy(
+    string Title, string Markdown, DateTime SnapshotAt, IReadOnlyList<PublishedCopyFile> Files,
+    IReadOnlyList<PublishedBundleNote>? Notes = null, IReadOnlyList<int[]>? Edges = null);
+
+/// <summary>A note of a bundle's copy: <paramref name="Files"/>[n] is the copy's file that its <c>f/n</c> shows.</summary>
+internal sealed record PublishedBundleNote(int Id, string Title, string Markdown, int Depth, IReadOnlyList<int> Files);
 
 internal sealed record PublishedCopyFile(int Index, string MediaType);
 

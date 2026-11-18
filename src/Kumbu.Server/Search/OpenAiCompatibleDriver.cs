@@ -41,6 +41,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private readonly TimeProvider _time;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Uri _endpoint;
+    private readonly Action? _keyRefused;
     private int _dimensions;
 
     /// <summary>Until when the provider pauses, and why: one immutable record, replaced whole, so that callers on other
@@ -55,9 +56,9 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
 
     public OpenAiCompatibleDriver(
         string name, EmbeddingProviderOptions options, string? apiKey, Func<HttpClient> http, ILogger log,
-        TimeProvider? time = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+        TimeProvider? time = null, Func<TimeSpan, CancellationToken, Task>? delay = null, Action? keyRefused = null)
     {
-        (_name, _options, _apiKey, _http, _log) = (name, options, apiKey, http, log);
+        (_name, _options, _apiKey, _http, _log, _keyRefused) = (name, options, apiKey, http, log, keyRefused);
         _time = time ?? TimeProvider.System;
         _delay = delay ?? ((d, ct) => Task.Delay(d, _time, ct));
         _endpoint = new Uri(options.BaseUrl.TrimEnd('/') + "/embeddings");
@@ -124,6 +125,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
                 {
                     // A refused key or a wrong model fails every request; a 400 or 413 only these texts.
                     var down = response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound;
+                    if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) _keyRefused?.Invoke();
                     throw Fail(problem, down, query);
                 }
 

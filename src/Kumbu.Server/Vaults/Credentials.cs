@@ -55,6 +55,12 @@ public sealed class UserCredential(string userId, byte[] userKey, DiscreetFilter
         IReadOnlySet<string> hidden = discreet is null || discreet.Revealed ? None
             : (discreet.Ids ?? all.Select(a => a.Id)).Where(id => !skillsIds.Contains(id) && id != discreet.AlsoOpen).ToHashSet(StringComparer.Ordinal);
         _opened = new Opened([.. all.Where(a => !hidden.Contains(a.Id))], [.. all.Where(a => hidden.Contains(a.Id))], hidden, skillsIds);
+        // What the owner's list says of her own vaults, for the index (BYOK spec: a discreet vault never uses TensorX).
+        if (discreet?.Ids is { } ids)
+        {
+            foreach (var a in all.Where(a => a.IsOwner && a.Membership is null)) a.Vault.Discreet = ids.Contains(a.Id) && !skillsIds.Contains(a.Id);
+        }
+
         return _opened.Visible;
     }
 
