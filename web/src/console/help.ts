@@ -38,9 +38,10 @@ export const localHelp: Record<string, string> = {
   lsa: `lsa [path]
   ls -la: the listing with the vault's _archive/ too, with sizes and times.`,
   p: `p <note>
-  Peek: show a note as it reads in the app, with headings, links and task boxes. A link opens
-  its note and closes the console. Tasks don't tick here, and Mermaid diagrams show as their code.
-  It reads the note with cat; a section works too (p "plan.md#Goals").
+  Peek: show a note as it reads in the app, with headings, links and task boxes, whole however
+  long. A link opens its note and closes the console. Tasks don't tick here, Mermaid diagrams
+  show as their code, and a link to a note that doesn't exist creates nothing.
+  A section or a block works too: p "plan.md#Goals", p plan.md#^goal.
   A folder, an attachment or nothing there: an error.
 
   p plan.md

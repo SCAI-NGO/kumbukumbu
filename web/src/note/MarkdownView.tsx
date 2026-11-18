@@ -106,8 +106,9 @@ interface Props {
   /** While a tick is being saved, the next waits: it would be written on top of a version the app doesn't know. */
   tasksDisabled: boolean;
   onToggleTask(line: number): void;
-  /** A tap on a link to a note that doesn't exist yet, with its target as written. */
-  onCreateMissing(target: string): void;
+  /** A tap on a link to a note that doesn't exist yet, with its target as written; without it (the console, which never
+   * writes) such a link is only marked missing. */
+  onCreateMissing?(target: string): void;
   /** Agent highlights while "Show" is on, else null. */
   highlight?: Highlight | null;
   /** Find in the note: matches are marked, `current` (0-based) as the current one. */
@@ -133,7 +134,6 @@ const NoteContext = createContext<Omit<Props, "source" | "mask" | "highlight" | 
   attachments: [],
   tasksDisabled: true,
   onToggleTask: () => {},
-  onCreateMissing: () => {},
 });
 
 function TaskItem({ node, children, ...rest }: { node: HastNode; children: ReactNode } & ComponentPropsWithoutRef<"li">) {
@@ -285,8 +285,9 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
           </span>
         );
       }
-      // A missing image or PDF looks the same, but is no note to create: it comes by upload.
-      if (isAttachment(link.target)) {
+      // A missing image or PDF looks the same, but is no note to create: it comes by upload. Nor is one where
+      // nothing may be written (the console).
+      if (isAttachment(link.target) || !onCreateMissing) {
         return (
           <span className={missingClass}>
             {children}

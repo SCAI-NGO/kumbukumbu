@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -15,6 +17,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.getState().reset();
+  useDiscreet.setState({ gone: new Set() });
   useConsole.getState().reset();
 });
 
@@ -47,7 +51,8 @@ function later() {
 
 const welcome = "Kumbu² console, not a bash, and read-only. Type help for the commands, help <command> for details.";
 const log = () => screen.getByRole("log");
-const lines = () => Array.from(log().querySelectorAll("[data-line]"), (line) => line.textContent);
+// A peeked note's blocks carry its own line numbers as data-line: they are no lines of the console.
+const lines = () => Array.from(log().querySelectorAll("[data-line]")).filter((line) => !line.closest("[data-peek]")).map((line) => line.textContent);
 const input = () => screen.getByRole("textbox", { name: "Command" });
 const prompt = () => screen.getByRole("form", { name: "Command line" });
 
@@ -679,44 +684,62 @@ describe("peek", () => {
     "<script>alert(1)</script>",
     "",
     'A <img src=x onerror="alert(1)"> and <b onclick="x()">bold</b> word',
+    "",
+    "## Goals",
+    "",
+    "Ship the [[alpha]].",
+    "",
+    "## Later",
+    "",
+    "Nothing yet.",
   ].join("\n");
   const planLinks = [
     { line: 6, raw: "[[roadmap]]", target: "roadmap", kind: "note", path: "/Work/projects/roadmap.md", candidates: [] },
     // A discreet vault's note, while hidden, is no link target: the server answers "not found", as for the note view.
     { line: 6, raw: "[[Secret/diary]]", target: "Secret/diary", kind: "not_found", path: null, candidates: [] },
+    { line: 21, raw: "[[alpha]]", target: "alpha", kind: "note", path: "/Work/projects/alpha.md", candidates: [] },
   ];
-  const note = (content: string, path = PLAN) => json(200, { parts: [part(content)], isError: false, version: { path, token: "v1" } });
+  const noteView = (path: string, content: string) => ({ path, content, version: "v1", lastWriter: "ada", lastWriteAt: "2026-11-18T08:00:00Z" });
+  afterEach(() => localStorage.clear());
 
-  /** The console's endpoint answering `cat` with `answer`, the links of the note, and what the note page reads. */
-  function peekApi(answer: Answer = () => note(source)) {
+  /** The notes API as the note view reads it, and the console's endpoint, which peek never asks. */
+  function peekApi(extra: Parameters<typeof fakeApi>[0] = {}) {
     const posted: Body[] = [];
     const fetch = fakeApi({
       "GET /api/session": () => json(200, { user, previousSignInAt: null }),
       "POST /api/console": async (request) => {
-        const body = (await request.json()) as Body;
-        posted.push(body);
-        return answer(body);
+        posted.push((await request.json()) as Body);
+        return text("");
       },
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, source)),
       [`GET /api/links${PLAN}`]: () => json(200, planLinks),
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2 }]),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
-      "GET /api/notes/*": (r) =>
-        json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "# Roadmap", version: "v2", lastWriter: "ada", lastWriteAt: "2026-11-18T08:00:00Z" }),
+      "GET /api/notes/*": (r) => json(200, noteView(decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), "# Roadmap")),
       "GET /api/links/*": () => json(200, []),
       "GET /api/backlinks/*": () => json(200, []),
       "GET /api/changes": () => json(200, []),
+      ...extra,
     });
     return { fetch, posted };
   }
 
   const peeked = () => log().querySelector<HTMLElement>("[data-peek]")!;
+  const reads = (fetch: ReturnType<typeof fakeApi>, path: string) =>
+    fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === `/api/notes${path}`).length;
 
-  it("reads the note through cat with its path made absolute, and renders it", async () => {
+  async function peek(line: string, cwd = "/Work/projects") {
+    await open(cwd);
+    await run(line);
+    await waitFor(() => expect(peeked()).not.toBeNull());
+  }
+
+  it("reads the note as the note view does, with its path made absolute, and renders it under its path", async () => {
     const { posted } = peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
-    expect(posted).toEqual([{ call: "sh", command: `cat ${PLAN}` }]);
-    expect(lines().slice(0, 3)).toEqual(["/Work/projects", "> p plan.md", `→ cat ${PLAN}`]);
+    await peek("p plan.md");
+    expect(posted).toEqual([]);
+    expect(lines()).toEqual(["/Work/projects", "> p plan.md", PLAN]);
+    expect(within(log()).getByText("/projects/plan.md")).toHaveClass("text-muted");
     expect(within(peeked()).getByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
     expect(await within(peeked()).findByRole("link", { name: "roadmap" })).toHaveAttribute("href", "/notes/Work/projects/roadmap.md");
     // Shown as the note view shows it: the front matter as properties, no version line.
@@ -725,10 +748,16 @@ describe("peek", () => {
     expect(log()).not.toHaveTextContent("version of");
   });
 
+  it("shows a note too long for one call of the shell whole", async () => {
+    const long = `# Long\n\n${Array.from({ length: 4000 }, (_, i) => `Line ${i} of a long note.`).join("\n\n")}\n\nThe end.`;
+    peekApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, long)) });
+    await peek("p plan.md");
+    expect(within(peeked()).getByText("The end.")).toBeInTheDocument();
+  });
+
   it("shows task boxes disabled and a Mermaid block as code", async () => {
     peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
+    await peek("p plan.md");
     expect(within(peeked()).getByRole("checkbox", { name: "write" })).toBeDisabled();
     expect(within(peeked()).getByRole("checkbox", { name: "read" })).toBeDisabled();
     const code = peeked().querySelector("pre code")!;
@@ -738,8 +767,7 @@ describe("peek", () => {
 
   it("shows raw HTML as text and never renders it, as the note view does", async () => {
     peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
+    await peek("p plan.md");
     expect(peeked().querySelector("script, b, img")).toBeNull();
     expect(within(peeked()).getByText("<script>alert(1)</script>")).toBeInTheDocument();
     expect(peeked()).toHaveTextContent('A <img src=x onerror="alert(1)"> and <b onclick="x()">bold</b> word');
@@ -751,42 +779,37 @@ describe("peek", () => {
     const router = renderApp(["/", "/console"]);
     await screen.findByRole("heading", { name: "Console" });
     await run("p plan.md");
-    await userEvent.click(await within(peeked()).findByRole("link", { name: "roadmap" }));
+    await userEvent.click(await within(log()).findByRole("link", { name: "roadmap" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/roadmap.md"));
     expect(router.state.historyAction).toBe("REPLACE");
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Console" })).not.toBeInTheDocument());
   });
 
-  it("shows a link the server didn't resolve, as to a hidden discreet vault, as the note view does", async () => {
+  it("marks a link the server didn't resolve (as to a hidden discreet vault) missing, without a way to create the note", async () => {
     peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
+    await peek("p plan.md");
     await within(peeked()).findByRole("link", { name: "roadmap" });
     expect(within(peeked()).queryByRole("link", { name: "Secret/diary" })).toBeNull();
-    expect(within(peeked()).getByRole("button", { name: "Create the note “Secret/diary”" })).toBeInTheDocument();
+    expect(within(peeked()).queryByRole("button", { name: /Create the note/ })).toBeNull();
+    expect(within(peeked()).getByText("(missing)")).toBeInTheDocument();
   });
 
-  it("keeps the notice of another user's writing above the note, and leaves the embedded notes block out", async () => {
-    peekApi(() =>
-      note(
-        `[${PLAN}: last written by another user]\n# Plan\n\n![[roadmap]]\n\n--- embedded notes: shown for reading, not part of this note's text (which ends above) ---\n==> /Work/projects/roadmap.md <==\n# Roadmap\n`,
-      ),
-    );
-    await open("/Work/projects");
-    await run("p plan.md");
-    expect(lines()).toContain(`[${PLAN}: last written by another user]`);
-    expect(peeked()).not.toHaveTextContent("last written by another user");
-    expect(peeked()).not.toHaveTextContent("embedded notes");
-    expect(within(peeked()).getByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+  it("shows a section with its links, as they go by the whole note's lines", async () => {
+    peekApi();
+    await peek('p "plan.md#Goals"');
+    expect(lines()).toContain(`${PLAN}#Goals`);
+    expect(within(peeked()).getByRole("heading", { level: 2, name: "Goals" })).toBeInTheDocument();
+    expect(await within(peeked()).findByRole("link", { name: "alpha" })).toHaveAttribute("href", "/notes/Work/projects/alpha.md");
+    expect(peeked()).not.toHaveTextContent("Plan");
+    expect(peeked()).not.toHaveTextContent("Nothing yet.");
+    expect(within(peeked()).queryByText("draft")).toBeNull();
   });
 
-  it("prints the outline cat gives for a note too long to read whole, as text", async () => {
-    const outline = `# Plan\n## Goals\n\n[note too long for one call (~9,000 tokens); its outline is above. Read a part: cat "${PLAN}#Section", head -n 40 ${PLAN}, rg -n … ${PLAN}]`;
-    peekApi(() => note(outline));
+  it("says so for a heading the note doesn't have", async () => {
+    peekApi();
     await open("/Work/projects");
-    await run("p plan.md");
-    expect(log().querySelector("[data-peek]")).toBeNull();
-    expect(lines()).toContain(outline);
+    await run('p "plan.md#Nowhere"');
+    await waitFor(() => expect(lines()).toContain(`! Error: p: ${PLAN}: no heading “Nowhere”`));
   });
 
   it.each([
@@ -796,27 +819,50 @@ describe("peek", () => {
     ["p shot.png", "p: /Work/shot.png: not a note"],
     ["p plan.md | head", "p: can't be part of a pipeline"],
   ])("refuses %s without a request", async (line, said) => {
-    const { posted } = peekApi();
+    const { fetch, posted } = peekApi();
     await open("/Work");
+    const before = fetch.mock.calls.length;
     await run(line);
     expect(posted).toEqual([]);
+    expect(fetch.mock.calls.length).toBe(before);
     expect(lines()).toEqual(["/Work", `> ${line}`, `! Error: ${said}`]);
   });
 
-  it("prints the shell's error for a note that isn't there", async () => {
-    peekApi(() => text("cat: /Work/gone.md: no such note", true));
+  it("prints an error for a note that isn't there", async () => {
+    peekApi({ "GET /api/notes/Work/gone.md": () => json(404, { error: "There is no note /Work/gone.md." }) });
     await open("/Work");
     await run("p gone.md");
-    expect(lines()).toEqual(["/Work", "> p gone.md", "→ cat /Work/gone.md", "! Error: cat: /Work/gone.md: no such note"]);
+    await waitFor(() => expect(lines()).toEqual(["/Work", "> p gone.md", "/Work/gone.md", "! Error: p: There is no note /Work/gone.md."]));
     expect(log().querySelector("[data-peek]")).toBeNull();
   });
 
-  it("explains itself for help p", async () => {
+  it("collapses a note of a discreet vault hidden again to a neutral line, and reads it no more", async () => {
+    const DIARY = "/Tagebuch/a.md";
+    const { fetch } = peekApi({ [`GET /api/notes${DIARY}`]: () => json(200, noteView(DIARY, `Text of ${DIARY}.`)) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useConsole.setState({ cwd: "/" });
+    renderApp("/console", queryClient);
+    await screen.findByRole("heading", { name: "Console" });
+    await run(`p ${DIARY}`);
+    await waitFor(() => expect(peeked()).toHaveTextContent(`Text of ${DIARY}`));
+    const before = reads(fetch, DIARY);
+
+    // What hiding again does first; the console's reset follows it.
+    act(() => useDiscreet.setState({ gone: new Set(["Tagebuch"]), names: new Set() }));
+    expect(lines()).toEqual(["/", `> p ${DIARY}`, "(a note that's hidden again)"]);
+    expect(log().querySelector("[data-peek]")).toBeNull();
+    // Nothing observes it any more: asking the active queries again reads nothing of it.
+    await act(() => queryClient.invalidateQueries());
+    expect(reads(fetch, DIARY)).toBe(before);
+  });
+
+  it("explains itself for help p, which doesn't name cat", async () => {
     const { posted } = peekApi();
     await open();
     await run("help p");
     expect(posted).toEqual([]);
     expect(lines()[2]).toMatch(/^p <note>/);
+    expect(lines()[2]).not.toMatch(/\bcat\b/);
   });
 
   it.each(["l", "la", "lsa"])("explains help %s itself", async (name) => {
@@ -833,21 +879,18 @@ describe("peek", () => {
   ])("draws the note in phosphor in %s, as the rest of the output", async (scheme, fg) => {
     localStorage.setItem("kumbu.consoleScheme", scheme);
     peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
+    await peek("p plan.md");
     const screenBox = document.querySelector<HTMLElement>("[data-crt]")!;
     expect(screenBox.style.getPropertyValue("--crt-fg")).toBe(fg);
     expect(screenBox).toContainElement(peeked());
     for (const name of ["--text", "--text-body", "--accent-text", "--muted", "--dim", "--line"]) {
       expect(peeked().style.getPropertyValue(name)).toMatch(/var\(--crt-/);
     }
-    localStorage.clear();
   });
 
   it("keeps the app's colours in Plain", async () => {
     peekApi();
-    await open("/Work/projects");
-    await run("p plan.md");
+    await peek("p plan.md");
     expect(peeked().style.getPropertyValue("--text")).toBe("");
   });
 });

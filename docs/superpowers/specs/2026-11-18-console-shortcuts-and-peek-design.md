@@ -36,13 +36,15 @@ The maintainer's terminal habits: `l`, `la`, `lsa` for listings and `p` ("peek",
 ## Console (`web/src/console/`)
 
 - **Shortcuts:** a line whose first word is `l`, `la` or `lsa` is rewritten to `ls -l`, `ls -a`, `ls -la` before it is sent, the rest of the line (paths, pipes) kept; the `→` line shows what was sent, as for relative paths. Only as the first word of the line's first stage.
-- **Peek:** `p <note>` (relative paths as everywhere in the console) reads the note through `cat` and renders it with `MarkdownView` in the output, under its path:
+- **Peek:** `p <note>` (relative paths as everywhere in the console; a section `plan.md#Goals` or a block `plan.md#^goal` too) reads the note through the notes API, with the note view's own query, and renders it with `MarkdownView` in the output, under its path, shown as a line in the console's path style. Not through `cat`: the shell decorates what it prints (a notice of another writer above, a block of embedded notes below, an outline instead of a note too long for one call), which the console would have to parse away; the notes API gives the note whole, however long. A section or a block is cut from the whole note with its lines kept, so its links, which go by the note's lines, still match.
   - links work: a link opens the note and closes the console window (as links from any window do: replace);
+  - a link to a note that doesn't exist is marked missing, without the note view's button to create it: the console never writes;
   - task boxes show, disabled;
   - Mermaid shows as code;
   - images as in notes;
   - in Green and Amber everything is phosphor, headings brighter; in Plain the scheme's look.
   - `p` without an argument, or on a folder, a missing note or an attachment: an error in words, as the console's other errors.
+  - a peeked note of a discreet vault that hides again collapses to a neutral line, "(a note that's hidden again)": nothing of it, its path or its vault stays on screen, and it is read no more (the console's reset on hiding follows, but a render may come before it).
 - **Help:** the console's own help block names `l`, `la`, `lsa` and `p`; `help p` explains peek.
 
 ## Tests

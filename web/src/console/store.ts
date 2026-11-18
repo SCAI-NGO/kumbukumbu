@@ -6,8 +6,8 @@ import { useSession } from "../state/session";
 export type Output =
   | { kind: "text"; text: string; error?: boolean }
   | { kind: "image"; src: string; alt: string }
-  /** A note read by `p`, shown as the note view shows it; `version` is cat's token, which its links are asked for. */
-  | { kind: "note"; path: string; source: string; version: string };
+  /** A note `p` shows, read as the note view reads it; `at` is a section's heading or a block's `^id`. */
+  | { kind: "note"; path: string; at: string | null };
 
 /** A command and what it answered. */
 export interface Entry {
