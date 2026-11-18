@@ -750,6 +750,21 @@ describe("[[ completion of headings and blocks", () => {
     expect(asked.filter((p) => p.includes("roadmap"))).toEqual([]);
   });
 
+  it("says Loading… in a status region that is there before it, and Escape dismisses it", async () => {
+    withRoadmap(() => new Promise(() => {}));
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap");
+    const region = document.getElementById("link-completion-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveTextContent("");
+    await u.type(editorBox(), "#");
+    expect(await screen.findByText("Loading…")).toBe(region);
+    await u.keyboard("{Escape}");
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(editorBox().value).toBe(`${source} [[roadmap#`);
+    expect(screen.getByRole("textbox", { name: "Markdown source" })).toHaveFocus();
+  });
+
   it("says Loading… while the note loads, and offers nothing for a name no note has", async () => {
     let answer!: () => void;
     const fetch = withRoadmap(() => new Promise((resolve) => (answer = () => resolve(json(200, noteView(ROADMAP, roadmap, "r1")))))).fetch;

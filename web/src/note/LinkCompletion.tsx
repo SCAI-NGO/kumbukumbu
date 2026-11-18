@@ -81,6 +81,7 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
       .filter((o) => o.value !== "");
   }, [all, at, content, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
+  const waiting = !!at && at.start !== dismissed && loading;
 
   /** Called on every change of text or caret. */
   const follow = useCallback(() => {
@@ -106,8 +107,11 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   /** True when the key was the list's. */
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // While an IME composes (Japanese, Chinese, many phone keyboards), Enter and the arrows are the IME's.
-    if (!open || e.nativeEvent.isComposing || e.keyCode === 229) return false;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return false;
+    // While the note loads, Escape takes "Loading…" away; the other keys stay the textarea's.
+    if (waiting && e.key === "Escape") setDismissed(at.start);
+    else if (!open) return false;
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
     else if (e.key === "Enter" || e.key === "Tab") pick(options[active]);
     else if (e.key === "Escape") setDismissed(at.start);
     else return false;
@@ -116,29 +120,35 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   };
 
   const box = "mx-2 mb-1.5 max-h-[40vh] flex-none overflow-y-auto rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg";
-  const list = open ? (
-    <ul id="link-completion" role="listbox" aria-label={listNames[at.kind]} className={box}>
-      {options.map((option, i) => (
-        <li
-          key={option.key}
-          id={`link-option-${i}`}
-          role="option"
-          aria-selected={i === active}
-          onPointerDown={keepFocus}
-          onMouseDown={keepFocus}
-          onClick={() => pick(option)}
-          className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === active ? "bg-accent/15" : ""}`}
-        >
-          <span className="truncate text-[15px] text-text">{option.label}</span>
-          <span className="truncate font-mono text-[11px] text-dim">{option.detail}</span>
-        </li>
-      ))}
-    </ul>
-  ) : loading && at?.start !== dismissed ? (
-    <p role="status" className={`${box} px-3 py-2 text-[15px] text-muted`}>
-      Loading…
-    </p>
-  ) : null;
+  const list = (
+    <>
+      {open && (
+        <ul id="link-completion" role="listbox" aria-label={listNames[at.kind]} className={box}>
+          {options.map((option, i) => (
+            <li
+              key={option.key}
+              id={`link-option-${i}`}
+              role="option"
+              aria-selected={i === active}
+              onPointerDown={keepFocus}
+              onMouseDown={keepFocus}
+              onClick={() => pick(option)}
+              className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === active ? "bg-accent/15" : ""}`}
+            >
+              <span className="truncate text-[15px] text-text">{option.label}</span>
+              <span className="truncate font-mono text-[11px] text-dim">{option.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {/* There while a link is typed, before its text, so a screen reader announces "Loading…" when it comes. */}
+      {at && (
+        <p id="link-completion-status" role="status" className={waiting ? `${box} px-3 py-2 text-[15px] text-muted` : undefined}>
+          {waiting ? "Loading…" : ""}
+        </p>
+      )}
+    </>
+  );
 
   const textareaProps = {
     "aria-autocomplete": "list" as const,
