@@ -143,6 +143,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>The chunks of files larger than 15 MB, under their head in <see cref="Blobs"/> (files spec, decision 9).</summary>
     internal IMongoCollection<BlobChunkDocument> BlobChunks { get; } = db.GetCollection<BlobChunkDocument>("blob_chunks");
 
+    /// <summary><see cref="BlobChunks"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> BlobChunksByVault { get; } = db.GetCollection<SealedDocument>("blob_chunks");
+
     /// <summary>The largest file a vault keeps (<see cref="VaultOptions.MaxFileBytes"/>).</summary>
     internal long MaxFileBytes => options.Value.Vaults.MaxFileBytes;
 
@@ -769,13 +772,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
-        [Notes, Trash, Moves, Embeddings, Links, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
+        [Notes, Trash, Moves, Embeddings, Links, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, BlobChunksByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', WebDAV shares',
     /// the dev token's, recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
-    /// the published copies with their files and AI links), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// the published copies with their files and AI links), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all;
+    /// the chunks of large files right after it.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -856,7 +860,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
                         revokedShares = await RevokeSharesWithoutVaultsAsync(s, shareIds, token);
                         revokedConnections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, ids, Now, token);
-                        foreach (var collection in ContentCollections)
+                        // The chunks of large files after the commit, below: gigabytes of them would weigh on one
+                        // transaction, and without their heads, which go here, nothing reads them.
+                        foreach (var collection in ContentCollections.Where(c => c != BlobChunksByVault))
                         {
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
                         }
@@ -885,6 +891,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 RaiseNotesChanged(id);
             }
 
+            // The chunks too; any an upload writes after this, the blob sweep takes (BlobSweep.ReleaseChunksOfDeletedVaultsAsync).
             foreach (var collection in ContentCollections)
             {
                 deleted += (await collection.DeleteManyAsync(Builders<SealedDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None)).DeletedCount;
@@ -1204,6 +1211,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 {
                     log.LogError(e, "Sweeping the blobs of vault {VaultId} failed", vault.Id);
                 }
+            }
+
+            try
+            {
+                await sweep.ReleaseChunksOfDeletedVaultsAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "Sweeping the chunks of deleted vaults failed");
             }
         }
         finally

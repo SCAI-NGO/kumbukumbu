@@ -919,6 +919,25 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(5, await chunks.CountDocumentsAsync(ofVault, cancellationToken: Ct));
     }
 
+    /// <summary>A large file's chunks count towards the storage figure, also after a recount, so a second one doesn't
+    /// fit where the first took the space.</summary>
+    [Fact]
+    public async Task A_large_file_still_counts_after_a_recount()
+    {
+        var api = Own(quotaDefault: "30MB");
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var quota = Quota(api);
+        await quota.FigureAsync(user.User.Id, Ct);
+        var store = QuotaStore(user);
+        await store.PutBlobAsync("Work", new MemoryStream(System.Security.Cryptography.RandomNumberGenerator.GetBytes((int)(20 * OneMb))), null, Ct);
+
+        await quota.RecountAsync(user.User.Id);
+
+        Assert.InRange((await quota.FigureAsync(user.User.Id, Ct)).Used, 20 * OneMb, 21 * OneMb);
+        var more = System.Security.Cryptography.RandomNumberGenerator.GetBytes((int)(20 * OneMb));
+        await Assert.ThrowsAsync<QuotaExceededException>(() => store.PutBlobAsync("Work", new MemoryStream(more), null, Ct));
+    }
+
     /// <summary>A body that must not be read.</summary>
     private sealed class UnreadableStream : MemoryStream
     {

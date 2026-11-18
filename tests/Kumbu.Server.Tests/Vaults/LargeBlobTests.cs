@@ -213,6 +213,73 @@ public sealed class LargeBlobTests(MongoFixture fixture)
         Assert.True(condition());
     }
 
+    private static async Task<UnlockedVault> VaultAsync(VaultCatalog catalog) => Assert.Single(await catalog.OpenAsync(Token, Ct)).Vault;
+
+    private static BlobSweep Sweep(VaultCatalog catalog) => new(catalog, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+
+    [Fact]
+    public async Task The_sweep_releases_an_unreferenced_large_file_with_its_chunks()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        await PutAsync(store, Random(1000, 23));
+        await PutAsync(store, Random(20_000_000, 24));
+        var vault = await VaultAsync(catalog);
+
+        // Within its grace it stays: its record may be on the way.
+        Assert.Equal(0, await Sweep(catalog).RunAsync(vault, DateTime.UtcNow, Ct));
+        Assert.Equal(5, Count(world, "blob_chunks"));
+
+        Assert.Equal(2, await Sweep(catalog).RunAsync(vault, DateTime.UtcNow + TimeSpan.FromHours(1), Ct));
+        Assert.Equal(0, Count(world, "blobs"));
+        Assert.Equal(0, Count(world, "blob_chunks"));
+    }
+
+    [Fact]
+    public async Task The_sweep_takes_chunks_without_a_head_once_the_newest_is_past_its_grace()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var kept = await PutAsync(store, Random(20_000_000, 25));
+        var headless = await HeadAsync(world, await PutAsync(store, Random(20_000_000, 26)));
+        // As an upload leaves them that stopped half way: chunks no head names.
+        await Raw(world, "blobs").DeleteOneAsync(F.Eq("_id", headless["_id"]), Ct);
+        var orphans = F.Eq("head", headless["_id"]);
+        var at = (await Raw(world, "blob_chunks").Find(orphans).SortByDescending(d => d["at"]).FirstAsync(Ct))["at"].ToUniversalTime();
+        // Its first chunk long ago, as a slow upload's: the newest decides.
+        await Raw(world, "blob_chunks").UpdateOneAsync(orphans & F.Eq("n", 0), Builders<BsonDocument>.Update.Set("at", at - TimeSpan.FromHours(2)), cancellationToken: Ct);
+        var vault = await VaultAsync(catalog);
+
+        Assert.Equal(0, await Sweep(catalog).RunAsync(vault, at + BlobSweep.Grace - TimeSpan.FromSeconds(1), Ct));
+        Assert.Equal(10, Count(world, "blob_chunks"));
+
+        // Past the grace, they go; the stored file is referenced by nothing either, but still within its own grace.
+        Raw(world, "blobs").UpdateMany(F.Empty, Builders<BsonDocument>.Update.Set("at", at + TimeSpan.FromHours(1)), cancellationToken: Ct);
+        Assert.Equal(1, await Sweep(catalog).RunAsync(vault, at + BlobSweep.Grace + TimeSpan.FromSeconds(1), Ct));
+        Assert.Equal(5, Count(world, "blob_chunks"));
+        Assert.Equal(Random(20_000_000, 25), await ReadAsync(store, kept));
+    }
+
+    [Fact]
+    public async Task Deleting_a_vault_deletes_its_chunks_and_the_sweep_those_written_after()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        await catalog.CreateAsync("Other", Token, (_, _) => Task.CompletedTask, Ct);
+        await PutAsync(store, Random(20_000_000, 27));
+        await store.PutBlobAsync("Other", new MemoryStream(Random(20_000_000, 28)), null, Ct);
+        var work = (await catalog.OpenAsync(Token, Ct)).Single(a => a.Vault.Name == "Work").Vault.Id;
+        var stray = await Raw(world, "blob_chunks").Find(F.Eq("vault", work)).FirstAsync(Ct);
+
+        await catalog.DeleteVaultsAsync([work], (_, _) => Task.CompletedTask, Ct);
+
+        Assert.Equal(0, await Raw(world, "blob_chunks").CountDocumentsAsync(F.Eq("vault", work), cancellationToken: Ct));
+        // As an upload that raced the deletion leaves it, past the deletion's own sweep.
+        await Raw(world, "blob_chunks").InsertOneAsync(stray, cancellationToken: Ct);
+
+        await Sweep(catalog).ReleaseChunksOfDeletedVaultsAsync(Ct);
+
+        Assert.Equal(0, await Raw(world, "blob_chunks").CountDocumentsAsync(F.Eq("vault", work), cancellationToken: Ct));
+        Assert.Equal(5, Count(world, "blob_chunks"));
+    }
+
     [Fact]
     public async Task A_file_over_the_bound_is_refused()
     {
