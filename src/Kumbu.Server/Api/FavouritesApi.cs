@@ -32,8 +32,6 @@ public sealed record FavouritesView(IReadOnlyList<FavouriteView> Favourites);
 /// it is shown.</summary>
 public static partial class FavouritesApi
 {
-    private const string NoFavouritesSentence = "Only a signed-in person keeps favourites.";
-
     public static void MapFavouritesApi(this IEndpointRouteBuilder app)
     {
         // As /account/calendar: a person's setting, for her session only.
@@ -44,21 +42,19 @@ public static partial class FavouritesApi
 
     private static async Task<Ok<FavouritesView>> ReadAsync(RequestCaller caller, Favourites favourites, CancellationToken ct)
     {
-        var (userId, userKey) = Person(caller);
         var names = await ListedAsync(caller, ct);
-        return TypedResults.Ok(View(await favourites.ReadAsync(userId, userKey, ct), names));
+        return TypedResults.Ok(View(await favourites.ReadAsync(caller.User!.Id, caller.UserKey!, ct), names));
     }
 
     private static async Task<Ok<FavouritesView>> ReplaceAsync(FavouritesRequest body, RequestCaller caller, Favourites favourites, CancellationToken ct)
     {
-        var (userId, userKey) = Person(caller);
         if (body.Favourites.Count > Favourites.Cap) throw ApiErrors.BadRequest(new FavouritesFullException().Message);
         var names = await ListedAsync(caller, ct);
         var ids = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
         var visible = body.Favourites.Select(f => Stored(f, ids)).ToList();
         try
         {
-            return TypedResults.Ok(View(await favourites.ReplaceVisibleAsync(userId, userKey, names.Keys.ToHashSet(StringComparer.Ordinal), visible, ct), names));
+            return TypedResults.Ok(View(await favourites.ReplaceVisibleAsync(caller.User!.Id, caller.UserKey!, names.Keys.ToHashSet(StringComparer.Ordinal), visible, ct), names));
         }
         catch (FavouritesFullException e)
         {
@@ -69,9 +65,6 @@ public static partial class FavouritesApi
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
     }
-
-    private static (string UserId, byte[] UserKey) Person(RequestCaller caller) =>
-        caller.User is { } user && caller.UserKey is { } userKey ? (user.Id, userKey) : throw new ApiException(StatusCodes.Status403Forbidden, NoFavouritesSentence);
 
     /// <summary>The vaults the session lists, by id, with the names it sees them under: a hidden discreet vault isn't among them.</summary>
     private static async Task<Dictionary<string, string>> ListedAsync(RequestCaller caller, CancellationToken ct) =>
@@ -91,11 +84,13 @@ public static partial class FavouritesApi
         if (!Favourites.VaultKinds.Contains(f.Kind))
             throw ApiErrors.BadRequest("A favourite's kind is command, vault, board, calendar, gallery or note.");
         if (string.IsNullOrEmpty(f.Vault)) throw ApiErrors.BadRequest($"A favourite of kind {f.Kind} names its vault.");
-        if (!ids.TryGetValue(f.Vault, out var vaultId)) throw ApiErrors.BadRequest($"There is no vault '{f.Vault}'.");
+        // NFC-normalised, as every vault name in a URL is: a phone may send it decomposed.
+        var vault = ApiPaths.Parse(f.Vault, null, note: false).Segments[0];
+        if (!ids.TryGetValue(vault, out var vaultId)) throw ApiErrors.BadRequest($"There is no vault '{vault}'.");
         if (f.Kind != Favourites.Note) return new StoredFavourite(f.Kind, null, vaultId, null, default);
 
         if (string.IsNullOrEmpty(f.Path)) throw ApiErrors.BadRequest("A note's favourite names its path in the vault.");
-        var path = ApiPaths.Parse(f.Vault, f.Path, note: true);
+        var path = ApiPaths.Parse(vault, f.Path, note: true);
         if (ArchiveFolder.Contains(path)) throw ApiErrors.BadRequest($"{path.Value} is archived: an archived note can't be a favourite.");
         return new StoredFavourite(Favourites.Note, null, vaultId, string.Join('/', path.Segments.Skip(1)), default);
     }

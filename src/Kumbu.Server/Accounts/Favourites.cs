@@ -48,7 +48,7 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
     public async Task<IReadOnlyList<StoredFavourite>> ReadAsync(string userId, byte[] userKey, CancellationToken ct)
     {
         var user = await Users.Find(u => u.Id == userId).Project(u => new { u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
-        return user is null ? [] : Ordered(OpenCommands(user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed));
+        return user is null ? [] : Ordered(OpenCommands(userId, user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed));
     }
 
     /// <summary>
@@ -69,7 +69,7 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
         {
             var user = await Users.Find(u => u.Id == userId).Project(u => new { u.KeyId, u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
             if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
-            var before = OpenCommands(user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
+            var before = OpenCommands(userId, user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
             var kept = before.Where(b => b.VaultId is { } id && !listedVaultIds.Contains(id));
             var now = time.GetUtcNow();
             var given = new List<StoredFavourite>();
@@ -106,13 +106,23 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
     private static List<StoredFavourite> Ordered(IEnumerable<StoredFavourite> commands, IEnumerable<StoredFavourite> bound) =>
         [.. commands.Concat(bound).OrderBy(e => e.Added)];
 
-    /// <summary>The plain commands, <c>&lt;id&gt;@&lt;ticks&gt;</c> as <see cref="ReplaceVisibleAsync"/> writes them.</summary>
-    private static List<StoredFavourite> OpenCommands(string[]? stored) =>
-        [.. (stored ?? []).Select(s =>
+    /// <summary>The plain commands, <c>&lt;id&gt;@&lt;ticks&gt;</c> as <see cref="ReplaceVisibleAsync"/> writes them; one that
+    /// doesn't parse, as only tampering with the database leaves it, is left out and logged.</summary>
+    private List<StoredFavourite> OpenCommands(string userId, string[]? stored)
+    {
+        var commands = new List<StoredFavourite>();
+        foreach (var s in stored ?? [])
         {
             var at = s.LastIndexOf('@');
-            return new StoredFavourite(Command, s[..at], null, null, new DateTimeOffset(long.Parse(s[(at + 1)..], CultureInfo.InvariantCulture), TimeSpan.Zero));
-        })];
+            if (at > 0 && long.TryParse(s.AsSpan(at + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var ticks)
+                && ticks <= DateTimeOffset.MaxValue.UtcTicks)
+                commands.Add(new StoredFavourite(Command, s[..at], null, null, new DateTimeOffset(ticks, TimeSpan.Zero)));
+            else
+                log.LogWarning("A favourite command of user {UserId} does not parse; it is left out", userId);
+        }
+
+        return commands;
+    }
 
     /// <summary>The entries bound to a vault in <paramref name="sealedList"/>; none for none, and none (logged by the
     /// exception's type) when they don't open or don't parse: after a rotation of the user key, or tampering with the database.</summary>

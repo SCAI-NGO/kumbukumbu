@@ -280,7 +280,7 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Keys_and_connections_get_403()
+    public async Task Keys_get_403()
     {
         var alice = await NewAsync(Api, vault: "Work");
         await WriteAsync(alice, Command("settings.appearance"));
@@ -291,6 +291,33 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal((HttpStatusCode.Forbidden, HttpStatusCode.Forbidden), (read.StatusCode, write.StatusCode));
         Assert.Equal(["command settings.appearance"], await EntriesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_plain_entry_that_does_not_parse_is_left_out()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        await WriteAsync(alice, Command("settings.appearance"), In("board", "Work"));
+        var users = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<UserDocument>("users");
+        var stored = await users.Find(u => u.Id == alice.User.Id).Project(u => u.Favourites).SingleAsync(Ct);
+        await users.UpdateOneAsync(
+            u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Favourites, [.. stored!, "no-ticks", "@1", "bad@ticks"]), cancellationToken: Ct);
+
+        Assert.Equal(["command settings.appearance", "board Work"], await EntriesAsync(alice));
+        // And a write over it keeps the rest.
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await WriteAsync(alice, Command("settings.appearance"), In("board", "Work"), Command("theme.dark"));
+        Assert.Equal(["command settings.appearance", "board Work", "command theme.dark"], await EntriesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_vault_is_found_by_its_normalised_name()
+    {
+        var alice = await NewAsync(Api, vault: "Caf\u00e9");
+
+        await WriteAsync(alice, In("board", "Cafe\u0301"), Note("Cafe\u0301", "Cafe\u0301.md"));
+
+        Assert.Equal(["board Caf\u00e9", "note Caf\u00e9/Caf\u00e9.md"], await EntriesAsync(alice));
     }
 
     [Fact]
