@@ -44,7 +44,7 @@ export function useFavourites() {
     mutationKey: key,
     // One at a time, in the order made: the last write is the one that stands.
     scope: { id: "favourites" },
-    mutationFn: async (change: Change) => {
+    mutationFn: async ({ change }: { change: Change; made: number }) => {
       const generation = resets;
       const put = (from: View) => call(api.PUT("/api/account/favourites", { body: { favourites: change(from.favourites).map(input), version: from.version } }));
       // As the cache has it when sent: the version the write before answered, and every change made since. Forgotten
@@ -56,7 +56,9 @@ export function useFavourites() {
       } catch (e) {
         if (!(e instanceof HttpError && e.status === 409)) throw e;
         const fresh = await queryClient.fetchQuery({ queryKey: key, queryFn: read, staleTime: 0 });
-        if (generation === resets) queryClient.setQueryData<View>(key, { ...fresh, favourites: change(fresh.favourites) });
+        // Forgotten while read again: the change was made to a list no longer shown.
+        if (generation !== resets) return null;
+        queryClient.setQueryData<View>(key, { ...fresh, favourites: change(fresh.favourites) });
         return { generation, view: await put(fresh) };
       }
     },
@@ -80,14 +82,15 @@ export function useFavourites() {
     if (!before) return;
     void queryClient.cancelQueries({ queryKey: key });
     queryClient.setQueryData<View>(key, { ...before, favourites: to(before.favourites) });
-    write.mutate(to);
+    write.mutate({ change: to, made: resets });
   };
 
   const keys = new Set(list.map(favouriteKey));
   return {
     list,
     ready: query.data !== undefined,
-    error: write.error ? errorText(write.error) : null,
+    // Not of a change made before the vaults changed: its sentence may name a vault now hidden.
+    error: write.error && write.variables?.made === resets ? errorText(write.error) : null,
     has: (f: FavouriteInput) => keys.has(favouriteKey(f)),
     /** Adds or removes `f`, as it is now; in the same write, the entries keyed `stale` go (note favourites whose note is gone). */
     toggle: (f: FavouriteInput, stale: string[] = []) => {

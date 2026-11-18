@@ -359,6 +359,19 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task The_version_says_nothing_of_whether_the_list_was_ever_written()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        var bob = await NewAsync(Api, vault: "Work");
+
+        var (aliceVersion, bobVersion) = (await VersionAsync(alice), await VersionAsync(bob));
+
+        Assert.NotEqual(aliceVersion, bobVersion);
+        var plain = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("[null,null]")));
+        Assert.NotEqual(plain, aliceVersion);
+    }
+
+    [Fact]
     public async Task A_write_without_a_version_is_refused()
     {
         var alice = await NewAsync(Api, vault: "Work");
@@ -403,7 +416,7 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Writes_that_keep_conflicting_are_409()
+    public async Task A_write_the_document_changes_under_is_409()
     {
         var alice = await NewAsync(Api, vault: "Work");
         var favourites = Api.Services.GetRequiredService<Favourites>();

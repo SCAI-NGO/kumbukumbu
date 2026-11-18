@@ -301,4 +301,47 @@ describe("useFavourites", () => {
     expect(result.current.list.map(favouriteKey)).toEqual(["vault:Secret"]);
     stop();
   });
+
+  it("sends no second PUT when the vaults change during the read after a 409", async () => {
+    let reads = 0;
+    let answer: () => void = () => {};
+    const put = vi.fn(() => json(409, { error: "Your favourites changed elsewhere; try again." }));
+    fakeApi({
+      "GET /api/account/favourites": () =>
+        ++reads === 2 ? new Promise<Response>((r) => (answer = () => r(json(200, { favourites: [], version: "v2" })))) : json(200, { favourites: [], version: `v${reads}` }),
+      "PUT /api/account/favourites": put,
+    });
+    const { result, queryClient } = setup();
+    const stop = followVaults(queryClient);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.toggle(plan));
+    await waitFor(() => expect(reads).toBe(2));
+    act(() => queryClient.setQueryData(["vaults"], [{ name: "Secret", discreet: true }]));
+    await act(async () => {
+      answer();
+    });
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(put).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("shows no error of a write sent before the vaults changed", async () => {
+    let refuse: () => void = () => {};
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [], version: "v1" }),
+      "PUT /api/account/favourites": () => new Promise<Response>((r) => (refuse = () => r(json(400, { error: "There is no vault 'Tagebuch'." })))),
+    });
+    const { result, queryClient } = setup();
+    const stop = followVaults(queryClient);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.toggle({ kind: "board", vault: "Tagebuch" }));
+    await waitFor(() => expect(queryClient.isMutating()).toBe(1));
+    act(() => queryClient.setQueryData(["vaults"], []));
+    await act(async () => {
+      refuse();
+    });
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(result.current.error).toBeNull();
+    stop();
+  });
 });
