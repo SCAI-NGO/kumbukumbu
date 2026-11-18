@@ -179,6 +179,14 @@ public sealed class EmbeddingsOptions
     /// (the model on this server, <see cref="SearchOptions.Model"/>) or the name of one of <see cref="Providers"/>.
     /// Owners can still choose another, the internal model included.</summary>
     public string Default { get; set; } = Search.EmbeddingProviders.Internal;
+
+    /// <summary>Whether people may save their own TensorX key and have their vaults embedded with it
+    /// (<c>KUMBU_EMBEDDINGS_BYOK</c>, <see cref="Search.Byok"/>). Off by default.</summary>
+    public bool Byok { get; set; }
+
+    /// <summary>The switch counts only while vaults are embedded on this server by default: with an external default the
+    /// operator pays for everyone's embeddings, and an own key has nothing to add.</summary>
+    public bool ByokOffered => Byok && Default == Search.EmbeddingProviders.Internal;
 }
 
 /// <summary>One external provider: a protocol (<see cref="Driver"/>), where it is, which model, and how it is described

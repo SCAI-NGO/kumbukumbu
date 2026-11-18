@@ -254,6 +254,11 @@ if (bootstrapCommand)
     return await BootstrapAdmin.ExecuteAsync(app.Services.GetRequiredService<BootstrapAdmin>(), options.PublicUrl, Console.Out, Console.Error, CancellationToken.None);
 }
 
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Embeddings is { Byok: true, ByokOffered: false })
+{
+    app.Logger.LogInformation("Kumbu:Embeddings:Byok is ignored: with an external default (Kumbu:Embeddings:Default) the instance pays for everyone's embeddings");
+}
+
 // Without ICU (globalization-invariant mode, or an image without libicu) .NET compares by code point.
 if (!TextOrder.IsCultureAware)
 {
