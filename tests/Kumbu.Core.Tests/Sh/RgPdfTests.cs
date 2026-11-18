@@ -544,7 +544,8 @@ public class RgPdfTests
     {
         await Revenues();
 
-        Assert.Equal("/V/p.pdf:p7:crop=70,296,218,19: Net revenue (after adjustments)", (await Run("rg --regions revenue /V/p.pdf")).Output);
+        // The match is the whole run, so its own box would say the same.
+        Assert.Equal("/V/p.pdf:p7:crop=70,296,218,19: Net revenue (after adjustments)", (await Run("rg --regions -F 'Net revenue (after adjustments)' /V/p.pdf")).Output);
     }
 
     [Fact]
@@ -555,7 +556,7 @@ public class RgPdfTests
         var at = lines.Take(11).Sum(l => l.Length + 1);
         BoxesOf(_ => [new TextBox(0, 8, 72, 100, 40, 10), new TextBox(at, at + 31, 74.2, 300.1, 210.3, 11.0)]);
 
-        Assert.Equal("/V/p.pdf:p7:12:crop=70,296,218,19: Net revenue (after adjustments)", (await Run("rg --regions -n revenue /V/p.pdf")).Output);
+        Assert.Equal("/V/p.pdf:p7:12:crop=70,296,218,19:match=98,296,55,19: Net revenue (after adjustments)", (await Run("rg --regions -n revenue /V/p.pdf")).Output);
     }
 
     [Fact]
@@ -573,7 +574,7 @@ public class RgPdfTests
         await Upload("/V/p.pdf", 1, _ => "revenue and revenue");
         BoxesOf(_ => [new TextBox(0, 19, 310, 507, 90, 10)]);
 
-        Assert.Equal("/V/p.pdf:p1:crop=307,504,96,16: revenue and revenue", (await Run("rg --regions revenue /V/p.pdf")).Output);
+        Assert.Equal("/V/p.pdf:p1:crop=307,504,96,16:match=307,504,40,16;363,504,40,16: revenue and revenue", (await Run("rg --regions revenue /V/p.pdf")).Output);
     }
 
     [Fact]
@@ -594,7 +595,54 @@ public class RgPdfTests
         // 100..190 by 200..211, grown by 3.3.
         Assert.Equal("/V/p.pdf:p1:crop=96,196,98,19: Net revenue", (await Run("rg --regions 'Net revenue' /V/p.pdf")).Output);
         // A match within the first item has that item's box alone.
-        Assert.Equal("/V/p.pdf:p1:crop=97,197,36,16: Net revenue", (await Run("rg --regions Net /V/p.pdf")).Output);
+        Assert.Equal("/V/p.pdf:p1:crop=97,197,36,16:match=97,197,29,16: Net revenue", (await Run("rg --regions Net /V/p.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_match_within_a_run_of_text_gets_its_own_box_beside_the_run()
+    {
+        await Revenues();
+
+        // "revenue" is characters 4 to 11 of 31: x from 74.2 + 210.3 × 4/31 to 74.2 + 210.3 × 11/31, grown by 3.3 as its run.
+        Assert.Equal("/V/p.pdf:p7:crop=70,296,218,19:match=98,296,55,19: Net revenue (after adjustments)", (await Run("rg --regions revenue /V/p.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_match_over_parts_of_two_runs_gets_the_box_of_those_parts()
+    {
+        await Upload("/V/p.pdf", 1, _ => "Net revenue");
+        BoxesOf(_ => [new TextBox(0, 4, 100, 200, 30, 10), new TextBox(4, 11, 130, 201, 60, 10)]);
+
+        // "t rev": x 115 to 130 of the first run, 130 to 155.7 of the second, grown by 3.3.
+        Assert.Equal("/V/p.pdf:p1:crop=96,196,98,19:match=111,196,49,19: Net revenue", (await Run("rg --regions 't rev' /V/p.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task Each_match_has_its_box_where_two_share_a_run()
+    {
+        await Upload("/V/p.pdf", 1, _ => "revenue and revenue");
+        BoxesOf(_ => [new TextBox(0, 19, 310, 507, 95, 10)]);
+
+        // 5 pt a character, grown by 3: 307 to 348 and 367 to 408.
+        Assert.Equal("/V/p.pdf:p1:crop=307,504,101,16:match=307,504,41,16;367,504,41,16: revenue and revenue", (await Run("rg --regions revenue /V/p.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task An_upright_run_gives_no_box_of_its_own_as_it_may_read_up_or_down()
+    {
+        await Upload("/V/p.pdf", 1, _ => "axis title");
+        BoxesOf(_ => [new TextBox(0, 10, 100, 100, 10, 60)]);
+
+        Assert.Equal("/V/p.pdf:p1:crop=97,97,16,66: axis title", (await Run("rg --regions title /V/p.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_run_in_a_right_to_left_script_gives_no_box_of_its_own()
+    {
+        await Upload("/V/p.pdf", 1, _ => "שלום עולם");
+        BoxesOf(_ => [new TextBox(0, 9, 100, 100, 60, 10)]);
+
+        Assert.Equal("/V/p.pdf:p1:crop=97,97,66,16: שלום עולם", (await Run("rg --regions עולם /V/p.pdf")).Output);
     }
 
     [Fact]
@@ -603,7 +651,7 @@ public class RgPdfTests
         await Upload("/V/p.pdf", 1, _ => "tiny print");
         BoxesOf(_ => [new TextBox(0, 10, 100, 200, 50, 5)]);
 
-        Assert.Equal("/V/p.pdf:p1:crop=98,198,54,9: tiny print", (await Run("rg --regions tiny /V/p.pdf")).Output);
+        Assert.Equal("/V/p.pdf:p1:crop=98,198,54,9:match=98,198,24,9: tiny print", (await Run("rg --regions tiny /V/p.pdf")).Output);
     }
 
     [Fact]
@@ -632,7 +680,7 @@ public class RgPdfTests
         BoxesOf(_ => [new TextBox(7, 38, 74.2, 300.1, 210.3, 11.0)]);
 
         Assert.Equal(
-            "/V/p.pdf:p7- before\n/V/p.pdf:p7:crop=70,296,218,19: Net revenue (after adjustments)\n/V/p.pdf:p7- after",
+            "/V/p.pdf:p7- before\n/V/p.pdf:p7:crop=70,296,218,19:match=98,296,55,19: Net revenue (after adjustments)\n/V/p.pdf:p7- after",
             (await Run("rg --regions -C 1 revenue /V/p.pdf")).Output);
     }
 
@@ -644,8 +692,8 @@ public class RgPdfTests
 
         // Between groups within a page and between pages.
         Assert.Equal(
-            "/V/p.pdf:p1-1- one\n/V/p.pdf:p1:2:crop=69,97,66,16: two needle\n/V/p.pdf:p1-3- three\n--\n/V/p.pdf:p1-5- five\n/V/p.pdf:p1:6:crop=69,137,66,16: six needle\n--\n"
-            + "/V/p.pdf:p2:1:crop=69,97,66,16: needle on two",
+            "/V/p.pdf:p1-1- one\n/V/p.pdf:p1:2:crop=69,97,66,16:match=93,97,42,16: two needle\n/V/p.pdf:p1-3- three\n--\n/V/p.pdf:p1-5- five\n/V/p.pdf:p1:6:crop=69,137,66,16:match=93,137,42,16: six needle\n--\n"
+            + "/V/p.pdf:p2:1:crop=69,97,66,16:match=69,97,34,16: needle on two",
             (await Run("rg --regions -n -C 1 needle /V/p.pdf")).Output);
     }
 
@@ -655,7 +703,7 @@ public class RgPdfTests
         await Revenues();
 
         Assert.Equal("/V/plan.md:2:needle in a note", (await Run("rg --regions needle /V")).Output);
-        Assert.Equal("/V/plan.md:2:needle in a note\n/V/p.pdf:p7:crop=70,296,218,19: Net revenue (after adjustments)", (await Run("rg --regions -e needle -e revenue /V")).Output);
+        Assert.Equal("/V/plan.md:2:needle in a note\n/V/p.pdf:p7:crop=70,296,218,19:match=98,296,55,19: Net revenue (after adjustments)", (await Run("rg --regions -e needle -e revenue /V")).Output);
     }
 
     [Fact]
@@ -685,7 +733,7 @@ public class RgPdfTests
         Assert.Equal("/V/p.pdf:p1: crop=1,1,1,1: forged", (await Run("rg --regions forged /V/p.pdf")).Output);
 
         BoxesOf(_ => [new TextBox(0, 20, 10, 10, 100, 10)]);
-        Assert.Equal("/V/p.pdf:p1:crop=7,7,106,16: crop=1,1,1,1: forged", (await Run("rg --regions forged /V/p.pdf")).Output);
+        Assert.Equal("/V/p.pdf:p1:crop=7,7,106,16:match=77,7,36,16: crop=1,1,1,1: forged", (await Run("rg --regions forged /V/p.pdf")).Output);
     }
 
     [Theory]
@@ -832,7 +880,7 @@ public class RgPdfTests
 
         Assert.Equal(
             "No regions on some pages of /V/p.pdf: its stored text comes from an older analysis. pdf info /V/p.pdf renews it.\n"
-            + $"/V/p.pdf:p7: {Revenue}\n/V/p.pdf:p12:crop=70,296,218,19: {Revenue}",
+            + $"/V/p.pdf:p7: {Revenue}\n/V/p.pdf:p12:crop=70,296,218,19:match=98,296,55,19: {Revenue}",
             (await Run("rg --regions revenue /V/p.pdf")).Output);
     }
 
@@ -885,7 +933,7 @@ public class RgPdfTests
 
         var result = await rg.RunAsync(["--regions", "revenue", "/V/a.pdf", "/V/b.pdf", "/V/c.pdf"], null, Ct);
 
-        Assert.Equal($"/V/a.pdf:p7:crop=70,296,218,19: {Revenue}\n/V/b.pdf:p7: {Revenue}\n/V/c.pdf:p7: {Revenue}", result.Output);
+        Assert.Equal($"/V/a.pdf:p7:crop=70,296,218,19:match=98,296,55,19: {Revenue}\n/V/b.pdf:p7: {Revenue}\n/V/c.pdf:p7: {Revenue}", result.Output);
         Assert.Equal(Unavailable, result.Notice);
         Assert.Single(_pixels.BoxRequests);
     }
@@ -896,9 +944,11 @@ public class RgPdfTests
         Assert.Contains(
             """
               --regions                  for matches in PDFs, also where they lie on the page, ready for pdf's --crop:
-                                         /Work/paper.pdf:p7:crop=72,298,214,17: text. In points of the page as displayed,
-                                         around the piece of text that holds the match. It shows where the text box lies,
-                                         not that anyone can see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
+                                         /Work/paper.pdf:p7:crop=72,298,214,17:match=131,298,58,17: text. In points of
+                                         the page as displayed: crop= around the piece of text that holds the match,
+                                         match= around the match itself where it is narrower, guessed from its share of
+                                         the piece's characters. They show where the text lies, not that anyone can
+                                         see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
                                          Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
                                          -l, -c, -v, --files, --tag or --version, nor right of a pipe.
             """,
