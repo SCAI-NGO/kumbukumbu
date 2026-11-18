@@ -24,6 +24,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -149,5 +150,25 @@ describe("the note's menu from the keyboard", () => {
     const labels = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
     expect(labels).toContain("History");
     expect(labels).not.toContain("Find in note");
+  });
+
+  it("the_browser_menu_after_the_key_is_kept_away_but_not_a_later_right_click", async () => {
+    await readNote();
+    fireEvent.keyDown(document.body, { key: "ContextMenu", code: "ContextMenu" });
+    await screen.findByRole("menu", { name: "Note actions" });
+    vi.useFakeTimers();
+    // Windows raises the browser's menu after the key's keyup.
+    fireEvent.keyUp(document.activeElement!, { key: "ContextMenu", code: "ContextMenu" });
+    expect(fireEvent.contextMenu(document.activeElement!)).toBe(false);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(fireEvent.contextMenu(document.body, { button: 2 })).toBe(true);
+  });
+
+  it("the_key_held_down_keeps_the_browser_menu_away_while_ours_is_open", async () => {
+    await readNote();
+    shiftF10();
+    await screen.findByRole("menu", { name: "Note actions" });
+    expect(fireEvent.keyDown(document.activeElement!, { key: "F10", code: "F10", shiftKey: true, repeat: true })).toBe(false);
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
   });
 });

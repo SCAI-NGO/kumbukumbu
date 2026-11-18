@@ -33,9 +33,12 @@ export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoi
     const roomAbove = above - 8;
     const down = height <= roomBelow || (height > roomAbove && roomBelow >= roomAbove);
     const maxHeight = Math.max(MIN_HEIGHT, down ? roomBelow : roomAbove);
+    const shown = Math.min(height, maxHeight);
+    // On screen whatever the point: a caret scrolled out of the editor's view stands outside the window.
+    const within = (at: number, size: number, room: number) => Math.max(8, Math.min(at, room - 8 - size));
     setPlaced({
-      left: left + box.width + 8 <= window.innerWidth ? left : Math.max(8, left - box.width),
-      top: down ? below : Math.max(8, above - Math.min(height, maxHeight)),
+      left: within(left + box.width + 8 <= window.innerWidth ? left : left - box.width, box.width, window.innerWidth),
+      top: within(down ? below : above - shown, shown, window.innerHeight),
       maxHeight,
     });
     itemButtons(list.current)[0]?.focus();

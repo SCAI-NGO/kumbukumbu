@@ -85,4 +85,13 @@ describe("PointMenu", () => {
     await userEvent.keyboard("{ArrowUp}{Enter}");
     expect(order).toEqual(["close", "select"]);
   });
+
+  it("stays_on_screen_for_a_point_out_of_view", () => {
+    layout();
+    // A caret scrolled out of the editor's view, below the window and left of it.
+    render(<PointMenu label="Note actions" items={items()} at={{ left: -50, top: 2000 }} onClose={vi.fn()} />);
+    const menu = screen.getByRole("menu");
+    expect(menu.style.top).toBe(`${800 - 8 - 120}px`);
+    expect(menu.style.left).toBe("8px");
+  });
 });

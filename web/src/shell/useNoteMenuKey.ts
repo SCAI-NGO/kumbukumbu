@@ -12,7 +12,32 @@ function atDockButton(): MenuPoint | null {
   const button = document.querySelector<HTMLElement>('nav[aria-label="Vault actions"] [aria-label="Note actions"]');
   if (!button) return null;
   const box = button.getBoundingClientRect();
+  // From its right edge: with the ⋯ near the window's edge there is no room to the right, so the menu flips left and
+  // ends at the button, as the dock's own does.
   return { left: box.right, top: box.top - 4, bottom: box.bottom };
+}
+
+/**
+ * Keeps the browser's own context menu away after the key: Windows raises it on the key's keyup, which a prevented
+ * keydown doesn't stop. Only for a moment (until just after that keyup, else 500 ms), so a right click stays the
+ * browser's. Answers how to stop at once.
+ */
+function swallowContextMenu(key: string) {
+  const swallow = (e: Event) => e.preventDefault();
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (e.key !== key) return;
+    clearTimeout(timer);
+    timer = setTimeout(disarm, 0);
+  };
+  const disarm = () => {
+    clearTimeout(timer);
+    document.removeEventListener("contextmenu", swallow, true);
+    document.removeEventListener("keyup", onKeyUp, true);
+  };
+  let timer = setTimeout(disarm, 500);
+  document.addEventListener("contextmenu", swallow, true);
+  document.addEventListener("keyup", onKeyUp, true);
+  return disarm;
 }
 
 /**
@@ -25,19 +50,37 @@ export function useNoteMenuKey(path: string | null): { at: MenuPoint; close(): v
   const [open, setOpen] = useState<{ at: MenuPoint; opener: HTMLElement | null } | null>(null);
   const shown = useRef(path);
   shown.current = path;
+  const isOpen = useRef(false);
+  isOpen.current = open !== null;
 
   useEffect(() => {
+    // One at a time, and none left behind by the shell.
+    let disarm = () => {};
+    const swallow = (key: string) => {
+      disarm();
+      disarm = swallowContextMenu(key);
+    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (!isMenuKey(e) || e.isComposing || !shown.current) return;
+      // The key held down, or pressed again, over our own menu: not the browser's on top of it.
+      if (isOpen.current) {
+        e.preventDefault();
+        swallow(e.key);
+        return;
+      }
       const { overlay, mode, caretAt } = useEditor.getState();
       if (topDialog() || overlay !== "none" || document.querySelector('[role="menu"]')) return;
       const at = mode === "write" ? (caretAt?.() ?? null) : atDockButton();
       if (!at) return;
       e.preventDefault();
+      swallow(e.key);
       setOpen({ at, opener: document.activeElement instanceof HTMLElement ? document.activeElement : null });
     };
     document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      disarm();
+    };
   }, []);
 
   // Another note, or the other mode: the menu was for what was shown.
