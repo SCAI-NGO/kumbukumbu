@@ -333,6 +333,7 @@ app.MapGraphApi();
 app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();
+app.MapEmbeddingsKeyApi();
 app.MapFlagApi();
 app.MapRecentApi();
 app.MapTagApi();

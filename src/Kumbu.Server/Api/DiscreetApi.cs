@@ -112,7 +112,8 @@ public static class DiscreetApi
     /// the vault exists or is discreet. The vault Skills never is.
     /// </summary>
     private static async Task<NoContent> MarkAsync(
-        string vault, MarkDiscreetRequest body, RequestCaller caller, DiscreetVaults discreet, SyncHub hub, CancellationToken ct)
+        string vault, MarkDiscreetRequest body, RequestCaller caller, DiscreetVaults discreet, SyncHub hub, Vaults.VaultCatalog catalog,
+        Search.SearchIndex index, MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
     {
         var user = caller.User!;
         var visible = await caller.OpenVaultsAsync(ct);
@@ -123,6 +124,18 @@ public static class DiscreetApi
 
         // Every vault the session opens but Skills, should the list not open (Decision 2).
         var all = visible.Concat(session.Hidden).Where(v => !v.IsSkillsVault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
+        // A discreet vault's text stays on this server (BYOK spec): her own vault leaves TensorX first, and its members are
+        // told the provider changed, as for any switch.
+        if (body.Discreet && access.IsOwner && access.Vault.EmbeddingProvider == Search.Byok.Provider)
+        {
+            await catalog.SetEmbeddingProviderAsync(access.Vault, Search.EmbeddingProviders.Internal, ct);
+            index.CatchUp(access.Vault);
+            if (await catalog.IsSharedAsync(null, access.Id, ct))
+            {
+                await Sharing.VaultEvents.RecordAsync(db, access.Id, Sharing.VaultEvents.ProviderChanged, null, catalog.Now, ct);
+            }
+        }
+
         await discreet.SetAsync(user.Id, caller.UserKey!, access.Id, body.Discreet, all, ct);
         await hub.DiscreetChangedAsync(user.Id, access.Id, CancellationToken.None);
         return TypedResults.NoContent();
