@@ -76,6 +76,23 @@ public sealed class DavReadTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Get_and_head_of_a_file_are_a_download()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateFileAsync("site/page.html", FileDownloadTests.Page);
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/blob.bin", new ByteArrayContent(FileDownloadTests.Bin));
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        using var page = await dav.SendAsync(HttpMethod.Get, "/dav/Work/site/page.html");
+        await FileDownloadTests.AssertDownloadAsync(page, "page.html", FileDownloadTests.Text, FileDownloadTests.Page);
+        using var bin = await dav.SendAsync(HttpMethod.Get, "/dav/Work/blob.bin");
+        await FileDownloadTests.AssertDownloadAsync(bin, "blob.bin", FileDownloadTests.Bytes, FileDownloadTests.Bin);
+        using var head = await dav.SendAsync(HttpMethod.Head, "/dav/Work/site/page.html");
+        await FileDownloadTests.AssertDownloadAsync(head, "page.html", FileDownloadTests.Text, null);
+        Assert.Equal(FileDownloadTests.Page.Length, head.Content.Headers.ContentLength);
+    }
+
+    [Fact]
     public async Task An_svg_put_and_got_runs_nothing_under_the_file_content_policy()
     {
         var dav = await DavClient.NewAsync(Api);
