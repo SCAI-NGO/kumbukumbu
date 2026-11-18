@@ -10,6 +10,8 @@ import { startOver } from "../shell/lastNote";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
+import { useWindows } from "../windows/store";
+import { afterWindow } from "./Palette";
 
 beforeEach(() => {
   window.innerWidth = 390;
@@ -548,5 +550,38 @@ describe("the note's actions", () => {
     const question = await screen.findByRole("dialog", { name: "Delete inbox?" });
     expect(queryPalette()).not.toBeInTheDocument();
     await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
+  });
+});
+
+describe("an action waiting for its window to close", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useWindows.setState({ open: false });
+  });
+
+  it("runs_at_once_when_the_window_is_already_gone", () => {
+    const action = vi.fn();
+    afterWindow(action);
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("runs_once_the_window_closes", () => {
+    vi.useFakeTimers();
+    useWindows.setState({ open: true });
+    const action = vi.fn();
+    afterWindow(action);
+    vi.advanceTimersByTime(500);
+    useWindows.setState({ open: false });
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("is_dropped_when_the_window_stays_past_a_second", () => {
+    vi.useFakeTimers();
+    useWindows.setState({ open: true });
+    const action = vi.fn();
+    afterWindow(action);
+    vi.advanceTimersByTime(1000);
+    useWindows.setState({ open: false });
+    expect(action).not.toHaveBeenCalled();
   });
 });

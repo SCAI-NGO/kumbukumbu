@@ -23,11 +23,20 @@ import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
-/** Runs `then` once the window closing now is gone: the closing navigation goes through the router, not at once. */
-function afterWindow(then: () => void) {
+/** How long an action waits for its window to close; past that it is dropped, never popping up at a later close. */
+const WINDOW_WAIT = 1000;
+
+/**
+ * Runs `then` once the window closing now is gone (the closing navigation goes through the router, not at once), at
+ * once if it is gone already; not at all if it stays open past a second (a lock that keeps it).
+ */
+export function afterWindow(then: () => void) {
+  if (!useWindows.getState().open) return then();
+  const timer = setTimeout(() => stop(), WINDOW_WAIT);
   const stop = useWindows.subscribe((s) => {
     if (s.open) return;
     stop();
+    clearTimeout(timer);
     then();
   });
 }

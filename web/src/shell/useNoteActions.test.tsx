@@ -267,6 +267,9 @@ describe("the note's actions", () => {
     await waitFor(() => expect(state.copies).toHaveLength(1));
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(/Copy of inbox/)).not.toBeInTheDocument();
+    // Nor once the vault is shown again.
+    act(() => useDiscreet.setState({ gone: new Set() }));
+    expect(screen.queryByText(/Copy of inbox/)).not.toBeInTheDocument();
   });
 
   it("a_late_failure_after_hiding_names_nothing", async () => {

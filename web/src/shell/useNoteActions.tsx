@@ -111,7 +111,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
     const save = useEditor.getState().beforeRead;
     if (save && !(await save({ reread: false }))) return;
     setCopy(null);
-    duplicating.mutate(path, { onSuccess: setCopy });
+    // A copy whose vault was hidden meanwhile gets no notice, also none waiting for the vault to be shown again.
+    duplicating.mutate(path, { onSuccess: (copy) => !goneVault(useDiscreet.getState(), vaultOf(copy)) && setCopy(copy) });
   };
 
   const items: MenuItem[] = path
