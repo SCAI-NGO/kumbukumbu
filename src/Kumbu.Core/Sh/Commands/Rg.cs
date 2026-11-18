@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
@@ -64,7 +65,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
           searched in the current state only, not with --checkpoint; --files and --tag leave them out.
           With --regions a match in a PDF also says where on the page it lies.
-          Images are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
+          Text files are searched as notes are (UTF-8 without NUL bytes, up to 15 MB: a CSV, a script).
+          Images and other files are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
 
@@ -206,28 +208,36 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             if (operands.Count == 1) scope = path;
 
             var below = await notes.ReadNotesUnderAsync(path, ct);
-            var pdfs = pixels is null ? [] : (await StoreAttachments.UnderAsync(notes, path, ct)).Where(a => AttachmentText.IsPdf(a.Current)).ToList();
+            var files = await StoreAttachments.UnderAsync(notes, path, ct);
+            var pdfs = pixels is null ? [] : files.Where(a => AttachmentText.IsPdf(a.Current)).ToList();
+            // A text file is searched as a note is: its lines (spec 2026-11-18, decision 3).
+            below = [.. below, .. await TextsAsync(files.Where(a => Glob.Keeps(globs, a.Path, path)), ct)];
             if (below.Count == 0 && pdfs.Count == 0 && !path.IsRoot)
             {
                 var content = await notes.ReadAsync(path, ct);
                 if (content is null && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
                 {
-                    if (pixels is null || !AttachmentText.IsPdf(attachment.Current))
+                    if (attachment.Current.MediaType == AttachmentFormat.TextMediaType)
                     {
-                        return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes only");
+                        below = await TextsAsync([attachment], ct);
                     }
-
-                    documents.TryAdd(path, attachment.Current);
-                    continue;
+                    else if (pixels is null || !AttachmentText.IsPdf(attachment.Current))
+                    {
+                        return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes and text files only");
+                    }
+                    else
+                    {
+                        documents.TryAdd(path, attachment.Current);
+                        continue;
+                    }
                 }
 
-                if (content is null)
+                else if (content is null)
                 {
                     if (await HasNothingToSearchAsync(path, ct)) continue;
                     return ShellResult.Error($"rg: {path.Value}: No such file or directory");
                 }
-
-                below = [new Note(path, content)];
+                else below = [new Note(path, content)];
             }
 
             // After the checks above, so that a vault holding nothing but its archive has nothing to find, not nothing there.
@@ -688,6 +698,19 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         }
 
         return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));
+    }
+
+    /// <summary>The text files among <paramref name="files"/> with their lines, as notes to search; a file whose content
+    /// is gone is passed over.</summary>
+    private async Task<List<Note>> TextsAsync(IEnumerable<StoredAttachment> files, CancellationToken ct)
+    {
+        var texts = new List<Note>();
+        foreach (var file in files.Where(f => f.Current.MediaType == AttachmentFormat.TextMediaType))
+        {
+            if (await StoreAttachments.ReadBytesAsync(notes, file.Path, file.Current, ct) is { } bytes) texts.Add(new Note(file.Path, Encoding.UTF8.GetString(bytes)));
+        }
+
+        return texts;
     }
 
     /// <summary>A vault without notes, or a folder of attachments: there, with nothing for rg, unlike a path that isn't.</summary>

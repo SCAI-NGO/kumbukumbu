@@ -19,8 +19,9 @@ public sealed class Ls(INoteReader notes) : ICommand
         ls [-l] [-a|--archive] [path]
           List a directory. Directories end with '/'. Without a path, list the vaults; a vault shared
           with you shows its owner and what you may do in it: garten/ (shared by "Alice", read).
-          A note's path lists just that path. An attachment (an image or a PDF) is listed with its
-          kind, pixel size and file size: shot.png  image 1440×3120 412 KB.
+          A note's path lists just that path. An attachment is listed with its kind, an image's
+          pixel size and its file size: shot.png  image 1440×3120 412 KB, data.csv  text 2 KB,
+          report.docx  file 2.1 MB.
           A vault's listing leaves out _archive/; ls /Work/_archive/ lists what it holds.
           _archive/ is the vault's archive (see 'help archive'); hiding it is about attention, not
           access: whoever may read the vault may read it.

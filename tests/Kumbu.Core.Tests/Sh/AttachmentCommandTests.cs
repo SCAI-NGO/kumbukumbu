@@ -117,10 +117,10 @@ public class AttachmentCommandTests
 
         Assert.Equal("/Work/other.md\n/Work/plan.md", (await Run("rg --files /Work")).Output);
         Assert.DoesNotContain("shot.png:", (await Run("rg -i png /Work")).Output.Replace("/Work/plan.md", ""));
-        Assert.Equal("rg: /Work/shot.png is an attachment; rg searches the text of notes only", (await Run("rg x /Work/shot.png")).Output);
+        Assert.Equal("rg: /Work/shot.png is an attachment; rg searches the text of notes and text files only", (await Run("rg x /Work/shot.png")).Output);
         Assert.Contains("is an attachment, not a note", (await Run("semsearch layout /Work/shot.png")).Output);
-        Assert.Contains("Images are not searched", (await Run("help rg")).Output);
-        Assert.Contains("images are not searched", (await Run("help semsearch")).Output);
+        Assert.Contains("Images and other files are not searched", (await Run("help rg")).Output);
+        Assert.Contains("images and other files are not searched", (await Run("help semsearch")).Output);
         Assert.Contains("semsearch  ranks the pages of PDFs (not scans) by meaning", (await Run("help attachments")).Output);
     }
 
@@ -251,6 +251,109 @@ public class AttachmentCommandTests
         var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
 
         Assert.Equal("/W/n.md:1:see [[dup.png]]  (ambiguous, may mean this file)", (await sh.RunAsync("backlinks /W/a/dup.png", Ct)).Output);
+    }
+
+    private static readonly byte[] Binary = [0x50, 0x4B, 0x03, 0x04, 0x00, 0xFF];
+
+    private async Task Note(string path, string content) =>
+        Assert.False((await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync(path, content, null, Ct)).IsError);
+
+    [Fact]
+    public async Task Ls_shows_a_file_and_a_folder_with_a_dot_side_by_side()
+    {
+        await Upload("/Work/Makefile", "all:\n"u8.ToArray());
+        await Upload("/Work/sheet.xlsx", Binary);
+        await Note("/Work/v1.2/notes.md", "notes\n");
+        Assert.False((await Run("mkdir /Work/v1.3")).IsError);
+
+        Assert.Equal("Makefile  text 5 B\nother.md\nplan.md\nsheet.xlsx  file 6 B\nv1.2/\nv1.3/", (await Run("ls /Work")).Output);
+        Assert.Equal("notes.md", (await Run("ls /Work/v1.2")).Output);
+        Assert.Equal("/Work/Makefile  text 5 B", (await Run("ls /Work/Makefile")).Output);
+    }
+
+    [Fact]
+    public async Task Cat_prints_a_text_file_and_describes_a_binary_one()
+    {
+        await Upload("/Work/data.csv", "name;size\nrose;3\n"u8.ToArray());
+        await Upload("/Work/sheet.xlsx", Binary);
+        await Note("/Work/v1.2/notes.md", "notes\n");
+
+        Assert.Equal("name;size\nrose;3\n", (await Run("cat /Work/data.csv")).Output);
+        Assert.Equal("sheet.xlsx: file, 6 B", (await Run("cat /Work/sheet.xlsx")).Output);
+        Assert.Equal("cat: /Work/sheet.xlsx is an attachment, which has no sections; 'cat /Work/sheet.xlsx' describes it", (await Run("cat \"/Work/sheet.xlsx#Top\"")).Output);
+        Assert.Equal("cat: /Work/v1.2: Is a directory", (await Run("cat /Work/v1.2")).Output);
+        Assert.Contains("No such file", (await Run("cat /Work/v1.4")).Output);
+
+        // A long text file is cut as any output is, never outlined as a note: a CSV has no headings.
+        await Upload("/Work/long.csv", System.Text.Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("# a;b\n", OutputLimit.MaxChars / 4))));
+        Assert.DoesNotContain("its outline is above", (await Run("cat /Work/long.csv")).Output);
+    }
+
+    [Fact]
+    public async Task Rg_searches_text_files_and_not_binary_ones()
+    {
+        await Upload("/Work/data.csv", "name;size\nrose;3\n"u8.ToArray());
+        await Upload("/Work/rose.bin", [.. "rose"u8.ToArray(), 0]);
+
+        Assert.Equal("/Work/data.csv:2:rose;3", (await Run("rg rose /Work")).Output);
+        Assert.Equal("/Work/data.csv:2:rose;3", (await Run("rg rose /Work/data.csv")).Output);
+        Assert.Equal("/Work/other.md\n/Work/plan.md", (await Run("rg --files /Work")).Output);
+        Assert.Equal("rg: /Work/rose.bin is an attachment; rg searches the text of notes and text files only", (await Run("rg x /Work/rose.bin")).Output);
+    }
+
+    [Fact]
+    public async Task Mv_rm_and_restore_work_on_a_file()
+    {
+        await Upload("/Work/Makefile", "all:\n"u8.ToArray());
+        await Note("/Work/v1.2/notes.md", "notes\n");
+
+        Assert.StartsWith("moved /Work/Makefile to /Work/v1.2/Makefile", (await Run("mv /Work/Makefile /Work/v1.2")).Output);
+        Assert.StartsWith("moved /Work/v1.2/Makefile to /Work/build/GNUmakefile", (await Run("mv /Work/v1.2/Makefile /Work/build/GNUmakefile")).Output);
+        Assert.Equal("mv: /Work/build/GNUmakefile is a file, not a folder; nothing can be kept below it", (await Run("mv /Work/v1.2/notes.md /Work/build/GNUmakefile/notes.md")).Output);
+        Assert.StartsWith("moved /Work/v1.2/ to /Work/v1.3/", (await Run("mv /Work/v1.2/ /Work/v1.3/")).Output);
+
+        Assert.StartsWith("removed /Work/build/GNUmakefile;", (await Run("rm /Work/build/GNUmakefile")).Output);
+        Assert.Equal("restored /Work/build/GNUmakefile from the trash", (await Run("restore /Work/build/GNUmakefile")).Output);
+        Assert.Equal("all:\n", (await Run("cat /Work/build/GNUmakefile")).Output);
+    }
+
+    [Fact]
+    public async Task Rm_and_restore_tell_a_folder_with_a_dot_from_a_file_without_one()
+    {
+        await Upload("/Work/Makefile", "all:\n"u8.ToArray());
+        await Note("/Work/v1.2/notes.md", "notes\n");
+        Assert.False((await Run("mkdir /Work/v1.3")).IsError);
+
+        Assert.StartsWith("rm: /Work/v1.2: Is a directory holding 1 entry", (await Run("rm /Work/v1.2")).Output);
+        Assert.StartsWith("removed folder /Work/v1.3/;", (await Run("rm /Work/v1.3")).Output);
+        Assert.StartsWith("removed /Work/Makefile;", (await Run("rm /Work/Makefile")).Output);
+
+        Assert.Equal("restored /Work/v1.3/ from the trash", (await Run("restore /Work/v1.3")).Output);
+        Assert.Equal("restored /Work/Makefile from the trash", (await Run("restore /Work/Makefile")).Output);
+        Assert.Equal("Makefile  text 5 B\nother.md\nplan.md\nv1.2/\nv1.3/", (await Run("ls /Work")).Output);
+        Assert.Equal("mkdir: /Work/Makefile: File exists (it is a file)", (await Run("mkdir /Work/Makefile")).Output);
+    }
+
+    [Fact]
+    public async Task Archive_keeps_a_files_name_whole()
+    {
+        await Upload("/Work/Makefile", "all:\n"u8.ToArray());
+        await Upload("/Work/sheet.xlsx", Binary);
+
+        Assert.StartsWith("moved /Work/Makefile to /Work/_archive/Makefile 2026-10-27 110000;", (await Run("archive /Work/Makefile")).Output);
+        Assert.StartsWith("moved /Work/sheet.xlsx to /Work/_archive/sheet 2026-10-27 110000.xlsx;", (await Run("archive /Work/sheet.xlsx")).Output);
+    }
+
+    [Fact]
+    public async Task Links_to_a_file_lead_to_it()
+    {
+        await Upload("/Work/data.csv", "a;b\n"u8.ToArray());
+        await Upload("/Work/src/Makefile", "all:\n"u8.ToArray());
+        await Note("/Work/data.csv.md", "a note\n");
+        await Note("/Work/links.md", "[[data.csv]] [[Makefile]] [[nowhere]]\n");
+
+        Assert.Equal("1: [[data.csv]] → /Work/data.csv\n1: [[Makefile]] → /Work/src/Makefile\n1: [[nowhere]] → not found", (await Run("links /Work/links.md")).Output);
+        Assert.Equal("/Work/links.md:1:[[data.csv]] [[Makefile]] [[nowhere]]", (await Run("backlinks /Work/data.csv")).Output);
     }
 
     [Fact]
