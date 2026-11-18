@@ -209,7 +209,13 @@ internal sealed partial class Publications
     /// <summary>A copy as it is made: a single note's as before; a bundle's notes, and its members for the record.</summary>
     private sealed record MadeAny(Made Made, IReadOnlyList<PublishedBundleNote>? Notes, IReadOnlyList<BundleMember>? Members)
     {
-        public PublishedCopy Copy(DateTime at, Walk walk) => Notes is null ? Made.Copy(at) : Made.Copy(at) with { Notes = Notes, Edges = walk.Edges };
+        /// <remarks>Only the edges between notes the copy holds: one gone since the walk took it is in none.</remarks>
+        public PublishedCopy Copy(DateTime at, Walk walk)
+        {
+            if (Notes is null) return Made.Copy(at);
+            var ids = Notes.Select(n => n.Id).ToHashSet();
+            return Made.Copy(at) with { Notes = Notes, Edges = [.. walk.Edges.Where(e => ids.Contains(e[0]) && ids.Contains(e[1]))] };
+        }
     }
 
     /// <summary>The note alone as before, or the bundle the walk took.</summary>

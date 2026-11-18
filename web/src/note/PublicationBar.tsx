@@ -40,7 +40,7 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
 
   const p = publication.data;
   // A note published with another one's bundle (Publish 2.0 decision 7): where it went out, for owner and member alike.
-  if (!p && starts.length > 0) return <BundledBar starts={starts} />;
+  if (!p && starts.length > 0) return <BundledBar starts={owner ? starts : null} />;
   if (!p) return null;
 
   if (!owner) {
@@ -108,8 +108,16 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
 
 const titleOf = (path: string) => path.split("/").at(-1)!.replace(/\.md$/i, "");
 
-/** "Published with Plan": this note went out inside the bundle of each start note named. */
-function BundledBar({ starts }: { starts: string[] }) {
+/** "Published with Plan": this note went out inside the bundle of each start note named; a member learns only that
+ * it is published (publish spec §3.10). */
+function BundledBar({ starts }: { starts: string[] | null }) {
+  if (!starts) {
+    return (
+      <section aria-label="Publication" className={barClass}>
+        <span className="py-2">Published by the vault's owner</span>
+      </section>
+    );
+  }
   return (
     <section aria-label="Publication" className={barClass}>
       <span className="py-2">

@@ -276,9 +276,12 @@ describe("PublicationBar", () => {
       "GET /api/session": session(),
       [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: "/Work/Plan.md" }] }),
     });
-    renderBar(false);
+    renderBar();
     const region = await bar();
     expect(region).toHaveTextContent("Published with Plan");
     expect(within(region).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/notes/Work/Plan.md");
+    cleanup();
+    renderBar(false);
+    expect(await bar()).toHaveTextContent("Published by the vault's owner");
   });
 });
