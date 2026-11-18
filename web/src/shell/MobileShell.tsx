@@ -309,6 +309,21 @@ export default function MobileShell() {
     setPanelCollapsed(!panelCollapsed);
   }, [panelCollapsed, setPanelCollapsed]);
 
+  // Ctrl+Shift+\ (Cmd+Shift+\ on a Mac), the tree's shortcut mirrored. Shift+\ types `|` on many layouts, and `code`
+  // goes for layouts where `\` needs AltGr. Not while a dialog is open: the panel is behind it.
+  useEffect(() => {
+    if (!sidePanel) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey || e.defaultPrevented) return;
+      if (e.key !== "\\" && e.key !== "|" && e.code !== "Backslash") return;
+      if (topDialog()) return;
+      e.preventDefault();
+      toggleSidePanel();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [sidePanel, toggleSidePanel]);
+
   usePaletteShortcut();
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).

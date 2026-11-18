@@ -207,3 +207,61 @@ describe("the side panel's outline", () => {
     await waitFor(() => expect(marked()).toBe("Goals"));
   });
 });
+
+describe("Ctrl+Shift+\\", () => {
+  const press = (init: KeyboardEventInit) => act(() => void document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, shiftKey: true, ...init })));
+
+  it("hides and shows the side panel, Cmd too, the focus left in place", async () => {
+    await open();
+    const write = screen.getByRole("button", { name: "Write" });
+    act(() => write.focus());
+    // Shift+\ types `|` on many layouts.
+    press({ ctrlKey: true, key: "|", code: "Backslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    expect(write).toHaveFocus();
+    press({ metaKey: true, key: "\\", code: "Backslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    // The tree's shortcut stays the tree's.
+    expect(screen.getByRole("button", { name: "File tree" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("goes by the key's code too, for layouts where \\ is elsewhere, and by the key where the code differs", async () => {
+    await open();
+    press({ ctrlKey: true, key: "'", code: "Backslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    press({ ctrlKey: true, key: "\\", code: "IntlBackslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("isn't Ctrl+\\ or Ctrl+Alt+Shift+\\", async () => {
+    await open();
+    press({ ctrlKey: true, shiftKey: false, key: "\\", code: "Backslash" });
+    press({ ctrlKey: true, altKey: true, key: "|", code: "Backslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "File tree" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("hands the focus to the toggle when it hides the panel holding it", async () => {
+    await open();
+    const tab = within(panel()).getByRole("tab", { name: "Links" });
+    act(() => tab.focus());
+    press({ ctrlKey: true, key: "|", code: "Backslash" });
+    expect(toggle()).toHaveFocus();
+  });
+
+  it("does nothing while a dialog is open", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    press({ ctrlKey: true, key: "|", code: "Backslash" });
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does nothing below 1280 px", async () => {
+    width = "desktop";
+    await open();
+    press({ ctrlKey: true, key: "|", code: "Backslash" });
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+});
