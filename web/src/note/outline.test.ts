@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { atxHeading, headingLine, headingLink, outline, section } from "./outline";
+import { atxHeading, headingLine, headingLink, outline, section, writtenHeading } from "./outline";
 import { embedHeading } from "./wikiLinks";
 
 describe("outline", () => {
@@ -153,14 +153,16 @@ describe("headingLine", () => {
 });
 
 describe("a link to a heading whose text a link can't hold", () => {
-  const body = ["# Top", "", "## C# notes | x", "c", "## [draft] v2", "d", "## Notes [2]", "n", "## C\\# tips", "t", "## Notes", "## Notes"].join("\n");
-  const linkOf = (line: number) => headingLink(outline(body).find((h) => h.line === line)!.text);
+  const body = ["# Top", "", "## C# notes | x", "c", "## [draft] v2", "d", "## Notes [2]", "n", "## C\\# tips", "t", "## Notes", "## Notes", "## The **road**map", "r"].join("\n");
+  const linkOf = (line: number) => headingLink(writtenHeading(body.split("\n"), outline(body).find((h) => h.line === line)!));
 
-  it("is written without # | ^ [ ], %% and Markdown's escapes", () => {
-    expect([3, 5, 7, 9].map(linkOf)).toEqual(["C notes x", "draft v2", "Notes 2", "C tips"]);
+  it("is the heading as written, without # | ^ [ ], %% and Markdown's escapes", () => {
+    expect([3, 5, 7, 9, 13].map(linkOf)).toEqual(["C notes x", "draft v2", "Notes 2", "C tips", "The **road**map"]);
+    // A setext heading's text as written is the one shown.
+    expect(writtenHeading(["Plan", "==="], { level: 1, text: "Plan", line: 1 })).toBe("Plan");
   });
 
-  it.each([3, 5, 7, 9])("finds the heading at line %i, and its section", (line) => {
+  it.each([3, 5, 7, 9, 13])("finds the heading at line %i, and its section", (line) => {
     expect(headingLine(body, linkOf(line))).toBe(line);
     expect(headingLine(body, linkOf(line).toUpperCase())).toBe(line);
     expect(section(body, linkOf(line))?.split("\n")[line - 1]).toBe(body.split("\n")[line - 1]);

@@ -699,7 +699,7 @@ describe("[[ completion", () => {
 
 describe("[[ completion of headings and blocks", () => {
   const ROADMAP = "/Work/projects/roadmap.md";
-  const roadmap = ["# Roadmap", "", "Why it matters. ^why", "", "## Next steps", "", "- ship it ^ship", "", "## C# [later]"].join("\n");
+  const roadmap = ["# Roadmap", "", "Why it matters. ^why", "", "## Next steps", "", "- ship it ^ship", "", "## C# [later]", "", "## The **road**map"].join("\n");
   const withRoadmap = (answer: () => Response | Promise<Response> = () => json(200, noteView(ROADMAP, roadmap, "r1"))) => editorApi([ok], undefined, { [`GET /api/notes${ROADMAP}`]: answer });
   const options = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
 
@@ -708,12 +708,20 @@ describe("[[ completion of headings and blocks", () => {
     const { u } = await openInWrite();
     await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#");
     expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
-    expect(options("Headings to link")).toEqual(["RoadmapH1", "Next stepsH2", "C# [later]H2"]);
+    expect(options("Headings to link")).toEqual(["RoadmapH1", "Next stepsH2", "C# [later]H2", "The roadmapH2"]);
     await u.type(editorBox(), "c#");
     expect(screen.queryByRole("listbox", { name: "Headings to link" })).toBeNull();
     await u.type(editorBox(), "{Backspace}{Backspace}lat");
     await u.keyboard("{Enter}");
     expect(editorBox().value).toBe(`${source} [[Roadmap#C later]]`);
+  });
+
+  it("inserts a heading as written, its Markdown kept, as Obsidian links it", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#the road");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[Roadmap#The **road**map]]`);
   });
 
   it("lists the block ids that note has, with their text, and inserts one", async () => {

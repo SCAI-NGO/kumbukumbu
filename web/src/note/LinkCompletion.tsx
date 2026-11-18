@@ -23,7 +23,7 @@ import { apply } from "./textEdit";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
-/** A row of the list: what it shows, and what picking it inserts (a note's path, a heading's link text, `^id`). */
+/** A row of the list: what it shows, and what picking it inserts (a note's path, a heading's link text or `#fragment`, `^id`). */
 type Option = { key: string; label: string; detail: string; value: string };
 
 /** A Markdown link's path as written (`/My%20Plan.md`), decoded where it is well-formed, as the server reads it. */
@@ -77,8 +77,9 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     if (!at || content === undefined) return [];
     if (at.kind === "block") return blocksFor(content, at.query).map((b) => ({ key: b.id, label: b.text, detail: `^${b.id}`, value: `^${b.id}` }));
     return headingsFor(content, at.query)
-      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: headingLink(h.text) }))
-      .filter((o) => o.value !== "");
+      .filter((h) => headingLink(h.written) !== "")
+      // Inserted as written, as Obsidian links a heading; a Markdown link's encoded (`#The%20**road**map`).
+      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: at.kind === "markdownHeading" ? markdownFragment(h.written) : headingLink(h.written) }));
   }, [all, at, content, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
   const waiting = !!at && at.start !== dismissed && loading;
@@ -100,7 +101,7 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     if (at.kind === "note") apply(area, completeLink(area.value, caret, at, linkTarget(option.value, all), embedsAsImage(option.value)), onChange);
     else if (at.kind === "heading" || at.kind === "block") apply(area, completeSubpath(area.value, caret, at, option.value), onChange);
     else if (at.kind === "markdown") apply(area, completeMarkdown(area.value, caret, at, markdownPath(option.value)), onChange);
-    else apply(area, completeMarkdown(area.value, caret, at, `${at.note}${markdownFragment(option.label)}`), onChange);
+    else apply(area, completeMarkdown(area.value, caret, at, `${at.note}${option.value}`), onChange);
     setAt(null);
   };
 
