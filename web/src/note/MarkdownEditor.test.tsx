@@ -10,7 +10,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { presenceKey, useSyncStatus } from "../state/sync";
 import { resetRenames } from "./nameFromHeading";
-import { fakeApi, json, noContent, renderApp, user } from "../test/app";
+import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
 afterEach(() => {
@@ -887,15 +887,34 @@ describe("Named from its heading", () => {
     await screen.findByText("Beet text.");
   });
 
-  it("names it when leaving the notes for Settings", async () => {
+  it("leaves it unnamed under a window, such as Settings, and in Write mode once that closes", async () => {
+    const { moves } = gardenApi({ extra: { "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }) } });
+    const { u, router } = await writeIn(untitledUrl);
+    await u.type(editorBox(), "Einkaufsliste");
+    await wait(800);
+    await navigateAway(router, "/settings/appearance");
+    const settings = await screen.findByRole("dialog", { name: "Settings" }, { timeout: 5_000 });
+    await wait(800);
+    expect(moves).toEqual([]);
+    expect(router.state.location.pathname).toBe("/settings/appearance");
+    await u.click(within(settings).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(untitledUrl));
+    await wait(50);
+    expect(moves).toEqual([]);
+    expect(useEditor.getState().mode).toBe("write");
+    expect(useEditor.getState().currentPath).toBe(UNTITLED);
+  });
+
+  // Not for a window, such as Settings: the note stays open under it, in Write mode.
+  it("names it when leaving the notes for the board", async () => {
     const { moves } = gardenApi();
     const { u, router } = await writeIn(untitledUrl);
     await u.type(editorBox(), "Einkaufsliste");
     await wait(800);
-    await act(() => router.navigate("/settings"));
+    await act(() => router.navigate("/board/Home"));
     await waitFor(() => expect(moves).toEqual([named("/Home/Garden/Einkaufsliste.md")]));
     await wait(50);
-    expect(router.state.location.pathname).toBe("/settings");
+    expect(router.state.location.pathname).toBe("/board/Home");
     expect(useEditor.getState().recentPaths[0]).toBe("/Home/Garden/Einkaufsliste.md");
     expect(useEditor.getState().recentPaths).not.toContain(UNTITLED);
   });

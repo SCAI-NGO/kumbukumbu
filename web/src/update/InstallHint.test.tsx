@@ -16,7 +16,7 @@ function renderHint() {
   const router = createMemoryRouter(
     [
       { path: "/", element: <InstallHint /> },
-      { path: "/settings", element: <p>Settings page</p> },
+      { path: "/settings/appearance", element: <p>Settings page</p> },
     ],
     { initialEntries: ["/"] },
   );
@@ -81,7 +81,7 @@ describe("the install hint", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "How" }));
 
-    expect(router.state.location.pathname).toBe("/settings");
+    expect(router.state.location.pathname).toBe("/settings/appearance");
     expect(router.state.location.hash).toBe("#install");
     expect(await screen.findByText("Settings page")).toBeInTheDocument();
   });

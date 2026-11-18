@@ -80,7 +80,7 @@ describe("A part of the app that fails to load", () => {
   it("is caught for a page of the signed-in app", async () => {
     sessionStorage.setItem(RELOADED, "1");
     fakeApi({ "GET /api/session": () => json(200, { user, previousSignInAt: null }) });
-    renderApp("/access/keys");
+    renderApp("/settings/access/keys");
 
     expect(await screen.findByRole("heading", { name: "This page didn't load" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();

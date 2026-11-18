@@ -52,7 +52,7 @@ async function toRecent(page: Page, testInfo: TestInfo) {
     await items.filter({ hasText: /^Recent changes$/ }).click();
   }
   await expect(page).toHaveURL(/\/recent$/);
-  await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Recent changes" })).toBeVisible();
 }
 
 const rows = (page: Page) => page.getByRole("list", { name: "Recent changes" }).getByRole("listitem");
@@ -92,7 +92,7 @@ test("flags #15: chips, words and flags narrow the rows; Show more; rows open no
     if (onPhone(testInfo)) await openTree(page, testInfo);
     await revealDiscreet(page);
     await page.goto("/recent");
-    await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Recent changes" })).toBeVisible();
 
     // The Home chip: its note is there with it, gone without it, back again.
     await words(page).fill("Zahnarzt");
@@ -182,7 +182,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await words(page).fill("Zahnarzt");
     await expect(rows(page).filter({ hasText: "Zahnarzt" })).toHaveCount(1);
     await expect(vaultChips(page).getByRole("button", { name: "Home" })).toBeVisible();
-    await page.getByRole("link", { name: "Back to the notes" }).click();
+    await page.getByRole("dialog", { name: "Recent changes" }).getByRole("button", { name: "Close" }).click();
     await closeDrawer(page);
     await hideDiscreet(page);
     // The tree and the vault menu (the tree's own check means something because the menu shows no Home), then Recent changes again: nothing of Home.
@@ -201,7 +201,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
     await homeGone(page);
 
     // Second: reveal again (Home is back), hide from the second tab; the first, on Recent changes, learns of it by itself.
-    await page.getByRole("link", { name: "Back to the notes" }).click();
+    await page.getByRole("dialog", { name: "Recent changes" }).getByRole("button", { name: "Close" }).click();
     if (onPhone(testInfo)) await openTree(page, testInfo);
     await revealDiscreet(page);
     await toRecent(page, testInfo);
@@ -238,7 +238,7 @@ test("flags #16: hiding in this tab and from a second tab leaves nothing of Home
 test("flags #17: Bob sees Work's rows and nothing of Alice's own vaults @recent @serial @phone", async ({ bobPage, seedAs, folder }) => {
   await seedAs("tags/recent/Pump/Certificate.md", `/Work/${folder}/Pump/Certificate.md`);
   await bobPage.goto("/recent");
-  await expect(bobPage.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+  await expect(bobPage.getByRole("dialog", { name: "Recent changes" })).toBeVisible();
   await words(bobPage).fill(folder);
   const row = rows(bobPage).filter({ hasText: "Certificate" });
   await expect(row).toHaveCount(1);

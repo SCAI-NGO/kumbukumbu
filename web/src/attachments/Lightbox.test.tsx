@@ -67,7 +67,7 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
 }
 
 const order = ["/W/shots/a.png", "/W/shots/b.png", "/W/shots/c.png"];
-const opened = (path: string, paths = order) => ["/settings", { pathname: `/view${path}`, state: { paths } }];
+const opened = (path: string, paths = order) => ["/", { pathname: `/view${path}`, state: { paths } }];
 
 describe("Lightbox", () => {
   it("arrow keys move through the given order and Escape closes", async () => {
@@ -89,7 +89,7 @@ describe("Lightbox", () => {
 
     // Paging replaced the entry: Escape goes back to where the lightbox was opened.
     fireEvent.keyDown(document.body, { key: "Escape" });
-    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
   });
 
   it("pages through the folder's attachments when opened without an order", async () => {

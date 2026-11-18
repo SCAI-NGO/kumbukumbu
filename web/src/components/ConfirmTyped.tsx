@@ -22,6 +22,7 @@ export default function ConfirmTyped({
   password,
   onPasswordChange,
   children,
+  onTop,
 }: {
   title: string;
   text: string;
@@ -36,6 +37,8 @@ export default function ConfirmTyped({
   onPasswordChange?(value: string): void;
   /** More for the person to read or choose, between the text and the fields. */
   children?: ReactNode;
+  /** Rendered at the app's root, not inside the window that asked: drawn above windows (`z-[55]`). */
+  onTop?: boolean;
 }) {
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
@@ -43,7 +46,7 @@ export default function ConfirmTyped({
   const ready = (word === undefined || repeats(typed, word)) && (password === undefined || password !== "");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
+    <div className={`fixed inset-0 ${onTop ? "z-[60]" : "z-50"} flex items-end justify-center bg-bg/80 p-4 sm:items-center`}>
       <form
         ref={dialog}
         role="alertdialog"

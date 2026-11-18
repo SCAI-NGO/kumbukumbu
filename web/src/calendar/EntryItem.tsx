@@ -3,6 +3,7 @@ import { AlertTriangle, Check, CircleDot, Clock, ListTodo, SquareKanban, StickyN
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { noteUrl } from "../api/paths";
+import { useInWindow } from "../windows/context";
 import type { EntryKind, EntryState, EntryView } from "./api";
 import { cameFromHere, withCameFrom } from "./backLink";
 import TaskCheckbox from "./TaskCheckbox";
@@ -57,6 +58,8 @@ export default function EntryItem({ entry, actions, range, vault, kept }: { entr
   const reopen = reopenable(entry) ? actions?.onReopen : undefined;
   const later = actions && movable(entry);
   const location = useLocation();
+  // In What's on's window the note takes the window's place in the history; on the calendar page it is one step on.
+  const inWindow = useInWindow();
   return (
     <li className="@container rounded-[10px] bg-surface px-1 py-1">
       <div className="flex flex-wrap items-start gap-x-1 @xs:flex-nowrap">
@@ -65,6 +68,7 @@ export default function EntryItem({ entry, actions, range, vault, kept }: { entr
             {entry.time && <span className="pt-2 font-mono text-sm text-text-body @xs:flex-none @xs:pt-3.5">{entry.time}</span>}
             <Link
               to={noteUrl(entry.path)}
+              replace={inWindow}
               state={withCameFrom(undefined, cameFromHere(location, kept))}
               className="block min-h-12 min-w-0 py-3 font-medium break-words text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent @xs:flex-1"
             >

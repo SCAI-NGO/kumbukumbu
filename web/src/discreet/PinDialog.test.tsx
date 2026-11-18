@@ -193,7 +193,7 @@ describe("PinDialog", () => {
   it("says where the PIN is set, with a link to that section", () => {
     const { dialog } = renderDialog();
     expect(within(dialog).getByText((_, el) => el?.tagName === "P" && el.textContent === "The PIN is set in Settings → Discreet vaults.")).toBeInTheDocument();
-    expect(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" })).toHaveAttribute("href", "/settings#discreet-vaults");
+    expect(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" })).toHaveAttribute("href", "/settings/security#discreet-vaults");
   });
 
   it("keeps that line, unchanged, after a wrong PIN: below the digits, above the server's sentence", async () => {

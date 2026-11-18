@@ -110,7 +110,7 @@ describe("the calendar's time zone", () => {
 
   it("searches and saves a zone", async () => {
     const fetch = api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await section();
     expect(await within(calendar).findByText(/Europe\/Vienna/)).toBeInTheDocument();
     const field = within(calendar).getByLabelText("Your time zone");
@@ -129,7 +129,7 @@ describe("the calendar's time zone", () => {
 
   it("searches with spaces for underscores", async () => {
     api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await section();
     const field = within(calendar).getByLabelText("Your time zone");
     await userEvent.clear(field);
@@ -139,7 +139,7 @@ describe("the calendar's time zone", () => {
 
   it("an unknown zone shows the server's sentence", async () => {
     api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await section();
     const field = within(calendar).getByLabelText("Your time zone");
     await userEvent.clear(field);
@@ -154,7 +154,7 @@ describe("the calendar's time zone", () => {
       throw new TypeError("not supported");
     });
     const fetch = api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await section();
     const field = within(calendar).getByLabelText("Your time zone");
     await userEvent.clear(field);
@@ -187,7 +187,7 @@ async function weekSection() {
 describe("the person's week", () => {
   it("shows the browser's weekend as days off until someone chooses", async () => {
     api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await weekSection();
     expect(within(calendar).getByRole("group", { name: "Your week" })).toBeInTheDocument();
     expect(pressed(calendar)).toEqual(["Workday", "Workday", "Workday", "Workday", "Workday", "Day off", "Day off"]);
@@ -196,7 +196,7 @@ describe("the person's week", () => {
 
   it("a tap saves at once, all seven days as shown", async () => {
     const fetch = api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await weekSection();
     await userEvent.click(level(calendar, "Monday", "Day off"));
     await waitFor(async () =>
@@ -212,7 +212,7 @@ describe("the person's week", () => {
 
   it("Use my browser's weekend shows only while a choice is stored, and returns to not chosen", async () => {
     const fetch = api("Europe/Vienna");
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await weekSection();
     expect(within(calendar).queryByRole("button", { name: RESET })).not.toBeInTheDocument();
     await userEvent.click(level(calendar, "Sunday", "Workday"));
@@ -226,7 +226,7 @@ describe("the person's week", () => {
 
   it("the chosen level stands out, and every day is laid out alike", async () => {
     api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await weekSection();
     expect(level(calendar, "Monday", "Day off")).toHaveClass("bg-accent", "text-on-accent", "font-bold");
     expect(level(calendar, "Monday", "Workday")).not.toHaveClass("bg-accent");
@@ -241,7 +241,7 @@ describe("the person's week", () => {
 
   it("shows a stored week", async () => {
     api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "lighter", "workday", "workday"]);
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await weekSection();
     expect(pressed(calendar)).toEqual(["Day off", "Workday", "Workday", "Workday", "Lighter day", "Workday", "Workday"]);
     expect(within(calendar).getByRole("button", { name: RESET })).toBeInTheDocument();
@@ -249,7 +249,7 @@ describe("the person's week", () => {
 
   it("saving the zone sends no days", async () => {
     const fetch = api("Europe/Vienna", {}, ["off", "workday", "workday", "workday", "workday", "off", "off"]);
-    renderApp("/settings");
+    renderApp("/settings/calendar");
     const calendar = await section();
     const field = within(calendar).getByLabelText("Your time zone");
     await userEvent.clear(field);

@@ -33,9 +33,9 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
 }
 
 async function open() {
-  renderApp("/skills/installed");
+  renderApp("/settings/skills/installed");
   await userEvent.click(await screen.findByRole("button", { name: "Review" }));
-  return screen.findByRole("dialog");
+  return screen.findByRole("dialog", { name: /^Review the update of/ });
 }
 
 afterEach(() => {
@@ -73,7 +73,7 @@ describe("ReviewDialog", () => {
     expect(within(dialog).getByText("same")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Take update" }));
     await waitFor(() => expect(body).toEqual({ path: folder, hash: "HASH-1" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Review the update of/ })).not.toBeInTheDocument());
   });
 
   it("skips an update", async () => {
@@ -82,7 +82,7 @@ describe("ReviewDialog", () => {
     const dialog = await open();
     await userEvent.click(await within(dialog).findByRole("button", { name: "Skip" }));
     await waitFor(() => expect(body).toEqual({ path: folder, hash: "HASH-1" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Review the update of/ })).not.toBeInTheDocument());
   });
 
   it("says when the source moved on since the review", async () => {

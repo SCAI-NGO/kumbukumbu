@@ -30,52 +30,52 @@ describe("Access", () => {
     api();
     const router = renderApp("/access");
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Access" })).toBeInTheDocument();
+    expect(within(await screen.findByRole("dialog", { name: "Settings" })).getByRole("tablist", { name: "Access" })).toBeInTheDocument();
     const tabs = within(screen.getByRole("tablist", { name: "Access" })).getAllByRole("tab");
     expect(tabs.map((t) => t.textContent)).toEqual(["API keys", "Apps", "WebDAV"]);
     expect(tab("API keys")).toHaveAttribute("aria-selected", "true");
     expect(tab("Apps")).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "API keys" })).toContainElement(screen.getByRole("button", { name: "New key" }));
     expect(screen.queryByRole("heading", { name: "Connections" })).not.toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/access/keys");
+    expect(router.state.location.pathname).toBe("/settings/access/keys");
   });
 
   it("the tab is in the URL", async () => {
     api();
-    const router = renderApp("/access/apps");
+    const router = renderApp("/settings/access/apps");
 
     expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
     expect(tab("Apps")).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("button", { name: "New key" })).not.toBeInTheDocument();
-    expect(tab("API keys")).toHaveAttribute("href", "/access/keys");
-    expect(tab("WebDAV")).toHaveAttribute("href", "/access/dav");
+    expect(tab("API keys")).toHaveAttribute("href", "/settings/access/keys");
+    expect(tab("WebDAV")).toHaveAttribute("href", "/settings/access/dav");
 
     await userEvent.click(tab("WebDAV"));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/access/dav"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/dav"));
     expect(tab("WebDAV")).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: "WebDAV" })).toBeInTheDocument();
 
     await userEvent.keyboard("{ArrowLeft}");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/access/apps"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/apps"));
     expect(tab("Apps")).toHaveFocus();
 
     await userEvent.click(tab("API keys"));
     expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/access/keys");
+    expect(router.state.location.pathname).toBe("/settings/access/keys");
   });
 
-  it("/keys redirects to /access/keys", async () => {
+  it("/keys redirects to /settings/access/keys", async () => {
     api();
     const router = renderApp("/keys");
 
     expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/access/keys");
+    expect(router.state.location.pathname).toBe("/settings/access/keys");
     expect(tab("API keys")).toHaveAttribute("aria-selected", "true");
   });
 
   it("the apps tab has the MCP subtitle", async () => {
     api();
-    renderApp("/access/apps");
+    renderApp("/settings/access/apps");
 
     const panel = await screen.findByRole("tabpanel", { name: "Apps" });
     expect(within(panel).getByText("MCP via OAuth: claude.ai connectors, ChatGPT and others")).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe("Access", () => {
 
   it("a new connection's address has the page to itself, without the tabs, until done", async () => {
     api({ "POST /api/connections": () => json(201, connection) });
-    renderApp("/access/apps");
+    renderApp("/settings/access/apps");
     await connect();
 
     expect(await screen.findByText(connection.url)).toBeInTheDocument();
@@ -97,13 +97,13 @@ describe("Access", () => {
 
   it("leaving in the middle of a reveal and coming back shows the tabs again", async () => {
     api({ "POST /api/connections": () => json(201, connection) });
-    const router = renderApp(["/access/keys", "/access/apps"]);
+    const router = renderApp(["/settings/access/keys", "/settings/access/apps"]);
     await connect();
     expect(await screen.findByText(connection.url)).toBeInTheDocument();
 
     await act(() => router.navigate(-1));
     expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
-    await act(() => router.navigate("/access/apps"));
+    await act(() => router.navigate("/settings/access/apps"));
     expect(await screen.findByRole("button", { name: "Connect an app" })).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Access" })).toBeInTheDocument();
     expect(tab("Apps")).toHaveAttribute("aria-selected", "true");
@@ -111,27 +111,27 @@ describe("Access", () => {
 
   it("an unknown tab leads to the keys tab", async () => {
     api();
-    const router = renderApp("/access/foo");
+    const router = renderApp("/settings/access/foo");
 
     expect(await screen.findByRole("button", { name: "New key" })).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/access/keys");
+    expect(router.state.location.pathname).toBe("/settings/access/keys");
   });
 
   it("Home and End move to the first and the last tab, in place of the current entry", async () => {
     api();
-    const router = renderApp(["/settings", "/access/apps"]);
+    const router = renderApp(["/", "/settings/access/apps"]);
     await screen.findByRole("heading", { name: "Connections" });
     tab("Apps").focus();
 
     await userEvent.keyboard("{End}");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/access/dav"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/dav"));
     expect(tab("WebDAV")).toHaveFocus();
     await userEvent.keyboard("{Home}");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/access/keys"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/keys"));
     expect(tab("API keys")).toHaveFocus();
 
     await act(() => router.navigate(-1));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
   });
 });
 

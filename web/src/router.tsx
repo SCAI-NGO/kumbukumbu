@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, type JSX, type ReactNode } from "react";
-import { Navigate, Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
+import { Navigate, Outlet, useLocation, useMatches, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { useZonePreset } from "./calendar/preferences";
 import { errorText } from "./api/error-text";
@@ -11,12 +11,14 @@ import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hi
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
 import ForgotPassword from "./routes/ForgotPassword";
+import { Moved, SettingsMoved } from "./routes/settings/redirects";
 import SignIn from "./routes/SignIn";
-import MobileShell from "./shell/MobileShell";
 import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
 import UpdateBar from "./update/UpdateBar";
+import { setWindowRoutes } from "./windows/store";
+import WindowHost from "./windows/WindowHost";
 
 /**
  * Sends to sign-in, with the way back, as soon as any request found the session gone; and reloads into a new
@@ -39,8 +41,8 @@ function Root() {
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(neutral ? "/" : pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
-  // The shell shows the update bar under its own top bar; every other page has it above.
-  const inShell = pathname === "/" || pathname.startsWith("/notes/");
+  // The shell shows the update bar under its own top bar, under a window too; every other page has it above.
+  const inShell = useMatches().some((m) => (m.handle as { shell?: boolean } | undefined)?.shell === true);
   return (
     <>
       {!inShell && <UpdateBar />}
@@ -111,7 +113,7 @@ export const routes: RouteObject[] = [
       { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
       // Signed in or not: without a session it says what to do first, and keeps the link's secret through sign-in.
       { path: "/share", lazy: lazyPage(() => import("./routes/Share")) },
-      // As /share: a shared skill's code waits through sign-in. Before /skills/:tab, which would take "add" for a tab.
+      // As /share: a shared skill's code waits through sign-in. Not a window: it is before the app (and outranks /skills/:tab).
       { path: "/skills/add", lazy: lazyPage(() => import("./skills/AddSkill")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
@@ -124,33 +126,58 @@ export const routes: RouteObject[] = [
         errorElement: <RouteError />,
         children: [
           {
-            element: <MobileShell />,
+            element: <WindowHost />,
+            handle: { shell: true },
             children: [
               { path: "/", element: null },
               { path: "/notes/:vault/*", element: null },
+              { path: "/whats-on", handle: { window: true }, lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
+              // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
+              { path: "/recent", handle: { window: true }, lazy: lazyPage(() => import("./recent/RecentPage")) },
+              { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
+              {
+                lazy: lazyPage(() => import("./routes/settings/SettingsWindow")),
+                handle: { window: true },
+                children: [
+                  { path: "/settings/appearance", lazy: lazyPage(() => import("./routes/settings/Appearance")) },
+                  { path: "/settings/vaults", lazy: lazyPage(() => import("./routes/settings/Vaults")) },
+                  { path: "/settings/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
+                  { path: "/settings/access", element: <Navigate to="/settings/access/keys" replace /> },
+                  { path: "/settings/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
+                  { path: "/settings/skills", element: <Navigate to="/settings/skills/installed" replace /> },
+                  { path: "/settings/calendar", lazy: lazyPage(() => import("./routes/settings/Calendar")) },
+                  { path: "/settings/security", lazy: lazyPage(() => import("./routes/settings/Security")) },
+                  { path: "/settings/data", lazy: lazyPage(() => import("./routes/settings/Data")) },
+                  { path: "/settings/about", lazy: lazyPage(() => import("./routes/settings/About")) },
+                ],
+              },
+              {
+                lazy: lazyPage(() => import("./routes/admin/AdminWindow")),
+                handle: { window: true },
+                children: [
+                  { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
+                  { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
+                ],
+              },
+              // The addresses before the settings were a window, in bookmarks and older links: windows too, so that
+              // the shell stays behind while they are replaced.
+              { path: "/settings", handle: { window: true }, element: <SettingsMoved /> },
+              { path: "/access/:tab", handle: { window: true }, element: <Moved to="access" /> },
+              { path: "/access", handle: { window: true }, element: <Navigate to="/settings/access/keys" replace /> },
+              { path: "/keys", handle: { window: true }, element: <Navigate to="/settings/access/keys" replace /> },
+              { path: "/skills/:tab", handle: { window: true }, element: <Moved to="skills" /> },
+              { path: "/skills", handle: { window: true }, element: <Navigate to="/settings/skills/installed" replace /> },
             ],
           },
           { path: "/n/:vaultId/*", lazy: lazyPage(() => import("./routes/DeepLink")) },
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
           { path: "/calendar/:vault", lazy: lazyPage(() => import("./calendar/CalendarPage")) },
-          { path: "/whats-on", lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
-          // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
-          { path: "/recent", lazy: lazyPage(() => import("./recent/RecentPage")) },
           { path: "/gallery/:vault", lazy: lazyPage(() => import("./attachments/GalleryPage")) },
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
-          { path: "/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
-          { path: "/access", element: <Navigate to="/access/keys" replace /> },
-          // The page's address before it had tabs, in bookmarks and older links.
-          { path: "/keys", element: <Navigate to="/access/keys" replace /> },
-          { path: "/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
-          { path: "/skills", element: <Navigate to="/skills/installed" replace /> },
-          { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
-          { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
-          { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
-          { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],
       },
     ],
   },
 ];
+setWindowRoutes(routes);

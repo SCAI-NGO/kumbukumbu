@@ -19,6 +19,7 @@ function Prompt() {
   const [error, setError] = useState<string | null>(null);
   return (
     <ConfirmTyped
+      onTop
       title="Confirm your password"
       text="It's a while since you last gave your password on this device. Give it again to go on."
       action="Confirm"

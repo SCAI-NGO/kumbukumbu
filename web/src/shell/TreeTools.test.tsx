@@ -281,7 +281,7 @@ describe("the toolbar", () => {
     expect(item.querySelector("svg")).not.toBeNull();
     await userEvent.click(item);
     await waitFor(() => expect(router.state.location.pathname).toBe("/recent"));
-    expect(await screen.findByRole("heading", { level: 1, name: "Recent changes" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Recent changes" })).toBeInTheDocument();
     expect(useEditor.getState().overlay).toBe("none");
   });
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "../../state/session";
 import { fakeApi, json, noContent, renderApp } from "../../test/app";
 
@@ -32,6 +32,10 @@ function api(who = admin, extra: Parameters<typeof fakeApi>[0] = {}) {
 }
 
 const card = (name: string) => screen.getByRole("listitem", { name });
+
+beforeEach(() => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+});
 
 afterEach(() => {
   cleanup();
@@ -239,7 +243,7 @@ describe("Admin users", () => {
     expect(within(receipt).getByRole("button", { name: "Download receipt" })).toBeInTheDocument();
     expect(within(receipt).getByRole("button", { name: "Copy reply" })).toBeInTheDocument();
     await userEvent.click(within(receipt).getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Deleted for a privacy request" })).not.toBeInTheDocument();
   });
 
   it("counts the user's shared vaults in the dialog, sends the choice and names no vault", async () => {
@@ -302,7 +306,7 @@ describe("Admin users", () => {
     await userEvent.type(within(dialog).getByLabelText("Your password"), "wrong password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your password is wrong.");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Deleted for a privacy request" })).not.toBeInTheDocument();
   });
 
   it("shows no restore warning when no deleted user is back", async () => {
@@ -378,10 +382,10 @@ describe("Admin users", () => {
 
     // One receipt after the other.
     expect(await screen.findByRole("dialog", { name: "Deleted for a privacy request" })).toHaveTextContent("Username: anna");
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Deleted for a privacy request" })).getByRole("button", { name: "Close" }));
     expect(await screen.findByRole("dialog", { name: "Deleted for a privacy request" })).toHaveTextContent("Username: max");
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Deleted for a privacy request" })).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Deleted for a privacy request" })).not.toBeInTheDocument();
     await vi.waitFor(() => expect(screen.queryByText(/A backup restore brought back/)).not.toBeInTheDocument());
   });
 
@@ -468,7 +472,7 @@ describe("Admin users", () => {
     const fetch = api(plain);
     renderApp("/admin/users");
     expect(await screen.findByText("Only an admin can see this.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to the notes" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("dialog", { name: "Admin" })).toHaveTextContent("Only an admin can see this.");
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
     expect(fetch.mock.calls.some(([r]) => new URL(r.url).pathname.startsWith("/api/admin"))).toBe(false);
   });

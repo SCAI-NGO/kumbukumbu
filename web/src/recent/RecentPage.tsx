@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ArrowLeft, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -13,6 +13,7 @@ import { useDiscreet } from "../discreet/state";
 import FlagIcon from "../flags/FlagIcon";
 import { ago } from "../note/AgentBanner";
 import type { FlagFilter } from "../shell/treeFilter";
+import WindowFrame from "../windows/WindowFrame";
 import { useRecent, type RecentItem } from "./api";
 
 /** How many rows come at first, and how many more each Show more adds. */
@@ -21,7 +22,8 @@ const PAGE = 50;
 const TYPING_MS = 250;
 
 /**
- * `/recent`: the notes and attachments of every vault the session shows, by their last change, newest first (spec §4).
+ * `/recent`, a light window over the notes: the notes and attachments of every vault the session shows, by their last
+ * change, newest first (spec §4).
  * Narrowed by words over the path with its vault, by vault (all on at first) and by flag. The filters live here alone,
  * never in the address or the device's storage: a discreet vault's name must reach neither.
  */
@@ -75,14 +77,8 @@ export default function RecentPage() {
   const filtered = words.trim() !== "" || flag !== null || skip.length > 0;
 
   return (
-    <div className="relative flex h-dvh flex-col bg-bg">
-      <header className="flex flex-none items-center gap-1 border-b border-line px-2 py-1.5 lg:px-3">
-        <Link to="/" aria-label="Back to the notes" className="flex size-12 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent">
-          <ArrowLeft size={20} aria-hidden />
-        </Link>
-        <h1 className="min-w-0 flex-1 truncate px-2 text-[20px] font-bold text-text">Recent changes</h1>
-      </header>
-      <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:px-4">
+    <WindowFrame kind="light" title="Recent changes">
+      <div className="px-3 py-3 lg:px-4">
         <div className="mx-auto flex max-w-2xl flex-col gap-3">
           <div role="search" aria-label="Find in recent changes" className="flex flex-col gap-1">
             <div className="flex items-center gap-1">
@@ -90,6 +86,7 @@ export default function RecentPage() {
                 ref={field}
                 type="search"
                 aria-label="Find by name"
+                data-autofocus
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 placeholder="Find by name"
@@ -153,12 +150,12 @@ export default function RecentPage() {
               </>
             ))}
         </div>
-      </main>
-    </div>
+      </div>
+    </WindowFrame>
   );
 }
 
-/** A note opens as the note; an attachment in the lightbox, which pages through the attachments listed, as the tree's do. */
+/** A note opens as the note; an attachment in the lightbox, which pages through the attachments listed, as the tree's do. Either replaces the window. */
 function Row({ item, attachments }: { item: RecentItem; attachments: string[] }) {
   const kind = fileKindOfEntry(item);
   const Icon = fileKindIcon[kind];
@@ -167,6 +164,7 @@ function Row({ item, attachments }: { item: RecentItem; attachments: string[] })
     <li>
       <Link
         to={note ? noteUrl(item.path) : viewUrl(item.path)}
+        replace
         state={note ? undefined : ({ paths: attachments } satisfies LightboxState)}
         className="flex min-h-12 items-start gap-3 rounded-[10px] px-2 py-2 hover:bg-surface focus-visible:outline-2 focus-visible:outline-accent"
       >

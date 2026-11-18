@@ -45,9 +45,9 @@ afterEach(() => {
 describe("Skills", () => {
   it("groups skills by system, Skills and vault", async () => {
     api();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     await screen.findByText("builtin");
-    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["System", "Skills", "Work", "My Vault"]);
+    expect(within(screen.getByRole("tabpanel")).getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["System", "Skills", "Work", "My Vault"]);
     for (const section of screen.getAllByRole("region")) expect(section.getAttribute("aria-labelledby")).not.toMatch(/\s/);
     expect(screen.getByText("No description")).toBeInTheDocument();
     expect(screen.getByText(/last changed by Ada/)).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("Skills", () => {
           withoutSkills: [],
         }),
     });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const claimed = (await screen.findByText("claimed")).closest("li")!;
     expect(within(claimed).getByText(/unverified origin/)).toBeInTheDocument();
     expect(within(claimed).queryByText(/from /)).not.toBeInTheDocument();
@@ -73,43 +73,43 @@ describe("Skills", () => {
 
   it("names connections without Skills and links to Access", async () => {
     api(["Claude", "Desk key"]);
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const note = await screen.findByRole("status");
     expect(note).toHaveTextContent("Claude, Desk key can't use your skills yet: give them the vault Skills in Access.");
-    expect(within(note).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/access/keys");
+    expect(within(note).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/settings/access/keys");
   });
 
   it("copies a skill to Skills by default", async () => {
     let body: unknown;
     api([], { "POST /api/skills/copy": async (r) => ((body = await r.json()), json(200, { path: "/Skills/x" })) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("work-x")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Copy to…" }));
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Copy" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Copy work-x to…" })).getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(body).toEqual({ from: "/Work/_skills/x", to: "Skills" }));
   });
 
   it("shows the dialog's loading state while the vaults load", async () => {
     api([], { "GET /api/vaults": () => new Promise<Response>(() => {}) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("work-x")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Copy to…" }));
-    expect(within(screen.getByRole("dialog")).getByText("Loading…")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog", { name: "Copy work-x to…" })).getByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByText(/no other vault/i)).not.toBeInTheDocument();
   });
 
   it("asks for another name when the name is taken", async () => {
     api([], { "POST /api/skills/copy": () => json(409, { error: "taken", type: "name-taken" }) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("work-x")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Copy to…" }));
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Copy" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Copy work-x to…" })).getByRole("button", { name: "Copy" }));
     expect(await screen.findByLabelText("Name")).toBeInTheDocument();
   });
 
   it("offers a system skill as a plain .zip link", async () => {
     api();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     await screen.findByText("builtin");
     const link = within(screen.getByText("builtin").closest("li")!).getByRole("link", { name: "Download .zip" });
     expect(link).toHaveAttribute("href", "/api/skills/zip?path=system%3Abuiltin");
@@ -127,7 +127,7 @@ describe("Skills", () => {
       "POST /api/export/ticket": ticket,
     });
     const links = clicks();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("spaced")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Download spaced?" });
@@ -145,7 +145,7 @@ describe("Skills", () => {
       "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }),
     });
     const links = clicks();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("work-x")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Download work-x?" });
@@ -161,7 +161,7 @@ describe("Skills", () => {
       "POST /api/export/ticket": ticket,
     });
     const links = clicks();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("work-x")).closest("li")!;
     await userEvent.click(within(card).getByRole("button", { name: "Download .zip" }));
     await waitFor(() => expect(links).toEqual(["/api/skills/zip?path=%2FWork%2F_skills%2Fx"]));
@@ -171,7 +171,7 @@ describe("Skills", () => {
 
   it("offers no Move for a system skill", async () => {
     api();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = (await screen.findByText("builtin")).closest("li")!;
     expect(within(card).getByRole("button", { name: "Copy to…" })).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Move to…" })).not.toBeInTheDocument();
@@ -183,18 +183,18 @@ describe("Skills", () => {
     api();
     const router = renderApp("/skills");
     await screen.findByText("builtin");
-    expect(router.state.location.pathname).toBe("/skills/installed");
+    expect(router.state.location.pathname).toBe("/settings/skills/installed");
     const tab = (n: string) => within(screen.getByRole("tablist", { name: "Skills" })).getByRole("tab", { name: n });
     expect(tab("Installed")).toHaveAttribute("aria-selected", "true");
-    expect(tab("Try")).toHaveAttribute("href", "/skills/try");
+    expect(tab("Try")).toHaveAttribute("href", "/settings/skills/try");
     await userEvent.click(tab("Try"));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/skills/try"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/skills/try"));
   });
 
   it("checks for updates when the tab opens and on the button", async () => {
     let checks = 0;
     api([], { "POST /api/skills/updates/check": () => (checks++, json(200, [])) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     await screen.findByText("builtin");
     await waitFor(() => expect(checks).toBe(1));
     await waitFor(() => expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled());
@@ -216,7 +216,7 @@ describe("Skills", () => {
         }),
       "POST /api/skills/updates/check": () => json(200, [{ path: "/Skills/lost", state: "gone" }, { path: "/Skills/plain", state: "current" }]),
     });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = async (n: string) => (await screen.findByText(n)).closest("li")!;
     expect(within(await card("fresh")).getByText("Update available")).toBeInTheDocument();
     expect(within(await card("fresh")).getByRole("button", { name: "Review" })).toBeInTheDocument();
@@ -243,7 +243,7 @@ describe("Skills", () => {
           { path: "/Skills/fresh", state: "available" },
         ]),
     });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
     const card = async (n: string) => (await screen.findByText(n)).closest("li")!;
     const sentence = "Publishing is switched off on this server, so updates from links can't be checked right now.";
     expect(await within(await card("linked")).findByText(sentence)).toBeInTheDocument();

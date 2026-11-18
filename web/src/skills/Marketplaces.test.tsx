@@ -70,7 +70,7 @@ describe("Marketplaces", () => {
       },
       "DELETE /api/skills/marketplaces/alice/skills": () => ((removed = true), repos.shift(), noContent()),
     });
-    renderApp("/skills/marketplaces");
+    renderApp("/settings/skills/marketplaces");
 
     expect(await screen.findByText("alice/skills")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Repository"), "bob/tools");
@@ -85,7 +85,7 @@ describe("Marketplaces", () => {
 
   it("browses and shows what isn't installable and why", async () => {
     api();
-    renderApp("/skills/marketplaces");
+    renderApp("/settings/skills/marketplaces");
 
     await userEvent.click(await screen.findByRole("button", { name: "Browse alice/skills" }));
 
@@ -111,7 +111,7 @@ describe("Marketplaces", () => {
       "GET /api/skills/marketplaces/alice/skills/skill": (r) => ((previewUrl = r.url), json(200, preview)),
       "POST /api/skills/install": async (r) => ((body = await r.json()), json(201, { path: "/Skills/write-well" })),
     });
-    renderApp("/skills/marketplaces");
+    renderApp("/settings/skills/marketplaces");
 
     await userEvent.click(await screen.findByRole("button", { name: "Browse alice/skills" }));
     await userEvent.click(within((await screen.findByText("write-well")).closest("li")!).getByRole("button", { name: "Install…" }));
@@ -138,12 +138,12 @@ describe("Marketplaces", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "Install" }).at(-1)!);
 
     await waitFor(() => expect(body).toEqual({ repo: "alice/skills", commit, path: "skills/write-well", vault: "Skills" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Install write-well/ })).not.toBeInTheDocument());
   });
 
   it("says when GitHub's limit is reached", async () => {
     api({}, { "GET /api/skills/marketplaces/alice/skills": () => json(429, { error: rateLimited, type: "github-rate-limited" }) });
-    renderApp("/skills/marketplaces");
+    renderApp("/settings/skills/marketplaces");
 
     await userEvent.click(await screen.findByRole("button", { name: "Browse alice/skills" }));
 
@@ -152,7 +152,7 @@ describe("Marketplaces", () => {
 
   it("hides the tab when switched off", async () => {
     const fetch = api({ enabled: false });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
 
     await screen.findByRole("tablist", { name: "Skills" });
     await waitFor(() => expect(fetch.mock.calls.some(([r]) => new URL((r as Request).url).pathname === "/api/skills/marketplaces")).toBe(true));
@@ -162,7 +162,7 @@ describe("Marketplaces", () => {
 
   it("shows the tab when switched on", async () => {
     api();
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
 
     expect(await screen.findByRole("tab", { name: "Marketplaces" })).toBeInTheDocument();
   });

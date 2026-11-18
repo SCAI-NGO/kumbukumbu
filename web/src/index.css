@@ -511,6 +511,16 @@ html {
     opacity: 0.4;
   }
 }
+@keyframes k-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes k-slide-right {
+  from {
+    transform: translateX(-100%);
+  }
+}
 @keyframes k-in-up {
   from {
     transform: translateY(24px);
@@ -562,5 +572,11 @@ html {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+@keyframes k-blink {
+  50% {
+    opacity: 0;
   }
 }

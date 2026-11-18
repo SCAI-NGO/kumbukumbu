@@ -6,6 +6,7 @@ import { updateSharedSkill, useSharedSkills, withdrawSharedSkill, type SharedSki
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
+import { useWindowLock } from "../windows/context";
 
 const dayAndTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -146,6 +147,7 @@ export function SkillLinkReveal({ name, link, onDone }: { name: string; link: st
   const [copyFailed, setCopyFailed] = useState(false);
   const [closing, setClosing] = useState(false);
   const blocker = useLeaveGuard(saved);
+  useWindowLock("Copy the share link first");
 
   const copied = (ok: boolean) => {
     setCopyFailed(!ok);

@@ -38,6 +38,11 @@ describe("PasswordPrompt", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
+  it("is drawn above a window (z-[55]) it may be asked from", () => {
+    open();
+    expect(screen.getByRole("alertdialog", { name: "Confirm your password" }).parentElement).toHaveClass("fixed", "inset-0", "z-[60]");
+  });
+
   it("says so in the dialog when the password is wrong", async () => {
     fakeApi({ "POST /api/session/confirm": () => json(400, { error: "The password is wrong." }) });
     open();

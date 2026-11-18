@@ -53,7 +53,7 @@ describe("Shared", () => {
         return json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" });
       },
     });
-    const router = renderApp("/skills/installed");
+    const router = renderApp("/settings/skills/installed");
 
     // Share is for her own skills alone: not a member's, not a system skill.
     expect(within(await card("theirs")).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("Shared", () => {
     await waitFor(() => expect(screen.queryByText(link)).not.toBeInTheDocument());
     await waitFor(() => expect(within(screen.getByText("mine").closest("li")!).queryByRole("button", { name: "Share" })).not.toBeInTheDocument());
     await userEvent.click(tab("Shared")!);
-    await waitFor(() => expect(router.state.location.pathname).toBe("/skills/shared"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/skills/shared"));
     expect(await screen.findByText("/Skills/mine")).toBeInTheDocument();
     expect(screen.queryByText(/#/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /copy link/i })).not.toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("Shared", () => {
   it("says before sharing that images go as they are, location data included", async () => {
     let shared = false;
     api({ shared: false }, true, { "POST /api/skills/shared": () => ((shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
 
     await userEvent.click(within(await card("mine")).getByRole("button", { name: "Share" }));
 
@@ -94,7 +94,7 @@ describe("Shared", () => {
 
   it("offers no second link while one exists", async () => {
     api({ shared: true, changed: true });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
 
     const mine = await card("mine");
     expect(within(mine).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("Shared", () => {
     api(state, true, {
       "POST /api/skills/shared/p1/update": () => ((updated = true), (state.changed = false), json(200, { snapshotAt: "2026-11-08T10:00:00Z" })),
     });
-    renderApp("/skills/shared");
+    renderApp("/settings/skills/shared");
 
     await userEvent.click(within((await screen.findByText("/Skills/mine")).closest("li")!).getByRole("button", { name: "Update" }));
 
@@ -131,7 +131,7 @@ describe("Shared", () => {
       "DELETE /api/skills/shared/p1": () => ((withdrawn = true), (state.shared = false), (state.withdrawnBefore = true), noContent()),
       "POST /api/skills/shared": () => ((shared = true), (state.shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })),
     });
-    renderApp("/skills/shared");
+    renderApp("/settings/skills/shared");
 
     await userEvent.click(within((await screen.findByText("/Skills/mine")).closest("li")!).getByRole("button", { name: "Withdraw" }));
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Withdraw" }));
@@ -152,7 +152,7 @@ describe("Shared", () => {
   it("warns after a reload too, as the server remembers the withdrawal", async () => {
     let shared = false;
     api({ shared: false, withdrawnBefore: true }, true, { "POST /api/skills/shared": () => ((shared = true), json(201, { link, snapshotAt: "2026-11-08T09:00:00Z" })) });
-    renderApp("/skills/installed");
+    renderApp("/settings/skills/installed");
 
     await userEvent.click(within(await card("mine")).getByRole("button", { name: "Share" }));
     expect(within(screen.getByRole("alertdialog")).getByText("Copies made from the old link will be told their source is gone and get no more updates.")).toBeInTheDocument();
@@ -162,9 +162,9 @@ describe("Shared", () => {
 
   it("hides the tab when publishing is off", async () => {
     api({ shared: false }, false);
-    const router = renderApp("/skills/shared");
+    const router = renderApp("/settings/skills/shared");
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/skills/installed"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/skills/installed"));
     await card("mine");
     expect(tab("Shared")).not.toBeInTheDocument();
     expect(tab("Try")).toBeInTheDocument();

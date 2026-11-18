@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
+import { useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useNoteText, useTree, useVaults, type VaultView } from "../api/notes";
@@ -45,6 +45,7 @@ import { useCopied } from "./useCopied";
 import { useNoteEntry } from "../calendar/api";
 import DateDialog, { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
 import { flaggable, useFlagging } from "../flags/FlagMenu";
+import { ShellRedirect } from "../windows/context";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -351,8 +352,8 @@ export default function MobileShell() {
   const switchTask = useTaskSwitch(copied.say);
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
-  if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
-  if (keptThere) return <Navigate to={noteUrl(kept!)} replace />;
+  if (!path && recentPaths.length && !overview) return <ShellRedirect to={noteUrl(recentPaths[0])} />;
+  if (keptThere) return <ShellRedirect to={noteUrl(kept!)} />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
   const newNote = (folder: string) =>

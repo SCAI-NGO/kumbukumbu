@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useDesktop } from "../hooks/useDesktop";
+import WindowFrame from "../windows/WindowFrame";
+import { useCloseWindow } from "../windows/context";
+import { consoleSchemes, keepConsoleScheme, phosphor, storedConsoleScheme, type ConsoleScheme } from "./crt";
 import { run } from "./run";
 import { useConsole, type Entry, type Output, type Running } from "./store";
 
@@ -23,7 +26,17 @@ export default function ConsolePage() {
   const log = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
   const following = useRef(true);
-  const navigate = useNavigate();
+  const close = useCloseWindow();
+  const [scheme, setScheme] = useState(storedConsoleScheme);
+  const crt = scheme !== "plain";
+  // The caret's column, how far a long line scrolled the input, and whether it has the focus, for the drawn cursor.
+  const [caret, setCaret] = useState({ column: 0, scrolled: 0 });
+  const [focused, setFocused] = useState(false);
+  const markCaret = () => setCaret({ column: input.current?.selectionStart ?? 0, scrolled: input.current?.scrollLeft ?? 0 });
+  const choose = (next: ConsoleScheme) => {
+    setScheme(next);
+    keepConsoleScheme(next);
+  };
 
   // Leaving the page stops the running command; the store keeps the rest for coming back.
   useEffect(() => () => controller.current?.abort(), []);
@@ -35,6 +48,8 @@ export default function ConsolePage() {
     if (following.current && log.current) log.current.scrollTop = log.current.scrollHeight;
   };
   useLayoutEffect(follow, [entries, running]);
+  // Typing, history and clearing move the caret too.
+  useLayoutEffect(markCaret, [value]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -44,7 +59,7 @@ export default function ConsolePage() {
     setValue("");
     setWalk(null);
     following.current = true;
-    void run(value, controller.current.signal, () => navigate("/"));
+    void run(value, controller.current.signal, close);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -64,96 +79,126 @@ export default function ConsolePage() {
   };
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-5xl flex-col gap-4 px-4 pt-10 pb-[max(16px,env(safe-area-inset-bottom))]">
-      <header className="flex flex-col gap-2">
-        <Link to="/" className="flex min-h-11 items-center self-start text-accent-text">
-          Back to the notes
-        </Link>
-        <h1 className="text-[28px] leading-tight font-bold text-text">Console</h1>
-      </header>
+    <WindowFrame kind="console" title="Console" actions={<SchemeSwitch scheme={scheme} onChoose={choose} />}>
+      {/* Only the inside glows, a screen in a case: the title bar and the border keep the app's look. */}
       <div
-        ref={log}
-        role="log"
-        aria-label="Console output"
-        aria-busy={running !== null}
-        onScroll={(event) => {
-          const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
-          following.current = scrollHeight - scrollTop - clientHeight < 8;
-        }}
-        // A click in the output goes on typing, unless it selected something to copy.
-        onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-        // Relative: an error's screen-reader label is absolutely positioned, and must scroll here rather than grow the page.
-        className="relative min-h-0 flex-1 overflow-y-auto font-mono text-sm text-text"
+        data-crt={crt ? "" : undefined}
+        style={crt ? ({ "--crt-fg": phosphor[scheme].fg, "--crt-bg": phosphor[scheme].bg, "--crt-dim": phosphor[scheme].dim, color: "var(--crt-fg)", backgroundColor: "var(--crt-bg)", textShadow: "0 0 6px color-mix(in srgb, var(--crt-fg) 55%, transparent)" } as CSSProperties) : undefined}
+        className="relative flex h-full flex-col gap-4 px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))]"
       >
-        <p className={`mb-4 text-text-body ${wrap}`}>{welcome}</p>
-        {entries.map((entry, i) => (
-          <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} onImage={follow} />
-        ))}
-        {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} onImage={follow} />}
-      </div>
-      <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
-        <PathLine cwd={cwd} />
-        <div className="flex items-center gap-2">
-          <span aria-hidden className="text-muted">
-            &gt;
-          </span>
-          <input
-            ref={input}
-            aria-label="Command"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={running !== null}
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            enterKeyHint="go"
-            // 16 px so iOS doesn't zoom in.
-            className="min-h-11 min-w-0 flex-1 bg-transparent font-mono text-base text-text focus:outline-none disabled:opacity-60"
-          />
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={log}
+            role="log"
+            data-scheme={scheme}
+            aria-label="Console output"
+            aria-busy={running !== null}
+            onScroll={(event) => {
+              const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+              following.current = scrollHeight - scrollTop - clientHeight < 8;
+            }}
+            // A click in the output goes on typing, unless it selected something to copy.
+            onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
+            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
+          >
+            <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
+            {entries.map((entry, i) => (
+              <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} crt={crt} onImage={follow} />
+            ))}
+            {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} crt={crt} onImage={follow} />}
+          </div>
+          {crt && (
+            <div
+              data-scanlines
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-10 opacity-[0.06]"
+              style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
+            />
+          )}
         </div>
-      </form>
-    </main>
+        <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
+          <PathLine cwd={cwd} crt={crt} />
+          <div className="flex items-center gap-2">
+            <span aria-hidden className={crt ? "text-(--crt-dim)" : "text-muted"}>
+              &gt;
+            </span>
+            <div className="relative min-w-0 flex-1 overflow-hidden">
+              <input
+                ref={input}
+                aria-label="Command"
+                data-autofocus
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                onKeyDown={onKeyDown}
+                onKeyUp={markCaret}
+                onSelect={markCaret}
+                onClick={markCaret}
+                onScroll={markCaret}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                disabled={running !== null}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                // 16 px so iOS doesn't zoom in. In the phosphor schemes the real caret is hidden behind a drawn block.
+                style={crt ? { caretColor: "transparent" } : undefined}
+                className={`min-h-11 w-full bg-transparent font-mono text-base focus:outline-none disabled:opacity-60 ${crt ? "" : "text-text"}`}
+              />
+              {crt && focused && running === null && (
+                // Monospace, so the caret's column is its width in characters. Steady under reduced motion, blinking otherwise.
+                <span
+                  data-cursor
+                  aria-hidden="true"
+                  style={{ left: `calc(${caret.column}ch - ${caret.scrolled}px)`, backgroundColor: "var(--crt-fg)" }}
+                  className="pointer-events-none absolute top-1/2 h-[1.2em] w-[1ch] -translate-y-1/2 font-mono text-base motion-safe:animate-[k-blink_1s_steps(1)_infinite]"
+                />
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+    </WindowFrame>
   );
 }
 
 /** The working directory: its vault in the accent colour, the rest muted. */
-function PathLine({ cwd }: { cwd: string }) {
+function PathLine({ cwd, crt }: { cwd: string; crt: boolean }) {
   const at = cwd.indexOf("/", 1);
   const [vault, rest] = cwd === "/" ? ["", "/"] : at < 0 ? [cwd, ""] : [cwd.slice(0, at), cwd.slice(at)];
   return (
     <div data-line className="break-words">
-      {vault && <span className="text-accent-text">{vault}</span>}
-      {rest && <span className="text-muted">{rest}</span>}
+      {vault && <span className={crt ? "" : "text-accent-text"}>{vault}</span>}
+      {rest && <span className={crt ? "text-(--crt-dim)" : "text-muted"}>{rest}</span>}
     </div>
   );
 }
 
-function EntryView({ entry, withPath, onImage }: { entry: Entry | Running; withPath: boolean; onImage(): void }) {
+function EntryView({ entry, withPath, crt, onImage }: { entry: Entry | Running; withPath: boolean; crt: boolean; onImage(): void }) {
   return (
     <div className="mb-2">
-      {withPath && <PathLine cwd={entry.cwd} />}
+      {withPath && <PathLine cwd={entry.cwd} crt={crt} />}
       <div data-line className={wrap}>
-        <span aria-hidden className="select-none text-muted">
+        <span aria-hidden className={`select-none ${crt ? "text-(--crt-dim)" : "text-muted"}`}>
           {"> "}
         </span>
         {entry.typed}
       </div>
       {entry.sent !== undefined && (
-        <div data-line className={`text-dim ${wrap}`}>
+        <div data-line className={`${crt ? "text-(--crt-dim)" : "text-dim"} ${wrap}`}>
           <span aria-hidden className="select-none">
             {"→ "}
           </span>
           {entry.sent}
         </div>
       )}
-      {"output" in entry && entry.output.map((output, i) => <OutputView key={i} output={output} onImage={onImage} />)}
+      {"output" in entry && entry.output.map((output, i) => <OutputView key={i} output={output} crt={crt} onImage={onImage} />)}
     </div>
   );
 }
 
-function OutputView({ output, onImage }: { output: Output; onImage(): void }) {
+function OutputView({ output, crt, onImage }: { output: Output; crt: boolean; onImage(): void }) {
   if (output.kind === "image") {
     return (
       <div data-line>
@@ -169,12 +214,48 @@ function OutputView({ output, onImage }: { output: Output; onImage(): void }) {
     );
   }
   return (
-    <div data-line className={`text-warning ${wrap}`}>
+    // A phosphor screen has one colour: errors are inverse video. The word "error" shows in every scheme, never colour alone.
+    <div
+      data-line
+      data-error={crt ? "" : undefined}
+      className={`${crt ? "bg-(--crt-fg) px-1 text-(--crt-bg)" : "text-warning"} ${wrap}`}
+      style={crt ? { textShadow: "none" } : undefined}
+    >
       <span aria-hidden className="select-none">
         {"! "}
       </span>
-      <span className="sr-only">Error: </span>
-      {output.text}
+      <span>Error:</span> {output.text}
+    </div>
+  );
+}
+
+const label: Record<ConsoleScheme, string> = { plain: "Plain", green: "Green", amber: "Amber" };
+
+/** In the title bar: three buttons on the desktop, one that cycles on the phone. */
+function SchemeSwitch({ scheme, onChoose }: { scheme: ConsoleScheme; onChoose(scheme: ConsoleScheme): void }) {
+  const desktop = useDesktop();
+  const button = "min-h-11 px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent";
+  if (!desktop) {
+    const next = consoleSchemes[(consoleSchemes.indexOf(scheme) + 1) % consoleSchemes.length];
+    return (
+      <button type="button" onClick={() => onChoose(next)} className={`${button} rounded-[10px] border border-line bg-surface text-text`}>
+        Console scheme: {label[scheme]}
+      </button>
+    );
+  }
+  return (
+    <div role="group" aria-label="Console scheme" className="flex overflow-hidden rounded-md border border-line bg-surface-2">
+      {consoleSchemes.map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={option === scheme}
+          onClick={() => onChoose(option)}
+          className={`${button} ${option === scheme ? "bg-surface font-medium text-text" : "text-muted"}`}
+        >
+          {label[option]}
+        </button>
+      ))}
     </div>
   );
 }

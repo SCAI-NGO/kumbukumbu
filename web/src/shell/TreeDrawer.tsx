@@ -448,15 +448,15 @@ function AccountRow() {
         What's on
         <Badge count={badge.count} overdue={badge.overdue} />
       </Link>
-      <Link to="/skills/installed" onClick={close} className={link}>
+      <Link to="/settings/skills/installed" onClick={close} className={link}>
         <Sparkles size={16} aria-hidden className="text-muted" />
         Skills
       </Link>
-      <Link to="/access/keys" onClick={close} className={link}>
+      <Link to="/settings/access/keys" onClick={close} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
         Access
       </Link>
-      <Link to="/settings" onClick={close} className={link}>
+      <Link to="/settings/appearance" onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />
         Settings
       </Link>

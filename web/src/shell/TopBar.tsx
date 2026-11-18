@@ -32,6 +32,7 @@ export default function TopBar({
         <button
           id={sidebarToggleId}
           type="button"
+          data-window-return
           aria-label="File tree"
           aria-expanded={sidebar.expanded}
           aria-controls={sidebarId}
@@ -43,7 +44,7 @@ export default function TopBar({
           <PanelLeft size={22} strokeWidth={1.8} aria-hidden />
         </button>
       ) : (
-        <button type="button" aria-label="Open file tree" onClick={openTree} className={buttonClass}>
+        <button type="button" aria-label="Open file tree" data-window-return onClick={openTree} className={buttonClass}>
           <PanelLeft size={22} strokeWidth={1.8} aria-hidden />
         </button>
       )}

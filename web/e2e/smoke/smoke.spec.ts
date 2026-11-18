@@ -271,7 +271,7 @@ test("smoke #10: hidden Home leaves no trace in the tree, search or Recent chang
   // Recent changes (paged, so asked for by name): nothing matches, and Home is no vault chip.
   const recent = async () => {
     await page.goto("/recent");
-    await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Recent changes" })).toBeVisible();
     await page.getByRole("searchbox", { name: "Find by name" }).fill("Zahnarzt");
   };
   await recent();

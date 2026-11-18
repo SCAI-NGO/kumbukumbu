@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
 import { CopyButton, LeaveDialog, useLeaveGuard } from "./shownOnce";
+import { useWindowLock } from "../windows/context";
 
 /**
  * The recovery key, shown once. Continue unlocks only after the key was downloaded or copied and the user ticked
@@ -16,6 +17,7 @@ export function RecoveryKeyReveal({ value, onContinue }: { value: string; onCont
   const [stored, setStored] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const blocker = useLeaveGuard(saved);
+  useWindowLock("Save the recovery key first");
 
   const copied = (ok: boolean) => {
     setCopyFailed(!ok);

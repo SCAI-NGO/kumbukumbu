@@ -41,7 +41,7 @@ afterEach(() => {
 describe("DavShares", () => {
   it("lists shares", async () => {
     api();
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     const panel = await screen.findByRole("tabpanel", { name: "WebDAV" });
     const item = (await within(panel).findByText("Work PC")).closest("li")!;
     expect(item).toHaveTextContent("ada.k7qm");
@@ -62,20 +62,20 @@ describe("DavShares", () => {
 
   it("says when WebDAV is off", async () => {
     api({}, false);
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     expect(await screen.findByText("WebDAV is switched off on this server; shares work once it is on.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New share" })).toBeEnabled();
   });
 
   it("says when there is no share yet", async () => {
     api({}, true, []);
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     expect(await screen.findByText("You have no WebDAV shares yet.")).toBeInTheDocument();
   });
 
   it("marks a share that lost a vault", async () => {
     api({}, true, [{ ...workPc, lostVaults: ["v-gone"] }, home]);
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     const item = (await screen.findByText("Work PC")).closest("li")!;
     expect(within(item).getByRole("note")).toHaveTextContent("This share lost a vault when it was re-encrypted");
     expect(screen.getByText("Home").closest("li")).not.toHaveTextContent(/lost/);
@@ -88,7 +88,7 @@ describe("DavShares", () => {
       { ...home, expiresAt: "2026-01-31T09:00:00Z" },
       live,
     ]);
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     const over = (await screen.findByText("Revoked and expired (2)")).closest("details")!;
     expect(over).not.toHaveAttribute("open");
     expect(within(over).getAllByRole("heading", { level: 3, hidden: true }).map((h) => h.textContent)).toEqual(["Work PC", "Home"]);
@@ -104,7 +104,7 @@ describe("DavShares", () => {
   it("revoke dialog says drives stop working", async () => {
     let revoked = 0;
     api({ "DELETE /api/dav-shares/k7qm": () => (revoked++, noContent()) });
-    renderApp("/access/dav");
+    renderApp("/settings/access/dav");
     await userEvent.click(await screen.findByRole("button", { name: "Revoke Work PC" }));
     const confirm = screen.getByRole("alertdialog", { name: "Revoke Work PC?" });
     expect(confirm).toHaveTextContent("Drives mounted with this share stop working");

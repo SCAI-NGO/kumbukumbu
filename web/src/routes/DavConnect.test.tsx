@@ -33,7 +33,7 @@ function api(listed: unknown[] = []) {
 
 async function createShare(queryClient?: QueryClient) {
   api([share]);
-  const router = renderApp("/access/dav", queryClient);
+  const router = renderApp("/settings/access/dav", queryClient);
   await userEvent.click(await screen.findByRole("button", { name: "New share" }));
   const dialog = screen.getByRole("dialog", { name: "New WebDAV share" });
   await userEvent.type(within(dialog).getByLabelText("Label"), "Work PC");
@@ -87,7 +87,7 @@ describe("DavConnect", () => {
     expect(screen.queryByText(password)).not.toBeInTheDocument();
     expect(await screen.findByRole("tablist", { name: "Access" })).toBeInTheDocument();
     // Neither the URL nor storage nor the client-wide caches keep it.
-    expect(router.state.location.pathname + router.state.location.search + router.state.location.hash).toBe("/access/dav");
+    expect(router.state.location.pathname + router.state.location.search + router.state.location.hash).toBe("/settings/access/dav");
     expect(JSON.stringify({ ...localStorage })).not.toContain(password);
     expect(JSON.stringify({ ...sessionStorage })).not.toContain(password);
     await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(password));
@@ -96,7 +96,7 @@ describe("DavConnect", () => {
 
   it("asks once before leaving with the password unsaved", async () => {
     const router = await createShare();
-    await navigateAway(router, "/settings");
+    await navigateAway(router, "/settings/appearance");
     expect(screen.getByRole("alertdialog")).toHaveTextContent("You haven't saved the password");
     await userEvent.click(screen.getByRole("button", { name: "Stay" }));
     await userEvent.click(screen.getByRole("button", { name: "Done" }));

@@ -91,7 +91,7 @@ export default function Installed() {
       {withoutSkills.length > 0 && (
         <p role="status" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-text-body">
           {withoutSkills.join(", ")} can't use your skills yet: give them the vault Skills in{" "}
-          <Link to="/access/keys" className="text-accent-text underline">
+          <Link to="/settings/access/keys" replace className="text-accent-text underline">
             Access
           </Link>
           .
