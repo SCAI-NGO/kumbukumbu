@@ -8,11 +8,34 @@ import { useVisualViewport } from "../hooks/useVisualViewport";
 import { useEditor } from "../state/editor";
 import type { Heading } from "./outline";
 
+/** The note's headings, indented by level, a button each that jumps to it; `current` marks the one at that line. */
+export function OutlineList({ headings, current, onJump }: { headings: Heading[]; current?: number; onJump(line: number): void }) {
+  if (headings.length === 0) return <p className="px-[18px] pb-2 text-text-body">This note has no headings.</p>;
+  const top = Math.min(...headings.map((h) => h.level));
+  return (
+    <ul className="min-h-0 overflow-y-auto px-2">
+      {headings.map((h) => (
+        <li key={h.line} style={{ paddingLeft: (h.level - top) * 16 }}>
+          <button
+            type="button"
+            aria-current={h.line === current ? "location" : undefined}
+            onClick={() => onJump(h.line)}
+            className={`flex min-h-11 w-full items-center rounded-[8px] px-2.5 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+              h.level === top ? "font-semibold" : ""
+            } ${h.line === current ? "bg-accent/15 text-accent-text" : h.level === top ? "text-text" : "text-text-body"}`}
+          >
+            <span className="min-w-0 flex-1 truncate">{h.text}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** The note's headings as a sheet from the bottom; a tap jumps to one. */
 export function OutlineSheet({ headings, onJump, onClose }: { headings: Heading[]; onJump(line: number): void; onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
-  const top = Math.min(...headings.map((h) => h.level));
   return (
     <div className="absolute inset-0 z-30 flex items-end justify-center bg-black/55 sm:items-center" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -35,25 +58,7 @@ export function OutlineSheet({ headings, onJump, onClose }: { headings: Heading[
             <X size={22} aria-hidden />
           </button>
         </div>
-        {headings.length === 0 ? (
-          <p className="px-[18px] pb-2 text-text-body">This note has no headings.</p>
-        ) : (
-          <ul className="min-h-0 overflow-y-auto px-2">
-            {headings.map((h) => (
-              <li key={h.line} style={{ paddingLeft: (h.level - top) * 16 }}>
-                <button
-                  type="button"
-                  onClick={() => onJump(h.line)}
-                  className={`flex min-h-11 w-full items-center rounded-[8px] px-2.5 text-left focus-visible:outline-2 focus-visible:outline-accent ${
-                    h.level === top ? "font-semibold text-text" : "text-text-body"
-                  }`}
-                >
-                  <span className="min-w-0 flex-1 truncate">{h.text}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <OutlineList headings={headings} onJump={onJump} />
       </div>
     </div>
   );
