@@ -41,6 +41,7 @@ Typing paths in full is the console's slowest part, on the phone above all. A sh
 ## Phone (below the desktop breakpoint, `useDesktop()`)
 
 - A row of chips directly above the input while the word under the cursor is a path or a command with at least one match, at most a scrollable single line; each chip a 48 px high target with the name (folders with `/`).
+- An empty word after a command (`cat ` with the cursor after the space) offers the working folder's entries too, for `cd ` its folders only; an empty first word offers nothing. Why: the row is there to save typing on the phone, and the first name is where it saves the most; every command at once would be no help.
 - A tap puts the match in as Tab would with one match, and the keyboard stays up (the input keeps focus).
 - The row hides when the input is empty, a command is running, or nothing matches. It never covers the output's last line (the output's bottom padding grows with it).
 - In Green and Amber the chips take the phosphor colours, outlined.

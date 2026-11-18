@@ -970,6 +970,10 @@ describe("completion", () => {
       expect(input()).toHaveValue("cat Meeting\\ ");
       expect(posted.filter((body) => !body.command?.startsWith("ls"))).toEqual([]);
       expect(useConsole.getState().history).toEqual([]);
+      // Listing ran nothing, so the folder's listing is still good.
+      tab();
+      await waitFor(() => expect(lines()).toHaveLength(5));
+      expect(listed(posted)).toHaveLength(1);
     });
 
     it("doesn't list after a Tab that inserted, or once the line changed", async () => {
@@ -1068,13 +1072,40 @@ describe("completion", () => {
       shell();
       await open("/Work");
       await userEvent.type(input(), "cat pro");
+      const blurred = vi.fn();
+      input().addEventListener("blur", blurred);
       await userEvent.click(await screen.findByRole("button", { name: "projects/" }));
       expect(input()).toHaveValue("cat projects/");
       expect(input()).toHaveFocus();
+      expect(blurred).not.toHaveBeenCalled();
       expect((input() as HTMLInputElement).selectionStart).toBe(13);
       await waitFor(() => expect(chips()).toEqual(["alpha.md"]));
       await userEvent.click(screen.getByRole("button", { name: "alpha.md" }));
       expect(input()).toHaveValue("cat projects/alpha.md ");
+      expect(blurred).not.toHaveBeenCalled();
+      await waitFor(() => expect(chips()).toEqual(["Meeting Notes.md", "Meeting Plan.md", "plan.md", "projects/"]));
+    });
+
+    it("offers the working folder's entries for an empty word after a command, folders only for cd, and nothing for an empty first word", async () => {
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat ");
+      await waitFor(() => expect(chips()).toEqual(["Meeting Notes.md", "Meeting Plan.md", "plan.md", "projects/"]));
+      await userEvent.clear(input());
+      await userEvent.type(input(), "cd ");
+      await waitFor(() => expect(chips()).toEqual(["projects/"]));
+      await userEvent.clear(input());
+      await userEvent.type(input(), " ");
+      await act(async () => {});
+      expect(row()).toBeNull();
+    });
+
+    it("drops the chips when the console resets, as a discreet vault hides", async () => {
+      shell();
+      await open("/");
+      await userEvent.type(input(), "ls Wo");
+      await waitFor(() => expect(chips()).toEqual(["Work/"]));
+      act(() => useConsole.getState().reset());
       await waitFor(() => expect(row()).toBeNull());
     });
 

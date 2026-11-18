@@ -105,7 +105,7 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
 /** Tab's list of matches, as zsh prints it: under the line as typed, which is neither run nor remembered. */
 export function listMatches(line: string, matches: string[]) {
   const { cwd, add } = useConsole.getState();
-  add({ id: nextId++, cwd, typed: line, output: [text(matches.join("  "))] });
+  add({ id: nextId++, cwd, typed: line, output: [text(matches.join("  "))] }, false);
 }
 
 async function ask(request: ConsoleRequest, running: Running, generation: number, signal: AbortSignal, answered: (view: ConsoleView) => void) {

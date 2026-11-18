@@ -30,6 +30,7 @@ export default function ConsolePage() {
   const entries = useConsole((s) => s.entries);
   const history = useConsole((s) => s.history);
   const running = useConsole((s) => s.running);
+  const generation = useConsole((s) => s.generation);
   const [value, setValue] = useState("");
   // Walking the history: where, and the line being typed before, to come back to.
   const [walk, setWalk] = useState<{ index: number; draft: string } | null>(null);
@@ -55,8 +56,12 @@ export default function ConsolePage() {
   const lastTab = useRef<{ line: string; cursor: number } | null>(null);
   const [bell, setBell] = useState(false);
   const bellTimer = useRef<number | undefined>(undefined);
-  const [suggested, setSuggested] = useState<{ line: string; cursor: number; matches: string[] } | null>(null);
-  const chips = !desktop && running === null && value !== "" && suggested?.line === value && suggested.cursor === caret.column ? suggested.matches : [];
+  // Made in the console's generation they belong to: a reset (a discreet vault hidden) takes its names with it.
+  const [suggested, setSuggested] = useState<{ line: string; cursor: number; generation: number; matches: string[] } | null>(null);
+  const chips =
+    !desktop && running === null && value !== "" && suggested?.line === value && suggested.cursor === caret.column && suggested.generation === generation
+      ? suggested.matches
+      : [];
 
   // Leaving the page stops the running command; the store keeps the rest for coming back.
   useEffect(
@@ -81,18 +86,19 @@ export default function ConsolePage() {
     markCaret();
   }, [value]);
 
-  // The phone's chips: for the word under the caret, once something of it is typed.
+  // The phone's chips: for the word under the caret, and for an empty one after a command the working folder's
+  // entries, to save typing on the phone; an empty first word gets none (complete offers no commands for it).
   useEffect(() => {
     if (desktop || running || value === "") return;
     const cursor = caret.column;
     let current = true;
     void complete(value, cursor, cwd, listFolder).then((result) => {
-      if (current) setSuggested({ line: value, cursor, matches: result.replaceFrom < cursor ? result.matches : [] });
+      if (current) setSuggested({ line: value, cursor, generation, matches: result.matches });
     });
     return () => {
       current = false;
     };
-  }, [desktop, running, value, caret.column, cwd]);
+  }, [desktop, running, value, caret.column, cwd, generation]);
 
   /** Whether the line and caret are still the ones a completion was made for, and nothing runs. */
   const still = (line: string, cursor: number) =>

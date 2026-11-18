@@ -36,8 +36,8 @@ interface ConsoleState {
   generation: number;
   /** Records a typed line: not an empty one, and not twice in a row. */
   remember(line: string): void;
-  /** Adds an answered command to the scrollback, which ends the running one. */
-  add(entry: Entry): void;
+  /** Adds an answered command to the scrollback, which ends the running one; `ran` false for one that ran nothing. */
+  add(entry: Entry, ran?: boolean): void;
   reset(): void;
 }
 
@@ -55,9 +55,9 @@ export const useConsole = create<ConsoleState>()((set, get) => ({
     if (line.trim() === "" || history.at(-1) === line) return;
     set({ history: [...history, line].slice(-HISTORY) });
   },
-  add: (entry) => {
+  add: (entry, ran = true) => {
     // Whatever the command did, the folders may look different now.
-    forgetEntries();
+    if (ran) forgetEntries();
     set({ entries: [...get().entries, entry].slice(-SCROLLBACK), running: null });
   },
   // The listings go too: a discreet vault's names must not outlive its hiding.
