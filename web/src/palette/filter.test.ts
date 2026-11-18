@@ -16,6 +16,12 @@ describe("filterRows", () => {
     expect(filterRows([plan], "plan work", none)).toEqual([plan]);
   });
 
+  it("finds a note action by its name and group, not by the note's title it is placed with", () => {
+    const publish = row("Note", "plan", "Publish…");
+    expect(filterRows([publish], "plan", none)).toEqual([]);
+    expect(filterRows([publish], "no pub", none)).toEqual([publish]);
+  });
+
   it("ignores case", () => expect(filterRows([vaults], "SETTINGS vAU", none)).toEqual([vaults]));
 
   it("needs every word to match", () => expect(filterRows([vaults], "set zzz", none)).toEqual([]));

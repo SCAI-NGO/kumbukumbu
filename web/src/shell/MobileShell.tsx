@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useNoteText, useTree, useVaults, type VaultView } from "../api/notes";
-import { Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
-import { folderOf, inVault, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
-import { usePublications, usePublishEnabled } from "../api/publications";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
+import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { PointMenu } from "../components/PointMenu";
 import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
@@ -22,18 +21,13 @@ import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import NoteBar from "./NoteBar";
-import { parseProperties, splitFrontmatter } from "../note/properties";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { usePaletteShortcut } from "../palette/usePaletteShortcut";
-import { staleNotes } from "../palette/rows";
-import { useFavourites } from "../api/favourites";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
-import { useMarking } from "./ConfirmMark";
 import { forgetLastNote, keepLastNote, lastNote, ordinary, settleStart, startSettled, treeHas } from "./lastNote";
-import { copyItems, noteNames } from "./copyItems";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -43,11 +37,10 @@ import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
-import { publishingItems } from "./publishingItems";
-import { useCopied } from "./useCopied";
-import { useNoteEntry } from "../calendar/api";
-import DateDialog, { calendarItems, useRemoveFromCalendar, useTaskSwitch } from "../calendar/DateDialog";
-import { flaggable, useFlagging } from "../flags/FlagMenu";
+import { useNoteActions } from "./useNoteActions";
+import { useNoteMenuKey } from "./useNoteMenuKey";
+import DateDialog from "../calendar/DateDialog";
+import { useFlagging } from "../flags/FlagMenu";
 import { ShellRedirect } from "../windows/context";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
@@ -62,17 +55,13 @@ const loadMoveDialog = () =>
     return m;
   });
 const MoveDialog = lazy(loadMoveDialog);
-const HistorySheet = lazy(() => import("../note/HistorySheet"));
 const TrashSheet = lazy(() => import("./TrashSheet"));
 const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
 const ActivitySheet = lazy(() => import("./ActivitySheet"));
 const ArchiveSheet = lazy(() => import("./ArchiveSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
-const PublishDialog = lazy(() => import("./PublishDialog"));
 const Palette = lazy(() => import("../palette/Palette"));
-
-const noteFavourite = (path: string) => ({ kind: "note", vault: vaultOf(path), path: inVault(path) });
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -165,12 +154,6 @@ export default function MobileShell() {
   const dockLevel = useLevel(activeVault);
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
-  // The note's vault's tree, which says whether its bare name is unique for Copy link. The drawer reads the same
-  // query; read here it is also there before the drawer was first opened, so Copy link gives the same form either way.
-  const noteTree = useTree(path ? vaultOf(path) : null);
-  const noteNamesInVault = useMemo(() => noteTree.data && noteNames(noteTree.data.root), [noteTree.data]);
-  const favourites = useFavourites();
-  const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   const userId = useSession((s) => s.user?.id ?? null);
@@ -178,7 +161,6 @@ export default function MobileShell() {
   // The last note of an ordinary vault is kept for the next start, once it has loaded; a discreet one never is, and
   // while one is open the kept path stays the last ordinary note.
   const loaded = useNoteLoaded(path);
-  const noteText = useNoteText(path);
   useEffect(() => {
     if (userId && path && loaded && ordinary(vaults.data, discreetNames, vaultOf(path))) keepLastNote(userId, path);
   }, [userId, path, loaded, vaults.data, discreetNames]);
@@ -217,8 +199,6 @@ export default function MobileShell() {
   const [folderDialog, setFolderDialog] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<DeleteSubject | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
-  const [history, setHistory] = useState<string | null>(null);
-  const [publishing, setPublishing] = useState<string | null>(null);
   /** The note whose date the date dialog gives or changes. */
   const [dating, setDating] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<VaultSheet | null>(null);
@@ -231,8 +211,6 @@ export default function MobileShell() {
         setFolderDialog((folder) => (gonePath(folder) ? null : folder));
         setDeleting((subject) => (gonePath(subject?.path) ? null : subject));
         setMoving((subject) => (gonePath(subject?.path) ? null : subject));
-        setHistory((path) => (gonePath(path) ? null : path));
-        setPublishing((path) => (gonePath(path) ? null : path));
         setDating((path) => (gonePath(path) ? null : path));
         setVaultSheet((sheet) => (sheet && goneVault(s, sheet.vault) ? null : sheet));
       }),
@@ -341,26 +319,10 @@ export default function MobileShell() {
   const queryClient = useQueryClient();
   useEffect(() => onRefusal(() => void queryClient.invalidateQueries({ queryKey: ["vaults"] })), [queryClient]);
 
-  // Only the owner publishes, only while the server does, and a published note has its bar instead (publish spec §3.11).
-  const publishEnabled = usePublishEnabled();
-  const noteVault = path ? vaults.data?.find((v) => v.name === vaultOf(path)) : undefined;
-  const ownNote = !!noteVault && noteVault.owner == null;
-  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20), and what is published.
-  const publications = usePublications(noteVault?.name ?? "", ownNote).data;
-  const mayPublish =
-    ownNote && publishEnabled === true && publications !== undefined && !publications.publications.some((p) => p.path === path) && publishableAsNote(noteVault, path ?? "");
-  const marking = useMarking(publications?.publications.map((p) => p.path));
-  const publishingActions =
-    path && ownNote
-      ? publishingItems({ path, note: true, marks: publications?.unpublishable, mayPublish, onPublish: () => setPublishing(path), onMark: (marked) => marking.mark(path, marked) })
-      : [];
-
-  // The note's header line asks the calendar about the note shown; its menu takes the same answer, asking nothing itself.
-  const dated = useNoteEntry(path, false);
-  const removeDate = useRemoveFromCalendar(copied.say);
-  const switchTask = useTaskSwitch(copied.say);
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
+  const noteActions = useNoteActions(path, { onMove: setMoving, onDelete: setDeleting, onDate: setDating, onFlag: flagging.open });
+  const noteMenu = useNoteMenuKey(path);
   if (!path && recentPaths.length && !overview) return <ShellRedirect to={noteUrl(recentPaths[0])} />;
   if (keptThere) return <ShellRedirect to={noteUrl(kept!)} />;
 
@@ -377,10 +339,6 @@ export default function MobileShell() {
   // Below `write` the dock makes nothing, and the note can't be changed; the board's definition wants `maintain`.
   const dockWrites = !!dockFolder && atLeast(dockLevel, "write");
   const noteChanges = !!path && mayChange(noteLevel, path);
-  // The note's properties show in a box with + Add property when it has keys to show; without (no frontmatter, an
-  // empty one, or one that can't be read) the note's ⋯ offers it.
-  const shownFrontmatter = noteText === undefined ? undefined : splitFrontmatter(noteText).frontmatter;
-  const boxless = noteText !== undefined && !(shownFrontmatter != null && parseProperties(shownFrontmatter)?.length);
   // On a phone the tree is a drawer: the frame and the pill go around and under the top bar instead (spec §3.7).
   const framed = discreetShown && !docked;
   const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating, onFlag: flagging.open };
@@ -434,17 +392,7 @@ export default function MobileShell() {
               {renameProblem}
             </p>
           )}
-          {favourites.error && (
-            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
-              {favourites.error}
-            </p>
-          )}
-          {marking.error && (
-            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
-              {errorText(marking.error)}
-            </p>
-          )}
-          {copied.status}
+          {noteActions.notices}
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
@@ -452,37 +400,7 @@ export default function MobileShell() {
               newNote={dockFolder && dockWrites ? () => newNote(dockFolder) : null}
               newFolder={dockFolder && dockWrites ? () => setFolderDialog(dockFolder) : null}
               upload={dockFolder && dockWrites ? () => openUpload(dockFolder) : null}
-              noteActions={
-                path
-                  ? [
-                      { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
-                      { label: "History", icon: History, onSelect: () => setHistory(path) },
-                      ...copyItems(path, noteNamesInVault, true, copied.copy),
-                      // Once the list is read: a change before would replace it. The change lets go of the vault's favourites whose note is gone.
-                      // None for an archived note: the server takes none.
-                      ...(favourites.ready && !inVault(path).startsWith("_archive/")
-                        ? [
-                            {
-                              label: favourites.has(noteFavourite(path)) ? "Remove from favourites" : "Add to favourites",
-                              icon: Star,
-                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), { tree: noteTree.data, at: noteTree.dataUpdatedAt }]])) : []),
-                            },
-                          ]
-                        : []),
-                      ...publishingActions,
-                      ...(noteChanges
-                        ? [
-                            // Not while it is being named from its heading: a name given by hand must not lose that race.
-                            ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) }]),
-                            { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
-                            ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => flagging.open(path) }] : []),
-                            ...calendarItems(path, dated, setDating, removeDate, switchTask),
-                            ...(boxless ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
-                          ]
-                        : []),
-                    ]
-                  : null
-              }
+              noteActions={path ? noteActions.items : null}
             />
           )}
         </div>
@@ -499,7 +417,7 @@ export default function MobileShell() {
       {overlay === "palette" && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
-            <Palette />
+            <Palette note={path && !gone ? { path, items: noteActions.items } : null} />
           </Suspense>
         </LoadBoundary>
       )}
@@ -521,21 +439,9 @@ export default function MobileShell() {
           )}
         </LoadBoundary>
       )}
-      {history && (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setHistory(null)} />}>
-          <Suspense>
-            <HistorySheet path={history} onClose={() => setHistory(null)} />
-          </Suspense>
-        </LoadBoundary>
-      )}
-      {marking.question}
-      {publishing && (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setPublishing(null)} />}>
-          <Suspense>
-            <PublishDialog path={publishing} onClose={() => setPublishing(null)} />
-          </Suspense>
-        </LoadBoundary>
-      )}
+      {/* Outside the dock, which Write mode hides. */}
+      {noteMenu && <PointMenu label="Note actions" items={noteActions.items} at={noteMenu.at} onClose={noteMenu.close} />}
+      {noteActions.dialogs}
       {vaultSheet && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setVaultSheet(null)} />}>
           <Suspense>

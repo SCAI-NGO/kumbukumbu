@@ -2,11 +2,12 @@
 import { notifyManager, useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useDiscreet } from "../discreet/state";
-import { api, call, type RefusalCode } from "./client";
+import { api, call, HttpError, type RefusalCode } from "./client";
 import { addToFirstColumn } from "./board";
 import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
+import { copyName, copyText } from "../note/duplicate";
 import type { FlagName } from "../flags/api";
 import type { components } from "./schema";
 
@@ -223,6 +224,33 @@ export function useCreateNote() {
       void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(path)] });
       void queryClient.invalidateQueries({ queryKey: ["vaults"] });
       // Links to it that were "not found" lead somewhere now.
+      void queryClient.invalidateQueries({ queryKey: ["links"] });
+    },
+  });
+}
+
+/**
+ * Copies the note beside it as the server has it, without the keys a copy doesn't take, and answers the copy's path:
+ * "Copy of plan.md", or the next number while that name is taken, up to 99.
+ */
+export function useDuplicateNote() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (path: string) => {
+      const content = copyText((await call(api.GET("/api/notes/{vault}/{path}", { params: params(path) }))).content);
+      for (let n = 1; ; n++) {
+        try {
+          return (await call(api.PUT("/api/notes/{vault}/{path}", { params: params(copyName(path, n)), body: { content } }))).path;
+        } catch (e) {
+          // Without a version the write only creates: a 409 is a note of that name.
+          if (!(e instanceof HttpError && e.status === 409)) throw e;
+          if (n === 99) throw new HttpError(409, `There are already 99 copies of ${path.slice(path.lastIndexOf("/") + 1)}; rename one and try again.`);
+        }
+      }
+    },
+    onSettled: (_, __, path) => {
+      void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(path)] });
+      void queryClient.invalidateQueries({ queryKey: ["vaults"] });
       void queryClient.invalidateQueries({ queryKey: ["links"] });
     },
   });

@@ -13,6 +13,8 @@ export type Find = { query: string; index: number; count: number };
 export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
 /** The open editor's text and the version it goes on, while any of it isn't saved. */
 export type Unsaved = () => { text: string; version: string } | null;
+/** The caret's place on screen: its left, and the top and bottom of its line. */
+export type CaretAt = () => { left: number; top: number; bottom: number };
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -56,6 +58,8 @@ interface EditorState {
   beforeRead: BeforeRead | null;
   /** Set by the open editor with `beforeRead`: what a save that failed left, for hiding discreet vaults again. */
   unsaved: Unsaved | null;
+  /** Set by the open editor: where its caret stands on screen, for the note's menu from the keyboard. */
+  caretAt: CaretAt | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
@@ -75,6 +79,7 @@ interface EditorState {
   endWrite(): Promise<void>;
   setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: BeforeRead | null, unsaved?: Unsaved | null): void;
+  setCaretAt(caretAt: CaretAt | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
   refused: { path: string; code: RefusalCode; at: number } | null;
@@ -131,6 +136,7 @@ const initial = {
   recentPaths: [],
   beforeRead: null,
   unsaved: null as Unsaved | null,
+  caretAt: null as CaretAt | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
   scrollTarget: null,
@@ -178,6 +184,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (!guard || (await guard())) set({ mode: "read" });
   },
   setBeforeRead: (beforeRead, unsaved = null) => set({ beforeRead, unsaved }),
+  setCaretAt: (caretAt) => set({ caretAt }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),

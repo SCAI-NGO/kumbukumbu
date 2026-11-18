@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Row } from "./rows";
 
-const groups: Row["group"][] = ["Commands", "Vaults", "Notes"];
+const groups: Row["group"][] = ["Note", "Commands", "Vaults", "Notes"];
 const noteLimit = 50;
 
 /**
- * Rows holding every word of the query in their place or name, favourites first, then by group; within a group the
+ * Rows holding every word of the query in their place or name (a note action: in its group and name), favourites first, then by group; within a group the
  * rows where every word starts a word come before the rest, each alphabetical. At most 50 notes, so a large vault stays quick.
  */
 export function filterRows(rows: Row[], query: string, favourites: ReadonlySet<string>): Row[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const starting = words.map((w) => new RegExp(`[^\\p{L}\\p{N}]${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u"));
   const ranked = rows.flatMap((row) => {
-    const text = `${row.place} ${row.name}`.toLowerCase();
+    // A note action is searched with its group, as it reads "Note: Publish", and not by its place: the note's title
+    // would bring up every action wherever the title's words are typed to find another note.
+    const text = (row.group === "Note" ? `note ${row.name}` : `${row.place} ${row.name}`).toLowerCase();
     if (!words.every((w) => text.includes(w))) return [];
     const starts = words.every((w, i) => text.startsWith(w) || starting[i].test(text));
-    return [{ row, favourite: favourites.has(row.key), starts }];
+    return [{ row, favourite: !!row.favourite && favourites.has(row.key), starts }];
   });
   ranked.sort(
     (a, b) =>

@@ -10,6 +10,8 @@ import { startOver } from "../shell/lastNote";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
+import { useWindows } from "../windows/store";
+import { afterWindow } from "./Palette";
 
 beforeEach(() => {
   window.innerWidth = 390;
@@ -36,13 +38,14 @@ function signedInApi({
   favourites = [] as (FavouriteInput & { added?: string })[],
   workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response>,
   homeTree = null as (() => Response) | null,
+  publish = false,
 } = {}) {
   const at = { shown };
   let held: Favourite[] = favourites.map((f) => ({ added: "2026-11-01T09:00:00Z", ...f }));
   const puts: FavouriteInput[][] = [];
   const answer = { put: null as Response | null };
   const fetch = fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null }, publishEnabled: publish }),
     "GET /api/vaults": () => json(200, [vault("Work"), ...(homeTree ? [vault("Home")] : []), ...(at.shown ? [vault("Tagebuch", true)] : [])]),
     ...(homeTree ? { "GET /api/vaults/Home/tree": homeTree } : {}),
     "GET /api/embeddings": () => json(200, []),
@@ -430,5 +433,155 @@ describe("rows", () => {
     await userEvent.click(screen.getByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
     await screen.findByRole("dialog", { name: "Favourites and commands" });
     expect(field()).toHaveValue("");
+  });
+});
+
+describe("the note's actions", () => {
+  const noteGroup = () => within(palette()).queryByRole("group", { name: "Note" });
+  const noteOptions = () => within(noteGroup()!).getAllByRole("option").map((o) => o.getAttribute("aria-label"));
+
+  it("note_group_with_a_note_open_and_text_typed", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "note");
+    await waitFor(() => expect(noteGroup()).toBeInTheDocument());
+    // Before Commands.
+    expect(within(palette()).getAllByRole("group").map((g) => g.getAttribute("aria-label"))[0]).toBe("Note");
+    expect(noteOptions()).toContain("Delete note, inbox");
+  });
+
+  it("not_in_the_empty_palette", async () => {
+    signedInApi();
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["inbox, Work"]));
+    expect(noteGroup()).not.toBeInTheDocument();
+  });
+
+  it("not_without_a_note", async () => {
+    signedInApi();
+    renderApp({ pathname: "/", state: { overview: true } });
+    await userEvent.click(await screen.findByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await userEvent.type(field(), "note");
+    await waitFor(() => expect(options()).toContain("Search notes for ‘note’"));
+    expect(noteGroup()).not.toBeInTheDocument();
+  });
+
+  it("labels_are_the_menus", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "note");
+    await waitFor(() => expect(noteGroup()).toBeInTheDocument());
+    // Placed with the note's title.
+    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Rename or move, inbox"]));
+  });
+
+  it("no_star_and_ctrl_d_does_nothing", async () => {
+    const { puts } = signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    expect(within(within(palette()).getByRole("option", { name: "Delete note, inbox" })).queryByRole("button")).not.toBeInTheDocument();
+    const event = new KeyboardEvent("keydown", { key: "d", code: "KeyD", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => void field().dispatchEvent(event));
+    await act(async () => {});
+    expect(puts).toEqual([]);
+    expect(highlighted()).toBe("Delete note, inbox");
+  });
+
+  it("delete_note_asks_first", async () => {
+    const { fetch } = signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Delete inbox?" })).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE")).toBe(false);
+  });
+
+  it("the_note_title_finds_notes_not_its_actions", async () => {
+    signedInApi({ workTree: () => tree("Work", ["inbox.md", "plan-2026.md"]) });
+    await openPalette("/notes/Work/plan.md");
+    await userEvent.type(field(), "plan");
+    await waitFor(() => expect(highlighted()).toBe("plan-2026, Work"));
+    expect(noteGroup()).not.toBeInTheDocument();
+  });
+
+  it("no_pub_finds_publish", async () => {
+    signedInApi({ publish: true });
+    await openPalette();
+    await userEvent.type(field(), "no pub");
+    await waitFor(() => expect(highlighted()).toBe("Publish…, inbox"));
+  });
+
+  it("find_in_note_leaves_the_focus_in_the_find_field", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "find in note");
+    await waitFor(() => expect(highlighted()).toBe("Find in note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const find = await screen.findByRole("searchbox", { name: "Find in note" });
+    await act(async () => {});
+    expect(queryPalette()).not.toBeInTheDocument();
+    expect(find).toHaveFocus();
+  });
+
+  it("over_a_window_the_window_closes_before_the_action_runs", async () => {
+    signedInApi();
+    const router = await shown();
+    await navigateAway(router, "/console");
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    ctrlP();
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const question = await screen.findByRole("dialog", { name: "Delete inbox?" });
+    expect(question.closest("[inert]")).toBeNull();
+    await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
+  });
+
+  it("the_palette_closes_before_the_action_runs", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const question = await screen.findByRole("dialog", { name: "Delete inbox?" });
+    expect(queryPalette()).not.toBeInTheDocument();
+    await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
+  });
+});
+
+describe("an action waiting for its window to close", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useWindows.setState({ open: false });
+  });
+
+  it("runs_at_once_when_the_window_is_already_gone", () => {
+    const action = vi.fn();
+    afterWindow(action);
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("runs_once_the_window_closes", () => {
+    vi.useFakeTimers();
+    useWindows.setState({ open: true });
+    const action = vi.fn();
+    afterWindow(action);
+    vi.advanceTimersByTime(500);
+    useWindows.setState({ open: false });
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("is_dropped_when_the_window_stays_past_a_second", () => {
+    vi.useFakeTimers();
+    useWindows.setState({ open: true });
+    const action = vi.fn();
+    afterWindow(action);
+    vi.advanceTimersByTime(1000);
+    useWindows.setState({ open: false });
+    expect(action).not.toHaveBeenCalled();
   });
 });
