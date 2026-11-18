@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import fixture from "./console-fixture.json";
@@ -13,6 +14,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
+  useEditor.getState().reset();
   useConsole.getState().reset();
 });
 
@@ -263,6 +265,7 @@ describe("local commands", () => {
       [
         "In this console:",
         "  cd [path] (.. alone is cd ..), pwd, clear, exit",
+        "  l, la and lsa for ls -l, ls -a and ls -la; p <note> shows a note as it reads in the app (help p).",
         "  Relative paths work here; the console turns them into absolute ones, and → shows the result.",
         "  It only reads: pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy are refused, and the write tools aren't here.",
         "",
@@ -618,5 +621,233 @@ describe("the console scheme", () => {
     await open();
     await run("rm /Work/a.md");
     expect(screen.getByText("Error:")).not.toHaveClass("sr-only");
+  });
+});
+
+describe("the shortcuts for ls", () => {
+  it.each([
+    ["l", "/Work", "ls -l /Work"],
+    ["la", "/Work", "ls -a /Work"],
+    ["lsa", "/Work", "ls -la /Work"],
+    ["l", "/", "ls -l"],
+    ["l projects", "/Work", "ls -l /Work/projects"],
+    ["la /Home", "/Work", "ls -a /Home"],
+    ["l /Work | rg md", "/", "ls -l /Work | rg md"],
+    ["lsa|head -n 3", "/Work", "ls -la /Work | head -n 3"],
+    ["  l  /Work", "/", "ls -l  /Work"],
+  ])("sends %s at %s as %s, and shows it", async (line, cwd, sent) => {
+    const { posted } = consoleApi(() => text("plan.md"));
+    await open(cwd);
+    await run(line);
+    expect(posted).toEqual([{ call: "sh", command: sent }]);
+    expect(lines()).toContain(`→ ${sent}`);
+    expect(lines()).toContain(`> ${line}`);
+    expect(useConsole.getState().history).toEqual([line]);
+  });
+
+  it.each([
+    ["cat /Work/a.md | l", "cat /Work/a.md | l"],
+    ["ls l", "ls /Work/l"],
+    ["rg -n la", "rg -n la /Work"],
+    ["ll", "ll"],
+    ["lsa-x", "lsa-x"],
+  ])("leaves %s alone", async (line, sent) => {
+    const { posted } = consoleApi(() => text(""));
+    await open("/Work");
+    await run(line);
+    expect(posted).toEqual([{ call: "sh", command: sent }]);
+  });
+});
+
+describe("peek", () => {
+  const PLAN = "/Work/projects/plan.md";
+  const source = [
+    "---",
+    "status: draft",
+    "---",
+    "# Plan",
+    "",
+    "See [[roadmap]] and [[Secret/diary]].",
+    "",
+    "- [ ] write",
+    "- [x] read",
+    "",
+    "```mermaid",
+    "graph TD; A-->B",
+    "```",
+    "",
+    "<script>alert(1)</script>",
+    "",
+    'A <img src=x onerror="alert(1)"> and <b onclick="x()">bold</b> word',
+  ].join("\n");
+  const planLinks = [
+    { line: 6, raw: "[[roadmap]]", target: "roadmap", kind: "note", path: "/Work/projects/roadmap.md", candidates: [] },
+    // A discreet vault's note, while hidden, is no link target: the server answers "not found", as for the note view.
+    { line: 6, raw: "[[Secret/diary]]", target: "Secret/diary", kind: "not_found", path: null, candidates: [] },
+  ];
+  const note = (content: string, path = PLAN) => json(200, { parts: [part(content)], isError: false, version: { path, token: "v1" } });
+
+  /** The console's endpoint answering `cat` with `answer`, the links of the note, and what the note page reads. */
+  function peekApi(answer: Answer = () => note(source)) {
+    const posted: Body[] = [];
+    const fetch = fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "POST /api/console": async (request) => {
+        const body = (await request.json()) as Body;
+        posted.push(body);
+        return answer(body);
+      },
+      [`GET /api/links${PLAN}`]: () => json(200, planLinks),
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2 }]),
+      "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/notes/*": (r) =>
+        json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "# Roadmap", version: "v2", lastWriter: "ada", lastWriteAt: "2026-11-18T08:00:00Z" }),
+      "GET /api/links/*": () => json(200, []),
+      "GET /api/backlinks/*": () => json(200, []),
+      "GET /api/changes": () => json(200, []),
+    });
+    return { fetch, posted };
+  }
+
+  const peeked = () => log().querySelector<HTMLElement>("[data-peek]")!;
+
+  it("reads the note through cat with its path made absolute, and renders it", async () => {
+    const { posted } = peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(posted).toEqual([{ call: "sh", command: `cat ${PLAN}` }]);
+    expect(lines().slice(0, 3)).toEqual(["/Work/projects", "> p plan.md", `→ cat ${PLAN}`]);
+    expect(within(peeked()).getByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+    expect(await within(peeked()).findByRole("link", { name: "roadmap" })).toHaveAttribute("href", "/notes/Work/projects/roadmap.md");
+    // Shown as the note view shows it: the front matter as properties, no version line.
+    expect(within(peeked()).getByText("draft")).toBeInTheDocument();
+    expect(peeked()).not.toHaveTextContent("status: draft");
+    expect(log()).not.toHaveTextContent("version of");
+  });
+
+  it("shows task boxes disabled and a Mermaid block as code", async () => {
+    peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(within(peeked()).getByRole("checkbox", { name: "write" })).toBeDisabled();
+    expect(within(peeked()).getByRole("checkbox", { name: "read" })).toBeDisabled();
+    const code = peeked().querySelector("pre code")!;
+    expect(code).toHaveTextContent("graph TD; A-->B");
+    expect(code).toHaveClass("language-mermaid");
+  });
+
+  it("shows raw HTML as text and never renders it, as the note view does", async () => {
+    peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(peeked().querySelector("script, b, img")).toBeNull();
+    expect(within(peeked()).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    expect(peeked()).toHaveTextContent('A <img src=x onerror="alert(1)"> and <b onclick="x()">bold</b> word');
+  });
+
+  it("opens a link's note in the console window's place, which closes it", async () => {
+    peekApi();
+    useConsole.setState({ cwd: "/Work/projects" });
+    const router = renderApp(["/", "/console"]);
+    await screen.findByRole("heading", { name: "Console" });
+    await run("p plan.md");
+    await userEvent.click(await within(peeked()).findByRole("link", { name: "roadmap" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/roadmap.md"));
+    expect(router.state.historyAction).toBe("REPLACE");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Console" })).not.toBeInTheDocument());
+  });
+
+  it("shows a link the server didn't resolve, as to a hidden discreet vault, as the note view does", async () => {
+    peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    await within(peeked()).findByRole("link", { name: "roadmap" });
+    expect(within(peeked()).queryByRole("link", { name: "Secret/diary" })).toBeNull();
+    expect(within(peeked()).getByRole("button", { name: "Create the note “Secret/diary”" })).toBeInTheDocument();
+  });
+
+  it("keeps the notice of another user's writing above the note, and leaves the embedded notes block out", async () => {
+    peekApi(() =>
+      note(
+        `[${PLAN}: last written by another user]\n# Plan\n\n![[roadmap]]\n\n--- embedded notes: shown for reading, not part of this note's text (which ends above) ---\n==> /Work/projects/roadmap.md <==\n# Roadmap\n`,
+      ),
+    );
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(lines()).toContain(`[${PLAN}: last written by another user]`);
+    expect(peeked()).not.toHaveTextContent("last written by another user");
+    expect(peeked()).not.toHaveTextContent("embedded notes");
+    expect(within(peeked()).getByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+  });
+
+  it("prints the outline cat gives for a note too long to read whole, as text", async () => {
+    const outline = `# Plan\n## Goals\n\n[note too long for one call (~9,000 tokens); its outline is above. Read a part: cat "${PLAN}#Section", head -n 40 ${PLAN}, rg -n … ${PLAN}]`;
+    peekApi(() => note(outline));
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(log().querySelector("[data-peek]")).toBeNull();
+    expect(lines()).toContain(outline);
+  });
+
+  it.each([
+    ["p", "p: missing note"],
+    ["p a.md b.md", "p: too many arguments"],
+    ["p projects", "p: /Work/projects: not a note"],
+    ["p shot.png", "p: /Work/shot.png: not a note"],
+    ["p plan.md | head", "p: can't be part of a pipeline"],
+  ])("refuses %s without a request", async (line, said) => {
+    const { posted } = peekApi();
+    await open("/Work");
+    await run(line);
+    expect(posted).toEqual([]);
+    expect(lines()).toEqual(["/Work", `> ${line}`, `! Error: ${said}`]);
+  });
+
+  it("prints the shell's error for a note that isn't there", async () => {
+    peekApi(() => text("cat: /Work/gone.md: no such note", true));
+    await open("/Work");
+    await run("p gone.md");
+    expect(lines()).toEqual(["/Work", "> p gone.md", "→ cat /Work/gone.md", "! Error: cat: /Work/gone.md: no such note"]);
+    expect(log().querySelector("[data-peek]")).toBeNull();
+  });
+
+  it("explains itself for help p", async () => {
+    const { posted } = peekApi();
+    await open();
+    await run("help p");
+    expect(posted).toEqual([]);
+    expect(lines()[2]).toMatch(/^p <note>/);
+  });
+
+  it.each(["l", "la", "lsa"])("explains help %s itself", async (name) => {
+    const { posted } = peekApi();
+    await open();
+    await run(`help ${name}`);
+    expect(posted).toEqual([]);
+    expect(lines()[2]).toMatch(new RegExp(`^${name} \\[path\\]`));
+  });
+
+  it.each([
+    ["green", "#33ff66"],
+    ["amber", "#ffb000"],
+  ])("draws the note in phosphor in %s, as the rest of the output", async (scheme, fg) => {
+    localStorage.setItem("kumbu.consoleScheme", scheme);
+    peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    const screenBox = document.querySelector<HTMLElement>("[data-crt]")!;
+    expect(screenBox.style.getPropertyValue("--crt-fg")).toBe(fg);
+    expect(screenBox).toContainElement(peeked());
+    for (const name of ["--text", "--text-body", "--accent-text", "--muted", "--dim", "--line"]) {
+      expect(peeked().style.getPropertyValue(name)).toMatch(/var\(--crt-/);
+    }
+    localStorage.clear();
+  });
+
+  it("keeps the app's colours in Plain", async () => {
+    peekApi();
+    await open("/Work/projects");
+    await run("p plan.md");
+    expect(peeked().style.getPropertyValue("--text")).toBe("");
   });
 });

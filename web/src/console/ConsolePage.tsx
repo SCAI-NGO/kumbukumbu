@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useLinks } from "../api/notes";
 import { useDesktop } from "../hooks/useDesktop";
+import { maskedBody } from "../note/comments";
+import MarkdownView from "../note/MarkdownView";
+import { Properties } from "../note/NoteView";
+import { splitFrontmatter } from "../note/properties";
 import WindowFrame from "../windows/WindowFrame";
 import { useCloseWindow } from "../windows/context";
 import { consoleSchemes, keepConsoleScheme, phosphor, storedConsoleScheme, type ConsoleScheme } from "./crt";
@@ -199,6 +204,7 @@ function EntryView({ entry, withPath, crt, onImage }: { entry: Entry | Running; 
 }
 
 function OutputView({ output, crt, onImage }: { output: Output; crt: boolean; onImage(): void }) {
+  if (output.kind === "note") return <Peek path={output.path} source={output.source} version={output.version} crt={crt} />;
   if (output.kind === "image") {
     return (
       <div data-line>
@@ -225,6 +231,41 @@ function OutputView({ output, crt, onImage }: { output: Output; crt: boolean; on
         {"! "}
       </span>
       <span>Error:</span> {output.text}
+    </div>
+  );
+}
+
+const noop = () => {};
+
+// On a phosphor screen the note's colours are the screen's: headings and links in its full colour, the text a little
+// dimmer, so they stand out; lines and boxes in the dimmed one.
+const phosphorNote = {
+  "--text": "var(--crt-fg)",
+  "--text-body": "color-mix(in srgb, var(--crt-fg) 80%, var(--crt-bg))",
+  "--accent-text": "var(--crt-fg)",
+  "--accent": "var(--crt-fg)",
+  "--on-accent": "var(--crt-bg)",
+  "--muted": "var(--crt-dim)",
+  "--dim": "var(--crt-dim)",
+  "--line": "var(--crt-dim)",
+  "--warning": "var(--crt-fg)",
+  "--surface": "var(--crt-bg)",
+  "--surface-2": "var(--crt-bg)",
+  "--highlight": "var(--crt-dim)",
+} as CSSProperties;
+
+/**
+ * A note read by `p`, by the note view's renderer (and its sanitising): its links as the server resolves them for the
+ * note view, task boxes disabled, Mermaid as code. The console never writes, so a missing note is not created here.
+ */
+function Peek({ path, source, version, crt }: { path: string; source: string; version: string; crt: boolean }) {
+  const links = useLinks(path, version);
+  const { frontmatter } = useMemo(() => splitFrontmatter(source), [source]);
+  const shown = useMemo(() => maskedBody(source), [source]);
+  return (
+    <div data-line data-peek style={crt ? phosphorNote : undefined} className="my-2 font-sans">
+      {frontmatter !== null && <Properties yaml={frontmatter} changed={null} still />}
+      <MarkdownView source={shown.body} mask={shown.mask} links={links.data} tasksDisabled onToggleTask={noop} onCreateMissing={noop} path={path} diagramsAsCode />
     </div>
   );
 }

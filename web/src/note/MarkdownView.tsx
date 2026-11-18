@@ -15,6 +15,7 @@ import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
 import { useDarkScheme } from "../theme/dark";
+import { useInWindow } from "../windows/context";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { blockSource, findBlock } from "./blocks";
 import { remarkCallouts, type CalloutKind } from "./callouts";
@@ -121,6 +122,8 @@ interface Props {
   checkpointLink?: (path: string) => string;
   /** Shown right before the rule at a line of the note (1-based), if it gives something: never in an embedded note. */
   ruleNotice?: (line: number) => ReactNode;
+  /** Mermaid blocks stay their code, in the note and in the notes it embeds (the console's peek). */
+  diagramsAsCode?: boolean;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
@@ -166,7 +169,8 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   const note = useNote(path);
   const errorFor = useErrorTextFor(path);
   const links = useLinks(path, note.data?.version);
-  const { onCreateMissing } = useContext(NoteContext);
+  const { onCreateMissing, diagramsAsCode } = useContext(NoteContext);
+  const inWindow = useInWindow();
   const body = useMemo(() => {
     if (!note.data) return null;
     const masked = maskComments(note.data.content);
@@ -183,6 +187,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
     <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
       <Link
         to={noteUrl(path)}
+        replace={inWindow}
         className="-mx-1 flex min-h-11 items-center gap-1.5 rounded-[6px] px-1 font-mono text-[12px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
       >
         <CornerDownRight size={14} aria-hidden className="flex-none" />
@@ -195,7 +200,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
         <p className="text-sm text-muted">{block !== null ? `This note has no block ^${block}.` : `This note has no heading “${heading}”.`}</p>
       )}
       {body !== null && (
-        <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
+        <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested diagramsAsCode={diagramsAsCode} />
       )}
     </section>
   );
@@ -210,6 +215,7 @@ const missingClass = "text-muted underline decoration-dim decoration-dashed unde
  */
 function AttachmentChip({ path }: { path: string }) {
   const { attachments, checkpointLink } = useContext(NoteContext);
+  const inWindow = useInWindow();
   const kind = fileKindOf(path);
   const Icon = fileKindIcon[kind];
   const name = titleOf(path);
@@ -223,6 +229,7 @@ function AttachmentChip({ path }: { path: string }) {
   return (
     <Link
       to={checkpointLink ? checkpointLink(path) : viewUrl(path)}
+      replace={inWindow}
       state={{ paths: attachments } satisfies LightboxState}
       aria-label={`Open the ${kind === "pdf" ? "PDF" : kind === "text" ? "file" : "image"} ${name}`}
       className={`${chip} text-accent-text focus-visible:outline-2 focus-visible:outline-accent`}
@@ -244,6 +251,8 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   const { links, onCreateMissing, path, checkpointLink } = useContext(NoteContext);
   const link = links?.[index];
   const [choosing, setChoosing] = useState(false);
+  // From a window (the console's peek), the note takes the window's place in the history.
+  const inWindow = useInWindow();
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
   if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
     return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} block={subpathBlock(link.raw)} />;
@@ -258,6 +267,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       return (
         <Link
           to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
+          replace={inWindow}
           state={noteAt(link.raw)}
           className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
         >
@@ -322,7 +332,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       const block = link?.kind === "self" ? subpathBlock(link.raw) : null;
       if (block && path && !checkpointLink) {
         return (
-          <Link to={noteUrl(path)} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+          <Link to={noteUrl(path)} replace={inWindow} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
             {children}
           </Link>
         );
@@ -523,7 +533,7 @@ const components: Components = {
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
   blockquote: ({ node, ...props }) => <blockquote data-line={useLine(node)} className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
   pre: ({ node, ...props }) => {
-    const code = mermaidCode(node);
+    const code = useContext(NoteContext).diagramsAsCode ? null : mermaidCode(node);
     const line = useLine(node);
     return code ? (
       <div data-line={line} data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
@@ -606,7 +616,7 @@ function useMath(wanted: boolean): MathPlugins | null {
   return wanted ? (math ?? mathLoaded) : null;
 }
 
-function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink, ruleNotice }: Props) {
+function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink, ruleNotice, diagramsAsCode = false }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   // Comments masked as the server's fair copy reads them, so the view hides exactly what the copy leaves out.
@@ -637,8 +647,8 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
   const context = useMemo(
-    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice }),
-    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice],
+    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode }),
+    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode],
   );
 
   // Every view, an embedded note's and History's too, gets ids of its own: the same note shown twice repeats none.

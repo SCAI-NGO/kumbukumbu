@@ -4,10 +4,21 @@ import { consoleCall, type ConsoleRequest, type ConsoleView } from "./api";
 import { helpBlock, localHelp } from "./help";
 import { resolveLine, resolvePath } from "./paths";
 import { useConsole, type Output, type Running } from "./store";
-import { tokenise } from "./tokenise";
+import { joinLine, tokenise } from "./tokenise";
 
 /** The commands the console answers itself (console design §6). */
-const local = new Set(["cd", "pwd", "clear", "exit"]);
+const local = new Set(["cd", "pwd", "clear", "exit", "p"]);
+
+/** The console's words for ls; the shell has none of them. */
+const shortcuts: Record<string, string> = { l: "ls -l", la: "ls -a", lsa: "ls -la" };
+
+/** `line` with a shortcut as its first word written out, the rest kept as typed; in a later stage it stays. */
+const expand = (line: string) => line.replace(/^\s*(l|la|lsa)(?=[\s|]|$)/, (_, word: string) => shortcuts[word]);
+
+// What the shell's cat says around a note (Cat.cs): the block of embedded notes after it, which the view draws
+// itself, and the footer of a note too long to print, whose outline it gives instead.
+const embedsHeader = "\n--- embedded notes: shown for reading, not part of this note's text (which ends above) ---";
+const tooLong = "\n[note too long for one call (~";
 
 let nextId = 1;
 
@@ -29,6 +40,19 @@ function shown(view: ConsoleView, sent: string): Output[] {
   return output;
 }
 
+/** What `p` shows of cat's answer: the note, under the notice that another user wrote it, if there is one. */
+function peeked(view: ConsoleView, path: string): Output[] {
+  const printed = view.parts.map((part) => part.text ?? "").join("");
+  if (view.isError) return [error(printed)];
+  if (printed.includes(tooLong)) return [text(printed)];
+  const notice = `[${path}: last written by another user]`;
+  const noticed = printed.startsWith(`${notice}\n`);
+  const shown = noticed ? printed.slice(notice.length + 1) : printed;
+  const end = shown.indexOf(embedsHeader);
+  const source = end < 0 ? shown : shown.slice(0, end);
+  return [...(noticed ? [text(notice)] : []), { kind: "note", path, source, version: view.version?.token ?? "" }];
+}
+
 /**
  * Runs a typed line: a local command here, anything else through `POST /api/console` with its paths made absolute.
  * One at a time; an answer that comes after the console was reset (the session ended) is dropped. `leave` goes back to
@@ -42,7 +66,8 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
   const { cwd, generation } = store;
   const entry: Running = { id: nextId++, cwd, typed: line };
   const done = (output: Output[]) => useConsole.getState().add({ ...entry, output });
-  const stages = tokenise(line);
+  const expanded = expand(line);
+  const stages = tokenise(expanded);
 
   // Only as the first word of a line of one stage; a line that doesn't tokenise goes to the shell for its error.
   const inPipeline = stages && stages.length > 1 ? stages.find((stage) => local.has(stage[0])) : undefined;
@@ -50,7 +75,7 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
 
   // `..` alone is `cd ..`, as in zsh and fish.
   const [name, ...args] = stages?.length !== 1 ? [] : stages[0].length === 1 && stages[0][0] === ".." ? ["cd", ".."] : stages[0];
-  if (local.has(name) && args.length > (name === "cd" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
+  if (local.has(name) && args.length > (name === "cd" || name === "p" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
   if (name === "pwd") return done([text(cwd)]);
   if (name === "clear") return useConsole.setState({ entries: [] });
   if (name === "exit") {
@@ -73,7 +98,20 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
     });
   }
 
-  const sent = resolveLine(line, cwd);
+  if (name === "p") {
+    if (args.length === 0) return done([error("p: missing note")]);
+    const path = resolvePath(args[0], cwd);
+    // A section (plan.md#Goals) is of its note, whose links it shows.
+    const note = path.includes(".md#") ? path.slice(0, path.indexOf(".md#") + 3) : path;
+    // A folder or an attachment: cat would list or describe it, which is no note to show.
+    if (!note.endsWith(".md")) return done([error(`p: ${path}: not a note`)]);
+    const sent = joinLine([["cat", path]]);
+    return ask({ call: "sh", command: sent }, { ...entry, sent }, generation, signal, (view) =>
+      useConsole.getState().add({ ...entry, sent, output: peeked(view, note) }),
+    );
+  }
+
+  const sent = resolveLine(expanded, cwd);
   const intro = name === "help" && args.length === 0 ? [text(helpBlock)] : [];
   return ask({ call: "sh", command: sent }, { ...entry, sent }, generation, signal, (view) =>
     useConsole.getState().add({ ...entry, sent, output: [...intro, ...shown(view, sent)] }),
