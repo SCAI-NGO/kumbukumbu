@@ -64,7 +64,11 @@ export function followVaults(queryClient: QueryClient): () => void {
   return queryClient.getQueryCache().subscribe((event) => {
     const key = event.query.queryKey;
     if (key.length !== 1 || key[0] !== "vaults") return;
-    if (event.type === "removed" || (event.type === "updated" && event.action.type === "success")) read();
+    if (event.type === "removed" || (event.type === "updated" && event.action.type === "success")) {
+      read();
+      // The favourites answered are those of the vaults listed: a shown or hidden discreet vault changes them.
+      void queryClient.invalidateQueries({ queryKey: ["favourites"] });
+    }
   });
 }
 
