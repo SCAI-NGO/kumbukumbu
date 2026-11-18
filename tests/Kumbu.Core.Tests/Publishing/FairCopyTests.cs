@@ -521,4 +521,51 @@ public class FairCopyTests
             """, copy.Markdown);
         Assert.Equal([P("/Work/Routing/flow.png")], copy.Files);
     }
+
+    // Publish 2.0: links between the notes of one copy.
+    private static readonly Dictionary<string, int> BundleIds = new(StringComparer.Ordinal) { ["Plan"] = 3, ["Plan.md"] = 3, ["Other note.md"] = 4 };
+
+    private static string Bundled(string content) =>
+        FairCopies.Make(Note, content, InFolder, _ => true, null, t => BundleIds.TryGetValue(t, out var id) ? id : null).Markdown;
+
+    [Fact]
+    public void A_wikilink_to_a_bundle_note_links_inside_the_copy() =>
+        Assert.Equal("See [Plan](#kn-3).", Bundled("See [[Plan]]."));
+
+    [Fact]
+    public void A_link_to_a_heading_or_block_keeps_its_subpath()
+    {
+        Assert.Equal("[the idea](#kn-3/Big%20idea)", Bundled("[[Plan#Big idea|the idea]]"));
+        Assert.Equal("[x](#kn-3/%5Eb1)", Bundled("[x](Plan.md#^b1)"));
+        Assert.Equal("[x](#kn-4/Big%20idea)", Bundled("[x](Other%20note.md#Big%20idea)"));
+    }
+
+    [Fact]
+    public void An_embed_of_a_bundle_note_stays_an_embed() => Assert.Equal("![Plan](#kn-3)", Bundled("![[Plan]]"));
+
+    [Fact]
+    public void A_note_not_in_the_bundle_stays_plain_text()
+    {
+        Assert.Equal("See Elsewhere and here.", Bundled("See [[Elsewhere]] and [here](Elsewhere.md)."));
+        Assert.Equal(Text("See [[Plan]] and [x](Plan.md)."), Copy("See [[Plan]] and [x](Plan.md).").Markdown);
+        Assert.Equal("See Plan and x.", Text("See [[Plan]] and [x](Plan.md)."));
+    }
+
+    [Fact]
+    public void Unlink_turns_links_to_dropped_notes_into_their_text()
+    {
+        Assert.Equal("a [b](#kn-4/x) c", FairCopies.Unlink("[a](#kn-3) [b](#kn-4/x) ![c](#kn-3)", id => id != 3));
+        Assert.Equal("a ] b", FairCopies.Unlink(@"[a \] b](#kn-3)", _ => false));
+    }
+
+    [Fact]
+    public void Unlink_leaves_code_alone()
+    {
+        const string markdown = "```\n[a](#kn-3)\n```\n\nIn `[a](#kn-3)` and [a](#kn-3).\n";
+        Assert.Equal("```\n[a](#kn-3)\n```\n\nIn `[a](#kn-3)` and a.\n", FairCopies.Unlink(markdown, _ => false));
+    }
+
+    [Fact]
+    public void NoteIds_reads_ids_outside_code() =>
+        Assert.Equal(new HashSet<int> { 4, 5 }, FairCopies.NoteIds("`[a](#kn-3)` [b](#kn-4/x)\n\n![c](#kn-5)").ToHashSet());
 }
