@@ -150,8 +150,8 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         var found = await ShAsync(host, key, "rg --regions 'Page 2' /");
 
         Assert.False(found.IsError, Text(found.Content[0]));
-        // The fake's box 72,100,90,11, grown by 3.3.
-        Assert.Equal($"{path}:p2:crop=68,96,98,19: Page 2 text", Text(Assert.Single(found.Content)));
+        // The fake's box 72,100,90,11, grown by 3.3; "Page 2" is 6 of its 11 characters.
+        Assert.Equal($"{path}:p2:crop=68,96,98,19:match=68,96,57,19: Page 2 text", Text(Assert.Single(found.Content)));
         Assert.Equal(mine, Assert.Single(sidecar.TextBoxPdfs));
     }
 
