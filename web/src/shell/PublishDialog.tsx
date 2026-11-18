@@ -1,47 +1,175 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState, type FormEvent } from "react";
 import { errorText } from "../api/error-text";
-import { pdfsNotYet, usePasswordWindowOpen, usePublish } from "../api/publications";
+import {
+  BundleChangedError,
+  manyNotes,
+  maxDepth,
+  pdfsNotYet,
+  previewSet,
+  usePasswordWindowOpen,
+  usePublicationPreview,
+  usePublish,
+  useUpdatePublication,
+  type PublicationPreviewView,
+} from "../api/publications";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 
+const reasons: Record<string, string> = {
+  unpublishable: "marked unpublishable",
+  behind: "only reached through a note that stays out",
+  without: "taken out by you",
+};
+
+const notesText = (n: number) => (n === 1 ? "1 note" : `${n} notes`);
+
+const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+
 /**
- * The owner publishes the note (publish spec §3.5, §3.11): her password, as for an invitation, unless the password
- * window is open. The link stays in this component's state; the bar above the note copies it again later.
+ * The list a publication takes (Publish 2.0 decision 2): every note with a box to take it out (the start note stays),
+ * then what stays behind and why. Nothing is published before this list was on screen.
  */
-export default function PublishDialog({ path, onClose }: { path: string; onClose(): void }) {
+function BundleList({
+  preview,
+  start,
+  without,
+  onToggle,
+}: {
+  preview: PublicationPreviewView;
+  start: string;
+  without: readonly string[];
+  onToggle(path: string): void;
+}) {
+  const id = useId();
+  const count = preview.notes.length;
+  const many = count >= manyNotes;
+  const behind = preview.leftOut.filter((l) => l.reason !== "without");
+  return (
+    <div className="flex flex-col gap-3">
+      <p role="status" className={`text-sm ${many ? "font-semibold text-warning" : "text-text-body"}`}>
+        {notesText(count)}
+        {Number(preview.bytes) > 0 ? `, ${megabytes(Number(preview.bytes))} of images` : ""}
+        {many && <span className="block">That's a lot of notes. Check the list before you publish.</span>}
+      </p>
+      <fieldset className="flex max-h-64 flex-col gap-1 overflow-y-auto rounded-[10px] border border-line p-2">
+        <legend className="px-1 text-sm text-text-body">What goes out</legend>
+        {preview.notes.map((n) => (
+          <label key={n.path} className="flex min-h-9 items-center gap-2 text-sm text-text">
+            <input type="checkbox" checked disabled={n.path === start} onChange={() => onToggle(n.path)} />
+            <span className="min-w-0 break-words">
+              {n.title} <span className="font-mono text-[12px] text-muted">{n.path}</span>
+            </span>
+          </label>
+        ))}
+        {without
+          .filter((w) => !preview.notes.some((n) => n.path === w))
+          .map((w) => (
+            <label key={w} className="flex min-h-9 items-center gap-2 text-sm text-muted">
+              <input type="checkbox" checked={false} onChange={() => onToggle(w)} />
+              <span className="min-w-0 font-mono text-[12px] break-words">{w}</span>
+            </label>
+          ))}
+      </fieldset>
+      {behind.length > 0 && (
+        <div>
+          <h3 id={`${id}-left`} className="text-sm font-semibold text-text">
+            Stays behind
+          </h3>
+          <ul aria-labelledby={`${id}-left`} className="text-sm text-text-body">
+            {behind.map((l) => (
+              <li key={l.path} className="break-words">
+                <span className="font-mono text-[12px]">{l.path}</span>: {reasons[l.reason] ?? l.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview.tooMany && <FormError>More notes than one publication can take: choose a smaller depth or take notes out.</FormError>}
+      {preview.tooLarge && <FormError>The images of these notes are larger than 64 MB together: choose a smaller depth or take notes out.</FormError>}
+    </div>
+  );
+}
+
+/**
+ * The owner publishes the note (publish spec §3.5, §3.11), with the notes it links to as deep as she chooses (Publish
+ * 2.0): her password, as for an invitation, unless the password window is open. With `update`, the same list makes a
+ * new copy under the same link. The link stays in this component's state; the bar above the note copies it again later.
+ */
+export default function PublishDialog({ path, onClose, update }: { path: string; onClose(): void; update?: { depth: number; without: string[] } }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   const passwordWindow = usePasswordWindowOpen();
   // The field's own state, cleared once used. The mutation holds it as its variables until it settles, then is reset
   // (the link, its answer, too): the refusal is kept here instead.
   const [password, setPassword] = useState("");
+  const [depth, setDepth] = useState(update?.depth ?? 0);
+  const [without, setWithout] = useState<string[]>(update?.without ?? []);
+  const [changed, setChanged] = useState<PublicationPreviewView | null>(null);
   const [published, setPublished] = useState<{ link: string; plain: string[] } | null>(null);
   const [refusal, setRefusal] = useState<Error | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const publish = usePublish(path);
-  const asks = passwordWindow.known && !passwordWindow.open;
+  const updating = useUpdatePublication(path);
+  const bundle = depth > 0;
+  const asked = usePublicationPreview(path, depth, without, bundle);
+  const preview = changed ?? asked.data;
+  const asks = !update && passwordWindow.known && !passwordWindow.open;
+  const pending = publish.isPending || updating.isPending;
+  const blocked = bundle && (!preview || preview.tooMany || preview.tooLarge);
+  const disabled = pending || blocked || (!update && (!passwordWindow.known || (asks && password === "")));
+
+  const toggle = (note: string) => {
+    setChanged(null);
+    setWithout((w) => (w.includes(note) ? w.filter((p) => p !== note) : [...w, note]));
+  };
+
+  const failed = (error: Error) => {
+    if (error instanceof BundleChangedError) setChanged(error.preview);
+    setRefusal(error);
+  };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!passwordWindow.known || publish.isPending || (asks && password === "")) return;
+    if (disabled) return;
     setRefusal(null);
-    publish.mutate(asks ? { password } : {}, {
-      onSuccess: (view) => {
-        setPassword("");
-        setPublished({ link: view.link, plain: view.plain });
-        publish.reset();
+    const expected = bundle && preview ? previewSet(preview) : undefined;
+    if (update) {
+      updating.mutate(
+        { depth, without, expected: expected ?? [path] },
+        {
+          onSuccess: () => {
+            updating.reset();
+            onClose();
+          },
+          onError: (error) => {
+            failed(error);
+            updating.reset();
+          },
+        },
+      );
+      return;
+    }
+    publish.mutate(
+      { ...(asks ? { password } : {}), depth, without, expected },
+      {
+        onSuccess: (view) => {
+          setPassword("");
+          setPublished({ link: view.link, plain: view.plain });
+          publish.reset();
+        },
+        onError: (error) => {
+          failed(error);
+          publish.reset();
+        },
       },
-      onError: (error) => {
-        setRefusal(error);
-        publish.reset();
-      },
-    });
+    );
   };
 
   const names = published?.plain.filter((p) => p !== pdfsNotYet) ?? [];
+  const count = bundle ? (preview?.notes.length ?? 0) : 1;
 
   return (
     <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/55 sm:items-center">
@@ -53,7 +181,7 @@ export default function PublishDialog({ path, onClose }: { path: string; onClose
         className="k-sheet flex max-h-full w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-[16px] border border-line bg-surface p-4 pb-[max(20px,env(safe-area-inset-bottom))] sm:rounded-[16px]"
       >
         <h2 id={`${id}-title`} className="text-[22px] font-bold break-words text-text">
-          Publish this note
+          {update ? "Update the published copy" : "Publish this note"}
         </h2>
         {published ? (
           <>
@@ -76,16 +204,46 @@ export default function PublishDialog({ path, onClose }: { path: string; onClose
             </button>
           </>
         ) : (
-          <form onSubmit={submit} className="flex flex-col gap-4" aria-busy={publish.isPending}>
-            <p className="text-text-body">Anyone with the link can read a copy of this note as it is now. Links to other notes become plain text.</p>
+          <form onSubmit={submit} className="flex flex-col gap-4" aria-busy={pending}>
+            <p className="text-text-body">
+              {bundle
+                ? "Anyone with the link can read a copy of these notes as they are now. Links between them stay links; links to other notes become plain text."
+                : "Anyone with the link can read a copy of this note as it is now. Links to other notes become plain text."}
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${id}-depth`} className={labelClass}>
+                How many links deep
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  id={`${id}-depth`}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={maxDepth}
+                  value={depth}
+                  onChange={(e) => {
+                    setChanged(null);
+                    setDepth(Math.max(0, Math.min(maxDepth, Math.trunc(Number(e.target.value) || 0))));
+                  }}
+                  aria-describedby={`${id}-depth-hint`}
+                  className={`${inputClass} w-20`}
+                />
+                <span id={`${id}-depth-hint`} className="text-sm text-text-body">
+                  {!bundle ? "This note only" : preview ? `+${notesText(preview.notes.length - 1)}` : "Counting …"}
+                </span>
+              </div>
+            </div>
+            {bundle && preview && <BundleList preview={preview} start={path} without={without} onToggle={toggle} />}
             {asks && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
-            {refusal && <FormError>{errorText(refusal)}</FormError>}
+            {refusal && <FormError>{refusal instanceof BundleChangedError ? refusal.message : errorText(refusal)}</FormError>}
+            {asked.error && <FormError>{errorText(asked.error)}</FormError>}
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className={secondaryButtonClass}>
                 Cancel
               </button>
-              <button type="submit" disabled={!passwordWindow.known || publish.isPending || (asks && password === "")} className={primaryButtonClass}>
-                Publish
+              <button type="submit" disabled={disabled} className={primaryButtonClass}>
+                {update ? "Update copy" : bundle ? `Publish ${notesText(count)}` : "Publish"}
               </button>
             </div>
           </form>

@@ -210,6 +210,20 @@ public sealed class UnlockedVault
     /// </summary>
     public string EmbeddingProvider { get; set; } = Search.EmbeddingProviders.Internal;
 
+    /// <summary>The owner's own TensorX key while the vault is on <see cref="Search.Byok.Provider"/> (BYOK spec, "How the
+    /// key is kept"): a copy sealed in the vault's meta, so the vault can be embedded while its owner isn't signed in.
+    /// Null for every other provider. Never logged.</summary>
+    public string? EmbeddingKey { get; set; }
+
+    /// <summary>The id of the key whose copy the meta holds, while that is the owner's current key
+    /// (<see cref="Accounts.UserDocument.EmbeddingsKeyId"/>), also while BYOK is switched off; null otherwise. What a
+    /// replaced or removed key finds its vaults by.</summary>
+    public string? EmbeddingKeyId { get; set; }
+
+    /// <summary>Known to be discreet: its owner's session found it on her discreet list, or she just marked it. Such a
+    /// vault's text stays on this server, whatever its meta says (<see cref="Search.EmbeddingProviders.Resolve"/>).</summary>
+    public bool Discreet { get; set; }
+
     /// <summary>One note is indexed at a time per vault, so two updates of a note can't overtake each other.</summary>
     public SemaphoreSlim IndexGate { get; }
 
@@ -777,11 +791,15 @@ internal sealed record MovePayload(
 /// <remarks>Embeddings: the embedding provider the owner chose; missing (vaults before the overnight round, or never
 /// chosen) or null is the instance's default (<see cref="EmbeddingsOptions.Default"/>). Up to 0.2.2 an explicit
 /// <c>internal</c> was stored as null too. DisplayName: what callers see the vault as, once its owner renamed it; missing
-/// otherwise. Name, in every stored path, never changes after creation.</remarks>
+/// otherwise. EmbeddingsKey: the owner's own TensorX key, while Embeddings is <c>tensorx-byok</c>; it stays when the admin
+/// switches BYOK off, so that switching it on again restores the vault. EmbeddingsKeyId: the id the owner's key had when
+/// the copy was made; the copy counts only while it is her key's id now. Name, in every stored path, never changes after creation.</remarks>
 internal sealed record VaultMeta(
     string Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EmbeddingsKey = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EmbeddingsKeyId = null)
 {
     [JsonIgnore]
     public string Shown => DisplayName ?? Name;

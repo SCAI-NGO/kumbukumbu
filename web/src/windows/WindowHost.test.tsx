@@ -242,6 +242,28 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
+  it("leaves nothing of a peeked discreet note in the console as its vault hides, and reads it no more", async () => {
+    let shown = true;
+    const fetch = signedInApi(() => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
+    await screen.findByText("Text of /Work/inbox.md.");
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    await act(() => router.navigate("/console"));
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    await userEvent.type(screen.getByRole("textbox", { name: "Command" }), "p /Tagebuch/a.md{Enter}");
+    await within(consoleWindow()).findByText("Text of /Tagebuch/a.md.");
+
+    shown = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: false, hiding: false }));
+    const diaryReads = () => fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/api/notes/Tagebuch/a.md").length;
+    const reads = diaryReads();
+    await waitFor(() => expect(consoleWindow().textContent).not.toContain("Tagebuch"));
+    await act(() => queryClient.invalidateQueries());
+    expect(diaryReads()).toBe(reads);
+  });
+
   describe("as the sync socket moves the note behind it", () => {
     beforeEach(() => {
       FakeSocket.all = [];

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -58,7 +59,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public void AddTextFile(string path, string text)
     {
         if (!VaultPath.TryParse(path, out var parsed)) throw new ArgumentException($"Bad path: {path}");
-        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        var bytes = Encoding.UTF8.GetBytes(text);
         var id = PutBlobAsync(parsed.Vault!, bytes, CancellationToken.None).Result;
         _attachments[parsed] = new StoredAttachment(
             parsed, new AttachmentState(AttachmentFormat.TextMediaType, bytes.Length, null, null, VersionToken.Of(bytes), id), 1, Writers.Seed, Seeded, [], null, WriterRef.Server);
@@ -124,6 +125,13 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     {
         IReadOnlyList<Note> result =
             [.. _notes.Where(n => IsBelow(n.Key, dir)).Select(n => new Note(n.Key, n.Value.Content)).Reverse()];
+        return Task.FromResult(result);
+    }
+
+    public Task<IReadOnlyList<NoteStamp>> ListNoteStampsAsync(VaultPath dir, CancellationToken ct)
+    {
+        IReadOnlyList<NoteStamp> result =
+            [.. _notes.Where(n => n.Key == dir || IsBelow(n.Key, dir)).Select(n => new NoteStamp(n.Key, Encoding.UTF8.GetByteCount(n.Value.Content), n.Value.LastWriteAt))];
         return Task.FromResult(result);
     }
 

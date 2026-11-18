@@ -212,10 +212,17 @@ public static class VaultEvents
     /// </summary>
     internal static string TextFor(
         string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true, string? note = null, string? reason = null,
-        int? count = null) => (toOwner, kind) switch
+        int? count = null, int? notes = null, int? added = null, int? removed = null) => (toOwner, kind) switch
     {
         (true, NotePublished or PublicationUpdated or PublicationWithdrawn or PublishedNoteKept) when note is null => "A publication of this vault changed.",
+        (true, NotePublished) when notes is > 1 => $"{person} published {note} with {notes.Value.ToString(CultureInfo.InvariantCulture)} notes.",
         (true, NotePublished) => $"{person} published {note}.",
+        // A note of a bundle left its copy at once (Publish 2.0 decision 3).
+        (true, PublicationUpdated) when reason == WithdrawalReasons.Unpublishable =>
+            $"{Left(removed ?? 1)} the published copy of {note}: {Inside(person)} made a note of it unpublishable.",
+        (true, PublicationUpdated) when reason == WithdrawalReasons.Removed => $"{Left(removed ?? 1)} the published copy of {note}: {Inside(person)} removed a note of it.",
+        (true, PublicationUpdated) when added is > 0 || removed is > 0 =>
+            $"{person} updated the published copy of {note}: +{(added ?? 0).ToString(CultureInfo.InvariantCulture)}, \u2212{(removed ?? 0).ToString(CultureInfo.InvariantCulture)} notes.",
         (true, PublicationUpdated) => $"{person} updated the published copy of {note}.",
         (true, PublicationWithdrawn) when reason == WithdrawalReasons.Removed => $"The publication of {note} was withdrawn: {Inside(person)} removed the note.",
         (true, PublicationWithdrawn) when reason == WithdrawalReasons.Unpublishable => $"The publication of {note} was withdrawn: {Inside(person)} made it unpublishable.",
@@ -275,6 +282,8 @@ public static class VaultEvents
     /// <summary>A person inside a sentence: <see cref="WriterLabels.You"/> as "you", a quoted name as it is.</summary>
     private static string Inside(string person) => person == WriterLabels.You ? "you" : person;
 
+    private static string Left(int notes) => notes == 1 ? "1 note left" : $"{notes.ToString(CultureInfo.InvariantCulture)} notes left";
+
     private static bool IsPublication(string kind) => kind is NotePublished or PublicationUpdated or PublicationWithdrawn or PublishedNoteKept;
 
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
@@ -296,7 +305,9 @@ public static class VaultEvents
             if (access.IsOwner && IsPublication(e.Kind))
             {
                 var log = e.Entry is { } entry ? (await PublishingLogAsync(ct)).GetValueOrDefault(entry) : null;
-                return TextFor(e.Kind, toOwner: true, log is null ? "" : Who(log), access.Name, null, null, note: log is null ? null : NoteOf(log), reason: log?.Reason);
+                return TextFor(
+                    e.Kind, toOwner: true, log is null ? "" : Who(log), access.Name, null, null, note: log is null ? null : NoteOf(log), reason: log?.Reason,
+                    notes: log?.Notes, added: log?.Added, removed: log?.Removed);
             }
 
             if (access.IsOwner)

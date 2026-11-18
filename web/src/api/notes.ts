@@ -150,6 +150,12 @@ export const useVaults = ({ passive = false }: { passive?: boolean } = {}) => {
   });
 };
 
+/** The provider of the person's own TensorX key (BYOK). */
+export const byokProvider = "tensorx-byok";
+
+/** Her own TensorX key: whether the server offers one, whether she saved one, and its last four characters. */
+export const useByok = () => useQuery({ queryKey: ["byok"], queryFn: () => call(api.GET("/api/account/embeddings-key")), staleTime: 60_000 });
+
 /** The server's embedding providers, the internal model first. */
 export const useEmbeddingProviders = () =>
   useQuery({ queryKey: ["embeddings"], queryFn: () => call(api.GET("/api/embeddings")), staleTime: 60_000 });

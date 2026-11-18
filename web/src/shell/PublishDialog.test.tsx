@@ -150,4 +150,95 @@ describe("PublishDialog", () => {
     expect(cached()).not.toContain("correct horse");
     expect(cached()).not.toContain(link);
   });
+
+  describe("with the notes it links to", () => {
+    const preview = (paths: string[], extra: Record<string, unknown> = {}) => ({
+      notes: paths.map((path, i) => ({ path, title: path.split("/").at(-1)!.replace(".md", ""), depth: i === 0 ? 0 : 1 })),
+      leftOut: [{ path: "/Work/Salaries.md", reason: "unpublishable" }],
+      plain: [],
+      bytes: 0,
+      tooMany: false,
+      tooLarge: false,
+      ...extra,
+    });
+
+    const base = (handlers: Parameters<typeof fakeApi>[0]) =>
+      fakeApi({
+        "GET /api/session": session(true),
+        "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
+        "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+        ...handlers,
+      });
+
+    it("shows the list, what stays behind and sends what it showed", async () => {
+      let body: unknown;
+      const asked: string[] = [];
+      base({
+        "GET /api/publication-previews/Work/Questions.md": (r) => {
+          asked.push(new URL(r.url).search);
+          return json(200, preview([NOTE, "/Work/Plan.md", "/Work/Budget.md"]));
+        },
+        "POST /api/publications/Work/Questions.md": async (r) => {
+          body = await r.json();
+          return json(201, published);
+        },
+      });
+      renderDialog();
+      const depth = await screen.findByLabelText("How many links deep");
+      expect(screen.getByText("This note only")).toBeInTheDocument();
+      await userEvent.clear(depth);
+      await userEvent.type(depth, "1");
+      expect(await screen.findByText("+2 notes")).toBeInTheDocument();
+      expect(screen.getByText(/only reached through|marked unpublishable/)).toBeInTheDocument();
+      expect(asked).toEqual(["?depth=1"]);
+      const publish = screen.getByRole("button", { name: "Publish 3 notes" });
+      await vi.waitFor(() => expect(publish).toBeEnabled());
+      await userEvent.click(publish);
+      expect(await screen.findByLabelText("Link")).toHaveValue(link);
+      expect(body).toEqual({ depth: 1, without: [], expected: ["Budget.md", "Plan.md", "Questions.md"] });
+    });
+
+    it("takes a note out when its box is cleared", async () => {
+      const asked: string[] = [];
+      base({
+        "GET /api/publication-previews/Work/Questions.md": (r) => {
+          const query = new URL(r.url).search;
+          asked.push(query);
+          return json(200, preview(query.includes("without") ? [NOTE] : [NOTE, "/Work/Plan.md"]));
+        },
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}1");
+      await userEvent.click(await screen.findByRole("checkbox", { name: /Plan/ }));
+      await vi.waitFor(() => expect(asked.at(-1)).toBe("?depth=1&without=Plan.md"));
+      expect(await screen.findByRole("button", { name: "Publish 1 note" })).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: /Questions/ })).toBeDisabled();
+    });
+
+    it("warns from 50 notes on", async () => {
+      base({
+        "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE, ...Array.from({ length: 49 }, (_, i) => `/Work/n${i}.md`)])),
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}2");
+      expect(await screen.findByText("That's a lot of notes. Check the list before you publish.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Publish 50 notes" })).toBeInTheDocument();
+    });
+
+    it("shows the new list when the vault changed meanwhile", async () => {
+      base({
+        "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE, "/Work/Plan.md"])),
+        "POST /api/publications/Work/Questions.md": () =>
+          json(409, { message: "Something changed in the vault since the list was shown: check the list again.", preview: preview([NOTE, "/Work/Plan.md", "/Work/New.md"]) }),
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}1");
+      const publish = await screen.findByRole("button", { name: "Publish 2 notes" });
+      await vi.waitFor(() => expect(publish).toBeEnabled());
+      await userEvent.click(publish);
+      expect(await screen.findByText("Something changed in the vault: check the list again.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Publish 3 notes" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Link")).not.toBeInTheDocument();
+    });
+  });
 });
