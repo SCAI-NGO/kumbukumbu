@@ -61,7 +61,7 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         var api = app.PublicApi.WithWebHostBuilder(b =>
         {
             if (quotaDefault is not null) b.UseSetting("Kumbu:Quota:Default", quotaDefault);
-            if (freshDatabase) b.UseSetting("Kumbu:Mongo:Database", "t" + Guid.NewGuid().ToString("N"));
+            if (freshDatabase) b.UseSetting("Kumbu:Mongo:Database", app.NewDatabase().DatabaseNamespace.DatabaseName);
             if (time is not null)
             {
                 b.ConfigureServices(s =>

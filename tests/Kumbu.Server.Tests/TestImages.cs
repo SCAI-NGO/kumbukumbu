@@ -25,7 +25,8 @@ internal static class TestImages
 
     /// <summary>
     /// A MongoDB the tests share instead of starting a container (<c>KUMBU_TEST_MONGO</c>), for machines where
-    /// Docker cannot run it. Databases are per test and random, so nothing needs cleaning up.
+    /// Docker cannot run it. Databases are per test and random, and dropped after each test (<see cref="TestDatabases"/>): left behind, their files would
+    /// pile up on a mongod that outlives the run until it hits its open-file limit.
     /// </summary>
     public static string? ExternalMongo { get; } =
         Environment.GetEnvironmentVariable("KUMBU_TEST_MONGO") is { Length: > 0 } value ? value : null;
