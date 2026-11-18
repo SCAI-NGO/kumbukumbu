@@ -1119,9 +1119,6 @@ internal static class ApiPaths
         {
             PathKind.Note when !path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md."),
             PathKind.Attachment when path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is a note: /api/notes reads and writes it."),
-            PathKind.Attachment when !path.IsAttachment => throw ApiErrors.BadRequest($"{path.Value}: {AttachmentFormat.UnsupportedMessage}."),
-            PathKind.NoteOrAttachment when !path.IsNote && !path.IsAttachment =>
-                throw ApiErrors.BadRequest($"{path.Value} is neither a note (.md) nor a file Kumbu² keeps (PDF, PNG, JPEG, GIF, WebP, SVG)."),
             _ => path,
         };
     }

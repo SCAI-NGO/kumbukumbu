@@ -40,14 +40,16 @@ public sealed class DavSkillTextTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, put.StatusCode);
     }
 
-    [Theory, InlineData("/dav/Work/run.py"), InlineData("/dav/Work/_skills/x/notes")]
-    public async Task Put_outside_or_of_an_unlisted_name_is_415(string path)
+    [Fact]
+    public async Task Put_of_an_unlisted_name_in_a_skill_is_415_and_outside_one_a_file()
     {
         var dav = await DavClient.NewAsync(app.PublicApi);
         await SkillFolderAsync(dav);
-        using var put = await dav.SendAsync(HttpMethod.Put, path, new ByteArrayContent(Script));
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/_skills/x/notes", new ByteArrayContent(Script));
+        using var outside = await dav.SendAsync(HttpMethod.Put, "/dav/Work/run.py", new ByteArrayContent(Script));
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, put.StatusCode);
-        Assert.Contains(AttachmentFormat.UnsupportedMessage, await put.Content.ReadAsStringAsync(Ct));
+        Assert.Contains(AttachmentFormat.SkillFolderMessage, await put.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(HttpStatusCode.Created, outside.StatusCode);
     }
 
     [Fact]

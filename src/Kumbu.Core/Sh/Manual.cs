@@ -130,22 +130,22 @@ public static class Manual
         """;
 
     public const string UploadDescription = """
-        Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): an image (PNG, JPEG,
-        GIF, WebP, SVG) or a PDF, whatever you can't send as text. Notes are not files: create and change those with
+        Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a
+        PDF, a spreadsheet, a CSV, whatever you can't send as text. Notes are not files: create and change those with
         the write tool. Two steps:
 
         1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you
-           need write access; the name's extension says the format). It answers a one-time URL and a curl line.
+           need write access). It answers a one-time URL and a curl line.
         2. Run that curl line in a shell, with <local file> the file's path on that machine:
            curl -sS -X PUT --data-binary @<local file> '<url>'
            This needs a shell that can reach this server over the network. Without one, you can't upload; tell the user.
 
         To replace a file that exists, pass its version (sh: cat shows it); without version a path that exists is
-        refused. At most 15 MB; Kumbu² keeps PNG, JPEG, GIF, WebP, SVG and PDF only, and checks the format from the
-        bytes, not from the name: a file that isn't what its name says is refused. The URL works once and expires
-        after 10 minutes. If the PUT fails, call upload again for a new URL.
+        refused. At most 15 MB. A name ending in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf must hold that format:
+        Kumbu² checks it from the bytes, and a file that isn't what its name says is refused; any other file is kept
+        as it is. The URL works once and expires after 10 minutes. If the PUT fails, call upload again for a new URL.
         The PUT's answer says where the file went and its version; reach it from a note with ![](/Folder/file.png)
-        (a PDF as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.
+        (a PDF or any other file as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.
         """;
 
     public const string ReplaceDescription = """

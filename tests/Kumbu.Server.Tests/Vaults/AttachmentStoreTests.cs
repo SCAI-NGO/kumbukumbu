@@ -529,6 +529,28 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name_in_the_transaction()
+    {
+        // What the writers check before: here a write that raced past them, refused under the vault's gate.
+        var (_, _, store) = await WorldAsync();
+        Assert.True(await store.TryCreateAsync(new StoredNote(P("/Work/v1.2/notes.md"), "n", 1, Writers.Dev, T0, [], Ref: WriterRef.Server), Ct));
+        await CreateAsync(store, "/Work/Makefile", Png(64));
+
+        var onFolder = await AttachmentAsync(store, "/Work/v1.2", Png(64));
+        var belowFile = await AttachmentAsync(store, "/Work/Makefile/x.png", Png(64));
+
+        Assert.Equal([P("/Work/v1.2")], await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { onFolder } }, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.Equal([P("/Work/Makefile")], await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { belowFile } }, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.False(await store.TryCreateAsync(new StoredNote(P("/Work/Makefile/x.md"), "x", 1, Writers.Dev, T0, [], Ref: WriterRef.Server), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/v1.2"), Ct));
+        Assert.Null(await store.GetAsync(P("/Work/Makefile/x.md"), Ct));
+
+        // The folder emptied in the same batch makes room.
+        var note = (await store.GetAsync(P("/Work/v1.2/notes.md"), Ct))!;
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { Trashes = { note }, AttachmentCreates = { onFolder } }, Writers.Dev, WriterRef.Server, T0, Ct));
+    }
+
+    [Fact]
     public async Task Whether_blobs_are_stored_is_read_from_the_index_alone()
     {
         var (world, _, store) = await WorldAsync();

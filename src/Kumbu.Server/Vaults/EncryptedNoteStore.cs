@@ -181,6 +181,7 @@ public sealed class EncryptedNoteStore(
         {
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(note.Ref);
+            if (Clash(vault, [], [note.Path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, note, ct)) return null;
             return () => vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
         }, ct, adding: Bytes(note.Content));
@@ -207,13 +208,13 @@ public sealed class EncryptedNoteStore(
         batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
 
-        // The last check of the one rule text files stand under: only strictly inside a skill's folder.
+        // The last check of the rule a skill's folder stands under: it keeps text, PDFs and images, never other bytes.
         var skillsVault = vault.Kind == VaultKinds.Skills ? access.Vault.Name : null;
-        var texts = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+        var files = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
             .Concat(batch.AttachmentMoves.Select(m => m.Target)).Concat(batch.AttachmentRestores.Select(r => r.Restored));
-        if (texts.Any(a => a.Current.MediaType == AttachmentFormat.TextMediaType && !SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
+        if (files.Any(a => a.Current.MediaType == AttachmentFormat.OctetStream && !FolderMarker.Is(a.Path) && SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
         {
-            throw new InvalidOperationException("A text file outside a skill's folder; nothing was written.");
+            throw new InvalidOperationException("A binary file inside a skill's folder; nothing was written.");
         }
 
         VaultPath? conflict = null;
@@ -340,6 +341,13 @@ public sealed class EncryptedNoteStore(
                 });
             }
 
+            var placed = batch.Creates.Select(c => c.Path).Concat(batch.AttachmentCreates.Select(c => c.Path))
+                .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path))
+                .Concat(batch.Moves.Select(m => m.Target.Path)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path)).ToList();
+            var leaving = batch.Trashes.Select(t => t.Path).Concat(batch.AttachmentTrashes.Select(t => t.Path))
+                .Concat(batch.Moves.Select(m => m.Current.Path)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path));
+            if (Clash(vault, leaving, placed) is { } clash) return Refuse(clash);
+
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
             withdrawn = await FollowAsync(session, access, batch, by, byRef, at, ct);
             return () => apply.ForEach(a => a());
@@ -375,6 +383,20 @@ public sealed class EncryptedNoteStore(
                 cancellationToken: ct);
             return move;
         }
+    }
+
+    /// <summary>
+    /// The file and folder rule (<see cref="FileOrFolder"/>) once more, under the vault's gate in the write's transaction,
+    /// so two writes racing can't break it: the path in the way when <paramref name="placed"/> are stored and
+    /// <paramref name="leaving"/> are gone, or null. The writers checked it before, with their sentences.
+    /// </summary>
+    private static VaultPath? Clash(UnlockedVault vault, IEnumerable<VaultPath> leaving, IReadOnlyCollection<VaultPath> placed)
+    {
+        if (placed.Count == 0) return null;
+        var stored = vault.Notes.Keys.Concat(vault.Attachments.Keys).ToHashSet();
+        stored.ExceptWith(leaving);
+        stored.UnionWith(placed);
+        return FileOrFolder.Clash(placed, stored);
     }
 
     /// <summary>
@@ -930,6 +952,7 @@ public sealed class EncryptedNoteStore(
             restored = NoteWriter.Restored(note, writer, reference, at, changeset);
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(restored.Ref);
+            if (Clash(vault, [], [path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
             var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id) & F.Eq(d => d.PathId, vault.PathId(path)), cancellationToken: ct);
             if (removed.DeletedCount == 0) return null;
