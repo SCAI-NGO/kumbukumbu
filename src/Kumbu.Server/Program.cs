@@ -111,6 +111,7 @@ builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<DiscreetVaults>();
 builder.Services.AddSingleton<CalendarSettings>();
+builder.Services.AddSingleton<Favourites>();
 // The server's zone for a caller without one of her own; tests replace it.
 builder.Services.AddSingleton(ServerZone.Instance);
 builder.Services.AddSingleton<UserKeyRotation>();
@@ -325,6 +326,7 @@ app.MapGraphApi();
 app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();
+app.MapFavouritesApi();
 app.MapFlagApi();
 app.MapRecentApi();
 app.MapTagApi();

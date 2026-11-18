@@ -177,6 +177,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["PUT /api/account/preferences"] = "turning the download password off needs the password; on is safe",
         ["GET /api/account/calendar"] = Reading,
         ["PUT /api/account/calendar"] = "the calendar's time zone and week: preferences, they widen no access",
+        ["GET /api/account/favourites"] = Reading,
+        ["PUT /api/account/favourites"] = "what the palette shows first: a preference, it widens no access",
         ["POST /api/vaults"] = "a new empty vault reaches nothing new",
         ["PUT /api/vaults/{vault}/embeddings"] = "deliberate exception, security-architecture.md",
         ["POST /api/vaults/{vault}/trash/purge"] = "guarded inline: the password in the body, else the window (WebDAV design §3.11)",
