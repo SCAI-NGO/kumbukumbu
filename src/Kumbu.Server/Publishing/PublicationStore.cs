@@ -219,6 +219,28 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         await InsertFilesAsync(session, doc.Vault, doc.Id, l, key, files, ct);
     }
 
+    /// <summary>
+    /// A bundle's copy with notes taken out (Publish 2.0 decision 3): the same document, a copy <paramref name="change"/>
+    /// makes from the stored one, and the files only those notes used deleted; the others keep their indices. Nothing
+    /// when the copy is gone or <paramref name="change"/> leaves it as it is.
+    /// </summary>
+    public async Task PruneCopyAsync(
+        IClientSessionHandle session, string code, byte[] key, Func<PublishedCopy, (PublishedCopy Copy, IReadOnlyCollection<int> Freed)?> change, CancellationToken ct)
+    {
+        var lookup = ShareCode.Lookup(code);
+        var l = Convert.ToHexStringLower(lookup);
+        if (await catalog.Publications.Find(session, P.Eq(d => d.Lookup, lookup)).FirstOrDefaultAsync(ct) is not { Kind: null } doc) return;
+        var copy = JsonSerializer.Deserialize<PublishedCopy>(VaultCrypto.Open(key, doc.Blob, CopyContext(l))) ?? throw new PublishingConflictException();
+        if (change(copy) is not { } pruned) return;
+        var updated = await catalog.Publications.UpdateOneAsync(
+            session, P.Eq(d => d.Id, doc.Id) & P.Eq(d => d.Blob, doc.Blob), Builders<PublicationDocument>.Update.Set(d => d.Blob, SealCopy(key, l, pruned.Copy)), cancellationToken: ct);
+        if (updated.MatchedCount == 0) throw new PublishingConflictException();
+        if (pruned.Freed.Count > 0)
+        {
+            await catalog.PublicationFiles.DeleteManyAsync(session, Files.Eq(d => d.Publication, doc.Id) & Files.In(d => d.Index, pruned.Freed), cancellationToken: ct);
+        }
+    }
+
     /// <summary>The copy and its files; returns the publication's id (null if there was none) for
     /// <see cref="DeleteAiLinksAsync"/> once the transaction is committed.</summary>
     public async Task<ObjectId?> DeleteCopyAsync(IClientSessionHandle session, string code, CancellationToken ct)
