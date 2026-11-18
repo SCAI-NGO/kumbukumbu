@@ -85,17 +85,84 @@ describe("useFavourites", () => {
     expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance"]);
   });
 
-  it("reads again after a conflicting write", async () => {
-    let reads = 0;
+  it("carries the version the list was read with, and the next write the one the last answered", async () => {
+    const versions: unknown[] = [];
+    let n = 0;
     fakeApi({
-      "GET /api/account/favourites": () => json(200, { favourites: reads++ === 0 ? [] : [{ ...palette, added }] }),
-      "PUT /api/account/favourites": () => json(409, { error: "Changed elsewhere." }),
+      "GET /api/account/favourites": () => json(200, { favourites: [], version: "v0" }),
+      "PUT /api/account/favourites": async (r) => {
+        const body = (await r.json()) as { favourites: object[]; version: string };
+        versions.push(body.version);
+        return json(200, { favourites: body.favourites.map((f) => ({ ...f, added })), version: `v${++n}` });
+      },
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => {
+      result.current.toggle(plan);
+      result.current.toggle(palette);
+    });
+    await waitFor(() => expect(versions).toEqual(["v0", "v1"]));
+  });
+
+  it("after a 409 reads the list again and makes the same change to it", async () => {
+    let held: unknown[] = [];
+    let version = "v0";
+    const bodies: { favourites: unknown[]; version: string }[] = [];
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: held, version }),
+      "PUT /api/account/favourites": async (r) => {
+        const body = (await r.json()) as { favourites: object[]; version: string };
+        bodies.push(body);
+        if (body.version !== version) return json(409, { error: "Your favourites changed elsewhere; try again." });
+        held = body.favourites.map((f) => ({ ...f, added }));
+        version = `${version}+`;
+        return json(200, { favourites: held, version });
+      },
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    // Another device stars the palette meanwhile.
+    held = [{ ...palette, added }];
+    version = "v1";
+    act(() => result.current.toggle(plan));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ favourites: [palette, plan], version: "v1" });
+    await waitFor(() => expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance", "note:Work/projects/plan.md"]));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("gives up after a second 409, says so and reads again", async () => {
+    let reads = 0;
+    const put = vi.fn(() => json(409, { error: "Your favourites changed elsewhere; try again." }));
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: reads++ === 0 ? [] : [{ ...palette, added }], version: `v${reads}` }),
+      "PUT /api/account/favourites": put,
     });
     const { result } = setup();
     await waitFor(() => expect(reads).toBe(1));
     act(() => result.current.toggle(plan));
-    await waitFor(() => expect(result.current.has(palette)).toBe(true));
-    expect(result.current.has(plan)).toBe(false);
+    await waitFor(() => expect(result.current.error).toBe("Your favourites changed elsewhere; try again."));
+    expect(put).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance"]));
+  });
+
+  it("says why a write failed, until the next change", async () => {
+    let puts = 0;
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [], version: "v0" }),
+      "PUT /api/account/favourites": async (r) => {
+        const body = (await r.json()) as { favourites: object[] };
+        return puts++ === 0 ? json(400, { error: "Your favourites are full (200)." }) : json(200, { favourites: body.favourites.map((f) => ({ ...f, added })), version: "v1" });
+      },
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.error).toBeNull();
+    act(() => result.current.toggle(plan));
+    await waitFor(() => expect(result.current.error).toBe("Your favourites are full (200)."));
+    act(() => result.current.toggle(palette));
+    await waitFor(() => expect(result.current.error).toBeNull());
   });
 
   it("refetches when the vaults change", async () => {
@@ -211,5 +278,27 @@ describe("useFavourites", () => {
     });
     await waitFor(() => expect(queryClient.isMutating()).toBe(0));
     expect(queryClient.getQueryData(["favourites"])).toBeUndefined();
+  });
+
+  it("ignores the answer to a write sent before the list was read again for other vaults", async () => {
+    let release: () => void = () => {};
+    let reads = 0;
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: reads++ === 0 ? [] : [{ kind: "vault", vault: "Secret", added }], version: `v${reads}` }),
+      "PUT /api/account/favourites": () => new Promise<Response>((r) => (release = () => r(json(200, { favourites: [{ ...plan, added }], version: "late" })))),
+    });
+    const { result, queryClient } = setup();
+    const stop = followVaults(queryClient);
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => result.current.toggle(plan));
+    await waitFor(() => expect(queryClient.isMutating()).toBe(1));
+    act(() => queryClient.setQueryData(["vaults"], [{ name: "Secret", discreet: true }]));
+    await waitFor(() => expect(result.current.has({ kind: "vault", vault: "Secret" })).toBe(true));
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(result.current.list.map(favouriteKey)).toEqual(["vault:Secret"]);
+    stop();
   });
 });

@@ -12382,18 +12382,20 @@ export interface components {
             path?: null | string;
         };
         FavouritesRequest: {
-            favourites: (components["schemas"]["FavouriteInput"] | null)[];
+            favourites: components["schemas"]["FavouriteInput"][];
+            version: string;
         };
         FavouriteView: {
             kind: string;
+            /** Format: date-time */
+            added: string;
             id?: null | string;
             vault?: null | string;
             path?: null | string;
-            /** Format: date-time */
-            added: string;
         };
         FavouritesView: {
             favourites: components["schemas"]["FavouriteView"][];
+            version: string;
         };
         FileConflictView: {
             error: string;
