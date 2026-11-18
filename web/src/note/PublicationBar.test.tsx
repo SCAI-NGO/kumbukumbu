@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json, noContent, user } from "../test/app";
 import PublicationBar from "./PublicationBar";
@@ -38,7 +39,9 @@ function renderBar(owner = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(
     <QueryClientProvider client={queryClient}>
-      <PublicationBar path={NOTE} owner={owner} />
+      <MemoryRouter>
+        <PublicationBar path={NOTE} owner={owner} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return container;
@@ -266,5 +269,30 @@ describe("PublicationBar", () => {
     await userEvent.click(within(region).getByRole("button", { name: "Unpublish" }));
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Unpublish" }));
     expect(del).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the bundle a note went out with", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: "/Work/Plan.md" }] }),
+    });
+    renderBar();
+    const region = await bar();
+    expect(region).toHaveTextContent("Published with Plan");
+    expect(within(region).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/notes/Work/Plan.md");
+    cleanup();
+    renderBar(false);
+    expect(await bar()).toHaveTextContent("Published by the vault's owner");
+  });
+
+  it("tells a member a bundled note is published, though the list names no start for her", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: null }] }),
+    });
+    renderBar(false);
+    const region = await bar();
+    expect(region).toHaveTextContent("Published by the vault's owner");
+    expect(within(region).queryByRole("link")).not.toBeInTheDocument();
   });
 });

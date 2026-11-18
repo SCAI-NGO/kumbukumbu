@@ -40,7 +40,7 @@ public static class Manual
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
-          publish ls|add|update|rm <note> share one note as a read-only copy behind a secret link
+          publish ls|add|update|rm <note> share a note, with --depth N the notes it links to, as a read-only copy behind a secret link; show the person the list it prints before publishing more than one note
           skills ls|find|cat|copy|check   the user's skills: find one for the task, read and follow it (help skills)
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
