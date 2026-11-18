@@ -42,10 +42,11 @@ function Redeemed({ vault, member, onGrant, onDecline, pending, first }: { vault
         </p>
       )}
       <div className="flex gap-2">
-        <button type="button" onClick={onGrant} disabled={!redeemer || pending} className={secondaryButtonClass}>
+        {/* Initial focus as before the filter came: Grant when it can be pressed, Decline only when Grant can't. */}
+        <button type="button" onClick={onGrant} disabled={!redeemer || pending} data-autofocus={(first && !!redeemer && !pending) || undefined} className={secondaryButtonClass}>
           Grant access
         </button>
-        <button type="button" onClick={onDecline} disabled={pending} data-autofocus={first || undefined} className={secondaryButtonClass}>
+        <button type="button" onClick={onDecline} disabled={pending} data-autofocus={(first && (!redeemer || pending)) || undefined} className={secondaryButtonClass}>
           Decline
         </button>
       </div>
