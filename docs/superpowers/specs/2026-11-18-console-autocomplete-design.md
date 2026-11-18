@@ -28,7 +28,8 @@ Typing paths in full is the console's slowest part, on the phone above all. A sh
 - The word under the cursor (the console's tokeniser decides where a word starts; a quoted word completes inside its quotes).
 - The first word of a stage: commands, those of `sh` (from `help`'s list or a fixed list kept with the console's help) plus the console's own (`cd`, `pwd`, `clear`, `exit`, `l`, `la`, `lsa`, `p`).
 - Any other word: a path. At `/` the vaults; otherwise the entries of the folder the word's directory part names, relative to the working directory as console paths are (`..`, `.` work). `cd` completes folders and vaults only.
-- Names with spaces or quotes are put in quoted as the tokeniser reads them (`"Meeting Notes.md"`).
+- Names with spaces, quotes or other characters the tokeniser wouldn't read as themselves are put in with backslash escapes (`Meeting\ Notes.md`, `it\'s.md`), unless the word already opened a quote: then completion stays inside it and closes it only on a unique file match. Why: typing goes on after a folder (`My\ Folder/` then the next name) and a partial completion never leaves a quote open, which a closing quote would block or an open one would leave unreadable.
+- A word that names a note or an attachment followed by `/` completes nothing; a vault's `_archive/` is offered only once `_` is typed and only if the vault has one (the vault is listed with `ls -a` for that).
 - A folder or vault completes with a trailing `/`, a file with a trailing space.
 - `_archive/` is offered only once its first letter is typed (as `ls` leaves it out).
 

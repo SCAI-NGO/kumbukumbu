@@ -11,25 +11,34 @@ const TTL = 10_000;
 let cache = new Map<string, { at: number; entries: Promise<string[] | null> }>();
 let epoch = 0;
 
-/** The names `ls` printed: folders with their `/`; the notes about shares, damage and locked vaults left out. */
-function parse(output: string): string[] {
+/**
+ * The names `ls` printed: folders with their `/`; the notes about damage and locked vaults left out, which are whole
+ * lines in parentheses (a name like `(draft).md` is not). Null where `folder` is itself a note or an attachment:
+ * `ls` then prints that path, with a summary after two spaces for an attachment.
+ */
+function parse(output: string, folder: string): string[] | null {
   const names: string[] = [];
   for (const line of output.split("\n")) {
-    if (line.trim() === "" || line.startsWith("(")) continue;
     // A shared vault carries its owner and level, an attachment its summary after two spaces.
     const entry = line.replace(/ \(shared by .*\)$/, "");
+    if (entry.trim() === "" || /^\(.*\)$/.test(entry)) continue;
+    if (entry === folder || entry.startsWith(`${folder}  `)) return null;
     const gap = entry.indexOf("  ");
     names.push(gap < 0 ? entry : entry.slice(0, gap));
   }
   return names;
 }
 
+/** A vault is listed with its archive (`-a`), so that completion knows whether it has one. */
+const lsCommand = (folder: string) =>
+  folder === "/" ? "ls" : `ls ${folder.split("/").length === 2 ? "-a " : ""}${quote(folder)}`;
+
 async function fetch(folder: string): Promise<string[] | null> {
   const mine = epoch;
   try {
-    const view = await consoleCall({ call: "sh", command: folder === "/" ? "ls" : `ls ${quote(folder)}` }, new AbortController().signal);
+    const view = await consoleCall({ call: "sh", command: lsCommand(folder) }, new AbortController().signal);
     if (view.isError || mine !== epoch) return null;
-    return parse(view.parts.map((part) => (part.type === "image" ? "" : part.text ?? "")).join("\n"));
+    return parse(view.parts.map((part) => (part.type === "image" ? "" : part.text ?? "")).join("\n"), folder);
   } catch {
     return null;
   }

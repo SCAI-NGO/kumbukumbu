@@ -24,7 +24,7 @@ describe("listFolder", () => {
     await listFolder("/Work");
     await listFolder("/");
     expect(call.mock.calls.map(([request]) => request)).toEqual([
-      { call: "sh", command: "ls /Work" },
+      { call: "sh", command: "ls -a /Work" },
       { call: "sh", command: "ls" },
     ]);
   });
@@ -36,7 +36,11 @@ describe("listFolder", () => {
 
   it("quotes a folder with spaces for the shell", async () => {
     await listFolder("/My Vault/it's");
-    expect(call.mock.calls[0][0]).toEqual({ call: "sh", command: `ls "/My Vault/it's"` });
+    await listFolder("/My Vault");
+    expect(call.mock.calls.map(([request]) => request)).toEqual([
+      { call: "sh", command: `ls "/My Vault/it's"` },
+      { call: "sh", command: "ls -a '/My Vault'" },
+    ]);
   });
 
   it("refreshes after forgetEntries and after ten seconds", async () => {
@@ -69,6 +73,31 @@ describe("listFolder", () => {
     useConsole.getState().reset();
     finish(await answer("hidden.md"));
     expect(await pending).toBeNull();
+  });
+
+  it("drops an answer that was on its way when a command ran", async () => {
+    let finish!: (view: Awaited<ReturnType<typeof answer>>) => void;
+    call.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    const pending = listFolder("/Work/x");
+    useConsole.getState().add({ id: 1, cwd: "/", typed: "mkdir x", output: [] });
+    finish(await answer("stale.md"));
+    expect(await pending).toBeNull();
+    await listFolder("/Work/x");
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps names that only look like notices, and drops real ones", async () => {
+    call.mockImplementationOnce(() =>
+      answer(["(draft).md", "(old)/", "(v)/ (shared by Bo, read)", "(1 note here doesn't open: changed or damaged outside Kumbu²; the server log has details)"].join("\n")),
+    );
+    expect(await listFolder("/Work")).toEqual(["(draft).md", "(old)/", "(v)/"]);
+  });
+
+  it("gives null where the path is a note or an attachment, not a folder", async () => {
+    call.mockImplementationOnce(() => answer("/Work/plan.md"));
+    expect(await listFolder("/Work/plan.md")).toBeNull();
+    call.mockImplementationOnce(() => answer("/Work/shot.png  image 10×10 1 KB"));
+    expect(await listFolder("/Work/shot.png")).toBeNull();
   });
 
   it("gives null for a failing or erroring ls, and doesn't ask again at once", async () => {

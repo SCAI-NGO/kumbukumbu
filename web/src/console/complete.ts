@@ -21,6 +21,9 @@ interface Word {
   value: string;
   /** The words of its stage before it. */
   before: string[];
+  /** Whether it has a quote in it, and the one still open at the cursor, if any. */
+  quoted: boolean;
+  open: "'" | '"' | null;
 }
 
 /** Where the word at the end of `text` starts, read as the tokeniser reads; null for syntax the shell refuses. */
@@ -30,6 +33,7 @@ function wordAt(text: string): Word | null {
   let value = "";
   let start = 0;
   let inToken = false;
+  let quoted = false;
   const begin = (i: number) => {
     if (!inToken) start = i;
     inToken = true;
@@ -39,6 +43,7 @@ function wordAt(text: string): Word | null {
     words.push(value);
     value = "";
     inToken = false;
+    quoted = false;
   };
 
   for (let i = 0; i < text.length; i++) {
@@ -53,6 +58,7 @@ function wordAt(text: string): Word | null {
         words = [];
       } else if (c === "'" || c === '"') {
         begin(i);
+        quoted = true;
         state = c === "'" ? "single" : "double";
       } else if (c === "\\" && next !== undefined) {
         begin(i);
@@ -69,7 +75,8 @@ function wordAt(text: string): Word | null {
     } else value += c;
   }
 
-  return { start: inToken ? start : text.length, value, before: words };
+  const open = state === "single" ? "'" : state === "double" ? '"' : null;
+  return { start: inToken ? start : text.length, value, before: words, quoted, open };
 }
 
 const common = (names: string[]) => names.reduce((prefix, name) => {
@@ -78,8 +85,15 @@ const common = (names: string[]) => names.reduce((prefix, name) => {
   return prefix.slice(0, n);
 });
 
-/** A quote left open, as zsh leaves one while a word is only part-way: more can be typed inside it. */
-const open = (word: string) => (word.includes("'") ? `"${word.replace(/[\\"]/g, "\\$&")}` : `'${word}`);
+/** The word with a backslash before every character the tokeniser would not read as itself; a line break can't be escaped. */
+const escape = (word: string) => (/[\r\n]/.test(word) ? quote(word) : word.replace(/[^\p{L}\p{N}_\-./:#,=+@%]/gu, "\\$&"));
+
+/** The word inside the quote it was typed in, or in the other kind where it holds that one; closed when `close`. */
+function inQuote(word: string, typed: "'" | '"' | null, close: boolean) {
+  const mark = (typed ?? "'") === "'" && !word.includes("'") ? "'" : '"';
+  const body = mark === "'" ? word : word.replace(/[\\"]/g, "\\$&");
+  return mark + body + (close ? mark : "");
+}
 
 /**
  * What Tab completes at `cursor` in `line`: a command as the first word of a stage, else a path in the folder the
@@ -111,8 +125,8 @@ export async function complete(
   if (!entries) return none;
 
   const names = new Set(entries);
-  // ls leaves a vault's archive out; it is offered once its first letter is typed.
-  if (base.startsWith("_") && folder.split("/").filter(Boolean).length === 1) names.add("_archive/");
+  // A vault's listing carries its archive (entries.ts asks for it); it is offered once its first letter is typed.
+  if (!base.startsWith("_") && folder.split("/").filter(Boolean).length === 1) names.delete("_archive/");
   // `..` completes to the folder above, except at the root, which has none.
   if (base.startsWith(".") && "..".startsWith(base) && folder !== "/") names.add("../");
 
@@ -120,14 +134,17 @@ export async function complete(
   const matches = [...names].filter((n) => n.startsWith(base) && (!foldersOnly || n.endsWith("/")));
   if (matches.length === 0) return { ...range, matches, insert: null };
 
+  // Where the word opened a quote, completion stays inside it; else names are escaped, so that typing goes on after a
+  // folder and a partial completion never leaves a quote open.
+  const put = (text: string, close: boolean) => (word.quoted ? inQuote(text, word.open, close) : escape(text));
+
   if (matches.length === 1) {
     const name = matches[0];
-    return { ...range, matches, insert: quote(dir + name) + (name.endsWith("/") ? "" : " ") };
+    const file = !name.endsWith("/");
+    return { ...range, matches, insert: put(dir + name, file) + (file ? " " : "") };
   }
 
   const prefix = common(matches);
   if (prefix.length <= base.length) return { ...range, matches, insert: null };
-  const part = dir + prefix;
-  const needsQuote = matches.some((m) => quote(dir + m) !== dir + m);
-  return { ...range, matches, insert: needsQuote ? open(part) : part };
+  return { ...range, matches, insert: put(dir + prefix, false) };
 }
