@@ -389,13 +389,20 @@ public sealed class UnlockedVault
     /// </summary>
     internal LargeBlobHead OpenLargeBlobHead(BlobDocument doc)
     {
-        var head = Open<LargeBlobHead>(BlobContext(doc.BlobId), doc.Blob);
+        var head = Checked(Open<LargeBlobHead>(BlobContext(doc.BlobId), doc.Blob), doc.Chunks);
+        if (!CryptographicOperations.FixedTimeEquals(LargeBlobId(head.Sha256), doc.BlobId)) throw new InvalidDataException($"Large blob {doc.Id} does not match its id");
+        return head;
+    }
+
+    /// <summary>A head that holds together: its format, and a size that <paramref name="chunks"/> chunks hold, as the clear
+    /// field gives their number.</summary>
+    private static LargeBlobHead Checked(LargeBlobHead head, int? chunks)
+    {
         if (head.Format != LargeBlobHead.Marker || head.Key is not { Length: VaultCrypto.KeySize } || head.Sha256 is not { Length: 32 }
-            || head.ChunkSize <= 0 || head.Chunks < 1 || head.Chunks != doc.Chunks
-            || head.Size <= (long)(head.Chunks - 1) * head.ChunkSize || head.Size > (long)head.Chunks * head.ChunkSize
-            || !CryptographicOperations.FixedTimeEquals(LargeBlobId(head.Sha256), doc.BlobId))
+            || head.ChunkSize <= 0 || head.Chunks < 1 || head.Chunks != chunks
+            || head.Size <= (long)(head.Chunks - 1) * head.ChunkSize || head.Size > (long)head.Chunks * head.ChunkSize)
         {
-            throw new InvalidDataException($"Large blob {doc.Id} does not match its head");
+            throw new InvalidDataException("A large blob's head does not hold together");
         }
 
         return head;
@@ -638,6 +645,16 @@ public sealed class UnlockedVault
                     return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
                 }
 
+                case "blobs" when doc.Revision > 0:
+                {
+                    // A large file's head, its chunk count standing in for the revision: its id comes from the hash it
+                    // seals, and only it is sealed again. The chunks stay as they are: under the file's own data key,
+                    // bound to the head's _id, which the update keeps.
+                    var head = Checked(Parse<LargeBlobHead>(plain), (int)doc.Revision);
+                    var pid = to.LargeBlobId(head.Sha256);
+                    return new Resealed(pid, LargeBlobId(head.Sha256), SealPlain(to.BlobContext(pid)), null, []) { Sha256 = seal ? null : head.Sha256 };
+                }
+
                 case "blobs":
                 {
                     var pid = to.BlobId(plain);
@@ -697,6 +714,10 @@ public sealed class UnlockedVault
         /// <summary>A blob's bytes when it was opened but not sealed (<c>seal: false</c>): its id under the old key is
         /// computed from them.</summary>
         public byte[]? Bytes { get; init; }
+
+        /// <summary>A large file's hash when its head was opened but not sealed: its id under the old key is computed
+        /// from it.</summary>
+        public byte[]? Sha256 { get; init; }
     }
 
     /// <summary>Every blob id an attachment record names, current and history, mapped to the new key's.</summary>
