@@ -68,6 +68,27 @@ export function linkTarget(path: string, all: string[]): string {
 }
 
 /**
+ * The note a link from `from` leads to, as the server's `LinkResolver` (src/Kumbu.Core/Links/LinkResolver.cs) finds
+ * it: the note whose path in the vault ends with the link (from the vault's root for a leading `/`), ignoring case;
+ * `all` comes from the tree, which leaves the archive out. Of several, the server takes the one in the source's folder
+ * and calls the others ambiguous; the list takes the first in text order then. Null when no note fits.
+ */
+export function linkedNote(link: string, all: string[], from: string): string | null {
+  const target = link.trim().normalize("NFC").replace(/\.md$/i, "").toLowerCase();
+  if (!target) return null;
+  const fits = all
+    .filter((p) => /\.md$/i.test(p))
+    .filter((p) => {
+      const at = `/${linkPath(p).toLowerCase()}`;
+      return target.startsWith("/") ? at === target : at.endsWith(`/${target}`);
+    })
+    .sort((a, b) => a.localeCompare(b));
+  const folder = from.slice(0, from.lastIndexOf("/") + 1);
+  const beside = fits.filter((p) => p.slice(0, p.lastIndexOf("/") + 1) === folder);
+  return (beside.length === 1 ? beside[0] : fits[0]) ?? null;
+}
+
+/**
  * Whether a wiki link can name the note: `#` starts a heading, `|` an alias, and `[` `]` end the link, in any
  * form of it (name or full path), so a note with one of them in its path can't be linked to and isn't offered.
  */

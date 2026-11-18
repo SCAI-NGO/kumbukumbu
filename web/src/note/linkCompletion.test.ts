@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { completeLink, embedsAsImage, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
+import { completeLink, embedsAsImage, linkedNote, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
   it("finds an open [[ on the caret's line", () => {
@@ -67,6 +67,35 @@ describe("linkTarget", () => {
   it("goes from the vault's root where even the whole path is the end of another", () => {
     expect(linkTarget("/W/a/status.md", all)).toBe("/a/status");
     expect(linkTarget("/W/Plan.md", ["/W/Plan.md", "/W/deep/plan.md"])).toBe("/Plan");
+  });
+});
+
+describe("linkedNote", () => {
+  const all = ["/W/Plan.md", "/W/a/status.md", "/W/b/status.md", "/W/x/a/status.md", "/W/shot.png", "/W/Notes/Idea.md"];
+
+  it("is the note whose path in the vault ends with the link, ignoring case", () => {
+    expect(linkedNote("plan", all, "/W/Notes/Idea.md")).toBe("/W/Plan.md");
+    expect(linkedNote("NOTES/idea", all, "/W/Plan.md")).toBe("/W/Notes/Idea.md");
+    expect(linkedNote("x/a/status", all, "/W/Plan.md")).toBe("/W/x/a/status.md");
+    expect(linkedNote(" plan.md ", all, "/W/Notes/Idea.md")).toBe("/W/Plan.md");
+  });
+
+  it("takes a path from the vault's root as it stands", () => {
+    expect(linkedNote("/a/status", all, "/W/Plan.md")).toBe("/W/a/status.md");
+    expect(linkedNote("/status", all, "/W/Plan.md")).toBeNull();
+  });
+
+  it("takes the one in the open note's folder when several fit, else the first in text order", () => {
+    expect(linkedNote("status", all, "/W/b/today.md")).toBe("/W/b/status.md");
+    expect(linkedNote("status", all, "/W/Plan.md")).toBe("/W/a/status.md");
+    expect(linkedNote("a/status", all, "/W/Plan.md")).toBe("/W/a/status.md");
+  });
+
+  it("is none for a name no note ends with, an attachment, or a part of a name", () => {
+    expect(linkedNote("nothing", all, "/W/Plan.md")).toBeNull();
+    expect(linkedNote("shot.png", all, "/W/Plan.md")).toBeNull();
+    expect(linkedNote("lan", all, "/W/Notes/Idea.md")).toBeNull();
+    expect(linkedNote("", all, "/W/Plan.md")).toBeNull();
   });
 });
 
