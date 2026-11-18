@@ -67,7 +67,7 @@ public sealed class TextAttachmentTests
     public async Task Write_outside_a_skill_folder_answers_as_before()
     {
         var (_, writer, _, _) = Make();
-        Assert.Equal("write: /Work/run.py: note names end in .md", (await writer.WriteAsync("/Work/run.py", "x", null, Ct)).Output);
+        Assert.Equal("write: /Work/run.py: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", (await writer.WriteAsync("/Work/run.py", "x", null, Ct)).Output);
     }
 
     [Fact]

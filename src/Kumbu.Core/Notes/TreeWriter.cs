@@ -124,12 +124,11 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         // A folder on the way may not be a note or an attachment.
-        for (var dir = VaultPath.Root.Child(target.Segments[0]); dir.Segments.Count < target.Segments.Count - 1;)
+        foreach (var dir in FileOrFolder.FoldersAbove(target))
         {
-            dir = dir.Child(target.Segments[dir.Segments.Count]);
             if (await store.GetAsync(dir, ct) is not null || await StoreAttachments.GetAsync(store, dir, ct) is not null)
             {
-                return Fail(ShellErrorKind.Conflict, $"{Cp}: {dir.Value}: Not a directory");
+                return Fail(ShellErrorKind.Conflict, FileOrFolder.NotFolder(Cp, dir));
             }
         }
 

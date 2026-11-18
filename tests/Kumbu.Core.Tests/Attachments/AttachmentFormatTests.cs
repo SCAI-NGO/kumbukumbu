@@ -134,6 +134,18 @@ public class AttachmentFormatTests
     }
 
     [Fact]
+    public void A_skills_folder_keeps_no_other_file()
+    {
+        var refusal = $": {AttachmentFormat.SkillFolderMessage}";
+        Assert.Equal("tool.bin" + refusal, AttachmentFormat.Problem(P("/Skills/pdf/tool.bin"), "x"u8));
+        Assert.Equal("notes" + refusal, AttachmentFormat.Problem(P("/Work/_skills/x/notes"), "x"u8));
+        Assert.Equal("report.docx" + refusal, AttachmentFormat.RenameProblem(P("/Work/report.docx"), P("/Skills/pdf/report.docx")));
+        // The skill's folder itself and the location hold no files of a skill.
+        Assert.Null(AttachmentFormat.Problem(P("/Work/_skills/notes"), "x"u8));
+        Assert.Equal("x.md is a note's name (it ends in .md); notes are written as text, not uploaded", AttachmentFormat.Problem(P("/Work/x.md"), "x"u8));
+    }
+
+    [Fact]
     public void A_text_file_can_be_renamed_only_within_skill_folders()
     {
         Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), P("/Skills/pdf/b.txt")));

@@ -123,7 +123,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         var replaced = Replaced(replacing);
-        if (!replaced.Contains(target) && await ExistsAsync(target, ct)) return ShellResult.Error($"{command}: {target.Value}: Not a directory");
+        if (!replaced.Contains(target) && await ExistsAsync(target, ct)) return ShellResult.Error(FileOrFolder.NotFolder(command, target));
 
         var map = notes.Concat(attachments).ToDictionary(p => p, p => Rebase(p, source, target));
         // Each path on its own: a folder can carry a Board.md into the place of the board's.
@@ -220,10 +220,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         // A folder on the way may not be a note or an attachment.
-        for (var dir = VaultPath.Root.Child(target.Segments[0]); dir.Segments.Count < target.Segments.Count - 1;)
+        foreach (var dir in FileOrFolder.FoldersAbove(target))
         {
-            dir = dir.Child(target.Segments[dir.Segments.Count]);
-            if (!leaving.Contains(dir) && await ExistsAsync(dir, ct)) return ShellResult.Error($"{command}: {dir.Value}: Not a directory");
+            if (!leaving.Contains(dir) && await ExistsAsync(dir, ct)) return ShellResult.Error(FileOrFolder.NotFolder(command, dir));
         }
 
         return null;

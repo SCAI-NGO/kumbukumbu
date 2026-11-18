@@ -448,6 +448,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
+            if ((await store.ListTrashAsync(path, ct)).Any(t => t.Note.Path == path && (version is null || t.Note.Version == version))
+                && await RoomAsync("restore", path, ct) is { } taken)
+            {
+                return taken;
+            }
+
             var restored = await store.TryRestoreFromTrashAsync(path, version, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct), ct);
             if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
 
@@ -549,24 +555,29 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     {
         if (NoteNames.Problem(path) is { } problem) return ShellResult.Error($"{tool}: {path.Value}: {problem}");
 
-        var vault = VaultPath.Root.Child(path.Segments[0]);
         if (!(await store.ListVaultsAsync(ct)).Contains(path.Segments[0]))
         {
             return ShellResult.Error(
                 $"{tool}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
         }
 
+        return await RoomAsync(tool, path, ct);
+    }
+
+    /// <summary>Why no note can be stored at <paramref name="path"/>: a folder is there, or a note or file is above it
+    /// (<see cref="FileOrFolder"/>); null if it can.</summary>
+    private async Task<ShellResult?> RoomAsync(string tool, VaultPath path, CancellationToken ct)
+    {
         if ((await store.ListNotesUnderAsync(path, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, path, ct)).Count > 0)
         {
-            return ShellResult.Error($"{tool}: {path.Value}: Is a directory");
+            return ShellResult.Error(FileOrFolder.IsFolder(tool, path));
         }
 
-        for (var dir = vault; dir.Segments.Count < path.Segments.Count - 1;)
+        foreach (var dir in FileOrFolder.FoldersAbove(path))
         {
-            dir = dir.Child(path.Segments[dir.Segments.Count]);
             if (await store.ReadAsync(dir, ct) is not null || await StoreAttachments.GetAsync(store, dir, ct) is not null)
             {
-                return ShellResult.Error($"{tool}: {dir.Value}: Not a directory");
+                return ShellResult.Error(FileOrFolder.NotFolder(tool, dir));
             }
         }
 
@@ -593,6 +604,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         FolderMarker.Is(path) ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory")
         : AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text ? ShellResult.Error($"{tool}: {path.Name} is a text file in a skill; replace it whole with write")
         : AttachmentFormat.ForPath(path) == AttachmentFormat.Svg ? ShellResult.Error($"{tool}: {path.Name} is an SVG; replace it whole with write")
+        : AttachmentFormat.ForPath(path) == AttachmentFormat.File ? ShellResult.Error(tool == "write"
+            ? $"{tool}: {path.Value}: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)"
+            : $"{tool}: {path.Value}: note names end in .md; {tool} changes notes only")
         : path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
 
     private static ShellResult? TooLarge(string tool, string content)

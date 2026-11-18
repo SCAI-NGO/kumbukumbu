@@ -25,7 +25,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>15 MB per file.</summary>
     public const long MaxBytes = 15 * 1024 * 1024;
 
-    public const string UnsupportedMessage = "Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP, SVG) only";
+    /// <summary>Why a file of no other format isn't kept inside a skill's folder, which holds what a skill runs and reads.</summary>
+    public const string SkillFolderMessage =
+        "a skill's folder keeps text files (scripts, data, LICENSE and the like), PDFs and images (PNG, JPEG, GIF, WebP, SVG) only; keep other files outside it";
 
     /// <summary>An image of text: checked as XML, its size read from its root, shown only as a picture (spec 2026-11-17).
     /// Inside a skill's folder, <see cref="ForPath"/> keeps <c>.svg</c> a text file.</summary>
@@ -64,7 +66,8 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>Any file that is no other format: kept as it is, its media type decided by its content at each write (<see cref="MediaTypeOf"/>), so not in <see cref="All"/>.</summary>
     public static AttachmentFormat File { get; } = new("", OctetStream, AttachmentKind.File);
 
-    private const string OctetStream = "application/octet-stream";
+    /// <summary>The media type of a <see cref="File"/> that isn't text.</summary>
+    public const string OctetStream = "application/octet-stream";
 
     /// <summary>The media type a <see cref="File"/> is kept as: <see cref="TextMediaType"/> for UTF-8 without NUL bytes up to <see cref="MaxBytes"/> (a BOM is fine), else bytes.</summary>
     public static string MediaTypeOf(ReadOnlySpan<byte> content) =>
@@ -116,7 +119,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         {
             return ForPath(target) switch
             {
-                { } kept when kept == File => null,
+                { } kept when kept == File => SkillPaths.IsInSkillFolder(target) ? $"{target.Name}: {SkillFolderMessage}" : null,
                 null => $"{source.Name} is a file, not a note; its new name can't end in .md (a new name doesn't change what the file is)",
                 { } kept when kept == Marker => $"{source.Name} is a file; only a folder's marker is named {FolderMarker.Name}",
                 { } kept when kept == Text => $"{source.Name} is a file, and inside a skill's folder {target.Name} is a text file; upload it there instead",
@@ -154,13 +157,10 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     public static string? Problem(VaultPath path, ReadOnlySpan<byte> head)
     {
         var format = ForPath(path);
-        if (format is null)
-        {
-            return UnsupportedMessage;
-        }
+        if (format is null) return $"{path.Name} is a note's name (it ends in .md); notes are written as text, not uploaded";
 
-        // Any bytes; their media type is MediaTypeOf's, the size bound the writer's.
-        if (format == File) return null;
+        // Any bytes, but not in a skill's folder; their media type is MediaTypeOf's, the size bound the writer's.
+        if (format == File) return SkillPaths.IsInSkillFolder(path) ? $"{path.Name}: {SkillFolderMessage}" : null;
 
         if (format == Marker)
         {
