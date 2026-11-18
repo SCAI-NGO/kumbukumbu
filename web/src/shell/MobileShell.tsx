@@ -459,7 +459,7 @@ export default function MobileShell() {
                             {
                               label: favourites.has(noteFavourite(path)) ? "Remove from favourites" : "Add to favourites",
                               icon: Star,
-                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), noteTree.data.root]])) : []),
+                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), noteTree.data]])) : []),
                             },
                           ]
                         : []),

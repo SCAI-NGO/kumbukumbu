@@ -50,8 +50,9 @@ describe("useFavourites", () => {
     await waitFor(() => expect(result.current.has(palette)).toBe(false));
     expect(result.current.list.map(favouriteKey)).toEqual(["note:Work/projects/plan.md"]);
 
-    act(() => result.current.drop(["note:Work/projects/plan.md"]));
-    await waitFor(() => expect(result.current.list).toEqual([]));
+    // Stale keys go in the same change.
+    act(() => result.current.toggle(palette, ["note:Work/projects/plan.md"]));
+    await waitFor(() => expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance"]));
   });
 
   it("PUT carries the whole visible list without added", async () => {
@@ -119,7 +120,6 @@ describe("useFavourites", () => {
     const { result } = setup();
     expect(result.current.ready).toBe(false);
     act(() => result.current.toggle(plan));
-    act(() => result.current.drop(["command:settings.appearance"]));
     await act(async () => {});
     expect(put).not.toHaveBeenCalled();
     act(() => answer());

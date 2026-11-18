@@ -16,8 +16,8 @@ const input = ({ kind, id, vault, path }: Favourite): FavouriteInput => ({ kind,
 
 /**
  * Her favourites in the order added, those of the vaults her session lists and the commands. A change sends the whole
- * list (the server replaces what the session sees), shown at once and put back if the write fails. Until the list has
- * been read (`ready`), a change does nothing: it would replace what the server holds with one entry.
+ * list (the server replaces what the session sees), shown at once; after a failed write the list is read again. Until
+ * the list has been read (`ready`), a change does nothing: it would replace what the server holds with one entry.
  */
 export function useFavourites() {
   const queryClient = useQueryClient();
@@ -60,6 +60,5 @@ export function useFavourites() {
         const now = all.filter((x) => !stale.includes(favouriteKey(x)));
         return now.some((x) => favouriteKey(x) === favouriteKey(f)) ? now.filter((x) => favouriteKey(x) !== favouriteKey(f)) : [...now, { ...f, added: new Date().toISOString() }];
       }),
-    drop: (drop: string[]) => change((now) => now.filter((x) => !drop.includes(favouriteKey(x)))),
   };
 }

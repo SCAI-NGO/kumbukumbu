@@ -63,6 +63,10 @@ describe("staleNotes", () => {
 
   it("names the note favourites missing from their vault's loaded tree, and nothing else", () => {
     const list = [f("Work", "plan.md"), f("Work", "gone.md"), f("Work", "_archive/old.md"), f("Home", "x.md"), { kind: "vault", vault: "Gone", added: "2026-11-18T09:00:00Z" }];
-    expect(staleNotes(list, new Map([["Work", work]]))).toEqual(["note:Work/gone.md"]);
+    expect(staleNotes(list, new Map([["Work", { damaged: 0, root: work }]]))).toEqual(["note:Work/gone.md"]);
+  });
+
+  it("names none of a tree that leaves out notes that don't open", () => {
+    expect(staleNotes([f("Work", "gone.md")], new Map([["Work", { damaged: 1, root: work }]]))).toEqual([]);
   });
 });

@@ -93,6 +93,27 @@ describe("the shell", () => {
     await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "inbox.md" }], []]));
   });
 
+  it.each([
+    ["drops a favourite of the vault whose note is gone", 0, [{ kind: "note", vault: "Work", path: "inbox.md" }]],
+    ["keeps it while the tree has notes that don't open", 1, [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "inbox.md" }]],
+  ])("the note menu's star %s", async (_, damaged, put) => {
+    const puts: unknown[] = [];
+    signedInApi({
+      "GET /api/vaults/Work/tree": () => json(200, { ...workTree, damaged }),
+      "GET /api/account/favourites": () => json(200, { favourites: [{ kind: "note", vault: "Work", path: "gone.md", added: "2026-11-18T09:00:00Z" }] }),
+      "PUT /api/account/favourites": async (r) => {
+        const { favourites } = (await r.json()) as { favourites: Record<string, unknown>[] };
+        puts.push(favourites);
+        return json(200, { favourites: favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" })) });
+      },
+    });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to favourites" }));
+    await waitFor(() => expect(puts).toEqual([put]));
+  });
+
   it("shows the note's place and title, and switches between Read and Write", async () => {
     signedInApi();
     renderApp("/notes/Work/projects/deep/plan.md");

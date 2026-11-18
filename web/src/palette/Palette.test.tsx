@@ -358,6 +358,17 @@ describe("rows", () => {
     await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Home", path: "garden.md" }, { kind: "command", id: "settings.appearance" }]]));
   });
 
+  it("a tree with notes that don't open drops nothing: the note may be one of them", async () => {
+    const { puts } = signedInApi({
+      favourites: [{ kind: "note", vault: "Work", path: "broken.md" }],
+      workTree: () => json(200, { damaged: 1, root: { name: "Work", path: "/Work", folders: [], notes: [note("/Work/inbox.md"), note("/Work/plan.md")] } }),
+    });
+    await openPalette();
+    await waitFor(() => expect(options()).toContain("inbox, Work"));
+    await toggleAppearance();
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "broken.md" }, { kind: "command", id: "settings.appearance" }]]));
+  });
+
   it("closes when the discreet vaults are hidden again, and opens again with an empty field", async () => {
     const { at } = signedInApi({ shown: true });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

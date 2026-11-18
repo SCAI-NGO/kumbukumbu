@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { favouriteKey, type Favourite, type FavouriteInput } from "../api/favourites";
-import { fileKindOfEntry, type TreeFolder, type VaultView } from "../api/notes";
+import { fileKindOfEntry, type TreeFolder, type TreeView, type VaultView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf } from "../api/paths";
 import { treeHas } from "../shell/lastNote";
 import { schemes } from "../theme/schemes";
@@ -77,11 +77,12 @@ export function noteRows(vault: string, root: TreeFolder): Row[] {
 
 /**
  * The keys of note favourites whose note was moved, renamed or deleted: those of a vault whose tree is loaded (`trees`)
- * and lacks it. A vault without a loaded tree (still loading, failed, not listed: a hidden one's) keeps its entries.
+ * and lacks it. A vault without a loaded tree (still loading, failed, not listed: a hidden one's) keeps its entries;
+ * so does one whose tree leaves out notes that don't open (`damaged`), as the note may be one of them.
  */
-export function staleNotes(favourites: Favourite[], trees: ReadonlyMap<string, TreeFolder>): string[] {
+export function staleNotes(favourites: Favourite[], trees: ReadonlyMap<string, TreeView>): string[] {
   return favourites.flatMap((f) => {
-    const root = f.kind === "note" && f.vault ? trees.get(f.vault) : undefined;
-    return root && !treeHas(root, `/${f.vault}/${f.path}`) ? [favouriteKey(f)] : [];
+    const tree = f.kind === "note" && f.vault ? trees.get(f.vault) : undefined;
+    return tree && Number(tree.damaged) === 0 && !treeHas(tree.root, `/${f.vault}/${f.path}`) ? [favouriteKey(f)] : [];
   });
 }

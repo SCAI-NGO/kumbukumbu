@@ -5,7 +5,7 @@ import { useEffect, useId, useMemo, useState, type KeyboardEvent, type Synthetic
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { favouriteKey, useFavourites, type FavouriteInput } from "../api/favourites";
-import { treeQuery, useVaults, type TreeFolder, type TreeView } from "../api/notes";
+import { treeQuery, useVaults, type TreeView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
@@ -31,7 +31,7 @@ const FRESH = 60_000;
  * Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists; and
  * the loaded trees by vault, which say which note favourites are gone.
  */
-function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeFolder> } {
+function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeView> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -46,7 +46,7 @@ function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeFolder> } {
         ...vaultRows(vaults ?? []),
         ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].root) : [])),
       ],
-      trees: new Map((vaults ?? []).flatMap((v, i) => (trees[i] ? [[v.name, trees[i].root] as const] : []))),
+      trees: new Map((vaults ?? []).flatMap((v, i) => (trees[i] ? [[v.name, trees[i]] as const] : []))),
     }),
     [admin, shared, marketplaces, vaults, trees],
   );
