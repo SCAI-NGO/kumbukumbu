@@ -339,6 +339,28 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
     current?.scrollIntoView({ block: "center" });
   }, [noteTool, mode, finding?.query, finding?.current, note.data?.content]);
 
+  // Beside the side panel, where the reader is: the last heading above the top of the visible text, as they scroll.
+  const readAt = useCallback(() => {
+    if (!scroller.current || !article.current) return;
+    const top = scroller.current.getBoundingClientRect().top + 1;
+    let line = 0;
+    for (const h of article.current.querySelectorAll<HTMLElement>(headingLines)) {
+      if (h.getBoundingClientRect().top > top) break;
+      line = Number(h.dataset.line);
+    }
+    const { reading, setReading } = useEditor.getState();
+    if (reading?.path !== path || reading.line !== line) setReading({ path, line });
+  }, [path]);
+  useEffect(() => {
+    if (panel && mode === "read" && note.data) readAt();
+  }, [panel, mode, note.data, readAt]);
+  useEffect(
+    () => () => {
+      if (useEditor.getState().reading?.path === path) useEditor.getState().setReading(null);
+    },
+    [path],
+  );
+
   const jump = (line: number) => {
     useEditor.getState().setNoteTool(null);
     [...(article.current?.querySelectorAll<HTMLElement>(headingLines) ?? [])].find((h) => Number(h.dataset.line) === line)?.scrollIntoView({ block: "start" });
@@ -551,7 +573,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
           </p>
         )
       )}
-      <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      <div ref={scroller} {...dropTarget} onScroll={panel ? readAt : undefined} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {/* Nor one made from the path of a missing note whose vault the list doesn't name (a hidden one's bookmark). */}
         {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}

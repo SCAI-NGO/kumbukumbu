@@ -2,6 +2,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useMatch, useNavigate } from "react-router-dom";
+import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNote, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
@@ -142,11 +143,21 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   );
 }
 
-/** The side panel beside the open note: the note as saved, a heading clicked comes into view as from the outline sheet. */
+/**
+ * The side panel beside the open note. While it is written: the editor's text and caret, and a heading clicked takes
+ * the caret there. Else the note as saved and where its reader is, and a heading clicked comes into view as from the
+ * outline sheet.
+ */
 function NoteSidePanel({ path, hidden }: { path: string; hidden: boolean }) {
   const note = useNote(path);
-  const jump = (line: number) => useEditor.getState().setScrollTarget({ path, line });
-  return <SidePanel path={path} hidden={hidden} text={note.data?.content ?? ""} currentLine={0} onJump={jump} />;
+  const live = useEditor((s) => (s.live?.path === path ? s.live : null));
+  const reading = useEditor((s) => (s.reading?.path === path ? s.reading.line : 0));
+  const jump = (line: number) => {
+    const { mode, goToLine, setScrollTarget } = useEditor.getState();
+    if (mode === "write") goToLine?.(line);
+    else setScrollTarget({ path, line });
+  };
+  return <SidePanel path={path} hidden={hidden} text={live?.text ?? note.data?.content ?? ""} currentLine={live?.caretLine ?? reading} onJump={jump} />;
 }
 
 /** The signed-in app: top bar, the note (or the vaults), the dock, and the drawer and sheets over them. */
@@ -159,7 +170,21 @@ export default function MobileShell() {
   const unnamed = useUnnamedVault(path);
   const missing = useNoteMissing(path);
   const hiding = useDiscreet((s) => s.hiding);
-  const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
+  // Picked, so that the editor's text published as it is typed (`live`) doesn't render the shell again on every key.
+  const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor(
+    useShallow(({ recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault }) => ({
+      recentPaths,
+      overlay,
+      mode,
+      activeVault,
+      upload,
+      noteTool,
+      openNote,
+      openUpload,
+      setOverlay,
+      setActiveVault,
+    })),
+  );
   const vaults = useVaults();
   const dockLevel = useLevel(activeVault);
   const noteLevel = useLevel(path && vaultOf(path));

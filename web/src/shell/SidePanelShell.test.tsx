@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -129,5 +129,81 @@ describe("the side panel in the shell", () => {
     risks.scrollIntoView = scrolled;
     await userEvent.click(within(panel()).getByRole("button", { name: "Risks" }));
     await waitFor(() => expect(scrolled).toHaveBeenCalledWith({ block: "start" }));
+  });
+});
+
+/** The panel's outline entries, and the one marked as where the reader is. */
+const entries = () => within(screen.getByRole("tabpanel", { name: "Outline" })).getAllByRole("button");
+const marked = () => within(screen.getByRole("tabpanel", { name: "Outline" })).queryAllByRole("button").find((b) => b.getAttribute("aria-current") === "location")?.textContent ?? null;
+
+async function writing() {
+  await open();
+  await userEvent.click(within(panel()).getByRole("tab", { name: "Outline" }));
+  const write = screen.getByRole("button", { name: "Write" });
+  await waitFor(() => expect(write).toBeEnabled());
+  await userEvent.click(write);
+  return (await screen.findByRole("textbox", { name: "Markdown source" })) as HTMLTextAreaElement;
+}
+
+/** Puts the caret at `offset`, as a click or an arrow key would. */
+function caretTo(area: HTMLTextAreaElement, offset: number) {
+  act(() => {
+    area.setSelectionRange(offset, offset);
+    fireEvent.select(area);
+  });
+}
+
+describe("the side panel's outline", () => {
+  it("follows the text being written, unsaved included", async () => {
+    const area = await writing();
+    await userEvent.type(area, "\n\n## New", { initialSelectionStart: content.length, initialSelectionEnd: content.length });
+    await waitFor(() => expect(entries().map((b) => b.textContent)).toEqual(["Plan", "Goals", "Risks", "New"]));
+  });
+
+  it("marks the heading at or above the caret's line while writing", async () => {
+    const area = await writing();
+    caretTo(area, content.indexOf("- one"));
+    await waitFor(() => expect(marked()).toBe("Goals"));
+    caretTo(area, content.indexOf("None yet."));
+    await waitFor(() => expect(marked()).toBe("Risks"));
+  });
+
+  it("puts the caret at the start of the heading's line in Write mode, the focus in the textarea and the line at its top", async () => {
+    const area = await writing();
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      // The caret's mark in the hidden copy of the text stands 500 px below the textarea's top.
+      if (this.dataset.caret !== undefined) return { top: 600, bottom: 620, left: 30 } as DOMRect;
+      if (this === area) return { top: 100, bottom: 700, left: 0 } as DOMRect;
+      return rect.call(this);
+    });
+    await userEvent.click(within(panel()).getByRole("button", { name: "Risks" }));
+    const start = content.indexOf("## Risks");
+    expect(area).toHaveFocus();
+    expect([area.selectionStart, area.selectionEnd]).toEqual([start, start]);
+    expect(area.scrollTop).toBe(500);
+    await waitFor(() => expect(marked()).toBe("Risks"));
+  });
+
+  it("marks the last heading above the top of the visible text in Read mode, following the scroll", async () => {
+    await open();
+    await userEvent.click(within(panel()).getByRole("tab", { name: "Outline" }));
+    const article = screen.getByRole("article");
+    const scroller = article.parentElement!;
+    const tops: Record<string, number> = { Plan: 40, Goals: 300, Risks: 600 };
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === scroller) return { top: 64, bottom: 800 } as DOMRect;
+      if (/^H[1-6]$/.test(this.tagName) && this.textContent! in tops) return { top: tops[this.textContent!], bottom: tops[this.textContent!] + 30 } as DOMRect;
+      return rect.call(this);
+    });
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(marked()).toBe("Plan"));
+    Object.assign(tops, { Plan: -500, Goals: 64, Risks: 400 });
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(marked()).toBe("Goals"));
+    Object.assign(tops, { Goals: -300, Risks: 100 });
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(marked()).toBe("Goals"));
   });
 });
