@@ -114,6 +114,7 @@ builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<DiscreetVaults>();
 builder.Services.AddSingleton<EmbeddingsKeys>();
 builder.Services.AddSingleton<CalendarSettings>();
+builder.Services.AddSingleton<Favourites>();
 // The server's zone for a caller without one of her own; tests replace it.
 builder.Services.AddSingleton(ServerZone.Instance);
 builder.Services.AddSingleton<UserKeyRotation>();
@@ -334,6 +335,7 @@ app.MapHistoryApi();
 app.MapBoardApi();
 app.MapCalendarApi();
 app.MapEmbeddingsKeyApi();
+app.MapFavouritesApi();
 app.MapFlagApi();
 app.MapRecentApi();
 app.MapTagApi();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
+import { forgetFavourites } from "../api/favourites";
 import { vaultOf } from "../api/paths";
 import type { components } from "../api/schema";
 import { useEditor } from "../state/editor";
@@ -64,7 +65,12 @@ export function followVaults(queryClient: QueryClient): () => void {
   return queryClient.getQueryCache().subscribe((event) => {
     const key = event.query.queryKey;
     if (key.length !== 1 || key[0] !== "vaults") return;
-    if (event.type === "removed" || (event.type === "updated" && event.action.type === "success")) read();
+    if (event.type === "removed" || (event.type === "updated" && event.action.type === "success")) {
+      read();
+      // The favourites answered are those of the vaults listed: a shown or hidden discreet vault changes them. Forgotten,
+      // so none is cached unseen (a hidden vault's would show once the palette opens); mounted ones read again.
+      forgetFavourites(queryClient);
+    }
   });
 }
 

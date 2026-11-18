@@ -162,13 +162,15 @@ export const useEmbeddingProviders = () =>
 /** Asked again every few seconds while the vault is being re-encrypted: its "try again in a moment" comes true by itself. */
 const whileBusy = (query: { state: { error: unknown } }) => (isVaultBusy(query.state.error) ? 3000 : false);
 
-export const useTree = (vault: string | null) =>
-  useQuery({
-    queryKey: ["tree", vault],
-    queryFn: (): Promise<TreeView> => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
-    enabled: vault !== null,
-    refetchInterval: whileBusy,
-  });
+/** A vault's tree, for `useTree` and for reading the trees of several vaults at once (`useQueries`). */
+export const treeQuery = (vault: string | null) => ({
+  queryKey: ["tree", vault],
+  queryFn: (): Promise<TreeView> => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
+  enabled: vault !== null,
+  refetchInterval: whileBusy,
+});
+
+export const useTree = (vault: string | null) => useQuery(treeQuery(vault));
 
 /** What a tree entry is: an image, PDF or text file the vault keeps, or a note. */
 export const fileKindOfEntry = (entry: Pick<TreeFolder["notes"][number], "kind">): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");

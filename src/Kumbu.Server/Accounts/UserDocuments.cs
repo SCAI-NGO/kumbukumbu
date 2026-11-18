@@ -175,6 +175,16 @@ public sealed class UserDocument
     [BsonElement("embeddingsKeyId"), BsonIgnoreIfNull]
     public string? EmbeddingsKeyId { get; set; }
 
+    /// <summary>Her favourite commands, each <c>&lt;id&gt;@&lt;ticks added&gt;</c> (<see cref="Accounts.Favourites"/>); null
+    /// until she keeps one. Plain, as the zone: a command names no vault.</summary>
+    [BsonElement("favourites"), BsonIgnoreIfNull]
+    public string[]? Favourites { get; set; }
+
+    /// <summary>Her favourites bound to a vault (a vault, its board, calendar or gallery, a note), sealed under a key derived
+    /// from the user key since they name vaults (<see cref="Accounts.Favourites"/>); null until she keeps one.</summary>
+    [BsonElement("favouritesSealed"), BsonIgnoreIfNull]
+    public byte[]? FavouritesSealed { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

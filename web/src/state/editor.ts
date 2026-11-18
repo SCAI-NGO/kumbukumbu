@@ -5,7 +5,7 @@ import type { RefusalCode } from "../api/client";
 import type { Picked } from "../upload/collectFiles";
 
 export type Mode = "read" | "write";
-export type Overlay = "none" | "tree" | "search" | "upload";
+export type Overlay = "none" | "tree" | "search" | "upload" | "palette";
 export type SearchMode = "hybrid" | "meaning" | "exact";
 /** The open note's tools in Read mode: its outline (a sheet), find in the note (a bar in place of the dock), or the Add property dialog. */
 export type NoteTool = "outline" | "find" | "addProperty" | null;
