@@ -25,6 +25,12 @@ public class SectionAddressTests
         # Draft [v2] ^x 50%% off
         # A|B
         # A^B
+        # The **road**map
+        # See [[Plan|the plan]]
+        # `code` here
+        # Road **x**
+        # Road x
+        # Ref [[Plan#Goals]] %%hidden%% ==hi==
         """;
 
     private static readonly IReadOnlyList<Heading> Headings = Outline.Parse(Lines.Split(Note));
@@ -64,6 +70,15 @@ public class SectionAddressTests
     [InlineData("QA", @"#Q\#A")]
     [InlineData("C basics", "#C basics")]
     [InlineData("c basics", "#C basics")]
+    // The web app links a heading by its text as shown: Markdown marks, link targets and comments gone.
+    [InlineData("The roadmap", "#The **road**map")]
+    [InlineData("the ROADMAP", "#The **road**map")]
+    [InlineData("See the plan", "#See [[Plan|the plan]]")]
+    [InlineData("code here", "#`code` here")]
+    [InlineData("Road x", "#Road x")]
+    [InlineData("Road **x**", "#Road **x**")]
+    [InlineData("Ref Plan › Goals hi", @"#Ref [[Plan\#Goals]] %%hidden%% ==hi==")]
+    [InlineData("Ref PlanGoals hidden ==hi==", @"#Ref [[Plan\#Goals]] %%hidden%% ==hi==")]
     public void ResolvesAHeadingAsObsidianLinksIt(string fragment, string address) => Assert.Equal([address], Resolve(fragment));
 
     [Fact]

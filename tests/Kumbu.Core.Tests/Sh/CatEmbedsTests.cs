@@ -104,6 +104,14 @@ public class CatEmbedsTests
     }
 
     [Fact]
+    public async Task A_section_embed_finds_a_heading_by_its_text_as_shown()
+    {
+        const string content = "# Plan\n\n![[Notes#The roadmap]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Notes.md", "# Notes\n\n## The **road**map\n\nroad\n"));
+        Assert.Equal("\n" + Header + "\n[line 3: ![[Notes#The roadmap]] → /Work/Pump/Notes.md#The roadmap]\n## The **road**map\n\nroad", Appendix(result, content));
+    }
+
+    [Fact]
     public async Task An_attachment_embed_gets_its_description()
     {
         const string content = "# Plan\n\n![[shot.png]]\n";
