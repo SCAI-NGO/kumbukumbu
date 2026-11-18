@@ -36,13 +36,14 @@ function signedInApi({
   favourites = [] as (FavouriteInput & { added?: string })[],
   workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response>,
   homeTree = null as (() => Response) | null,
+  publish = false,
 } = {}) {
   const at = { shown };
   let held: Favourite[] = favourites.map((f) => ({ added: "2026-11-01T09:00:00Z", ...f }));
   const puts: FavouriteInput[][] = [];
   const answer = { put: null as Response | null };
   const fetch = fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null }, publishEnabled: publish }),
     "GET /api/vaults": () => json(200, [vault("Work"), ...(homeTree ? [vault("Home")] : []), ...(at.shown ? [vault("Tagebuch", true)] : [])]),
     ...(homeTree ? { "GET /api/vaults/Home/tree": homeTree } : {}),
     "GET /api/embeddings": () => json(200, []),
@@ -430,5 +431,86 @@ describe("rows", () => {
     await userEvent.click(screen.getByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
     await screen.findByRole("dialog", { name: "Favourites and commands" });
     expect(field()).toHaveValue("");
+  });
+});
+
+describe("the note's actions", () => {
+  const noteGroup = () => within(palette()).queryByRole("group", { name: "Note" });
+  const noteOptions = () => within(noteGroup()!).getAllByRole("option").map((o) => o.getAttribute("aria-label"));
+
+  it("note_group_with_a_note_open_and_text_typed", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "note");
+    await waitFor(() => expect(noteGroup()).toBeInTheDocument());
+    // Before Commands.
+    expect(within(palette()).getAllByRole("group").map((g) => g.getAttribute("aria-label"))[0]).toBe("Note");
+    expect(noteOptions()).toContain("Delete note, inbox");
+  });
+
+  it("not_in_the_empty_palette", async () => {
+    signedInApi();
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["inbox, Work"]));
+    expect(noteGroup()).not.toBeInTheDocument();
+  });
+
+  it("not_without_a_note", async () => {
+    signedInApi();
+    renderApp({ pathname: "/", state: { overview: true } });
+    await userEvent.click(await screen.findByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await userEvent.type(field(), "note");
+    await waitFor(() => expect(options()).toContain("Search notes for ‘note’"));
+    expect(noteGroup()).not.toBeInTheDocument();
+  });
+
+  it("labels_are_the_menus", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "inbox");
+    await waitFor(() => expect(noteGroup()).toBeInTheDocument());
+    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Rename or move, inbox"]));
+  });
+
+  it("no_star_and_ctrl_d_does_nothing", async () => {
+    const { puts } = signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    expect(within(within(palette()).getByRole("option", { name: "Delete note, inbox" })).queryByRole("button")).not.toBeInTheDocument();
+    const event = new KeyboardEvent("keydown", { key: "d", code: "KeyD", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => void field().dispatchEvent(event));
+    await act(async () => {});
+    expect(puts).toEqual([]);
+    expect(highlighted()).toBe("Delete note, inbox");
+  });
+
+  it("delete_note_asks_first", async () => {
+    const { fetch } = signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Delete inbox?" })).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE")).toBe(false);
+  });
+
+  it("no_pub_finds_publish", async () => {
+    signedInApi({ publish: true });
+    await openPalette();
+    await userEvent.type(field(), "no pub");
+    await waitFor(() => expect(highlighted()).toBe("Publish…, inbox"));
+  });
+
+  it("the_palette_closes_before_the_action_runs", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const question = await screen.findByRole("dialog", { name: "Delete inbox?" });
+    expect(queryPalette()).not.toBeInTheDocument();
+    await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
   });
 });

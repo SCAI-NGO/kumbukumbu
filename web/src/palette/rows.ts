@@ -2,17 +2,21 @@
 import { favouriteKey, type Favourite, type FavouriteInput } from "../api/favourites";
 import { fileKindOfEntry, type TreeFolder, type TreeView, type VaultView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf } from "../api/paths";
+import type { MenuItem } from "../components/Menu";
 import { treeHas } from "../shell/lastNote";
 import { schemes } from "../theme/schemes";
 
-/** What the palette lists. `group` is its section; `place` is shown muted beside the name and searched with it. */
+/**
+ * What the palette lists. `group` is its section; `place` is shown muted beside the name and searched with it. A row
+ * without `favourite` can't be starred.
+ */
 export type Row = {
   key: string;
-  group: "Commands" | "Vaults" | "Notes";
+  group: "Note" | "Commands" | "Vaults" | "Notes";
   name: string;
   place: string;
-  favourite: FavouriteInput;
-  run: { to: string } | { scheme: string };
+  favourite?: FavouriteInput;
+  run: { to: string } | { scheme: string } | { action(): void };
 };
 
 const command = (id: string, place: string, name: string, run: Row["run"]): Row => {
@@ -44,6 +48,11 @@ export function commandRows({ admin, shared, marketplaces }: { admin: boolean; s
     go("open.console", "Open", "Console", "/console"),
     ...schemes.map((s) => command(`scheme.${s.id}`, "Colour scheme", s.name, { scheme: s.id })),
   ];
+}
+
+/** The open note's menu, as rows placed with its title; not pinnable, as they act on the note that is open. */
+export function noteActionRows(title: string, items: MenuItem[]): Row[] {
+  return items.map((item) => ({ key: `note-action:${item.label}`, group: "Note", name: item.label, place: title, run: { action: item.onSelect } }));
 }
 
 export function vaultRows(vaults: VaultView[]): Row[] {

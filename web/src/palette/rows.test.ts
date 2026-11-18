@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { describe, expect, it } from "vitest";
+import { Trash2 } from "lucide-react";
+import { describe, expect, it, vi } from "vitest";
 import type { TreeFolder, VaultView } from "../api/notes";
 import { schemes } from "../theme/schemes";
-import { commandRows, noteRows, staleNotes, vaultRows } from "./rows";
+import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows } from "./rows";
 
 const note = (path: string, kind = "note") => ({ name: path.split("/").pop()!, path, size: 1, kind, mediaType: "text/markdown" });
 const folder = (path: string, notes: ReturnType<typeof note>[], folders: TreeFolder[] = []): TreeFolder => ({ name: path.split("/").pop()!, path, notes, folders });
@@ -74,5 +75,13 @@ describe("staleNotes", () => {
   it("names none added later than five minutes before the tree was read: another device's may not be in it yet", () => {
     const list = [f("Work", "new.md", "2026-11-18T09:55:01Z"), f("Work", "late.md", "2026-11-18T10:03:00Z"), f("Work", "old.md", "2026-11-18T09:54:59Z")];
     expect(staleNotes(list, new Map([["Work", { tree: { damaged: 0, root: work }, at: read }]]))).toEqual(["note:Work/old.md"]);
+  });
+});
+
+describe("noteActionRows", () => {
+  it("names each row as the menu's item, placed with the note's title, without a favourite", () => {
+    const onSelect = vi.fn();
+    const [row] = noteActionRows("plan", [{ label: "Delete note", icon: Trash2, onSelect }]);
+    expect(row).toEqual({ key: "note-action:Delete note", group: "Note", name: "Delete note", place: "plan", run: { action: onSelect } });
   });
 });

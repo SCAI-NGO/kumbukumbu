@@ -417,7 +417,7 @@ export default function MobileShell() {
       {overlay === "palette" && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
-            <Palette />
+            <Palette note={path && !gone ? { path, items: noteActions.items } : null} />
           </Suspense>
         </LoadBoundary>
       )}

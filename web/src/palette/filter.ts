@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Row } from "./rows";
 
-const groups: Row["group"][] = ["Commands", "Vaults", "Notes"];
+const groups: Row["group"][] = ["Note", "Commands", "Vaults", "Notes"];
 const noteLimit = 50;
 
 /**
@@ -12,10 +12,11 @@ export function filterRows(rows: Row[], query: string, favourites: ReadonlySet<s
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const starting = words.map((w) => new RegExp(`[^\\p{L}\\p{N}]${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u"));
   const ranked = rows.flatMap((row) => {
-    const text = `${row.place} ${row.name}`.toLowerCase();
+    // A note action is searched with its group, as it reads "Note: Publish".
+    const text = `${row.group === "Note" ? "note " : ""}${row.place} ${row.name}`.toLowerCase();
     if (!words.every((w) => text.includes(w))) return [];
     const starts = words.every((w, i) => text.startsWith(w) || starting[i].test(text));
-    return [{ row, favourite: favourites.has(row.key), starts }];
+    return [{ row, favourite: !!row.favourite && favourites.has(row.key), starts }];
   });
   ranked.sort(
     (a, b) =>

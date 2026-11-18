@@ -9,6 +9,7 @@ import { treeQuery, useVaults, type TreeView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
+import type { MenuItem } from "../components/Menu";
 import { useDesktop } from "../hooks/useDesktop";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
@@ -17,7 +18,7 @@ import { applyScheme } from "../theme/apply";
 import { useCloseWindow } from "../windows/context";
 import { useWindows } from "../windows/store";
 import { filterRows } from "./filter";
-import { commandRows, noteRows, staleNotes, vaultRows, type ReadTree, type Row } from "./rows";
+import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows, type ReadTree, type Row } from "./rows";
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
@@ -28,10 +29,10 @@ const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r): ReadTr
 const FRESH = 60_000;
 
 /**
- * Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists; and
- * the loaded trees by vault, which say which note favourites are gone.
+ * Every row the person may open: the open note's actions, the commands she has, and the vaults and notes of the vaults
+ * the session lists; and the loaded trees by vault, which say which note favourites are gone.
  */
-function useRows(): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
+function useRows(note: PaletteNote | null): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -39,7 +40,7 @@ function useRows(): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
   const vaults = useVaults().data;
   // Each vault's tree as the drawer has it, from the cache where it was read before.
   const trees = useQueries({ queries: (vaults ?? []).map((v) => ({ ...treeQuery(v.name), staleTime: FRESH })), combine: treesOf });
-  return useMemo(
+  const all = useMemo(
     () => ({
       rows: [
         ...commandRows({ admin, shared, marketplaces }),
@@ -50,6 +51,8 @@ function useRows(): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
     }),
     [admin, shared, marketplaces, vaults, trees],
   );
+  // Apart from the rest: the shell hands over new items on each of its renders, and the trees needn't be walked again for them.
+  return { rows: [...(note ? noteActionRows(titleOf(note.path), note.items) : []), ...all.rows], trees: all.trees };
 }
 
 /** A note opened lately, as its row; one not in its tree (yet) still has one. */
@@ -61,12 +64,15 @@ function recentRow(path: string, byKey: Map<string, Row>): Row {
 
 type Section = { heading: string; rows: Row[] };
 
+/** The open note and its menu's items (`useNoteActions`), offered as the group Note. */
+export type PaletteNote = { path: string; items: MenuItem[] };
+
 /**
  * The command palette: favourites, commands, vaults and notes in one list, a word or two away. On the desktop a panel
  * near the top with the field above the list; on the phone a sheet from below with the field near the thumb. Rendered
  * into the body, so that it is reachable over a window too (the shell under one is inert).
  */
-export default function Palette() {
+export default function Palette({ note = null }: { note?: PaletteNote | null }) {
   const navigate = useNavigate();
   const closeWindow = useCloseWindow();
   const recentPaths = useEditor((s) => s.recentPaths);
@@ -77,7 +83,7 @@ export default function Palette() {
   const [query, setQuery] = useState("");
   // By its key, not its place: a star moves a row to the favourites, or off them.
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const { rows, trees } = useRows();
+  const { rows, trees } = useRows(note);
   const favourites = useFavourites();
   // Each change lets go of the note favourites whose note is gone, in the same write.
   const toggle = (f: FavouriteInput) => favourites.toggle(f, staleNotes(favourites.list, trees));
@@ -98,7 +104,7 @@ export default function Palette() {
     const found = filterRows(rows, typed, keys);
     return [
       { heading: "Favourites", rows: found.filter((r) => keys.has(r.key)) },
-      ...(["Commands", "Vaults", "Notes"] as const).map((group) => ({ heading: group, rows: found.filter((r) => r.group === group && !keys.has(r.key)) })),
+      ...(["Note", "Commands", "Vaults", "Notes"] as const).map((group) => ({ heading: group, rows: found.filter((r) => r.group === group && !keys.has(r.key)) })),
     ];
   }, [rows, typed, favourites.list, recentPaths]);
 
@@ -120,7 +126,8 @@ export default function Palette() {
       if (useWindows.getState().open) closeWindow();
       useEditor.getState().setSearchQuery(typed);
       useEditor.getState().setOverlay("search");
-    } else if ("scheme" in entry.run) applyScheme(entry.run.scheme);
+    } else if ("action" in entry.run) entry.run.action();
+    else if ("scheme" in entry.run) applyScheme(entry.run.scheme);
     else void navigate(entry.run.to);
   };
 
@@ -135,7 +142,8 @@ export default function Palette() {
       // Caught here only, as a browser's bookmark is: the highlighted row's star.
       // The highlight goes with the row, wherever the star moves it.
       const row = entries[at];
-      if (row) {
+      // A note's action has no star.
+      if (row?.favourite) {
         setActiveKey(row.key);
         toggle(row.favourite);
       }
@@ -146,7 +154,7 @@ export default function Palette() {
   let index = 0;
   const option = (row: Row | null) => {
     const i = index++;
-    const on = !!row && favourites.has(row.favourite);
+    const on = !!row?.favourite && favourites.has(row.favourite);
     const highlighted = i === at;
     return (
       <li
@@ -167,21 +175,23 @@ export default function Palette() {
               <span className="min-w-0 truncate text-[15px] text-text">{row.name}</span>
               <span className={`min-w-0 truncate font-mono text-[12px] text-dim ${desktop ? "ml-auto flex-none" : ""}`}>{row.place}</span>
             </span>
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label={on ? `Remove ${row.name} from favourites` : `Add ${row.name} to favourites`}
-              aria-pressed={on}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggle(row.favourite);
-              }}
-              className={`flex size-11 flex-none items-center justify-center rounded-[10px] ${on ? "text-accent-text" : "text-muted"} ${
-                desktop && !on && !highlighted ? "opacity-0 group-hover:opacity-100" : ""
-              }`}
-            >
-              <Star size={18} strokeWidth={1.8} fill={on ? "currentColor" : "none"} aria-hidden />
-            </button>
+            {row.favourite && (
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={on ? `Remove ${row.name} from favourites` : `Add ${row.name} to favourites`}
+                aria-pressed={on}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggle(row.favourite!);
+                }}
+                className={`flex size-11 flex-none items-center justify-center rounded-[10px] ${on ? "text-accent-text" : "text-muted"} ${
+                  desktop && !on && !highlighted ? "opacity-0 group-hover:opacity-100" : ""
+                }`}
+              >
+                <Star size={18} strokeWidth={1.8} fill={on ? "currentColor" : "none"} aria-hidden />
+              </button>
+            )}
           </>
         ) : (
           <span className="flex min-w-0 flex-1 items-center gap-2 py-1 text-[15px] text-text">
