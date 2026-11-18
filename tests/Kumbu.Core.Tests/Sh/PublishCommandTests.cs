@@ -33,16 +33,22 @@ public class PublishCommandTests
             return Throws is null ? Task.FromResult(Lines) : Task.FromException<IReadOnlyList<PublicationLine>>(Throws);
         }
 
-        public Task<PublishOutcome> AddAsync(VaultPath note, CancellationToken ct)
+        public PublishOutcome? Outcome { get; init; }
+
+        public PublishWalk? Options { get; private set; }
+
+        public Task<PublishOutcome> AddAsync(VaultPath note, PublishWalk options, CancellationToken ct)
         {
             Calls.Add($"add {note}");
-            return Throws is null ? Task.FromResult(new PublishOutcome(Link, At, Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
+            Options = options;
+            return Throws is null ? Task.FromResult(Outcome ?? new PublishOutcome(Link, At, Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
         }
 
-        public Task<PublishOutcome> UpdateAsync(VaultPath note, CancellationToken ct)
+        public Task<PublishOutcome> UpdateAsync(VaultPath note, PublishWalk options, CancellationToken ct)
         {
             Calls.Add($"update {note}");
-            return Throws is null ? Task.FromResult(new PublishOutcome(null, At.AddHours(1).AddMinutes(38), Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
+            Options = options;
+            return Throws is null ? Task.FromResult(Outcome ?? new PublishOutcome(null, At.AddHours(1).AddMinutes(38), Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
         }
 
         public Task WithdrawAsync(VaultPath note, CancellationToken ct)
@@ -213,15 +219,86 @@ public class PublishCommandTests
         Assert.Equal(
             """
             publish ls [path]        the published notes below a path; a link is never shown again
-            publish add <note>       publish a copy of one note behind a secret link, shown once
-            publish update <note>    replace the copy with the note as it is now; the link stays
+            publish add <note>       publish a copy of the note behind a secret link, shown once
+            publish update <note>    replace the copy with the notes as they are now; the link stays
             publish rm <note>        withdraw the publication; its link reads nothing from then on
+              --depth N              also take the notes it links to, N links deep (0 to 5, default 0)
+              --without <note>       leave a note out, and what is reached only through it (repeatable)
+              --dry-run              add only: list what would be published, publish nothing
             Only the vault's owner publishes, with a key or connection she allowed to ("May publish").
-            Links to other notes become plain text; frontmatter, tags, comments and images' metadata
-            stay behind. PDFs are not published yet. Notes and folders the owner marked unpublishable
-            can't be published at all.
+            add and update print every note the copy takes and every note left behind. Before you
+            publish more than the one note, show that list to the person and let them confirm it.
+            Links between the notes of a copy stay links; links to other notes become plain text.
+            Frontmatter, tags, comments and images' metadata stay behind. PDFs are not published yet.
+            Notes and folders the owner marked unpublishable are never published, nor walked through.
             """,
             help.TrimEnd());
-        Assert.Contains("\n  publish ls|add|update|rm <note> share one note as a read-only copy behind a secret link\n", Manual.ToolDescription);
+        Assert.Contains("\n  publish ls|add|update|rm <note> share a note, with --depth N the notes it links to, as a read-only copy behind a secret link; show the person the list it prints before publishing more than one note\n", Manual.ToolDescription);
+    }
+
+    [Fact]
+    public async Task Add_with_depth_lists_the_notes_and_those_left_out()
+    {
+        var publisher = new FakePublisher
+        {
+            Outcome = new PublishOutcome(Link, At, [], false, [P("/Work/Plan.md"), P("/Work/Budget.md")], [new LeftOutNote(P("/Work/Salaries.md"), "unpublishable")]),
+        };
+
+        var result = await Run(publisher, "publish add /Work/Plan.md --depth 1 --without /Work/Old.md");
+
+        Assert.Equal(1, publisher.Options!.Depth);
+        Assert.Equal([P("/Work/Old.md")], publisher.Options.Without);
+        Assert.Equal(
+            $"published /Work/Plan.md with 2 notes as a copy of 2026-11-05 14:32 UTC\nlink (shown once): {Link}\nnotes:\n  /Work/Plan.md\n  /Work/Budget.md\nleft out:\n  /Work/Salaries.md  marked unpublishable",
+            result.Output);
+    }
+
+    [Fact]
+    public async Task Add_dry_run_says_nothing_was_published()
+    {
+        var publisher = new FakePublisher { Outcome = new PublishOutcome(null, default, [], false, [P("/Work/Plan.md"), P("/Work/B.md")], [], DryRun: true) };
+
+        var result = await Run(publisher, "publish add /Work/Plan.md --depth 1 --dry-run");
+
+        Assert.True(publisher.Options!.DryRun);
+        Assert.StartsWith("would publish /Work/Plan.md with 2 notes; nothing was published\nnotes:", result.Output);
+    }
+
+    [Fact]
+    public async Task Update_lists_added_and_removed()
+    {
+        var publisher = new FakePublisher { Outcome = new PublishOutcome(null, At, [], false, [P("/Work/Plan.md"), P("/Work/D.md")], [], [P("/Work/D.md")], [P("/Work/B.md")]) };
+
+        var result = await Run(publisher, "publish update /Work/Plan.md");
+
+        Assert.Null(publisher.Options!.Depth);
+        Assert.EndsWith("added:\n  /Work/D.md\nremoved:\n  /Work/B.md", result.Output);
+    }
+
+    [Theory]
+    [InlineData("publish add /Work/Plan.md --depth 6")]
+    [InlineData("publish add /Work/Plan.md --depth")]
+    [InlineData("publish update /Work/Plan.md --dry-run")]
+    [InlineData("publish ls --depth 1")]
+    [InlineData("publish add /Work/Plan.md --deep 1")]
+    public async Task Wrong_options_are_invalid(string line)
+    {
+        var publisher = new FakePublisher();
+
+        var result = await Run(publisher, line);
+
+        Assert.True(result.IsError);
+        Assert.Equal(ShellErrorKind.Invalid, result.Kind);
+        Assert.Empty(publisher.Calls);
+    }
+
+    [Fact]
+    public async Task Ls_names_how_many_notes_a_bundle_holds()
+    {
+        var publisher = new FakePublisher { Lines = [new PublicationLine(P("/Work/Plan.md"), At, false, 3), new PublicationLine(P("/Work/A.md"), At, false, 1)] };
+
+        var result = await Run(publisher, "publish ls /Work");
+
+        Assert.Equal("/Work/A.md  2026-11-05 14:32 UTC  older: no\n/Work/Plan.md  2026-11-05 14:32 UTC  older: no  notes: 3", result.Output);
     }
 }
