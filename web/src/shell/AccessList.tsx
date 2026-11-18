@@ -30,7 +30,7 @@ const kindLabels: Record<string, string> = { key: "API key", connection: "App", 
  * Who opened Bob's link and waits for the owner: the one place she sees a member's username (collab design §4.2).
  * The display name comes quoted from the server, as free text someone typed.
  */
-function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: string; member: MemberAccess; onGrant(): void; onDecline(): void; pending: boolean }) {
+function Redeemed({ vault, member, onGrant, onDecline, pending, first }: { vault: string; member: MemberAccess; onGrant(): void; onDecline(): void; pending: boolean; first: boolean }) {
   const membership = useMembership(vault, member.id, true);
   const redeemer = membership.data?.redeemer;
   return (
@@ -45,7 +45,7 @@ function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: strin
         <button type="button" onClick={onGrant} disabled={!redeemer || pending} className={secondaryButtonClass}>
           Grant access
         </button>
-        <button type="button" onClick={onDecline} disabled={pending} className={secondaryButtonClass}>
+        <button type="button" onClick={onDecline} disabled={pending} data-autofocus={first || undefined} className={secondaryButtonClass}>
           Decline
         </button>
       </div>
@@ -235,7 +235,7 @@ function MaintainDialog({ vault, member, onClose }: { vault: string; member: Mem
 }
 
 /** One person: her role, what she connected, and what the owner can do now. */
-function Member({ vault, member, onRevoke }: { vault: string; member: MemberAccess; onRevoke(): void }) {
+function Member({ vault, member, first, onRevoke }: { vault: string; member: MemberAccess; first: boolean; onRevoke(): void }) {
   const id = useId();
   const change = useMembershipChange(vault);
   const [raising, setRaising] = useState(false);
@@ -253,7 +253,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
             Invited as {roleLabels[role] ?? member.role}
             {member.expiresAt ? `; the link works until ${timeText(member.expiresAt)}` : ""}.
           </p>
-          <button type="button" onClick={() => change.mutate({ kind: "withdraw", id: member.id })} disabled={change.isPending} className={`${secondaryButtonClass} self-start`}>
+          <button type="button" onClick={() => change.mutate({ kind: "withdraw", id: member.id })} disabled={change.isPending} data-autofocus={first || undefined} className={`${secondaryButtonClass} self-start`}>
             Withdraw
           </button>
         </>
@@ -263,6 +263,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
           vault={vault}
           member={member}
           pending={change.isPending}
+          first={first}
           onGrant={() => change.mutate({ kind: "confirm", id: member.id })}
           onDecline={() => change.mutate({ kind: "decline", id: member.id })}
         />
@@ -277,6 +278,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
               id={`${id}-role`}
               value={role}
               disabled={change.isPending}
+              data-autofocus={first || undefined}
               onChange={(e) => {
                 const to = e.target.value as Role;
                 if (to === "maintain") setRaising(true);
@@ -361,9 +363,10 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
         {bar}
         {members.length > 0 && (
           <ul aria-label="Members" className="flex flex-col gap-2">
-            {visible.map((m) => (
+            {visible.map((m, i) => (
               <Member
                 key={m.id}
+                first={i === 0}
                 vault={vault}
                 member={m}
                 onRevoke={() => {

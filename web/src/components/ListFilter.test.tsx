@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { useListFilter } from "./ListFilter";
@@ -90,6 +90,19 @@ describe("useListFilter", () => {
     expect(listed()).toEqual(["Anna", "Bob", "ÄRGER"]);
     expect(input).toHaveValue("");
     expect(screen.getByRole("radio", { name: "All 3" })).toBeChecked();
+    expect(input).toHaveFocus();
+  });
+
+  it("announces what is hidden in one status region", async () => {
+    render(<Probe items={things} />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveTextContent("");
+    await userEvent.type(screen.getByRole("searchbox"), "bob");
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region).toHaveTextContent("Showing 1 of 3");
+    expect(within(region).getByRole("button", { name: "Show all" })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("searchbox"), "zzz");
+    expect(region).toHaveTextContent("No things match.");
   });
 
   it("keeps the filter when the items change", async () => {

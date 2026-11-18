@@ -64,6 +64,24 @@ describe("AccessList", () => {
     expect(screen.getByRole("listitem", { name: "Bob" })).toBeInTheDocument();
   });
 
+  it("does not open on the search box when members are listed", async () => {
+    members = [member()];
+    accessApi();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = (
+      <QueryClientProvider client={client}>
+        <AccessList vault="Gartenarbeit" onClose={() => {}} />
+      </QueryClientProvider>
+    );
+    // Warm cache: the members are there at once, so the dialog's initial focus is chosen with the filter present.
+    const first = render(view);
+    await bob();
+    first.unmount();
+    render(view);
+    expect(screen.getByRole("searchbox")).not.toHaveFocus();
+    expect(within(screen.getByRole("listitem", { name: "Bob" })).getByLabelText("Role")).toHaveFocus();
+  });
+
   it("raises a role after the password dialog", async () => {
     members = [member()];
     let puts = 0;

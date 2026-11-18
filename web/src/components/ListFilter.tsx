@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { inputClass, labelClass, secondaryButtonClass } from "./form";
 
 export type Status = { value: string; label: string };
@@ -24,6 +24,7 @@ export function useListFilter<T>(
   const [text, setText] = useState("");
   const [chosen, setChosen] = useState(ALL);
   const groupName = useId();
+  const search = useRef<HTMLInputElement>(null);
 
   const needle = text.trim().toLocaleLowerCase();
   const matching = useMemo(
@@ -48,6 +49,7 @@ export function useListFilter<T>(
   const bar = (
     <div className="flex flex-col gap-3">
       <input
+        ref={search}
         type="search"
         aria-label={searchLabel}
         placeholder={searchLabel}
@@ -76,22 +78,26 @@ export function useListFilter<T>(
           ))}
         </div>
       </fieldset>
-      {hidden && (
-        <p className="flex flex-wrap items-center gap-3 text-sm text-text-body">
-          <span>{`Showing ${visible.length} of ${items.length}`}</span>
-          <button
-            type="button"
-            className={secondaryButtonClass}
-            onClick={() => {
-              setText("");
-              setChosen(ALL);
-            }}
-          >
-            Show all
-          </button>
-        </p>
-      )}
-      {visible.length === 0 && <p className="text-text-body">{`No ${noun} match.`}</p>}
+      <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-text-body">
+        {hidden && (
+          <>
+            <span>{`Showing ${visible.length} of ${items.length}`}</span>
+            <button
+              type="button"
+              className={secondaryButtonClass}
+              onClick={() => {
+                setText("");
+                setChosen(ALL);
+                // The button unmounts with the filters cleared; keep focus from falling back to the page.
+                search.current?.focus();
+              }}
+            >
+              Show all
+            </button>
+          </>
+        )}
+        {visible.length === 0 && <p className="basis-full text-base text-text-body">{`No ${noun} match.`}</p>}
+      </div>
     </div>
   );
   return { visible, bar };

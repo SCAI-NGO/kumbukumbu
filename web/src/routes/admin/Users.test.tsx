@@ -72,6 +72,8 @@ describe("Admin users", () => {
     expect(screen.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Bob"]);
 
     await userEvent.clear(search);
+    expect(search).toHaveValue("");
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
     await userEvent.click(screen.getByRole("radio", { name: "Deactivated 1" }));
     expect(screen.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Bob"]);
     expect(screen.getByText("Showing 1 of 3")).toBeInTheDocument();
