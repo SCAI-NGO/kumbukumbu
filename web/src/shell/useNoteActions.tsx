@@ -60,6 +60,9 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   const [copy, setCopy] = useState<string | null>(null);
   const failedCopy = useRef<{ of?: string; reset(): void }>({ reset: () => {} });
   failedCopy.current = { of: duplicating.variables, reset: duplicating.reset };
+  // A copy that answers after its vault was hidden (made once the save before it was done) is said nowhere either.
+  const copyHidden = useDiscreet((s) => !!copy && goneVault(s, vaultOf(copy)));
+  const failureHidden = useDiscreet((s) => !!duplicating.variables && goneVault(s, vaultOf(duplicating.variables)));
   // A sheet, dialog or notice about a vault hidden again goes with it: its title and its answers name the note.
   useEffect(
     () =>
@@ -159,12 +162,12 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           {errorText(marking.error)}
         </p>
       )}
-      {duplicating.isError && (
+      {duplicating.isError && !failureHidden && (
         <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
           {errorText(duplicating.error)}
         </p>
       )}
-      {copy && (
+      {copy && !copyHidden && (
         <DuplicateNotice
           key={copy}
           name={copy.slice(copy.lastIndexOf("/") + 1)}

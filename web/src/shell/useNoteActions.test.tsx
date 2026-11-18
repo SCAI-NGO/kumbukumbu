@@ -245,6 +245,44 @@ describe("the note's actions", () => {
     expect(screen.queryByText(/99 copies of inbox\.md/)).not.toBeInTheDocument();
   });
 
+  it("a_copy_made_after_hiding_names_nothing", async () => {
+    // Hidden while the unsaved text is being saved: the copy is made after, and its notice would name it.
+    const listed: unknown[] = [{ name: "Work", notes: 1, embeddings: "internal" }];
+    const state = server({ vaults: listed });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let release = () => {};
+    const saved = new Promise<void>((resolve) => (release = resolve));
+    const fetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (r: Request) => {
+      if (r.method === "PUT" && notePath(r) === "/Work/inbox.md") await saved;
+      return fetch(r);
+    });
+    await writeMore(queryClient);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Markdown source" }), { key: "F10", code: "F10", shiftKey: true });
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
+    // Hidden, the vault is no longer listed.
+    listed.length = 0;
+    act(() => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    await act(async () => release());
+    await waitFor(() => expect(state.copies).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/Copy of inbox/)).not.toBeInTheDocument();
+  });
+
+  it("a_late_failure_after_hiding_names_nothing", async () => {
+    let answer = (_: Response) => {};
+    const held = new Promise<Response>((resolve) => (answer = resolve));
+    server();
+    const fetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (r: Request) => (r.method === "PUT" && notePath(r) === "/Work/Copy of inbox.md" ? held : fetch(r)));
+    renderApp("/notes/Work/inbox.md");
+    await duplicate();
+    act(() => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    await act(async () => answer(json(500, { error: "Couldn't write inbox.md." })));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/inbox\.md/)).not.toBeInTheDocument();
+  });
+
   it("the_original_stays_open", async () => {
     server();
     const router = renderApp("/notes/Work/inbox.md");
