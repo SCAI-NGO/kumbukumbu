@@ -22,8 +22,9 @@ const drawClass = "min-h-12 rounded-[8px] px-3 text-[14px] text-muted hover:text
  * A Mermaid diagram as an image of the SVG Mermaid draws: its SVG never becomes markup of the page, so neither its
  * `<style>` nor anything else in it touches the page. Its URL is a `data:` URL, never a `blob:` one, and it is never
  * inside a link: a blob SVG opened on its own would be a document on the page's origin, while a page can't open a
- * `data:` URL as a document, and one opened by hand from the address bar has an origin of its own. A large diagram waits for Draw diagram, as does one the note leaves no place among
- * those drawing by themselves (`auto`); the largest are not drawn here.
+ * `data:` URL as a document, and one opened by hand from the address bar has an origin of its own. A large diagram
+ * waits for Draw diagram, as does one the note leaves no place among those drawing by themselves (`auto`); the largest
+ * are not drawn here.
  */
 export default function MermaidDiagram({ source, dark, auto = true }: { source: string; dark: boolean; auto?: boolean }) {
   const how = useMemo(() => drawing(source), [source]);
