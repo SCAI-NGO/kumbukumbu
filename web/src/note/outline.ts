@@ -115,14 +115,34 @@ export function outline(body: string): Heading[] {
   return headings;
 }
 
+/** Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`). */
+const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
 /**
- * The section under `heading` (its text as shown, ignoring case): from that heading to the next of the same or a
- * higher level. The other lines are left empty, so the section keeps the note's line numbers (its links go by them);
- * null when the note has no such heading.
+ * A heading (its text as shown, `headingText`) as Obsidian writes it in a link: its escapes taken out, then without
+ * `# | ^ [ ]` and `%%` (`C\# notes | x` → `C notes x`).
+ */
+export const headingLink = (text: string) =>
+  unescaped(text)
+    .replace(/%%|[#|^[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Whether a link's heading names the heading `text`, the characters a link can't hold dropped from both, ignoring case. */
+const linksTo = (link: string, text: string) => {
+  const own = headingLink(link).toLowerCase();
+  return own !== "" && own === headingLink(text).toLowerCase();
+};
+
+/**
+ * The section under `heading` (its text as shown, ignoring case, else as a link holds it, `headingLink`): from that
+ * heading to the next of the same or a higher level. The other lines are left empty, so the section keeps the note's
+ * line numbers (its links go by them); null when the note has no such heading.
  */
 export function section(body: string, heading: string): string | null {
   const headings = outline(body);
-  const at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
+  let at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
+  if (at < 0) at = headings.findIndex((h) => linksTo(heading, h.text));
   if (at < 0) return null;
   const start = headings[at].line;
   const end = headings.slice(at + 1).find((h) => h.level <= headings[at].level)?.line ?? Infinity;
@@ -157,8 +177,9 @@ function addressSegments(address: string): { text: string; index?: number }[] | 
 
 /**
  * The 1-based source line of the heading a section address names (`Roadmap`, `A#B`, `Notes[2]`), as `cat note#…`
- * resolves it: its own text and the parents above it match the segments, exactly or else ignoring case. Of several
- * matches the first in the note wins; null when none does.
+ * resolves it: its own text and the parents above it match the segments, exactly, else ignoring case, else as a link
+ * holds a heading (`headingLink`, which the link list inserts). Of several matches the first in the note wins; null
+ * when none does.
  */
 export function headingLine(body: string, address: string): number | null {
   const segments = addressSegments(address);
@@ -167,7 +188,6 @@ export function headingLine(body: string, address: string): number | null {
   // A heading answers to its text as written, as the Core keeps it (`The **road**map`), and as shown (`The roadmap`);
   // both with Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`).
   type Node = { written: string; shown: string; line: number; parent: Node | null; index: number };
-  const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
   const lines = body.split("\n");
   const nodes: Node[] = [];
   const open: (Node & { level: number })[] = [];
@@ -187,7 +207,8 @@ export function headingLine(body: string, address: string): number | null {
     nodes.push(node);
     open.push(node);
   }
-  for (const same of [(a: string, b: string) => a === b, (a: string, b: string) => a.toLowerCase() === b.toLowerCase()]) {
+  // Exactly, then ignoring case, then as a link holds a heading (`[[N#C notes x]]` for `## C# notes | x`).
+  for (const same of [(a: string, b: string) => a === b, (a: string, b: string) => a.toLowerCase() === b.toLowerCase(), linksTo]) {
     const found = nodes.find((n) => {
       let h: Node | null = n;
       for (let i = segments.length - 1; i >= 0; i--, h = h.parent) {

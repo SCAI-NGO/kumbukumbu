@@ -3,7 +3,7 @@ import type { TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf } from "../api/paths";
 import { wordMatch } from "../palette/filter";
 import { blockList } from "./blocks";
-import { codeSpan, fenceMarker, outline } from "./outline";
+import { codeSpan, fenceMarker, headingLink, outline } from "./outline";
 import { splitFrontmatter } from "./properties";
 
 /**
@@ -162,9 +162,6 @@ export function completeLink(value: string, caret: number, at: LinkQuery, target
 /** The note's headings, in order, whose text holds what is typed after `#`, ignoring case. */
 export const headingsFor = (content: string, query: string) =>
   outline(splitFrontmatter(content).body).filter((h) => h.text.toLowerCase().includes(query.trim().toLowerCase()));
-
-/** A heading (its text as shown, `headingText`) as Obsidian writes it in a link: without `# | ^ [ ]` and `%%`. */
-export const headingLink = (text: string) => text.replace(/%%|[#|^[\]]/g, "").replace(/\s+/g, " ").trim();
 
 /** The block ids the note has, with the start of their text, whose id or text holds what is typed after `#^`. */
 export function blocksFor(content: string, query: string) {

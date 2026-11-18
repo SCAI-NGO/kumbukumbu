@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { noteUrl } from "../api/paths";
 import { filterRows, wordMatch } from "../palette/filter";
 import { noteRows } from "../palette/rows";
-import { blocksFor, completeLink, completeMarkdown, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, markdownFragment, markdownPath, rankNotes } from "./linkCompletion";
+import { headingLink } from "./outline";
+import { blocksFor, completeLink, completeMarkdown, completeSubpath, embedsAsImage, headingsFor, linkedNote, linkQuery, linkTarget, markdownFragment, markdownPath, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
   it("finds an open [[ on the caret's line", () => {

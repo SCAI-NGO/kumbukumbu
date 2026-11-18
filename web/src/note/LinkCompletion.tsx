@@ -8,7 +8,6 @@ import {
   completeMarkdown,
   completeSubpath,
   embedsAsImage,
-  headingLink,
   headingsFor,
   linkedNote,
   linkQuery,
@@ -19,6 +18,7 @@ import {
   rankNotes,
   type LinkQuery,
 } from "./linkCompletion";
+import { headingLink } from "./outline";
 import { apply } from "./textEdit";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
