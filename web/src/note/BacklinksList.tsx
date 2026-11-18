@@ -5,17 +5,20 @@ import { useBacklinks } from "../api/notes";
 import { crumbOf, noteUrl, titleOf } from "../api/paths";
 import UnlinkedMentions from "./UnlinkedMentions";
 
-/** "Linked from": each note with a line linking here, once, in the server's order. */
-export default function BacklinksList({ path }: { path: string }) {
+/**
+ * "Linked from": each note with a line linking here, once, in the server's order. At the note's bottom it is set off
+ * from the text by a gap and a rule; in the side panel (`panel`) it starts at the top.
+ */
+export default function BacklinksList({ path, panel = false }: { path: string; panel?: boolean }) {
   const backlinks = useBacklinks(path);
   const navigate = useNavigate();
   const sources = [...new Map((backlinks.data ?? []).map((b) => [b.path, b])).values()];
-  const mentions = <UnlinkedMentions path={path} linked={sources.length > 0} />;
+  const mentions = <UnlinkedMentions path={path} linked={sources.length > 0} panel={panel} />;
   if (sources.length === 0) return mentions;
 
   return (
     <>
-      <section aria-label="Linked from" className="mt-[30px] border-t border-line pt-4">
+      <section aria-label="Linked from" className={panel ? undefined : "mt-[30px] border-t border-line pt-4"}>
         <h2 className="mb-1.5 font-mono text-[11px] font-medium tracking-[0.08em] text-dim uppercase">
           Linked from · {sources.length}
         </h2>

@@ -40,7 +40,7 @@ export default function SidePanel({ path, text, currentLine, onJump }: { path: s
 
   return (
     <aside aria-label="Side panel" className="flex w-[300px] flex-none flex-col border-l border-line bg-surface">
-      <div role="tablist" aria-label="Side panel" onKeyDown={onKeyDown} className="m-3 flex flex-none gap-1 rounded-[12px] border border-line p-1">
+      <div role="tablist" onKeyDown={onKeyDown} className="m-3 flex flex-none gap-1 rounded-[12px] border border-line p-1">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -63,7 +63,7 @@ export default function SidePanel({ path, text, currentLine, onJump }: { path: s
       <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${tab}`} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {tab === "links" ? (
           <div className="px-[18px] pb-4">
-            <BacklinksList path={path} />
+            <BacklinksList path={path} panel />
           </div>
         ) : (
           <OutlineList headings={headings} current={current} onJump={onJump} />
