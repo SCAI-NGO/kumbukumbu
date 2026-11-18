@@ -10,10 +10,11 @@ const noteLimit = 50;
  */
 export function filterRows(rows: Row[], query: string, favourites: ReadonlySet<string>): Row[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const starting = words.map((w) => new RegExp(`[^\\p{L}\\p{N}]${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u"));
   const ranked = rows.flatMap((row) => {
     const text = `${row.place} ${row.name}`.toLowerCase();
     if (!words.every((w) => text.includes(w))) return [];
-    const starts = words.every((w) => text.startsWith(w) || new RegExp(`[^\\p{L}\\p{N}]${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u").test(text));
+    const starts = words.every((w, i) => text.startsWith(w) || starting[i].test(text));
     return [{ row, favourite: favourites.has(row.key), starts }];
   });
   ranked.sort(

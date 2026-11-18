@@ -22,7 +22,7 @@ const command = (id: string, place: string, name: string, run: Row["run"]): Row 
 const go = (id: string, place: string, name: string, to: string) => command(id, place, name, { to });
 
 /** Follows the settings navigation, the tabs of Access and Skills, and the routes of `router.tsx`. */
-export function commandRows({ admin }: { admin: boolean }): Row[] {
+export function commandRows({ admin, shared, marketplaces }: { admin: boolean; shared: boolean; marketplaces: boolean }): Row[] {
   return [
     go("settings.appearance", "Settings", "Appearance", "/settings/appearance"),
     go("settings.vaults", "Settings", "Vaults", "/settings/vaults"),
@@ -31,8 +31,8 @@ export function commandRows({ admin }: { admin: boolean }): Row[] {
     go("settings.access.dav", "Settings / Access", "WebDAV", "/settings/access/dav"),
     go("settings.skills.installed", "Settings / Skills", "Installed", "/settings/skills/installed"),
     go("settings.skills.try", "Settings / Skills", "Try", "/settings/skills/try"),
-    go("settings.skills.shared", "Settings / Skills", "Shared", "/settings/skills/shared"),
-    go("settings.skills.marketplaces", "Settings / Skills", "Marketplaces", "/settings/skills/marketplaces"),
+    ...(shared ? [go("settings.skills.shared", "Settings / Skills", "Shared", "/settings/skills/shared")] : []),
+    ...(marketplaces ? [go("settings.skills.marketplaces", "Settings / Skills", "Marketplaces", "/settings/skills/marketplaces")] : []),
     go("settings.calendar", "Settings", "Calendar", "/settings/calendar"),
     go("settings.security", "Settings", "Security", "/settings/security"),
     go("settings.data", "Settings", "Your data", "/settings/data"),
@@ -47,10 +47,10 @@ export function commandRows({ admin }: { admin: boolean }): Row[] {
 
 export function vaultRows(vaults: VaultView[]): Row[] {
   return vaults.flatMap(({ name }) => {
-    const row = (favourite: FavouriteInput, label: string, to: string): Row => ({ key: favouriteKey(favourite), group: "Vaults", name: label, place: name, favourite, run: { to } });
+    const row = (favourite: FavouriteInput, label: string, to: string, where = name): Row => ({ key: favouriteKey(favourite), group: "Vaults", name: label, place: where, favourite, run: { to } });
     const at = encodeURIComponent(name);
     return [
-      row({ kind: "vault", vault: name }, name, `/notes/${at}`),
+      row({ kind: "vault", vault: name }, name, `/notes/${at}`, "Vault"),
       row({ kind: "board", vault: name }, "Board", `/board/${at}`),
       row({ kind: "calendar", vault: name }, "Calendar", `/calendar/${at}`),
       row({ kind: "gallery", vault: name }, "Gallery", `/gallery/${at}`),

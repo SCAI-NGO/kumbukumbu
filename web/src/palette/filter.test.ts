@@ -37,4 +37,12 @@ describe("filterRows", () => {
     const rows = Array.from({ length: 1000 }, (_, i) => row("Notes", "Work", `n${i}`));
     expect(filterRows([...rows, vaults], "n", none).filter((r) => r.group === "Notes")).toHaveLength(50);
   });
+
+  it("keeps a favourite note that would fall outside the first 50", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => row("Notes", "Work", `n${String(i).padStart(3, "0")}`));
+    const last = rows[99];
+    const out = filterRows(rows, "n", new Set([last.key]));
+    expect(out).toHaveLength(50);
+    expect(out[0]).toBe(last);
+  });
 });
