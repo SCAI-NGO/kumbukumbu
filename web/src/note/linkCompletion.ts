@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { TreeFolder } from "../api/notes";
-import { fileKindOf } from "../api/paths";
+import { fileKindOf, folderOf, titleOf } from "../api/paths";
+import { wordMatch } from "../palette/filter";
 import { blockList } from "./blocks";
 import { outline } from "./outline";
 import { splitFrontmatter } from "./properties";
@@ -100,24 +101,19 @@ export const linkable = (path: string) => !/[#|[\]]/.test(linkPath(path));
 const MAX = 8;
 
 /**
- * The notes (and attachments) for a query, best first: names starting with it, then names containing it, then
- * notes whose folder contains it; each group in text order. An empty query lists the vault's notes in text order.
- * Notes no link can name (`linkable`) are left out.
+ * The notes (and attachments) for a query, best first, as the palette ranks them (`wordMatch`): every word of the
+ * query in the note's folder or name, those where each starts a word first, then by name. Searched within the vault,
+ * so without its name. An empty query lists the vault's notes by name. Notes no link can name (`linkable`) are left out.
  */
 export function rankNotes(paths: string[], query: string): string[] {
-  const q = query.trim().toLowerCase();
-  const name = (p: string) => p.slice(p.lastIndexOf("/") + 1).replace(/\.md$/i, "").toLowerCase();
-  const rank = (p: string) => {
-    if (name(p).startsWith(q)) return 0;
-    if (name(p).includes(q)) return 1;
-    if (linkPath(p).toLowerCase().includes(q)) return 2;
-    return -1;
-  };
+  const match = wordMatch(query);
   return paths
     .filter(linkable)
-    .map((p) => ({ p, r: rank(p) }))
-    .filter(({ r }) => r >= 0)
-    .sort((a, b) => a.r - b.r || name(a.p).localeCompare(name(b.p)) || a.p.localeCompare(b.p))
+    .flatMap((p) => {
+      const rank = match(`${folderOf(p).split("/").slice(2).join(" / ")} ${titleOf(p)}`);
+      return rank === null ? [] : [{ p, rank }];
+    })
+    .sort((a, b) => a.rank - b.rank || titleOf(a.p).localeCompare(titleOf(b.p)) || a.p.localeCompare(b.p))
     .slice(0, MAX)
     .map(({ p }) => p);
 }

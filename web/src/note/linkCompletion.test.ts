@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
+import { noteUrl } from "../api/paths";
+import { filterRows } from "../palette/filter";
+import { noteRows } from "../palette/rows";
 import { blocksFor, completeLink, completeMarkdown, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, markdownFragment, markdownPath, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
@@ -102,7 +105,7 @@ describe("linkedNote", () => {
 describe("rankNotes", () => {
   const all = ["/W/roadmap.md", "/W/plan.md", "/W/projects/beta.md", "/W/old/plans.md", "/W/x/unplanned.md"];
 
-  it("puts names starting with the query first, then names containing it, then folders", () => {
+  it("puts notes whose folder or name has a word starting with the query first, then those only containing it", () => {
     expect(rankNotes(all, "plan")).toEqual(["/W/plan.md", "/W/old/plans.md", "/W/x/unplanned.md"]);
     expect(rankNotes(all, "proj")).toEqual(["/W/projects/beta.md"]);
   });
@@ -116,6 +119,22 @@ describe("rankNotes", () => {
   it("lists every note for an empty query, in text order, at most eight", () => {
     expect(rankNotes(all, "")).toEqual(["/W/projects/beta.md", "/W/plan.md", "/W/old/plans.md", "/W/roadmap.md", "/W/x/unplanned.md"]);
     expect(rankNotes(Array.from({ length: 12 }, (_, i) => `/W/n${i}.md`), "")).toHaveLength(8);
+  });
+});
+
+describe("one ranking", () => {
+  const paths = ["/Work/Zeta plan.md", "/Work/Replan.md", "/Work/Plan b.md", "/Work/projects/Plan a.md", "/Work/plans/x.md", "/Work/old/roadmap plan.md", "/Work/road.md"];
+  const note = (p: string) => ({ name: p.slice(p.lastIndexOf("/") + 1), path: p, size: 1, kind: "note", mediaType: "text/markdown" });
+  const root = {
+    name: "Work",
+    path: "/Work",
+    notes: paths.filter((p) => p.split("/").length === 3).map(note),
+    folders: ["projects", "plans", "old"].map((f) => ({ name: f, path: `/Work/${f}`, folders: [], notes: paths.filter((p) => p.startsWith(`/Work/${f}/`)).map(note) })),
+  };
+
+  it.each(["plan", "PL RO", "road", "an", ""])("ranks the notes for %j as the palette does", (query) => {
+    const palette = filterRows(noteRows("Work", root), query, new Set()).map((r) => ("to" in r.run ? r.run.to : ""));
+    expect(rankNotes(paths, query).map(noteUrl)).toEqual(palette);
   });
 });
 
