@@ -2,20 +2,46 @@
 import type { TreeFolder } from "../api/notes";
 import { fileKindOf } from "../api/paths";
 
-/** An open `[[` before the caret: where it starts (at the first `[`) and what has been typed after it. */
-export type LinkQuery = { start: number; query: string };
+/**
+ * What the caret is completing, and where the text it replaces starts: a wiki link's note (at the first `[`), a
+ * heading or block of the note it names (`note` as typed; "" for the open note, `[[#`), or a Markdown link's
+ * destination (just after `](`), a note or a heading of the note it names (`note` its path as typed).
+ */
+export type LinkQuery =
+  | { kind: "note"; start: number; query: string }
+  | { kind: "heading" | "block"; start: number; note: string; query: string }
+  | { kind: "markdown"; start: number; query: string }
+  | { kind: "markdownHeading"; start: number; note: string; query: string };
 
 /**
- * The `[[` the caret is in, if any: on the caret's line, not closed yet, and before a `|` or `#` (an alias or a
- * heading is past the note's name, so the list has nothing more to offer there).
+ * The link the caret is in, if any, on the caret's line and not closed yet: an open `[[` before a `|` (an alias is
+ * past what the list offers) and before a second `#`; else a `](` whose `[text]` is on the line, before a `)`.
  */
 export function linkQuery(value: string, caret: number): LinkQuery | null {
   const line = value.slice(value.lastIndexOf("\n", caret - 1) + 1, caret);
+  const lineStart = caret - line.length;
   const open = line.lastIndexOf("[[");
-  if (open < 0) return null;
-  const query = line.slice(open + 2);
-  if (/[[\]|#]/.test(query)) return null;
-  return { start: caret - line.length + open, query };
+  const typed = open < 0 ? "" : line.slice(open + 2);
+  if (open >= 0 && !/[[\]|]/.test(typed)) {
+    const start = lineStart + open;
+    const hash = typed.indexOf("#");
+    if (hash < 0) return { kind: "note", start, query: typed };
+    const note = typed.slice(0, hash);
+    const rest = typed.slice(hash + 1);
+    if (rest.startsWith("^")) return /[#^]/.test(rest.slice(1)) ? null : { kind: "block", start, note, query: rest.slice(1) };
+    return rest.includes("#") ? null : { kind: "heading", start, note, query: rest };
+  }
+  const close = line.lastIndexOf("](");
+  // `]](` closes a wiki link, not a Markdown link's text.
+  if (close < 0 || !line.slice(0, close).includes("[") || line[close - 1] === "]") return null;
+  const destination = line.slice(close + 2);
+  if (destination.includes(")")) return null;
+  const start = lineStart + close + 2;
+  const hash = destination.indexOf("#");
+  if (hash < 0) return { kind: "markdown", start, query: destination };
+  const note = destination.slice(0, hash);
+  const query = destination.slice(hash + 1);
+  return /\.md$/i.test(note) && !/^\^|#/.test(query) ? { kind: "markdownHeading", start, note, query } : null;
 }
 
 /** Every note and attachment path of a tree (`/Work/projects/plan.md`, `/Work/shot.png`). */

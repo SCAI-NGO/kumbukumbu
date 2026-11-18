@@ -20,7 +20,7 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   // Escape closes the list for this `[[`; a new one opens it again.
   const [dismissed, setDismissed] = useState<number | null>(null);
 
-  const options = useMemo(() => (at ? rankNotes(all.filter((p) => p !== path), at.query) : []), [all, at, path]);
+  const options = useMemo(() => (at?.kind === "note" ? rankNotes(all.filter((p) => p !== path), at.query) : []), [all, at, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
 
   /** Called on every change of text or caret. */
