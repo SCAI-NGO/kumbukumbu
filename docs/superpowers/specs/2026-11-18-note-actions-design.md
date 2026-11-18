@@ -55,7 +55,7 @@ While a note is shown or edited, the palette has a group **Note** before Command
 - **Not pinnable:** they act on the note that is open. The rows have no star, and Ctrl+D does nothing on them.
 - **Delete note asks first,** as the menu does (decided by the maintainer: without the question it would be done too quickly). Every row runs exactly what the menu item runs, dialogs included.
 - **The palette is gone before a row runs,** and over a window the window closes first, as for Search, and the row runs once it is gone. Why: what the row opens (the find field, Delete's question) must have the focus, and the shell under a window is inert.
-- **Filtering** as for every row: "no pub" finds "Note: Publish". In the empty palette the Note group is not shown (favourites and Recent stay the empty palette's); it appears once something is typed.
+- **Filtering** on the group and the name: "no pub" finds "Note: Publish". Not on the place, which is still shown. Why: the note's title as place would bring up every Note row whenever its words are typed to find another note ("plan" for plan-2026 with plan open). In the empty palette the Note group is not shown (favourites and Recent stay the empty palette's); it appears once something is typed.
 
 ## The note's menu from the keyboard
 

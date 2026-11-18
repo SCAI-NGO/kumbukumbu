@@ -468,8 +468,9 @@ describe("the note's actions", () => {
   it("labels_are_the_menus", async () => {
     signedInApi();
     await openPalette();
-    await userEvent.type(field(), "inbox");
+    await userEvent.type(field(), "note");
     await waitFor(() => expect(noteGroup()).toBeInTheDocument());
+    // Placed with the note's title.
     expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Rename or move, inbox"]));
   });
 
@@ -494,6 +495,14 @@ describe("the note's actions", () => {
     await userEvent.keyboard("{Enter}");
     expect(await screen.findByRole("dialog", { name: "Delete inbox?" })).toBeInTheDocument();
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE")).toBe(false);
+  });
+
+  it("the_note_title_finds_notes_not_its_actions", async () => {
+    signedInApi({ workTree: () => tree("Work", ["inbox.md", "plan-2026.md"]) });
+    await openPalette("/notes/Work/plan.md");
+    await userEvent.type(field(), "plan");
+    await waitFor(() => expect(highlighted()).toBe("plan-2026, Work"));
+    expect(noteGroup()).not.toBeInTheDocument();
   });
 
   it("no_pub_finds_publish", async () => {
