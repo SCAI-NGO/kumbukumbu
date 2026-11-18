@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { atxHeading, headingLine, headingLink, outline, section, writtenHeading } from "./outline";
+import { atxHeading, headingLine, headingLink, outline, section } from "./outline";
 import { embedHeading } from "./wikiLinks";
 
 describe("outline", () => {
@@ -153,19 +153,24 @@ describe("headingLine", () => {
 });
 
 describe("a link to a heading whose text a link can't hold", () => {
-  const body = ["# Top", "", "## C# notes | x", "c", "## [draft] v2", "d", "## Notes [2]", "n", "## C\\# tips", "t", "## Notes", "## Notes", "## The **road**map", "r"].join("\n");
-  const linkOf = (line: number) => headingLink(writtenHeading(body.split("\n"), outline(body).find((h) => h.line === line)!));
+  const body = ["# Top", "", "## C# notes | x", "c", "## [draft] v2", "d", "## Notes [2]", "n", "## C\\# tips", "t", "## Notes", "## Notes", "## The **road**map", "r", "## `a|b` x", "a"].join("\n");
+  const linkOf = (line: number) => headingLink(outline(body).find((h) => h.line === line)!.text);
 
-  it("is the heading as written, without # | ^ [ ], %% and Markdown's escapes", () => {
-    expect([3, 5, 7, 9, 13].map(linkOf)).toEqual(["C notes x", "draft v2", "Notes 2", "C tips", "The **road**map"]);
-    // A setext heading's text as written is the one shown.
-    expect(writtenHeading(["Plan", "==="], { level: 1, text: "Plan", line: 1 })).toBe("Plan");
+  it("is the heading as shown, without # | ^ [ ], %% and Markdown's escapes", () => {
+    expect([3, 5, 7, 9, 13, 15].map(linkOf)).toEqual(["C notes x", "draft v2", "Notes 2", "C tips", "The roadmap", "ab x"]);
   });
 
-  it.each([3, 5, 7, 9, 13])("finds the heading at line %i, and its section", (line) => {
+  it.each([3, 5, 7, 9, 13, 15])("finds the heading at line %i, and its section", (line) => {
     expect(headingLine(body, linkOf(line))).toBe(line);
     expect(headingLine(body, linkOf(line).toUpperCase())).toBe(line);
     expect(section(body, linkOf(line))?.split("\n")[line - 1]).toBe(body.split("\n")[line - 1]);
+  });
+
+  it("finds a heading by a link that holds it as written too, its Markdown kept", () => {
+    expect(headingLine(body, "the **road**map")).toBe(13);
+    expect(headingLine(body, "`ab` X")).toBe(15);
+    expect(section(body, "`ab` x")?.split("\n")[14]).toBe("## `a|b` x");
+    expect(section(body, "The **road**map")?.split("\n")[12]).toBe("## The **road**map");
   });
 
   it("still reads a trailing [n] as an index", () => {

@@ -716,12 +716,12 @@ describe("[[ completion of headings and blocks", () => {
     expect(editorBox().value).toBe(`${source} [[Roadmap#C later]]`);
   });
 
-  it("inserts a heading as written, its Markdown kept, as Obsidian links it", async () => {
+  it("inserts a heading as shown, without its Markdown marks, so the link renders", async () => {
     withRoadmap();
     const { u } = await openInWrite();
     await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#the road");
     await u.keyboard("{Enter}");
-    expect(editorBox().value).toBe(`${source} [[Roadmap#The **road**map]]`);
+    expect(editorBox().value).toBe(`${source} [[Roadmap#The roadmap]]`);
   });
 
   it("lists the block ids that note has, with their text, and inserts one", async () => {

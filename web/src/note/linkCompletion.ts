@@ -3,7 +3,7 @@ import type { TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf } from "../api/paths";
 import { wordMatch } from "../palette/filter";
 import { blockList } from "./blocks";
-import { codeSpan, fenceMarker, headingLink, outline, writtenHeading } from "./outline";
+import { codeSpan, fenceMarker, headingLink, outline } from "./outline";
 import { splitFrontmatter } from "./properties";
 
 /**
@@ -177,13 +177,9 @@ export function completeLink(value: string, caret: number, at: LinkQuery, target
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }
 
-/** The note's headings, in order, whose text as shown holds what is typed after `#`, ignoring case; each with its text as written. */
+/** The note's headings, in order, whose text as shown holds what is typed after `#`, ignoring case. */
 export function headingsFor(content: string, query: string) {
-  const body = splitFrontmatter(content).body;
-  const lines = body.split("\n");
-  return outline(body)
-    .filter((h) => h.text.toLowerCase().includes(query.trim().toLowerCase()))
-    .map((h) => ({ ...h, written: writtenHeading(lines, h) }));
+  return outline(splitFrontmatter(content).body).filter((h) => h.text.toLowerCase().includes(query.trim().toLowerCase()));
 }
 
 /** The block ids the note has, with the start of their text, whose id or text holds what is typed after `#^`. */
@@ -215,7 +211,7 @@ const encodeSegment = (text: string) =>
 /** `/Work/My Folder/Plan.md` → `/My%20Folder/Plan.md`: a note's path from the vault's root, as we write Markdown links everywhere. */
 export const markdownPath = (path: string) => `/${path.split("/").slice(2).map(encodeSegment).join("/")}`;
 
-/** A heading (as written) after a Markdown link's `#`: as a wiki link holds it (`headingLink`), encoded (`#Next%20steps`). */
+/** A heading (as shown) after a Markdown link's `#`: as a wiki link holds it (`headingLink`), encoded (`#Next%20steps`). */
 export const markdownFragment = (text: string) => `#${encodeSegment(headingLink(text))}`;
 
 /**

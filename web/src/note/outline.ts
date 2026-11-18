@@ -119,11 +119,11 @@ export function outline(body: string): Heading[] {
 const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
 
 /** A heading's text as written in the source (`The **road**map`), from its ATX line; a setext heading's as shown. */
-export const writtenHeading = (lines: string[], h: Heading) => atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text;
+const writtenHeading = (lines: string[], h: Heading) => atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text;
 
 /**
- * A heading (its text as written, `writtenHeading`) as Obsidian writes it in a link, its Markdown kept: its escapes
- * taken out, then without `# | ^ [ ]` and `%%` (`C\# notes | x` → `C notes x`).
+ * A heading as the link list writes it in a link (its text as shown, `headingText`): its escapes taken out, then
+ * without `# | ^ [ ]` and `%%`, blanks collapsed (`C\# notes | x` → `C notes x`).
  */
 export const headingLink = (text: string) =>
   unescaped(text)
@@ -131,22 +131,25 @@ export const headingLink = (text: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** Whether a link's heading names the heading `text`, the characters a link can't hold dropped from both, ignoring case. */
-const linksTo = (link: string, text: string) => {
+/**
+ * Whether a link's heading names the heading, shown as `shown` and written as `written`: the characters a link can't
+ * hold dropped from all three, ignoring case. The list inserts the shown form; Obsidian users may write the other.
+ */
+const linksTo = (link: string, shown: string, written: string) => {
   const own = headingLink(link).toLowerCase();
-  return own !== "" && own === headingLink(text).toLowerCase();
+  return own !== "" && (own === headingLink(shown).toLowerCase() || own === headingLink(written).toLowerCase());
 };
 
 /**
- * The section under `heading` (its text as shown, ignoring case, else as a link holds the heading as written,
- * `headingLink`): from that heading to the next of the same or a higher level. The other lines are left empty, so the
- * section keeps the note's line numbers (its links go by them); null when the note has no such heading.
+ * The section under `heading` (its text as shown, ignoring case, else as a link holds the heading as shown or as
+ * written, `headingLink`): from that heading to the next of the same or a higher level. The other lines are left
+ * empty, so the section keeps the note's line numbers (its links go by them); null when the note has no such heading.
  */
 export function section(body: string, heading: string): string | null {
   const headings = outline(body);
   const lines = body.split("\n");
   let at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
-  if (at < 0) at = headings.findIndex((h) => linksTo(heading, writtenHeading(lines, h)));
+  if (at < 0) at = headings.findIndex((h) => linksTo(heading, h.text, writtenHeading(lines, h)));
   if (at < 0) return null;
   const start = headings[at].line;
   const end = headings.slice(at + 1).find((h) => h.level <= headings[at].level)?.line ?? Infinity;
@@ -182,8 +185,8 @@ function addressSegments(address: string): { text: string; index?: number }[] | 
 /**
  * The 1-based source line of the heading a section address names (`Roadmap`, `A#B`, `Notes[2]`), as `cat note#…`
  * resolves it: its own text and the parents above it match the segments, exactly, else ignoring case, else as a link
- * holds a heading (`headingLink`, which the link list inserts). Of several matches the first in the note wins; null
- * when none does.
+ * holds a heading as shown or as written (`headingLink`; the link list inserts the shown form). Of several matches
+ * the first in the note wins; null when none does.
  */
 export function headingLine(body: string, address: string): number | null {
   const segments = addressSegments(address);
@@ -191,7 +194,7 @@ export function headingLine(body: string, address: string): number | null {
   // Each heading's parent (the nearest earlier one of a lower level) and its place among siblings of the same text.
   // A heading answers to its text as written, as the Core keeps it (`The **road**map`), and as shown (`The roadmap`);
   // both with Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`).
-  type Node = { written: string; shown: string; link: string; line: number; parent: Node | null; index: number };
+  type Node = { written: string; shown: string; raw: [string, string]; line: number; parent: Node | null; index: number };
   const lines = body.split("\n");
   const nodes: Node[] = [];
   const open: (Node & { level: number })[] = [];
@@ -208,15 +211,15 @@ export function headingLine(body: string, address: string): number | null {
     seen.set(parent, siblings);
     const index = (siblings.get(written) ?? 0) + 1;
     siblings.set(written, index);
-    const node = { written, shown, link: raw, line: h.line, parent, index, level: h.level };
+    const node = { written, shown, raw: [h.text, raw] as [string, string], line: h.line, parent, index, level: h.level };
     nodes.push(node);
     open.push(node);
   }
-  // Exactly, then ignoring case, then as a link holds a heading (`[[N#C notes x]]` for `## C# notes | x`).
+  // Exactly, then ignoring case, then as a link holds a heading (`[[N#C notes x]]` for `## C# notes | x`), shown or written.
   const passes = [
     (text: string, h: Node) => text === h.written || text === h.shown,
     (text: string, h: Node) => [h.written, h.shown].some((t) => t.toLowerCase() === text.toLowerCase()),
-    (text: string, h: Node) => linksTo(text, h.link),
+    (text: string, h: Node) => linksTo(text, ...h.raw),
   ];
   for (const same of passes) {
     const found = nodes.find((n) => {

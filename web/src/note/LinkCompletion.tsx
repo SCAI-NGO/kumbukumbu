@@ -77,9 +77,9 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     if (!at || content === undefined) return [];
     if (at.kind === "block") return blocksFor(content, at.query).map((b) => ({ key: b.id, label: b.text, detail: `^${b.id}`, value: `^${b.id}` }));
     return headingsFor(content, at.query)
-      .filter((h) => headingLink(h.written) !== "")
-      // Inserted as written, as Obsidian links a heading; a Markdown link's encoded (`#The%20**road**map`).
-      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: at.kind === "markdownHeading" ? markdownFragment(h.written) : headingLink(h.written) }));
+      .filter((h) => headingLink(h.text) !== "")
+      // Inserted as shown, not as written: Markdown marks inside a link's brackets keep it from rendering.
+      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: at.kind === "markdownHeading" ? markdownFragment(h.text) : headingLink(h.text) }));
   }, [all, at, content, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
   const waiting = !!at && at.start !== dismissed && loading;

@@ -89,6 +89,17 @@ describe("MarkdownView", () => {
     expect(screen.getByRole("link", { name: "plan › Goals" })).toHaveAttribute("href", "/notes/Work/projects/plan.md");
   });
 
+  it("links a heading as the link list inserts it, its marks and the characters a link can't hold left out", () => {
+    show("[[Roadmap#The roadmap]] [[Roadmap#C notes x]] [[Roadmap#ab x]]", [
+      link(1, "[[Roadmap#The roadmap]]", "note", "/Work/Roadmap.md"),
+      link(1, "[[Roadmap#C notes x]]", "note", "/Work/Roadmap.md"),
+      link(1, "[[Roadmap#ab x]]", "note", "/Work/Roadmap.md"),
+    ]);
+    for (const heading of ["The roadmap", "C notes x", "ab x"]) {
+      expect(screen.getByRole("link", { name: `Roadmap › ${heading}` })).toHaveAttribute("href", "/notes/Work/Roadmap.md");
+    }
+  });
+
   it("maps each link to the API's result by line and occurrence, not by its name", () => {
     // The same text on two lines can resolve differently (the API is the authority, e.g. after a move).
     show("[[x]] and [[x]]\n\n[[x]]", [

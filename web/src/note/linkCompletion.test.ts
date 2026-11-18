@@ -234,11 +234,11 @@ describe("headings and blocks of a note", () => {
     expect(headingsFor("---\n# no\n---\ntext", "")).toEqual([]);
   });
 
-  it("writes a heading as a link can hold it: its text as written, without # | ^ [ ] and %%", () => {
+  it("writes a heading as a link can hold it: its text as shown, without # | ^ [ ] and %%", () => {
     expect(headingLink("C# notes | [draft] ^x 50%% off")).toBe("C notes draft x 50 off");
     expect(headingLink("Goals")).toBe("Goals");
-    // Obsidian keeps the heading's Markdown in the link, as the server compares it.
-    expect(headingsFor("## The **road**map", "").map((h) => [h.text, headingLink(h.written)])).toEqual([["The roadmap", "The **road**map"]]);
+    // Markdown marks inside a link's brackets would keep it from rendering (remark splits the text there).
+    expect(headingsFor("## The **road**map [[plan|Plan]]\n## C# notes | x\n## `a|b` x", "").map((h) => headingLink(h.text))).toEqual(["The roadmap Plan", "C notes x", "ab x"]);
   });
 
   it("lists the block ids the note has, with the start of their text, filtered by id or text", () => {
