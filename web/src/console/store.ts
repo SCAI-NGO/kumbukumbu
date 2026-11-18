@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { create } from "zustand";
 import { useSession } from "../state/session";
+import { forgetEntries } from "./entries";
 
 /** A piece of a command's answer, as the scrollback shows it. */
 export type Output =
@@ -54,8 +55,16 @@ export const useConsole = create<ConsoleState>()((set, get) => ({
     if (line.trim() === "" || history.at(-1) === line) return;
     set({ history: [...history, line].slice(-HISTORY) });
   },
-  add: (entry) => set({ entries: [...get().entries, entry].slice(-SCROLLBACK), running: null }),
-  reset: () => set({ ...initial, generation: get().generation + 1 }),
+  add: (entry) => {
+    // Whatever the command did, the folders may look different now.
+    forgetEntries();
+    set({ entries: [...get().entries, entry].slice(-SCROLLBACK), running: null });
+  },
+  // The listings go too: a discreet vault's names must not outlive its hiding.
+  reset: () => {
+    forgetEntries();
+    set({ ...initial, generation: get().generation + 1 });
+  },
 }));
 
 // A sign-out, a session that ended, and one user replacing another directly (a sign-in over a session) all forget

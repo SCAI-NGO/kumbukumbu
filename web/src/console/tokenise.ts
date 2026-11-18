@@ -8,7 +8,7 @@ const PIPE = Symbol("pipe");
 type Token = string | typeof PIPE;
 
 /** Whether a real shell would act on the syntax at `i` and the shell doesn't support it. Only asked outside quotes. */
-function unsupported(input: string, i: number): boolean {
+export function unsupported(input: string, i: number): boolean {
   const c = input[i];
   const next = input[i + 1];
   if (c === "|") return next === "|";
