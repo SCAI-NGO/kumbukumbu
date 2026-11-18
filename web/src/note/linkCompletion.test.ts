@@ -204,6 +204,26 @@ describe("completeLink", () => {
   });
 });
 
+describe("completing with the caret inside a link", () => {
+  const edit = (text: string, complete: (value: string, caret: number) => { start: number; end: number; text: string }) => {
+    const value = text.replace("|", "");
+    const e = complete(value, text.indexOf("|"));
+    return value.slice(0, e.start) + e.text + value.slice(e.end);
+  };
+
+  it("replaces the rest of the name or heading after the caret, up to ]], |, #, [ or a blank", () => {
+    expect(edit("[[Pl|an]] x", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "Pl" }, "plan"))).toBe("[[plan]] x");
+    expect(edit("[[Pl|an|alias]]", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "Pl" }, "plan"))).toBe("[[plan]]|alias]]");
+    expect(edit("[[Note#Go|als]]", (v, c) => completeSubpath(v, c, { kind: "heading", start: 0, note: "Note", query: "Go" }, "Goals"))).toBe("[[Note#Goals]]");
+    expect(edit("[[Note#Ne|xt steps]]", (v, c) => completeSubpath(v, c, { kind: "heading", start: 0, note: "Note", query: "Ne" }, "Next steps"))).toBe("[[Note#Next steps]] steps]]");
+  });
+
+  it("replaces the rest of a Markdown link's destination, up to ) or a blank", () => {
+    expect(edit("[x](/pl|an.md) y", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "/pl" }, "/plan.md"))).toBe("[x](/plan.md) y");
+    expect(edit("[x](pl|an more", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "pl" }, "/plan.md"))).toBe("[x](/plan.md) more");
+  });
+});
+
 describe("headings and blocks of a note", () => {
   const note = ["---", "title: x", "---", "# Plan", "", "Why we do it. ^why", "", "## Goals", "", "- ship it ^ship", "- **test** it", "", "Long text", "on two lines", "", "^both", "", "## Risks"].join("\n");
 

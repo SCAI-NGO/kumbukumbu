@@ -159,11 +159,20 @@ export function rankNotes(paths: string[], query: string): string[] {
 export const embedsAsImage = (path: string) => fileKindOf(path) === "image";
 
 /**
- * The edit that completes the link: `[[que` (and a `]]` right after the caret, as the toolbar's button leaves
- * it) becomes `[[target]]`, with the caret after it; with `embed`, `![[target]]`, unless the `!` is typed already.
+ * Where a wiki link's typed part ends: after the rest of the word the caret is in (up to `]]`, `|`, `#`, `[` or a
+ * blank, so `[[Pl|an]]` is replaced whole), and a `]]` right after it, as the toolbar's button leaves it.
+ */
+function wikiEnd(value: string, caret: number) {
+  const end = caret + /^[^\]|#[\s]*/.exec(value.slice(caret))![0].length;
+  return value.startsWith("]]", end) ? end + 2 : end;
+}
+
+/**
+ * The edit that completes the link: `[[que` (and the rest of its word, `wikiEnd`) becomes `[[target]]`, with the
+ * caret after it; with `embed`, `![[target]]`, unless the `!` is typed already.
  */
 export function completeLink(value: string, caret: number, at: LinkQuery, target: string, embed = false) {
-  const end = value.startsWith("]]", caret) ? caret + 2 : caret;
+  const end = wikiEnd(value, caret);
   const text = `${embed && value[at.start - 1] !== "!" ? "!" : ""}[[${target}]]`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }
@@ -178,9 +187,9 @@ export function blocksFor(content: string, query: string) {
   return blockList(content).filter((b) => b.id.toLowerCase().includes(q) || b.text.toLowerCase().includes(q));
 }
 
-/** The edit that completes `[[Note#que` (and a `]]` right after the caret) with a heading or `^block`: `[[Note#Goals]]`. */
+/** The edit that completes `[[Note#que` (and the rest of its word, `wikiEnd`) with a heading or `^block`: `[[Note#Goals]]`. */
 export function completeSubpath(value: string, caret: number, at: LinkQuery & { note: string }, subpath: string) {
-  const end = value.startsWith("]]", caret) ? caret + 2 : caret;
+  const end = wikiEnd(value, caret);
   const text = `[[${at.note}#${subpath}]]`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }
@@ -204,9 +213,13 @@ export const markdownPath = (path: string) => `/${path.split("/").slice(2).map(e
 /** A heading after a Markdown link's `#`: as a wiki link holds it (`headingLink`), encoded (`#Next%20steps`). */
 export const markdownFragment = (text: string) => `#${encodeSegment(headingLink(text))}`;
 
-/** The edit that completes a Markdown link's destination (and a `)` right after the caret): `[x](/plan.md)`. */
+/**
+ * The edit that completes a Markdown link's destination (and the rest of it after the caret, up to a `)` or a blank,
+ * and that `)`): `[x](/plan.md)`.
+ */
 export function completeMarkdown(value: string, caret: number, at: LinkQuery, destination: string) {
-  const end = value[caret] === ")" ? caret + 1 : caret;
+  const rest = caret + /^[^)\s]*/.exec(value.slice(caret))![0].length;
+  const end = value[rest] === ")" ? rest + 1 : rest;
   const text = `${destination})`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }
