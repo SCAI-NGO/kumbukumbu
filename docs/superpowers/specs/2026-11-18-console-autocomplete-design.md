@@ -34,7 +34,7 @@ Typing paths in full is the console's slowest part, on the phone above all. A sh
 
 ## Desktop
 
-- **Tab:** one match completes fully; several complete to their common prefix; a second Tab with nothing new lists the matches in the output (one line, as zsh does), without running anything. No match: nothing happens (no beep, no line).
+- **Tab:** one match completes fully; several complete to their common prefix; a second Tab with nothing new lists the matches in the output (one line, as zsh does), without running anything. No match: the command line flashes once, briefly (its background lights up and fades in about 200 ms, in the accent colour, or the phosphor colour in Green and Amber), like a terminal's visual bell; no sound, no line in the output, no movement. Why: the maintainer wanted a small, transient sign that Tab was heard; a flash of colour rather than a shake keeps it calm and works under `prefers-reduced-motion` as it is.
 - Tab never leaves the input (it's the console's key while the input has focus); Shift+Tab keeps moving the focus as usual.
 
 ## Phone (below the desktop breakpoint, `useDesktop()`)
@@ -51,7 +51,7 @@ Typing paths in full is the console's slowest part, on the phone above all. A sh
 
 ## Tests (Vitest)
 
-- Tab: unique match, common prefix, second Tab lists, no match, a folder's `/`, a file's space, quoted names, relative paths with `..`, `cd` folders only, commands as the first word and after a pipe, `_archive/` only when typed.
+- Tab: unique match, common prefix, second Tab lists, no match (the flash: a class on the command line, removed again), a folder's `/`, a file's space, quoted names, relative paths with `..`, `cd` folders only, commands as the first word and after a pipe, `_archive/` only when typed.
 - Phone: the row shows matches for a path word, a tap completes and keeps focus, hides when empty, while running and with no match.
 - Cache: one `ls` per folder, refreshed after a command.
 
