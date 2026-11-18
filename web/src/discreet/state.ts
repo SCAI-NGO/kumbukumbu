@@ -66,8 +66,9 @@ export function followVaults(queryClient: QueryClient): () => void {
     if (key.length !== 1 || key[0] !== "vaults") return;
     if (event.type === "removed" || (event.type === "updated" && event.action.type === "success")) {
       read();
-      // The favourites answered are those of the vaults listed: a shown or hidden discreet vault changes them.
-      void queryClient.invalidateQueries({ queryKey: ["favourites"] });
+      // The favourites answered are those of the vaults listed: a shown or hidden discreet vault changes them. Reset, so
+      // none is cached unseen (a hidden vault's would show once the palette opens); mounted ones read again.
+      void queryClient.resetQueries({ queryKey: ["favourites"] });
     }
   });
 }

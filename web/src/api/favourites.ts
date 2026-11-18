@@ -16,7 +16,8 @@ const input = ({ kind, id, vault, path }: Favourite): FavouriteInput => ({ kind,
 
 /**
  * Her favourites in the order added, those of the vaults her session lists and the commands. A change sends the whole
- * list (the server replaces what the session sees), shown at once and put back if the write fails.
+ * list (the server replaces what the session sees), shown at once and put back if the write fails. Until the list has
+ * been read (`ready`), a change does nothing: it would replace what the server holds with one entry.
  */
 export function useFavourites() {
   const queryClient = useQueryClient();
@@ -24,27 +25,37 @@ export function useFavourites() {
   const list = query.data ?? [];
 
   const write = useMutation({
-    mutationFn: (next: Favourite[]) => call(api.PUT("/api/account/favourites", { body: { favourites: next.map(input) } })),
-    onMutate: async (next) => {
-      await queryClient.cancelQueries({ queryKey: key });
-      const before = queryClient.getQueryData<Favourite[]>(key);
-      queryClient.setQueryData(key, next);
-      return { before };
+    mutationKey: key,
+    // One at a time, in the order made: the last write is the one that stands.
+    scope: { id: "favourites" },
+    mutationFn: ({ next }: { next: Favourite[]; before: Favourite[] }) => call(api.PUT("/api/account/favourites", { body: { favourites: next.map(input) } })),
+    onSuccess: (view) => {
+      if (queryClient.isMutating({ mutationKey: key }) <= 1) queryClient.setQueryData(key, view.favourites);
     },
-    onSuccess: (view) => queryClient.setQueryData(key, view.favourites),
-    onError: (error, _next, context) => {
-      queryClient.setQueryData(key, context?.before);
+    onError: (error, { before }) => {
+      queryClient.setQueryData(key, before);
       // Someone else wrote meanwhile: what the list is now is for the server to say.
       if (error instanceof HttpError && error.status === 409) void queryClient.invalidateQueries({ queryKey: key });
     },
   });
 
+  // From the cache, not the render: a second change straight after the first sees it.
+  const change = (to: (now: Favourite[]) => Favourite[]) => {
+    const before = queryClient.getQueryData<Favourite[]>(key);
+    if (!before) return;
+    const next = to(before);
+    void queryClient.cancelQueries({ queryKey: key });
+    queryClient.setQueryData(key, next);
+    write.mutate({ next, before });
+  };
+
   const keys = new Set(list.map(favouriteKey));
   return {
     list,
+    ready: query.data !== undefined,
     has: (f: FavouriteInput) => keys.has(favouriteKey(f)),
     toggle: (f: FavouriteInput) =>
-      write.mutate(keys.has(favouriteKey(f)) ? list.filter((x) => favouriteKey(x) !== favouriteKey(f)) : [...list, { ...f, added: new Date().toISOString() }]),
-    drop: (drop: string[]) => write.mutate(list.filter((x) => !drop.includes(favouriteKey(x)))),
+      change((now) => (now.some((x) => favouriteKey(x) === favouriteKey(f)) ? now.filter((x) => favouriteKey(x) !== favouriteKey(f)) : [...now, { ...f, added: new Date().toISOString() }])),
+    drop: (drop: string[]) => change((now) => now.filter((x) => !drop.includes(favouriteKey(x)))),
   };
 }

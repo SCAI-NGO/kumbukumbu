@@ -108,4 +108,55 @@ describe("useFavourites", () => {
     expect(reads).toBe(2);
     stop();
   });
+
+  it("changes nothing until the list has been read", async () => {
+    let answer: () => void = () => {};
+    const put = vi.fn(() => json(200, { favourites: [] }));
+    fakeApi({
+      "GET /api/account/favourites": () => new Promise<Response>((r) => (answer = () => r(json(200, { favourites: [{ ...palette, added }] })))),
+      "PUT /api/account/favourites": put,
+    });
+    const { result } = setup();
+    expect(result.current.ready).toBe(false);
+    act(() => result.current.toggle(plan));
+    act(() => result.current.drop(["command:settings.appearance"]));
+    await act(async () => {});
+    expect(put).not.toHaveBeenCalled();
+    act(() => answer());
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.list.map(favouriteKey)).toEqual(["command:settings.appearance"]);
+  });
+
+  it("two toggles in a row send both", async () => {
+    const bodies: { favourites: unknown[] }[] = [];
+    fakeApi({
+      "GET /api/account/favourites": () => json(200, { favourites: [] }),
+      "PUT /api/account/favourites": async (r) => {
+        const body = (await r.json()) as { favourites: object[] };
+        bodies.push(body);
+        return json(200, { favourites: body.favourites.map((f) => ({ ...f, added })) });
+      },
+    });
+    const { result } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => {
+      result.current.toggle(plan);
+      result.current.toggle(palette);
+    });
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ favourites: [plan, palette] });
+    await waitFor(() => expect(result.current.list).toHaveLength(2));
+  });
+
+  it("keeps no favourites cached when the vaults change", async () => {
+    fakeApi({ "GET /api/account/favourites": () => json(200, { favourites: [{ kind: "vault", vault: "Secret", added }] }) });
+    const { result, queryClient, unmount } = setup();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    unmount();
+    expect(queryClient.getQueryData(["favourites"])).toBeDefined();
+    const stop = followVaults(queryClient);
+    act(() => queryClient.setQueryData(["vaults"], []));
+    expect(queryClient.getQueryData(["favourites"])).toBeUndefined();
+    stop();
+  });
 });
