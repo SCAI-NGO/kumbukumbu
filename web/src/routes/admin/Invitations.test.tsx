@@ -103,6 +103,37 @@ describe("Admin invitations", () => {
     await waitFor(() => expect(screen.queryByRole("listitem", { name: "Invitation for a user" })).not.toBeInTheDocument());
   });
 
+  it("filters invitations by note and status", async () => {
+    api();
+    renderApp("/admin/invitations");
+    await userEvent.type(await screen.findByRole("searchbox", { name: "Filter by note" }), "bob");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("For Bob")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Used 1" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText("For Bob")).not.toBeInTheDocument();
+  });
+
+  it("keeps the chosen status after a revoke", async () => {
+    let revoked = false;
+    api({
+      "GET /api/admin/invitations": () => json(200, revoked ? [used, { ...open, state: "revoked", revokedAt: "2026-10-22T09:00:00Z" }] : [used, open]),
+      "DELETE /api/admin/invitations/i1": () => {
+        revoked = true;
+        return noContent();
+      },
+    });
+    renderApp("/admin/invitations");
+    await userEvent.click(await screen.findByRole("radio", { name: "Open 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Revoke invitation for a user" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Revoke this invitation?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByText("No invitations match.")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Open 0" })).toBeChecked();
+  });
+
   it("asks for role, expiry (1, 7, 30 days) and a note, defaulting to a user for 7 days", async () => {
     const { dialog, bodies } = await createInvitation();
     expect(within(dialog).getByLabelText("User")).toBeChecked();
