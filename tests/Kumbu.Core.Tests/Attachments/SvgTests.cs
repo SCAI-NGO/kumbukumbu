@@ -23,7 +23,7 @@ public sealed class SvgTests
         Assert.Contains(AttachmentFormat.Svg, AttachmentFormat.All);
         Assert.Equal(AttachmentFormat.Text, AttachmentFormat.ForPath(P("/Skills/pdf/logo.svg")));
         Assert.Equal("image", AttachmentFormat.KindOf("/Work/logo.svg"));
-        Assert.Equal("Kumbu² keeps notes, PDFs and images (PNG, JPEG, GIF, WebP, SVG) only", AttachmentFormat.UnsupportedMessage);
+        Assert.Equal(AttachmentFormat.File, AttachmentFormat.ForPath(P("/Work/logo.svg.txt")));
     }
 
     [Theory]

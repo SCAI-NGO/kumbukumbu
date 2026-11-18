@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
 using System.Text;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Skills;
@@ -11,11 +12,13 @@ public enum AttachmentKind
     Pdf,
     Folder,
     Text,
+    File,
 }
 
 /// <summary>
 /// A file format Kumbu² keeps besides notes. The extension names the format; the first bytes decide
 /// whether the content really is that format, and for an SVG, which has no magic bytes, its XML (<see cref="SvgImage"/>).
+/// Any other name is a <see cref="File"/>, kept as its bytes (spec 2026-11-18).
 /// </summary>
 public sealed record AttachmentFormat(string Extension, string MediaType, AttachmentKind Kind)
 {
@@ -58,6 +61,15 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>Text kept inside a skill's folder; no format users may upload elsewhere, so not in <see cref="All"/>.</summary>
     public static AttachmentFormat Text { get; } = new("", TextMediaType, AttachmentKind.Text);
 
+    /// <summary>Any file that is no other format: kept as it is, its media type decided by its content at each write (<see cref="MediaTypeOf"/>), so not in <see cref="All"/>.</summary>
+    public static AttachmentFormat File { get; } = new("", OctetStream, AttachmentKind.File);
+
+    private const string OctetStream = "application/octet-stream";
+
+    /// <summary>The media type a <see cref="File"/> is kept as: <see cref="TextMediaType"/> for UTF-8 without NUL bytes up to <see cref="MaxBytes"/> (a BOM is fine), else bytes.</summary>
+    public static string MediaTypeOf(ReadOnlySpan<byte> content) =>
+        content.Length <= MaxBytes && TextProblem("", content) is null ? TextMediaType : OctetStream;
+
     /// <summary>The format a path is kept as: <see cref="Text"/> for a text name strictly inside a skill's folder, else by <see cref="ForName"/>.</summary>
     public static AttachmentFormat? ForPath(VaultPath path)
     {
@@ -75,9 +87,10 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>Whether a path is one a PDF is kept at: an attachment's extension names its format.</summary>
     public static bool IsPdf(VaultPath path) => ForPath(path)?.Kind == AttachmentKind.Pdf;
 
-    /// <summary>The format a file name's extension names (case-insensitive); null for any other name.</summary>
+    /// <summary>The format a file name's extension names (case-insensitive); null for a note's name (<c>.md</c>, as <see cref="VaultPath.IsNote"/>), <see cref="File"/> for any other.</summary>
     public static AttachmentFormat? ForName(string name)
     {
+        if (name.EndsWith(".md", StringComparison.Ordinal)) return null;
         // Exactly the marker's name; a whole path (see KindOf) names it as its last segment.
         if (name == FolderMarker.Name || name.EndsWith('/' + FolderMarker.Name, StringComparison.Ordinal)) return Marker;
         foreach (var format in All)
@@ -88,16 +101,29 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
             }
         }
 
-        return null;
+        return File;
     }
 
     /// <summary>
     /// Null when an attachment at <paramref name="source"/> may be named <paramref name="target"/>; otherwise why not.
-    /// Renaming doesn't change the bytes, so the new extension must name their format (.jpg and .jpeg are one).
+    /// Renaming doesn't change the bytes, so the new extension must name their format (.jpg and .jpeg are one);
+    /// a file may take any name that names no format (spec 2026-11-18, decision 7).
     /// </summary>
     public static string? RenameProblem(VaultPath source, VaultPath target)
     {
         if (ForPath(source) is not { } format) return null;
+        if (format == File)
+        {
+            return ForPath(target) switch
+            {
+                { } kept when kept == File => null,
+                null => $"{source.Name} is a file, not a note; its new name can't end in .md (a new name doesn't change what the file is)",
+                { } kept when kept == Marker => $"{source.Name} is a file; only a folder's marker is named {FolderMarker.Name}",
+                { } kept when kept == Text => $"{source.Name} is a file, and inside a skill's folder {target.Name} is a text file; upload it there instead",
+                { } kept => $"{source.Name} is a file, not {kept.Description}; its new name can't end in {kept.Extension} (a new name doesn't change what the file is)",
+            };
+        }
+
         if (format == Marker) return ForPath(target) == Marker ? null : $"{FolderMarker.Name} keeps its name";
         if (format == Text)
         {
@@ -112,13 +138,14 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
 
-    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", "folder", "text" (only for a full path inside a skill's folder), or "note" for anything else.</summary>
+    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", "folder", "text" (only for a full path inside a skill's folder), "file", or "note" for a note's name.</summary>
     public static string KindOf(string path) => (VaultPath.TryParse(path, out var parsed) && ForPath(parsed) is { } kept ? kept : ForName(path))?.Kind switch
     {
         AttachmentKind.Image => "image",
         AttachmentKind.Pdf => "pdf",
         AttachmentKind.Folder => "folder",
         AttachmentKind.Text => "text",
+        AttachmentKind.File => "file",
         _ => "note",
     };
 
@@ -131,6 +158,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         {
             return UnsupportedMessage;
         }
+
+        // Any bytes; their media type is MediaTypeOf's, the size bound the writer's.
+        if (format == File) return null;
 
         if (format == Marker)
         {
@@ -167,8 +197,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         "image/jpeg" => "a JPEG image",
         "image/gif" => "a GIF image",
         "image/svg+xml" => "an SVG image",
+        "image/webp" => "a WebP image",
         TextMediaType => "a text file",
-        _ => "a WebP image",
+        _ => throw new UnreachableException(MediaType),
     };
 
     private bool Matches(ReadOnlySpan<byte> head) => MediaType switch
@@ -177,6 +208,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         "image/png" => head.StartsWith(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }),
         "image/jpeg" => head.StartsWith(new byte[] { 0xFF, 0xD8, 0xFF }),
         "image/gif" => head.StartsWith("GIF87a"u8) || head.StartsWith("GIF89a"u8),
-        _ => head.Length >= 12 && head[..4].SequenceEqual("RIFF"u8) && head.Slice(8, 4).SequenceEqual("WEBP"u8),
+        "image/webp" => head.Length >= 12 && head[..4].SequenceEqual("RIFF"u8) && head.Slice(8, 4).SequenceEqual("WEBP"u8),
+        _ => throw new UnreachableException(MediaType),
     };
 }
