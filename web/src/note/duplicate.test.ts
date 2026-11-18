@@ -34,9 +34,44 @@ describe("copyText", () => {
     expect(copyText("---\na: 1\n---\nwhen: x\n")).toBe("---\na: 1\n---\nwhen: x\n");
   });
 
-  it("copies_unreadable_frontmatter_unchanged", () => {
-    const text = "---\nwhen: x\nnested:\n  a: 1\n---\nBody\n";
+  it("removes_the_calendar_keys_in_any_case_as_the_server_reads_them", () => {
+    expect(copyText(note("When: 2026-12-01", "b: 2"))).toBe(note("b: 2"));
+    expect(copyText(note("UNTIL: 2026-12-02", "Task: true", "TZ: Europe/Zurich", "b: 2"))).toBe(note("b: 2"));
+  });
+
+  it("keeps_due_rank_and_moved_in_another_case_which_the_board_doesnt_read", () => {
+    const text = note("Due: 2026-12-01", "RANK: a", "Moved: x");
     expect(copyText(text)).toBe(text);
+  });
+
+  it("removes_a_key_with_a_comment_after_its_value", () => {
+    expect(copyText(note("a: 1", "when: 2026-12-01 # dentist", "b: 2"))).toBe(note("a: 1", "b: 2"));
+  });
+
+  it("removes_a_key_below_a_block_scalar", () => {
+    expect(copyText(note("summary: >", "  Folded text", "  over lines", "when: 2026-12-01", "b: 2"))).toBe(
+      note("summary: >", "  Folded text", "  over lines", "b: 2"),
+    );
+  });
+
+  it("removes_a_nested_map_under_a_removed_key", () => {
+    expect(copyText(note("a: 1", "until:", "  day: 2026-12-02", "  time: 10:00", "b: 2"))).toBe(note("a: 1", "b: 2"));
+  });
+
+  it("removes_the_keys_from_a_frontmatter_the_properties_box_cant_read", () => {
+    expect(copyText("---\nwhen: x\nnested:\n  a: 1\n---\nBody\n")).toBe("---\nnested:\n  a: 1\n---\nBody\n");
+  });
+
+  it("handles_a_frontmatter_at_the_end_without_a_newline", () => {
+    expect(copyText("---\na: 1\nwhen: x\n---")).toBe("---\na: 1\n---");
+  });
+
+  it("leaves_an_empty_block_where_every_key_goes", () => {
+    expect(copyText("---\nwhen: x\ntask: true\n---\nBody\n")).toBe("---\n---\nBody\n");
+  });
+
+  it("reads_a_dots_closing_line", () => {
+    expect(copyText("---\nwhen: x\na: 1\n...\nBody\n")).toBe("---\na: 1\n...\nBody\n");
   });
 
   it("keeps_the_bom_and_line_endings", () => {

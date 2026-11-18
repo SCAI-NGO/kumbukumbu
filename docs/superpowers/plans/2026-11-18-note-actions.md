@@ -22,7 +22,7 @@
 
 ## Review Focus
 
-1. A note whose frontmatter is unreadable (`frontmatterUnreadable`): the copy is the text byte for byte, nothing removed, no error (Task 1 test `copies_unreadable_frontmatter_unchanged`).
+1. A note whose frontmatter the properties box can't read (a nested map, a block scalar): the calendar's keys still go, in any case, with `Frontmatter.Set`'s extent, because the server's calendar reads their dates all the same; only a missing or unclosed frontmatter block copies unchanged (Task 1 test `removes_the_keys_from_a_frontmatter_the_properties_box_cant_read`, final review fix).
 2. A note without frontmatter, or with `when:` only in its body text: nothing changes in the body (Task 1 test `leaves_the_body_alone`).
 3. A name near the length limit: "Copy of " plus a long name cut at the end of the name, before " 2" (Task 1 test `cuts_a_long_name_before_the_number`).
 4. Shift+F10 pressed in an input of a dialog or in the palette's field: nothing opens (Task 3 test `not_over_a_dialog_or_the_palette`).

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { frontmatterUnreadable } from "./frontmatterText";
+import { MAX_NAME } from "./nameFromHeading";
 
-/** The calendar's keys (`CalendarKeys.cs`, and `due` for cards), and the board's `rank` and `moved`: a copy takes none of them. */
-const DROPPED = new Set(["when", "until", "due", "task", "upcoming", "tz", "closed", "reason", "rank", "moved"]);
+/** The calendar's keys, which the server reads in any case (`CalendarKeys.cs`): a copy takes none of them. */
+const CALENDAR = new Set(["when", "until", "task", "upcoming", "tz", "closed", "reason"]);
+/** A card's `due` and the board's `rank` and `moved`, which the server reads exactly as written. */
+const BOARD = new Set(["due", "rank", "moved"]);
 
-const MAX_NAME = 100;
+const dropped = (key: string) => CALENDAR.has(key.toLowerCase()) || BOARD.has(key);
+
 const PREFIX = "Copy of ";
 
 /** The key a line starts, as `Frontmatter.Set` on the server reads it: a quoted key is the same key. */
@@ -15,12 +18,13 @@ const continues = (line: string) => /^[ \t]|^-(\s|$)/.test(line) && line.trim() 
 
 /**
  * The note's text without the keys a copy doesn't take (the calendar's, `rank`, `moved`), each with its whole entry,
- * a list or map below it included; every other byte as it was. Unchanged where there is no readable frontmatter.
+ * a list, map or block below it included, as `Frontmatter.Set` on the server takes a key's extent; every other byte as
+ * it was. Also where the properties box can't read the frontmatter: the server's calendar still reads its dates.
+ * Unchanged where there is no closed frontmatter block.
  */
 export function copyText(content: string): string {
   const bom = content.startsWith("﻿") ? "﻿" : "";
   const text = content.slice(bom.length);
-  if (frontmatterUnreadable(text)) return content;
   const lines = text.split("\n");
   if (lines[0]?.trimEnd() !== "---") return content;
   const end = lines.findIndex((l, i) => i > 0 && (l.trimEnd() === "---" || l.trimEnd() === "..."));
@@ -28,7 +32,7 @@ export function copyText(content: string): string {
   const kept: string[] = [lines[0]];
   for (let i = 1; i < end; i++) {
     const key = keyOf(lines[i].replace(/\r$/, ""));
-    if (key === undefined || !DROPPED.has(key)) {
+    if (key === undefined || !dropped(key)) {
       kept.push(lines[i]);
       continue;
     }

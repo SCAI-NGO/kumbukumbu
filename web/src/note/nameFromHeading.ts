@@ -13,7 +13,8 @@ import { splitFrontmatter } from "./properties";
 /** A name that carries no intention: `Untitled.md` as the app and Obsidian make them, `Untitled 2.md`, `Untitled 1.md` …, any case. */
 export const isUntitled = (path: string) => /^untitled(?: [1-9]\d*)?\.md$/i.test(path.slice(path.lastIndexOf("/") + 1));
 
-const MAX_NAME = 100;
+/** The longest file name, without `.md`, the server allows. */
+export const MAX_NAME = 100;
 
 /**
  * The heading's text as a file name: NFC, without the characters Obsidian and common file systems refuse, one space
