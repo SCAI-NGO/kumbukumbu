@@ -41,6 +41,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// a slot from before a blob is read until its bytes are open.</summary>
     internal SemaphoreSlim FileReads { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileReads));
 
+    /// <summary>The files larger than 15 MB written at once, server-wide (<see cref="VaultOptions.ConcurrentFileWrites"/>):
+    /// a slot from when an upload is known to be one until its head is in or it gave up.</summary>
+    internal SemaphoreSlim FileWrites { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileWrites));
+
     /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();

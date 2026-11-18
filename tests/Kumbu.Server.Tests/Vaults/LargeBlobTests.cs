@@ -17,10 +17,11 @@ public sealed class LargeBlobTests(MongoFixture fixture)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private async Task<(VaultWorld World, VaultCatalog Catalog, EncryptedNoteStore Store)> WorldAsync(int fileReads = 4, long maxFileBytes = VaultOptions.DefaultMaxFileBytes)
+    private async Task<(VaultWorld World, VaultCatalog Catalog, EncryptedNoteStore Store)> WorldAsync(
+        int fileReads = 4, long maxFileBytes = VaultOptions.DefaultMaxFileBytes, int fileWrites = 4)
     {
         var world = new VaultWorld(fixture.NewDatabase());
-        var catalog = world.Catalog(fileReads: fileReads, maxFileBytes: maxFileBytes);
+        var catalog = world.Catalog(fileReads: fileReads, maxFileBytes: maxFileBytes, fileWrites: fileWrites);
         await catalog.CreateAsync("Work", Token, (_, _) => Task.CompletedTask, Ct);
         return (world, catalog, Store(catalog));
     }
@@ -125,6 +126,91 @@ public sealed class LargeBlobTests(MongoFixture fixture)
 
         Assert.Equal(0, Count(world, "blobs"));
         Assert.Equal(0, Count(world, "blob_chunks"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task A_head_left_without_its_chunks_is_replaced_by_the_next_upload_of_its_bytes(int kept)
+    {
+        // As an upload leaves it whose head's insert reached the server while the call failed, and whose chunks went.
+        var (world, _, store) = await WorldAsync();
+        var bytes = Random(20_000_000, 16);
+        var id = await PutAsync(store, bytes);
+        var broken = (await HeadAsync(world, id))["_id"];
+        await Raw(world, "blob_chunks").DeleteManyAsync(F.Eq("head", broken) & F.Gte("n", kept), Ct);
+        await Assert.ThrowsAsync<VaultUnavailableException>(() => ReadAsync(Store(world.Catalog()), id));
+
+        Assert.Equal(id, await PutAsync(store, bytes));
+
+        Assert.Equal(bytes, await ReadAsync(Store(world.Catalog()), id));
+        Assert.NotEqual(broken, (await HeadAsync(world, id))["_id"]);
+        Assert.Equal(1, Count(world, "blobs"));
+        Assert.Equal(5, Count(world, "blob_chunks"));
+    }
+
+    [Theory]
+    [InlineData(1024)]
+    [InlineData(0)]
+    public async Task A_body_shorter_than_its_declared_length_is_refused(int size)
+    {
+        var (world, _, store) = await WorldAsync();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => PutAsync(store, Random(size, 17), 20_000_000));
+
+        Assert.Equal(0, Count(world, "blobs"));
+        Assert.Equal(0, Count(world, "blob_chunks"));
+    }
+
+    [Fact]
+    public async Task A_body_other_than_its_declared_length_is_refused_at_any_size()
+    {
+        var (world, _, store) = await WorldAsync();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => PutAsync(store, Random(2000, 18), 1000));
+        await Assert.ThrowsAsync<InvalidDataException>(() => PutAsync(store, Random(1000, 18), 2000));
+        await Assert.ThrowsAsync<InvalidDataException>(() => PutAsync(store, Random(20_000_000, 18), 19_000_000));
+        await Assert.ThrowsAsync<InvalidDataException>(() => PutAsync(store, Random(20_000_000, 18), 21_000_000));
+
+        Assert.Equal(0, Count(world, "blobs"));
+        Assert.Equal(0, Count(world, "blob_chunks"));
+    }
+
+    [Fact]
+    public async Task A_negative_declared_length_is_refused()
+    {
+        var (world, _, store) = await WorldAsync();
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => PutAsync(store, Random(1000, 19), -1));
+
+        Assert.Equal(0, Count(world, "blobs"));
+    }
+
+    [Fact]
+    public async Task Large_uploads_wait_for_a_write_slot()
+    {
+        var (world, _, store) = await WorldAsync(fileWrites: 1);
+        var held = new TaskCompletionSource();
+        var first = Task.Run(() => store.PutBlobAsync("Work", new FailingStream(Random(20_000_000, 20), int.MaxValue) { Wait = (18_000_000, held.Task) }, null, Ct), Ct);
+        await WaitForAsync(() => Count(world, "blob_chunks") > 0);
+
+        // A second large upload waits while the first holds the one slot; a small one doesn't.
+        var second = PutAsync(store, Random(20_000_000, 21));
+        await PutAsync(store, Random(1000, 22));
+        await Task.Delay(500, Ct);
+        Assert.False(second.IsCompleted);
+        // Only the first's chunks so far.
+        Assert.Single(await (await Raw(world, "blob_chunks").DistinctAsync<ObjectId>("head", F.Empty, cancellationToken: Ct)).ToListAsync(Ct));
+
+        held.SetResult();
+        await Task.WhenAll(first, second);
+        Assert.Equal(10, Count(world, "blob_chunks"));
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 300 && !condition(); i++) await Task.Delay(20, Ct);
+        Assert.True(condition());
     }
 
     [Fact]
@@ -262,6 +348,9 @@ public sealed class LargeBlobTests(MongoFixture fixture)
         /// <summary>Something to do once, when the reads pass a position.</summary>
         public (int Position, Action Then)? At { get; init; }
 
+        /// <summary>Something to wait for once, when the reads pass a position.</summary>
+        public (int Position, Task Until)? Wait { get; init; }
+
         private bool _done;
 
         public override bool CanRead => true;
@@ -282,6 +371,8 @@ public sealed class LargeBlobTests(MongoFixture fixture)
                 _done = true;
                 at.Then();
             }
+
+            if (Wait is { } wait && _position >= wait.Position) wait.Until.Wait();
 
             var n = Math.Min(count, Math.Min(failAt, bytes.Length) - _position);
             Array.Copy(bytes, _position, buffer, offset, n);

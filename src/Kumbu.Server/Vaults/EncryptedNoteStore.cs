@@ -548,6 +548,7 @@ public sealed class EncryptedNoteStore(
     /// </summary>
     public async Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(declaredLength ?? 0, nameof(declaredLength));
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v }) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
         var bound = catalog.MaxFileBytes;
         if (declaredLength > bound) throw new FileTooLargeException(bound);
@@ -561,11 +562,35 @@ public sealed class EncryptedNoteStore(
             var buffer = new byte[81920];
             int read;
             while (start.Length <= AttachmentFormat.MaxBytes && (read = await content.ReadAsync(buffer, ct)) > 0) start.Write(buffer, 0, read);
-            if (start.Length <= AttachmentFormat.MaxBytes) return await PutBlobAsync(vault, start.GetBuffer().AsMemory(0, (int)start.Length), ct);
+            if (start.Length <= AttachmentFormat.MaxBytes)
+            {
+                CheckLength(start.Length, declaredLength);
+                return await PutBlobAsync(vault, start.GetBuffer().AsMemory(0, (int)start.Length), ct);
+            }
+
             start.Position = 0;
         }
 
-        return await PutLargeBlobAsync(v, start, content, bound, ct);
+        // A slot for the whole upload: each holds two chunks' bytes while it streams, whatever its link's speed.
+        await catalog.FileWrites.WaitAsync(ct);
+        try
+        {
+            return await PutLargeBlobAsync(v, start, content, bound, declaredLength, ct);
+        }
+        finally
+        {
+            catalog.FileWrites.Release();
+        }
+    }
+
+    /// <summary>A body whose length was declared must have had exactly that many bytes: a shorter one, cut off on its
+    /// way, would be stored as a whole file, and one declared larger than 15 MB as a large one.</summary>
+    private static void CheckLength(long size, long? declaredLength)
+    {
+        if (declaredLength is { } declared && size != declared)
+        {
+            throw new InvalidDataException($"The body held {(size > declared ? "more" : "fewer")} than the {declared} bytes it declared: nothing was stored.");
+        }
     }
 
     /// <summary>
@@ -578,7 +603,7 @@ public sealed class EncryptedNoteStore(
     /// takes what it leaves once it is older than <see cref="BlobSweep.Grace"/>); one whose head finds the same bytes
     /// stored makes that blob young again and deletes its own chunks.
     /// </summary>
-    private async Task<string> PutLargeBlobAsync(UnlockedVault v, MemoryStream start, Stream content, long bound, CancellationToken ct)
+    private async Task<string> PutLargeBlobAsync(UnlockedVault v, MemoryStream start, Stream content, long bound, long? declaredLength, CancellationToken ct)
     {
         var headId = ObjectId.GenerateNewId();
         var key = Kumbu.Core.Crypto.VaultCrypto.NewKey();
@@ -598,6 +623,9 @@ public sealed class EncryptedNoteStore(
                 var nextLength = length == chunk.Length ? await FillAsync(start, content, next, ct) : 0;
                 size += length;
                 if (size > bound) throw new FileTooLargeException(bound);
+                if (size > declaredLength || nextLength == 0) CheckLength(size, declaredLength);
+                // Stopped here once the vault is deleted or being re-keyed, rather than at the head.
+                catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
                 if (RequireSpace(v, length) is { } reservation) reservations.Add(reservation);
                 hash.AppendData(chunk, 0, length);
                 await catalog.BlobChunks.InsertOneAsync(
@@ -628,7 +656,13 @@ public sealed class EncryptedNoteStore(
         {
             try
             {
-                await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+                // A head whose insert reached the server while the call failed (cancelled after it was sent, a
+                // connection reset) keeps its chunks: it is whole, and another upload of its bytes may have found it
+                // meanwhile; unreferenced, the sweep releases it with them.
+                if (await catalog.Blobs.CountDocumentsAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, headId), cancellationToken: CancellationToken.None) == 0)
+                {
+                    await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+                }
             }
             catch (MongoException)
             {
@@ -647,7 +681,10 @@ public sealed class EncryptedNoteStore(
     /// The head of a large file, under the vault's gate: true if it was inserted, false if the vault holds the same bytes
     /// already, whose blob is made young again. The sweep, under the same gate, takes chunks without a head once the
     /// newest of them is older than its grace: an upload that waited longer than that between two chunks may have lost
-    /// some. It counts its chunks before the head goes in, so a file the sweep cut short is refused, never stored.
+    /// some. It counts its chunks before the head goes in, so a file the sweep cut short is refused, never stored. A head
+    /// of the same bytes found without all its chunks (one whose upload failed as its insert reached the server, and
+    /// whose chunks went) is replaced by this one, chunks and all, rather than found: otherwise every later upload of
+    /// those bytes would find it, and none would ever open.
     /// </summary>
     private async Task<bool> PutHeadAsync(UnlockedVault v, ObjectId headId, byte[] id, LargeBlobHead head, CancellationToken ct)
     {
@@ -658,7 +695,19 @@ public sealed class EncryptedNoteStore(
         try
         {
             catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
-            if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount > 0) return false;
+            if (await catalog.Blobs.Find(filter).FirstOrDefaultAsync(ct) is { } held)
+            {
+                var of = c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, held.Id);
+                if (held.Chunks is not { } count || await catalog.BlobChunks.CountDocumentsAsync(of, cancellationToken: ct) == count)
+                {
+                    await catalog.Blobs.UpdateOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, held.Id), touch, cancellationToken: ct);
+                    return false;
+                }
+
+                await catalog.Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, held.Id), ct);
+                await catalog.BlobChunks.DeleteManyAsync(of, ct);
+            }
+
             if (await catalog.BlobChunks.CountDocumentsAsync(c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, headId), cancellationToken: ct) != head.Chunks)
             {
                 throw new ContentMissingException("The upload was too slow: part of the file was removed meanwhile, so nothing was stored. Try again.");

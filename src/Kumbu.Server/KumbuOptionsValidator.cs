@@ -18,6 +18,8 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
 
     public const string ConcurrentFileReadsMessage = "Kumbu:Vaults:ConcurrentFileReads must be 1 or more";
 
+    public const string ConcurrentFileWritesMessage = "Kumbu:Vaults:ConcurrentFileWrites must be 1 or more";
+
     public const string MaxFileBytesMessage = "Kumbu:Vaults:MaxFileBytes must be at least 15 MiB (15728640 bytes)";
 
     public const string PublicUrlMessage =
@@ -101,6 +103,11 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         if (options.Vaults.ConcurrentFileReads < 1)
         {
             failures.Add(ConcurrentFileReadsMessage);
+        }
+
+        if (options.Vaults.ConcurrentFileWrites < 1)
+        {
+            failures.Add(ConcurrentFileWritesMessage);
         }
 
         // Below 15 MiB the bound would refuse files that one document holds today.
