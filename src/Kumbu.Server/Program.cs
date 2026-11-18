@@ -90,9 +90,11 @@ builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
 // The internal model and the external providers the admin configured; each vault uses one of them.
+// People's own TensorX keys (Kumbu:Embeddings:Byok), a driver per key, used only while the instance offers BYOK.
+builder.Services.AddSingleton(sp => new ByokDrivers(sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
     sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
-    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
+    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<ByokDrivers>()));
 // The tokenizer chunks are bounded by, before the index that waits for it.
 builder.Services.AddHttpClient(ChunkTokenizer.HttpClientName);
 builder.Services.AddSingleton<ChunkTokenizer>();

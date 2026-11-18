@@ -35,8 +35,13 @@ public sealed class SearchIndex : BackgroundService
     private readonly ILogger<SearchIndex> _log;
     private readonly PdfAnalyses? _analyses;
     private readonly ChunkTokenizer? _tokenizer;
-    private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
-    private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
+    // A queue per route (EmbeddingProviders.RouteOf): per provider, and per key for BYOK. The configured providers' are
+    // made with the index, a key's when its first vault is queued; each runs from ExecuteAsync on.
+    private readonly ConcurrentDictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string Route, string Vault, VaultPath Path), byte> _queued = new();
+    private readonly ConcurrentDictionary<string, EmbeddingProvider> _routes = new(StringComparer.Ordinal);
+    private readonly List<Task> _runs = [];
+    private CancellationToken? _running;
     // Notes and PDFs whose last attempt failed, at which version and under which scheme (see Requeue).
     private readonly ConcurrentDictionary<(string Vault, VaultPath Path), (string Version, string Scheme)> _failed = new();
     private int _busy;
@@ -50,7 +55,7 @@ public sealed class SearchIndex : BackgroundService
     {
         (_catalog, _providers, _log, _analyses, _tokenizer) = (catalog, providers, log, analyses, tokenizer);
         // A queue per provider: one that is down or still loading holds up its own vaults only.
-        _queues = providers.All.ToDictionary(p => p.Name, _ => Channel.CreateUnbounded<(UnlockedVault, VaultPath)>(), StringComparer.Ordinal);
+        foreach (var provider in providers.All) Queue(provider);
         catalog.Unlocked += CatchUp;
         if (analyses is not null) analyses.Stored += OnAnalysed;
     }
@@ -70,13 +75,29 @@ public sealed class SearchIndex : BackgroundService
     /// each note once, however often it is written. A vault whose provider isn't configured isn't indexed.</summary>
     public void Enqueue(UnlockedVault vault, IEnumerable<VaultPath> paths)
     {
-        var provider = vault.EmbeddingProvider;
-        if (!_queues.TryGetValue(provider, out var queue)) return;
+        if (_providers.Resolve(vault) is not { } provider) return;
+        var queue = Queue(provider);
         foreach (var path in paths)
         {
-            if (_queued.TryAdd((provider, vault.Id, path), 0)) queue.Writer.TryWrite((vault, path));
+            if (_queued.TryAdd((provider.Name, vault.Id, path), 0)) queue.Writer.TryWrite((vault, path));
         }
     }
+
+    /// <summary>The queue of <paramref name="provider"/>'s route, made and, once the index runs, started on first use.</summary>
+    private Channel<(UnlockedVault Vault, VaultPath Path)> Queue(EmbeddingProvider provider)
+    {
+        if (_queues.TryGetValue(provider.Name, out var queue)) return queue;
+        lock (_runs)
+        {
+            if (_queues.TryGetValue(provider.Name, out queue)) return queue;
+            queue = Channel.CreateUnbounded<(UnlockedVault, VaultPath)>();
+            _queues[provider.Name] = queue;
+            if (_running is { } token) _runs.Add(RunAsync(provider, queue.Reader, token));
+            _routes[provider.Name] = provider;
+            return queue;
+        }
+    }
+
 
     /// <summary>Queues what a search found stale, but not a note or PDF whose last attempt at its current version, under
     /// the current scheme, failed: each search would send it to the provider again. A write (a new version), another
@@ -109,7 +130,7 @@ public sealed class SearchIndex : BackgroundService
         // every open vault once the bound has settled.
         if (!TokenizerSettled) return;
         foreach (var key in _failed.Keys.Where(k => k.Vault == vault.Id)) _failed.TryRemove(key, out _);
-        if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
+        if (_providers.Resolve(vault) is not { } provider)
         {
             _log.LogWarning("Vault {VaultId} uses the embedding provider {Provider}, which isn't configured; it isn't indexed", vault.Id, vault.EmbeddingProvider);
             return;
@@ -212,7 +233,17 @@ public sealed class SearchIndex : BackgroundService
             foreach (var vault in _catalog.OpenVaults) CatchUp(vault);
         }
 
-        await Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+        Task[] runs;
+        lock (_runs)
+        {
+            _running = stoppingToken;
+            _runs.AddRange(_routes.Values.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+            runs = [.. _runs];
+        }
+
+        // The configured providers' queues run until the stop; a key's queue made later starts on its own (Queue) and
+        // stops with the same token.
+        await Task.WhenAll(runs);
     }
 
     private async Task RunAsync(EmbeddingProvider provider, ChannelReader<(UnlockedVault Vault, VaultPath Path)> queue, CancellationToken stoppingToken)
@@ -225,8 +256,8 @@ public sealed class SearchIndex : BackgroundService
             _queued.TryRemove((provider.Name, vault.Id, path), out _);
             try
             {
-                // The owner switched the vault to another provider since: that provider's queue has the note.
-                if (vault.EmbeddingProvider == provider.Name) await IndexAsync(vault, path, stoppingToken);
+                // The owner switched the vault to another provider or key since: that one's queue has the note.
+                if (_providers.RouteOf(vault) == provider.Name) await IndexAsync(vault, path, stoppingToken);
                 _failed.TryRemove((vault.Id, path), out _);
             }
             catch (EmbeddingUnavailableException e) when (e.ProviderDown)
@@ -269,8 +300,7 @@ public sealed class SearchIndex : BackgroundService
                 return;
             }
 
-            var provider = vault.EmbeddingProvider;
-            if (_providers.Get(provider) is not { Driver: { } driver } configured) return;
+            if (_providers.Resolve(vault) is not { Driver: { } driver } configured) return;
             if (pdf is not null)
             {
                 await IndexPdfAsync(vault, path, filter, configured, pdf, ct);
@@ -354,7 +384,7 @@ public sealed class SearchIndex : BackgroundService
             // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
             // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
             // Nor does anything more of a vault being deleted or re-keyed.
-            if (vault.EmbeddingProvider != provider || !MayIndex(vault, path)) return;
+            if (_providers.RouteOf(vault) != provider || !MayIndex(vault, path)) return;
             float[][] vectors;
             var started = Stopwatch.GetTimestamp();
             try
@@ -381,7 +411,7 @@ public sealed class SearchIndex : BackgroundService
         var embeddings = new NoteEmbeddings(model, version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]], c.Part))], scheme);
         // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
         // or deleted the vault.
-        if (vault.EmbeddingProvider != provider) return;
+        if (_providers.RouteOf(vault) != provider) return;
         if (!MayIndex(vault, path)) return;
         await _catalog.Embeddings.UpdateOneAsync(
             filter,
