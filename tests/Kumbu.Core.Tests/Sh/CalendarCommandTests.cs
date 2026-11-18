@@ -157,6 +157,88 @@ public class CalendarCommandTests
             """), await Run(shell, "calendar /Work --month 2026-11"));
     }
 
+    [Fact]
+    public async Task Prints_a_range_as_its_weeks_both_ends_included()
+    {
+        var (shell, _, _) = Make(
+            ("/Work/Before.md", "---\nwhen: 2026-11-27\n---\n"),
+            ("/Work/Moving.md", "---\nwhen: 2026-11-28\n---\n"),
+            ("/Work/Invoice.md", "---\nwhen: 2026-12-01T09:00\n---\n"),
+            ("/Work/Party.md", "---\nwhen: 2026-12-02\n---\n"),
+            ("/Work/After.md", "---\nwhen: 2026-12-03\n---\n"));
+
+        Assert.Equal(ShellResult.Ok("""
+            28 November – 2 December 2026 · /Work
+            Week 48 · 28–29 Nov
+              Sat 28 Nov
+                Moving  /Work/Moving.md
+            Week 49 · 30 Nov – 2 Dec
+              Tue 1 Dec
+                09:00  Invoice  /Work/Invoice.md
+              Wed 2 Dec
+                Party  /Work/Party.md
+            """), await Run(shell, "calendar /Work --from 2026-11-28 --to 2026-12-02"));
+    }
+
+    [Fact]
+    public async Task A_range_shows_a_window_overlapping_its_start()
+    {
+        var (shell, _, _) = Make(
+            ("/Work/Urlaub.md", "---\nwhen: 2026-11-03\nuntil: 2026-11-14\n---\n"),
+            ("/Work/Zahnarzt.md", "---\nwhen: 2026-11-10T14:00\n---\n"),
+            ("/Work/Earlier.md", "---\nwhen: 2026-11-09\n---\n"));
+
+        Assert.Equal(ShellResult.Ok("""
+            10–16 November 2026 · /Work
+            Week 46 · 10–15 Nov
+              Tue 3 – Sat 14 Nov  Urlaub  /Work/Urlaub.md  ongoing · until Sat
+              Tue 10 Nov
+                14:00  Zahnarzt  /Work/Zahnarzt.md
+            Week 47 · 16 Nov
+              nothing yet
+            """), await Run(shell, "calendar /Work --from 2026-11-10 --to 2026-11-16"));
+    }
+
+    [Fact]
+    public async Task Tag_narrows_a_range()
+    {
+        var (shell, _, _) = Make(
+            ("/Work/Report.md", "---\nwhen: 2026-12-04\n---\nFor #kumbu\n"),
+            ("/Work/Zahnarzt.md", "---\nwhen: 2026-12-04\n---\n"));
+
+        Assert.Equal(ShellResult.Ok("""
+            4 December 2026 · /Work
+            Week 49 · 4 Dec
+              Fri 4 Dec
+                Report  /Work/Report.md
+            """), await Run(shell, "calendar /Work --from 2026-12-04 --to 2026-12-04 --tag kumbu"));
+    }
+
+    [Theory]
+    [InlineData("calendar /Work --from 2026-11-20", "calendar: --from needs --to; give both")]
+    [InlineData("calendar /Work --to 2026-11-20", "calendar: --to needs --from; give both")]
+    [InlineData("calendar /Work --from 2026-11-20 --to 2026-11-19", "calendar: --to 2026-11-19 is before --from 2026-11-20")]
+    [InlineData("calendar /Work --from 2026-01-01 --to 2027-01-02", "calendar: a range has at most 366 days, not 367")]
+    [InlineData("calendar /Work --from 2026-11-20 --to 2026-11-21 --week 46", "calendar: --from and --to can't go together with --week or --month; give one")]
+    [InlineData("calendar /Work --from 2026-11-20 --to 2026-11-21 --month 2026-11", "calendar: --from and --to can't go together with --week or --month; give one")]
+    [InlineData("calendar /Work --from tomorrow --to 2026-11-21", "calendar: --from takes a day such as 2026-11-20, not tomorrow")]
+    [InlineData("calendar /Work --from 2026-11-20 --to 2026-02-30", "calendar: --to takes a day such as 2026-11-20, not 2026-02-30")]
+    [InlineData("calendar /Work --from 0001-01-01 --to 0001-01-02", "calendar: a calendar has the years 2 to 9998")]
+    public async Task Range_errors(string line, string error)
+    {
+        var (shell, _, _) = Make(Week46);
+
+        Assert.Equal(ShellResult.Error(error), await Run(shell, line));
+    }
+
+    [Fact]
+    public async Task A_range_of_366_days_is_the_longest()
+    {
+        var (shell, _, _) = Make(("/Work/Leap.md", "---\nwhen: 2028-02-29\n---\n"));
+
+        Assert.Contains("\n  Tue 29 Feb\n    Leap  /Work/Leap.md", (await Run(shell, "calendar /Work --from 2028-01-01 --to 2028-12-31")).Output);
+    }
+
     [Theory]
     [InlineData("calendar /Work --month 2026-13", "calendar: --month takes a month such as 2026-11, not 2026-13")]
     [InlineData("calendar /Work --month november", "calendar: --month takes a month such as 2026-11, not november")]
@@ -421,7 +503,7 @@ public class CalendarCommandTests
         var (shell, _, _) = Make(Week46);
         var help = (await Run(shell, "help calendar")).Output;
 
-        Assert.StartsWith("calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11] [--tag <tag>]\n", help);
+        Assert.StartsWith("calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11 | --from 2026-11-20 --to 2026-12-06] [--tag <tag>]\n", help);
         foreach (var form in new[]
                  {
                      "calendar notifications [--tag <tag>]",
