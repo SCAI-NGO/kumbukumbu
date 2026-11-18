@@ -502,4 +502,5 @@ src/Kumbu.Server/models/
 # The end-to-end suite's signed-in state and secrets, its results and report (web/e2e/)
 web/e2e/.auth/
 web/e2e/.results/
+web/e2e/diagrams/.results/
 web/playwright-report/
