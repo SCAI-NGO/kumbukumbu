@@ -697,6 +697,69 @@ describe("[[ completion", () => {
   });
 });
 
+describe("[[ completion of headings and blocks", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const roadmap = ["# Roadmap", "", "Why it matters. ^why", "", "## Next steps", "", "- ship it ^ship", "", "## C# [later]"].join("\n");
+  const withRoadmap = (answer: () => Response | Promise<Response> = () => json(200, noteView(ROADMAP, roadmap, "r1"))) => editorApi([ok], undefined, { [`GET /api/notes${ROADMAP}`]: answer });
+  const options = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
+
+  it("lists the headings of the note the name leads to, and inserts the one picked as a link can hold it", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(options("Headings to link")).toEqual(["RoadmapH1", "Next stepsH2", "C# [later]H2"]);
+    await u.type(editorBox(), "c#");
+    expect(screen.queryByRole("listbox", { name: "Headings to link" })).toBeNull();
+    await u.type(editorBox(), "{Backspace}{Backspace}lat");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[Roadmap#C later]]`);
+  });
+
+  it("lists the block ids that note has, with their text, and inserts one", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#^");
+    expect(await screen.findByRole("listbox", { name: "Blocks to link" })).toBeInTheDocument();
+    expect(options("Blocks to link")).toEqual(["Why it matters.^why", "ship it^ship"]);
+    await u.type(editorBox(), "sh");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[roadmap#^ship]]`);
+  });
+
+  it("lists the open note's own headings after [[#, from the text as it is written", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control}{Enter}## Fresh{Enter}[[[[#");
+    expect(options("Headings to link")).toEqual(["PlanH1", "FreshH2"]);
+    await u.type(editorBox(), "fr");
+    await u.keyboard("{Tab}");
+    expect(editorBox().value).toBe(`${source}\n## Fresh\n[[#Fresh]]`);
+  });
+
+  it("says Loading… while the note loads, and offers nothing for a name no note has", async () => {
+    let answer!: () => void;
+    const fetch = withRoadmap(() => new Promise((resolve) => (answer = () => resolve(json(200, noteView(ROADMAP, roadmap, "r1")))))).fetch;
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#");
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    // Enter is still the textarea's.
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[roadmap#\n`);
+    await act(async () => answer());
+    await u.type(editorBox(), "{Backspace}");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).toBeNull();
+
+    await u.type(editorBox(), "]] [[[[nothing#");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
+    const asked = fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname);
+    expect(asked.filter((p) => p.includes("nothing"))).toEqual([]);
+  });
+});
+
 describe("Named from its heading", () => {
   const UNTITLED = "/Home/Garden/Untitled.md";
   const untitledUrl = "/notes/Home/Garden/Untitled.md";

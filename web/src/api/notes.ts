@@ -260,12 +260,13 @@ export function useDuplicateNote() {
  * The note as the server has it. Not read again by itself when the page comes back into view or online: that would
  * replace the text under the reader's eye. A change made elsewhere is shown instead (`useChangedElsewhere`), and
  * taken when the user says so. `refetchOnMount: false` for a view next to the note (its history), which must not
- * read it again either.
+ * read it again either. A null path reads nothing.
  */
-export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMount?: boolean } = {}) =>
+export const useNote = (path: string | null, { refetchOnMount = true }: { refetchOnMount?: boolean } = {}) =>
   useQuery({
     queryKey: ["note", path],
-    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })),
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path!) })),
+    enabled: path !== null,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount,

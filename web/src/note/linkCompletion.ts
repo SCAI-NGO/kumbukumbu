@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { TreeFolder } from "../api/notes";
 import { fileKindOf } from "../api/paths";
+import { blockList } from "./blocks";
+import { outline } from "./outline";
+import { splitFrontmatter } from "./properties";
 
 /**
  * What the caret is completing, and where the text it replaces starts: a wiki link's note (at the first `[`), a
@@ -129,5 +132,25 @@ export const embedsAsImage = (path: string) => fileKindOf(path) === "image";
 export function completeLink(value: string, caret: number, at: LinkQuery, target: string, embed = false) {
   const end = value.startsWith("]]", caret) ? caret + 2 : caret;
   const text = `${embed && value[at.start - 1] !== "!" ? "!" : ""}[[${target}]]`;
+  return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
+}
+
+/** The note's headings, in order, whose text holds what is typed after `#`, ignoring case. */
+export const headingsFor = (content: string, query: string) =>
+  outline(splitFrontmatter(content).body).filter((h) => h.text.toLowerCase().includes(query.trim().toLowerCase()));
+
+/** A heading (its text as shown, `headingText`) as Obsidian writes it in a link: without `# | ^ [ ]` and `%%`. */
+export const headingLink = (text: string) => text.replace(/%%|[#|^[\]]/g, "").replace(/\s+/g, " ").trim();
+
+/** The block ids the note has, with the start of their text, whose id or text holds what is typed after `#^`. */
+export function blocksFor(content: string, query: string) {
+  const q = query.trim().toLowerCase();
+  return blockList(content).filter((b) => b.id.toLowerCase().includes(q) || b.text.toLowerCase().includes(q));
+}
+
+/** The edit that completes `[[Note#que` (and a `]]` right after the caret) with a heading or `^block`: `[[Note#Goals]]`. */
+export function completeSubpath(value: string, caret: number, at: LinkQuery & { note: string }, subpath: string) {
+  const end = value.startsWith("]]", caret) ? caret + 2 : caret;
+  const text = `[[${at.note}#${subpath}]]`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }

@@ -6,7 +6,7 @@
  * line, naming the paragraph, list, table or quote above it. Never inside front matter or code. Both check themselves
  * against blocks.cases.json; a change here goes there too.
  */
-import { atxHeading } from "./outline";
+import { atxHeading, headingText } from "./outline";
 
 type Kind = "heading" | "paragraph" | "list" | "table" | "quote";
 
@@ -181,4 +181,25 @@ export function blockSource(source: string, block: { start: number; end: number 
   const inside = (i: number) => i + 1 >= block.start && i + 1 <= block.end;
   const common = Math.min(...lines.flatMap((l, i) => (inside(i) && !blank(l) ? [indent(l)] : [])));
   return lines.map((l, i) => (inside(i) ? (Number.isFinite(common) ? dedent(l, common) : l) : "")).join("\n");
+}
+
+// What starts a line of a block without being its text: a quote's `>`, a list's marker and task box, a heading's hashes.
+const marks = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[.\][ \t]+)?|#{1,6}[ \t]+)?/;
+
+/**
+ * The note's block ids in order, each once (its first block, ignoring case, as `findBlock` takes it), with the start
+ * of the block's text as it reads: without its id, the lines' marks, and Markdown's emphasis and links.
+ */
+export function blockList(source: string): { id: string; text: string }[] {
+  const lines = linesOf(source);
+  const seen = new Set<string>();
+  return blocks(lines).flatMap(({ id, start, end }) => {
+    if (seen.has(id.toLowerCase())) return [];
+    seen.add(id.toLowerCase());
+    const text = lines
+      .slice(start, end)
+      .map((l) => l.replace(inline, "").replace(ownLine, "").replace(marks, ""))
+      .join(" ");
+    return [{ id, text: headingText(text.replace(/\s+/g, " ")).slice(0, 100) }];
+  });
 }

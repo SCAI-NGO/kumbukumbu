@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { completeLink, embedsAsImage, linkedNote, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
+import { blocksFor, completeLink, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
   it("finds an open [[ on the caret's line", () => {
@@ -123,6 +123,41 @@ describe("completeLink", () => {
   it("replaces the typed part, and the ]] the toolbar left, with the whole link", () => {
     expect(completeLink("See [[pl", 8, { kind: "note", start: 4, query: "pl" }, "plan")).toEqual({ start: 4, end: 8, text: "[[plan]]", selStart: 12, selEnd: 12 });
     expect(completeLink("See [[pl]] x", 8, { kind: "note", start: 4, query: "pl" }, "plan")).toMatchObject({ start: 4, end: 10 });
+  });
+});
+
+describe("headings and blocks of a note", () => {
+  const note = ["---", "title: x", "---", "# Plan", "", "Why we do it. ^why", "", "## Goals", "", "- ship it ^ship", "- **test** it", "", "Long text", "on two lines", "", "^both", "", "## Risks"].join("\n");
+
+  it("lists the headings in order, filtered by what is typed, ignoring case", () => {
+    expect(headingsFor(note, "").map((h) => h.text)).toEqual(["Plan", "Goals", "Risks"]);
+    expect(headingsFor(note, "GO").map((h) => h.text)).toEqual(["Goals"]);
+    // A heading in the front matter's place is none: its lines are left out.
+    expect(headingsFor("---\n# no\n---\ntext", "")).toEqual([]);
+  });
+
+  it("writes a heading as a link can hold it: its text as shown, without # | ^ [ ] and %%", () => {
+    expect(headingLink("C# notes | [draft] ^x 50%% off")).toBe("C notes draft x 50 off");
+    expect(headingLink("Goals")).toBe("Goals");
+    expect(headingsFor("## The **road**map [[plan|Plan]]", "").map((h) => headingLink(h.text))).toEqual(["The roadmap Plan"]);
+  });
+
+  it("lists the block ids the note has, with the start of their text, filtered by id or text", () => {
+    expect(blocksFor(note, "")).toEqual([
+      { id: "why", text: "Why we do it." },
+      { id: "ship", text: "ship it" },
+      { id: "both", text: "Long text on two lines" },
+    ]);
+    expect(blocksFor(note, "SHI").map((b) => b.id)).toEqual(["ship"]);
+    expect(blocksFor(note, "two lines").map((b) => b.id)).toEqual(["both"]);
+    expect(blocksFor("a ^x\n\nb ^X", "")).toEqual([{ id: "x", text: "a" }]);
+  });
+
+  it("completes the link with the heading or block, and the ]] the toolbar left", () => {
+    const at = { kind: "heading" as const, start: 4, note: "Plan", query: "Go" };
+    expect(completeSubpath("See [[Plan#Go", 13, at, "Goals")).toEqual({ start: 4, end: 13, text: "[[Plan#Goals]]", selStart: 18, selEnd: 18 });
+    expect(completeSubpath("See [[Plan#Go]] x", 13, at, "Goals")).toMatchObject({ end: 15 });
+    expect(completeSubpath("![[#^s", 6, { kind: "block", start: 1, note: "", query: "s" }, "^ship")).toMatchObject({ start: 1, text: "[[#^ship]]" });
   });
 });
 
