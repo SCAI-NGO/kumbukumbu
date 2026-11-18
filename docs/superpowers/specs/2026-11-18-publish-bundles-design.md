@@ -1,6 +1,6 @@
 # Publish 2.0: a note with its linked notes — design
 
-Approved by the maintainer on: _pending_. Size: a project (server, `sh`, web app, reader).
+Approved by Chris on 2026-11-18. Size: a project (server, `sh`, web app, reader).
 
 Sources:
 - the ideas note: `/SWE/Kumbu/Ideas/Publish 2.0 and export as SPA 2026-11-11.md`;
