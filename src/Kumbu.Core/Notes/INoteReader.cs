@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Paths;
@@ -6,6 +7,10 @@ using Kumbu.Core.Paths;
 namespace Kumbu.Core.Notes;
 
 public sealed record Note(VaultPath Path, string Content);
+
+/// <summary>What <c>ls -l</c> shows of a note: its UTF-8 size and when its current version was written; null when the
+/// reader can't say.</summary>
+public sealed record NoteStamp(VaultPath Path, long Size, DateTime? At);
 
 /// <summary>Where a note went with <c>mv</c>; kept for a while, so an old path can say so.</summary>
 /// <param name="Changeset">The writer's changeset the move belongs to; null for a restore, or a move recorded before
@@ -35,6 +40,16 @@ public interface INoteReader
 
     /// <summary>Like <see cref="ListNotesUnderAsync"/>, with each note's content, in no particular order.</summary>
     Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct);
+
+    /// <summary>The size and time of the current version of the note at <paramref name="dir"/> and of every note below
+    /// it, without handing out their content where the reader can avoid it. The default reads the notes and has no time.</summary>
+    async Task<IReadOnlyList<NoteStamp>> ListNoteStampsAsync(VaultPath dir, CancellationToken ct)
+    {
+        var stamps = new List<NoteStamp>();
+        if (!dir.IsRoot && await ReadAsync(dir, ct) is { } own) stamps.Add(new NoteStamp(dir, Encoding.UTF8.GetByteCount(own), null));
+        stamps.AddRange((await ReadNotesUnderAsync(dir, ct)).Select(n => new NoteStamp(n.Path, Encoding.UTF8.GetByteCount(n.Content), null)));
+        return stamps;
+    }
 
     /// <summary>The names of the vaults the caller can see, empty ones included.</summary>
     Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct);
