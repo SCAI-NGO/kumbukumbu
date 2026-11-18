@@ -5,8 +5,8 @@ import { useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNoteLoaded, useNoteMissing, useNoteText, useTree, useVaults, type VaultView } from "../api/notes";
-import { Flag, FolderInput, History, ListPlus, TextSearch, Trash2 } from "lucide-react";
-import { folderOf, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
+import { Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
+import { folderOf, inVault, noteUrl, pathFromRoute, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -28,6 +28,8 @@ import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { usePaletteShortcut } from "../palette/usePaletteShortcut";
+import { staleNotes } from "../palette/rows";
+import { useFavourites } from "../api/favourites";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import { useMarking } from "./ConfirmMark";
 import { forgetLastNote, keepLastNote, lastNote, ordinary, settleStart, startSettled, treeHas } from "./lastNote";
@@ -69,6 +71,8 @@ const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 const PublishDialog = lazy(() => import("./PublishDialog"));
 const Palette = lazy(() => import("../palette/Palette"));
+
+const noteFavourite = (path: string) => ({ kind: "note", vault: vaultOf(path), path: inVault(path) });
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -165,6 +169,7 @@ export default function MobileShell() {
   // query; read here it is also there before the drawer was first opened, so Copy link gives the same form either way.
   const noteTree = useTree(path ? vaultOf(path) : null);
   const noteNamesInVault = useMemo(() => noteTree.data && noteNames(noteTree.data.root), [noteTree.data]);
+  const favourites = useFavourites();
   const copied = useCopied("mx-3 mb-2");
   const navigate = useNavigate();
   const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
@@ -448,6 +453,16 @@ export default function MobileShell() {
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
                       ...copyItems(path, noteNamesInVault, true, copied.copy),
+                      // Once the list is read: a change before would replace it. The change lets go of the vault's favourites whose note is gone.
+                      ...(favourites.ready
+                        ? [
+                            {
+                              label: favourites.has(noteFavourite(path)) ? "Remove from favourites" : "Add to favourites",
+                              icon: Star,
+                              onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), noteTree.data.root]])) : []),
+                            },
+                          ]
+                        : []),
                       ...publishingActions,
                       ...(noteChanges
                         ? [

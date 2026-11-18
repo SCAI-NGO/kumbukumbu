@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { TreeFolder, VaultView } from "../api/notes";
 import { schemes } from "../theme/schemes";
-import { commandRows, noteRows, vaultRows } from "./rows";
+import { commandRows, noteRows, staleNotes, vaultRows } from "./rows";
 
 const note = (path: string, kind = "note") => ({ name: path.split("/").pop()!, path, size: 1, kind, mediaType: "text/markdown" });
 const folder = (path: string, notes: ReturnType<typeof note>[], folders: TreeFolder[] = []): TreeFolder => ({ name: path.split("/").pop()!, path, notes, folders });
@@ -54,5 +54,15 @@ describe("noteRows", () => {
     expect(rows[1].favourite).toEqual({ kind: "note", vault: "Work", path: "projects/Big plan.md" });
     expect(rows[1].key).toBe("note:Work/projects/Big plan.md");
     expect(rows[1].run).toEqual({ to: "/notes/Work/projects/Big%20plan.md" });
+  });
+});
+
+describe("staleNotes", () => {
+  const work = folder("/Work", [note("/Work/plan.md")], [folder("/Work/_archive", [note("/Work/_archive/old.md")])]);
+  const f = (vault: string, path: string) => ({ kind: "note", vault, path, added: "2026-11-18T09:00:00Z" });
+
+  it("names the note favourites missing from their vault's loaded tree, and nothing else", () => {
+    const list = [f("Work", "plan.md"), f("Work", "gone.md"), f("Work", "_archive/old.md"), f("Home", "x.md"), { kind: "vault", vault: "Gone", added: "2026-11-18T09:00:00Z" }];
+    expect(staleNotes(list, new Map([["Work", work]]))).toEqual(["note:Work/gone.md"]);
   });
 });

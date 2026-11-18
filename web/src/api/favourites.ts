@@ -54,8 +54,12 @@ export function useFavourites() {
     list,
     ready: query.data !== undefined,
     has: (f: FavouriteInput) => keys.has(favouriteKey(f)),
-    toggle: (f: FavouriteInput) =>
-      change((now) => (now.some((x) => favouriteKey(x) === favouriteKey(f)) ? now.filter((x) => favouriteKey(x) !== favouriteKey(f)) : [...now, { ...f, added: new Date().toISOString() }])),
+    /** Adds or removes `f`; in the same write, the entries keyed `stale` go (note favourites whose note is gone). */
+    toggle: (f: FavouriteInput, stale: string[] = []) =>
+      change((all) => {
+        const now = all.filter((x) => !stale.includes(favouriteKey(x)));
+        return now.some((x) => favouriteKey(x) === favouriteKey(f)) ? now.filter((x) => favouriteKey(x) !== favouriteKey(f)) : [...now, { ...f, added: new Date().toISOString() }];
+      }),
     drop: (drop: string[]) => change((now) => now.filter((x) => !drop.includes(favouriteKey(x)))),
   };
 }

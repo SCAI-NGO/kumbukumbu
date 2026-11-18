@@ -71,6 +71,28 @@ async function openDrawer() {
 }
 
 describe("the shell", () => {
+  it('the note menu offers "Add to favourites" and then "Remove from favourites"', async () => {
+    const puts: unknown[] = [];
+    let held: unknown[] = [];
+    signedInApi({
+      "GET /api/account/favourites": () => json(200, { favourites: held }),
+      "PUT /api/account/favourites": async (r) => {
+        const { favourites } = (await r.json()) as { favourites: Record<string, unknown>[] };
+        puts.push(favourites);
+        held = favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" }));
+        return json(200, { favourites: held });
+      },
+    });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to favourites" }));
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "inbox.md" }]]));
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Remove from favourites" }));
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "inbox.md" }], []]));
+  });
+
   it("shows the note's place and title, and switches between Read and Write", async () => {
     signedInApi();
     renderApp("/notes/Work/projects/deep/plan.md");

@@ -5,7 +5,7 @@ import { useEffect, useId, useMemo, useState, type KeyboardEvent, type Synthetic
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { favouriteKey, useFavourites, type FavouriteInput } from "../api/favourites";
-import { treeQuery, useVaults, type TreeView } from "../api/notes";
+import { treeQuery, useVaults, type TreeFolder, type TreeView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
@@ -17,17 +17,21 @@ import { applyScheme } from "../theme/apply";
 import { useCloseWindow } from "../windows/context";
 import { useWindows } from "../windows/store";
 import { filterRows } from "./filter";
-import { commandRows, noteRows, vaultRows, type Row } from "./rows";
+import { commandRows, noteRows, staleNotes, vaultRows, type Row } from "./rows";
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 // Structurally shared by the query: the same trees give the same array, so the rows are built again only when one changes.
-const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r) => r.data);
+// A tree whose last read failed counts as not loaded: nothing is taken as gone from it.
+const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r) => (r.isSuccess ? r.data : undefined));
 // Opened again within a minute, the palette takes the trees it read as they are, rather than asking for every vault's again.
 const FRESH = 60_000;
 
-/** Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists. */
-function useRows(): Row[] {
+/**
+ * Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists; and
+ * the loaded trees by vault, which say which note favourites are gone.
+ */
+function useRows(): { rows: Row[]; trees: ReadonlyMap<string, TreeFolder> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -36,11 +40,14 @@ function useRows(): Row[] {
   // Each vault's tree as the drawer has it, from the cache where it was read before.
   const trees = useQueries({ queries: (vaults ?? []).map((v) => ({ ...treeQuery(v.name), staleTime: FRESH })), combine: treesOf });
   return useMemo(
-    () => [
-      ...commandRows({ admin, shared, marketplaces }),
-      ...vaultRows(vaults ?? []),
-      ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].root) : [])),
-    ],
+    () => ({
+      rows: [
+        ...commandRows({ admin, shared, marketplaces }),
+        ...vaultRows(vaults ?? []),
+        ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].root) : [])),
+      ],
+      trees: new Map((vaults ?? []).flatMap((v, i) => (trees[i] ? [[v.name, trees[i].root] as const] : []))),
+    }),
     [admin, shared, marketplaces, vaults, trees],
   );
 }
@@ -69,8 +76,10 @@ export default function Palette() {
   const id = useId();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const rows = useRows();
+  const { rows, trees } = useRows();
   const favourites = useFavourites();
+  // Each change lets go of the note favourites whose note is gone, in the same write.
+  const toggle = (f: FavouriteInput) => favourites.toggle(f, staleNotes(favourites.list, trees));
   const typed = query.trim();
 
   const sections = useMemo((): Section[] => {
@@ -78,9 +87,10 @@ export default function Palette() {
     if (!typed) {
       // A favourite with no row (a command this version doesn't know, a note not in its tree) isn't shown.
       const starred = favourites.list.flatMap((f) => byKey.get(favouriteKey(f)) ?? []);
+      const keys = new Set(starred.map((r) => r.key));
       return [
         { heading: "Favourites", rows: starred },
-        { heading: "Recent", rows: recentPaths.map((p) => recentRow(p, byKey)) },
+        { heading: "Recent", rows: recentPaths.map((p) => recentRow(p, byKey)).filter((r) => !keys.has(r.key)) },
       ];
     }
     const keys = new Set(favourites.list.map(favouriteKey));
@@ -121,7 +131,7 @@ export default function Palette() {
     } else if (withMod(e, "d")) {
       // Caught here only, as a browser's bookmark is: the highlighted row's star.
       const row = entries[at];
-      if (row) favourites.toggle(row.favourite);
+      if (row) toggle(row.favourite);
     } else return;
     e.preventDefault();
   };
@@ -157,7 +167,7 @@ export default function Palette() {
               aria-pressed={on}
               onClick={(e) => {
                 e.stopPropagation();
-                favourites.toggle(row.favourite);
+                toggle(row.favourite);
               }}
               className={`flex size-11 flex-none items-center justify-center rounded-[10px] ${on ? "text-accent-text" : "text-muted"} ${
                 desktop && !on && !highlighted ? "opacity-0 group-hover:opacity-100" : ""

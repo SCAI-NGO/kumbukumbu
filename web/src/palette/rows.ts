@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { favouriteKey, type FavouriteInput } from "../api/favourites";
+import { favouriteKey, type Favourite, type FavouriteInput } from "../api/favourites";
 import { fileKindOfEntry, type TreeFolder, type VaultView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf } from "../api/paths";
+import { treeHas } from "../shell/lastNote";
 import { schemes } from "../theme/schemes";
 
 /** What the palette lists. `group` is its section; `place` is shown muted beside the name and searched with it. */
@@ -72,4 +73,15 @@ export function noteRows(vault: string, root: TreeFolder): Row[] {
   };
   walk(root);
   return rows;
+}
+
+/**
+ * The keys of note favourites whose note was moved, renamed or deleted: those of a vault whose tree is loaded (`trees`)
+ * and lacks it. A vault without a loaded tree (still loading, failed, not listed: a hidden one's) keeps its entries.
+ */
+export function staleNotes(favourites: Favourite[], trees: ReadonlyMap<string, TreeFolder>): string[] {
+  return favourites.flatMap((f) => {
+    const root = f.kind === "note" && f.vault ? trees.get(f.vault) : undefined;
+    return root && !treeHas(root, `/${f.vault}/${f.path}`) ? [favouriteKey(f)] : [];
+  });
 }

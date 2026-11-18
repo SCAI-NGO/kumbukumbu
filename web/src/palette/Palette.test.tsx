@@ -31,13 +31,19 @@ const tree = (name: string, notes: string[]) => json(200, { damaged: 0, root: { 
 const vault = (name: string, discreet = false) => ({ name, notes: 2, embeddings: "internal", discreet });
 
 /** Work, and while `shown` the discreet Tagebuch; the favourites are kept as the server would, and written back as they are put. */
-function signedInApi({ shown = false, favourites = [] as FavouriteInput[], workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response> } = {}) {
+function signedInApi({
+  shown = false,
+  favourites = [] as FavouriteInput[],
+  workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response>,
+  homeTree = null as (() => Response) | null,
+} = {}) {
   const at = { shown };
   let held: Favourite[] = favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" }));
   const puts: FavouriteInput[][] = [];
   const fetch = fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
-    "GET /api/vaults": () => json(200, at.shown ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
+    "GET /api/vaults": () => json(200, [vault("Work"), ...(homeTree ? [vault("Home")] : []), ...(at.shown ? [vault("Tagebuch", true)] : [])]),
+    ...(homeTree ? { "GET /api/vaults/Home/tree": homeTree } : {}),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => workTree(),
     "GET /api/vaults/Tagebuch/tree": () => tree("Tagebuch", ["heute.md"]),
@@ -213,6 +219,13 @@ describe("the empty palette", () => {
     send(await tree("Work", ["inbox.md", "plan.md"]));
   });
 
+  it("Recent leaves out the notes already shown under Favourites", async () => {
+    signedInApi({ favourites: [{ kind: "note", vault: "Work", path: "inbox.md" }] });
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["inbox, Work"]));
+    expect(within(palette()).queryByRole("group", { name: "Recent" })).not.toBeInTheDocument();
+  });
+
   it('without favourites: "Star anything here to keep it on top."', async () => {
     signedInApi();
     await openPalette();
@@ -312,6 +325,37 @@ describe("rows", () => {
     await waitFor(() => expect(options()).toEqual(expect.arrayContaining(["Tagebuch, Vault", "heute, Tagebuch"])));
     act(() => useDiscreet.setState({ revealed: false }));
     await waitFor(() => expect(options()).toEqual(["Search notes for ‘tagebuch’"]));
+  });
+
+  it("a note favourite whose note isn't in its vault's tree is not shown", async () => {
+    signedInApi({ favourites: [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "plan.md" }] });
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["plan, Work", "inbox, Work"]));
+  });
+
+  const toggleAppearance = async () => {
+    await userEvent.type(field(), "appearance");
+    await waitFor(() => expect(highlighted()).toBe("Appearance, Settings"));
+    await userEvent.keyboard("{Control>}d{/Control}");
+  };
+
+  it("the next write drops it", async () => {
+    const { puts } = signedInApi({ favourites: [{ kind: "note", vault: "Work", path: "gone.md" }, { kind: "note", vault: "Work", path: "plan.md" }] });
+    await openPalette();
+    await waitFor(() => expect(options()).toContain("plan, Work"));
+    await toggleAppearance();
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Work", path: "plan.md" }, { kind: "command", id: "settings.appearance" }]]));
+  });
+
+  it("a favourite of a vault whose tree hasn't loaded is kept", async () => {
+    const { puts } = signedInApi({
+      favourites: [{ kind: "note", vault: "Home", path: "garden.md" }, { kind: "note", vault: "Work", path: "gone.md" }],
+      homeTree: () => json(500, { error: "Broken." }),
+    });
+    await openPalette();
+    await waitFor(() => expect(options()).toContain("inbox, Work"));
+    await toggleAppearance();
+    await waitFor(() => expect(puts).toEqual([[{ kind: "note", vault: "Home", path: "garden.md" }, { kind: "command", id: "settings.appearance" }]]));
   });
 
   it("closes when the discreet vaults are hidden again, and opens again with an empty field", async () => {
