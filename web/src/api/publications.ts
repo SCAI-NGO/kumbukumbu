@@ -57,10 +57,11 @@ export const usePublicationPreview = (path: string, depth: number, without: read
     gcTime: 0,
   });
 
-/** The start notes of the bundles `path` is published in, not as their start (Publish 2.0 decision 7). */
+/** The start notes of the bundles `path` is published in, not as their start (Publish 2.0 decision 7). A member is
+ * told no start: for her, one empty name says that it is published. */
 export function useBundledIn(path: string): string[] {
   const list = usePublications(vaultOf(path)).data;
-  return (list?.bundled ?? []).filter((b) => b.path === path).map((b) => b.start);
+  return (list?.bundled ?? []).filter((b) => b.path === path).map((b) => b.start ?? "");
 }
 
 /** The notes of `start`'s bundle as the vault's list names them, the start first. */

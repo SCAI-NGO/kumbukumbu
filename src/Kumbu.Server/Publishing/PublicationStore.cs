@@ -221,11 +221,13 @@ internal sealed class PublicationStore(VaultCatalog catalog)
 
     /// <summary>
     /// A bundle's copy with notes taken out (Publish 2.0 decision 3): the same document, a copy <paramref name="change"/>
-    /// makes from the stored one, and the files only those notes used deleted; the others keep their indices. Nothing
-    /// when the copy is gone or <paramref name="change"/> leaves it as it is.
+    /// makes from the stored one, the files only those notes used deleted, and those it <c>Moved</c> to a new index sealed
+    /// again under it, as each is bound to its index. Nothing when the copy is gone or <paramref name="change"/> leaves it
+    /// as it is.
     /// </summary>
     public async Task PruneCopyAsync(
-        IClientSessionHandle session, string code, byte[] key, Func<PublishedCopy, (PublishedCopy Copy, IReadOnlyCollection<int> Freed)?> change, CancellationToken ct)
+        IClientSessionHandle session, string code, byte[] key,
+        Func<PublishedCopy, (PublishedCopy Copy, IReadOnlyCollection<int> Freed, IReadOnlyList<(int From, int To)> Moved)?> change, CancellationToken ct)
     {
         var lookup = ShareCode.Lookup(code);
         var l = Convert.ToHexStringLower(lookup);
@@ -238,6 +240,16 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         if (pruned.Freed.Count > 0)
         {
             await catalog.PublicationFiles.DeleteManyAsync(session, Files.Eq(d => d.Publication, doc.Id) & Files.In(d => d.Index, pruned.Freed), cancellationToken: ct);
+        }
+
+        // Each to a lower index, in order: the one it takes is freed or moved on already, as the index is unique.
+        foreach (var (from, to) in pruned.Moved.OrderBy(m => m.From))
+        {
+            var file = Files.Eq(d => d.Publication, doc.Id) & Files.Eq(d => d.Index, from);
+            if (await catalog.PublicationFiles.Find(session, file).FirstOrDefaultAsync(ct) is not { } moved) continue;
+            var bytes = VaultCrypto.Open(key, moved.Blob, FileContext(l, from));
+            await catalog.PublicationFiles.UpdateOneAsync(
+                session, file, Builders<PublicationFileDocument>.Update.Set(d => d.Index, to).Set(d => d.Blob, VaultCrypto.Seal(key, bytes, FileContext(l, to))), cancellationToken: ct);
         }
     }
 

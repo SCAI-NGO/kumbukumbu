@@ -284,4 +284,15 @@ describe("PublicationBar", () => {
     renderBar(false);
     expect(await bar()).toHaveTextContent("Published by the vault's owner");
   });
+
+  it("tells a member a bundled note is published, though the list names no start for her", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: null }] }),
+    });
+    renderBar(false);
+    const region = await bar();
+    expect(region).toHaveTextContent("Published by the vault's owner");
+    expect(within(region).queryByRole("link")).not.toBeInTheDocument();
+  });
 });

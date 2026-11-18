@@ -77,8 +77,9 @@ internal sealed partial class Publications
         if (depth is < 0 or > MaxDepth) throw new PublishRefusedException($"the depth goes from 0 to {MaxDepth}", ShellErrorKind.Invalid);
     }
 
-    /// <summary>The notes of a walk (caller's view), the start first, and the links between them by index.</summary>
-    internal sealed record Walk(IReadOnlyList<BundleNoteLine> Notes, IReadOnlyList<BundleLeftOut> LeftOut, IReadOnlyList<int[]> Edges);
+    /// <summary>The notes of a walk to <paramref name="Depth"/> (caller's view), the start first, and the links between
+    /// them by index.</summary>
+    internal sealed record Walk(IReadOnlyList<BundleNoteLine> Notes, IReadOnlyList<BundleLeftOut> LeftOut, IReadOnlyList<int[]> Edges, int Depth);
 
     /// <summary>
     /// Breadth-first along outgoing links and embeds to <paramref name="depth"/>, entering only notes that no mark covers,
@@ -112,7 +113,8 @@ internal sealed partial class Publications
         return new Walk(
             [.. taken.Select(t => new BundleNoteLine(graph.Nodes[t.Node].Path!, graph.Nodes[t.Node].Title, t.Depth))],
             left,
-            [.. edges.Order().Select(e => new[] { e.Item1, e.Item2 })]);
+            [.. edges.Order().Select(e => new[] { e.Item1, e.Item2 })],
+            depth);
     }
 
     private static List<(int Node, int Depth)> Bfs(LinkGraph g, VaultPath note, int depth, Func<VaultPath, bool> admit)
@@ -170,14 +172,15 @@ internal sealed partial class Publications
     }
 
     /// <summary>A note's fair copy with the images <paramref name="usable"/> lets it take, its links to the notes
-    /// <paramref name="noteId"/> names inside the copy.</summary>
+    /// <paramref name="noteId"/> names inside the copy (to a heading of its own too, when it names the note itself).</summary>
     private FairCopy Fair(
         VaultAccess access, StoredNote note, PublishingRecord record, Dictionary<VaultPath, StoredAttachment> attachments, LinkResolver resolver,
         Func<VaultPath, bool> usable, Func<VaultPath, int?> noteId, string? ownOrigin = null)
     {
         var source = access.ToVault(note.Path);
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
-        int? NoteLink(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Note, Target: { } t } ? noteId(t) : null;
+        int? NoteLink(string target) =>
+            target.Length == 0 ? noteId(source) : resolver.Resolve(source, target) is { Kind: LinkKind.Note, Target: { } t } ? noteId(t) : null;
         bool MayCopy(VaultPath p) =>
             usable(p) && attachments.ContainsKey(p) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image && !Covered(record.Unpublishable, p.Value)
             && !InSkillPlace(access.Vault, p);
@@ -206,38 +209,61 @@ internal sealed partial class Publications
     private static IReadOnlyList<string>? StoredWithout(VaultAccess access, IReadOnlyList<VaultPath>? without) =>
         without is null || without.Count == 0 ? null : [.. without.Select(p => access.ToVault(p).Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
 
-    /// <summary>A copy as it is made: a single note's as before; a bundle's notes, and its members for the record.</summary>
-    private sealed record MadeAny(Made Made, IReadOnlyList<PublishedBundleNote>? Notes, IReadOnlyList<BundleMember>? Members)
+    /// <summary>A copy as it is made: a single note's as before; a bundle's notes and the links between them, and its
+    /// members for the record.</summary>
+    private sealed record MadeAny(Made Made, IReadOnlyList<PublishedBundleNote>? Notes, IReadOnlyList<int[]>? Edges, IReadOnlyList<BundleMember>? Members)
     {
-        /// <remarks>Only the edges between notes the copy holds: one gone since the walk took it is in none.</remarks>
-        public PublishedCopy Copy(DateTime at, Walk walk)
+        public PublishedCopy Copy(DateTime at) => Notes is null ? Made.Copy(at) : Made.Copy(at) with { Notes = Notes, Edges = Edges };
+    }
+
+    /// <summary>
+    /// Breadth-first from note 0 along <paramref name="edges"/> to <paramref name="depth"/>, entering only the notes
+    /// <paramref name="admit"/> lets in: the notes and depths a fresh walk would give once some of a walk's notes are
+    /// gone, in its order.
+    /// </summary>
+    private static List<(int Id, int Depth)> Rewalk(IReadOnlyList<int[]> edges, Func<int, bool> admit, int depth)
+    {
+        var order = new List<(int Id, int Depth)> { (0, 0) };
+        var seen = new HashSet<int> { 0 };
+        for (var at = 0; at < order.Count; at++)
         {
-            if (Notes is null) return Made.Copy(at);
-            var ids = Notes.Select(n => n.Id).ToHashSet();
-            return Made.Copy(at) with { Notes = Notes, Edges = [.. walk.Edges.Where(e => ids.Contains(e[0]) && ids.Contains(e[1]))] };
+            var (from, d) = order[at];
+            if (d == depth) continue;
+            foreach (var e in edges)
+            {
+                if (e[0] == from && admit(e[1]) && seen.Add(e[1])) order.Add((e[1], d + 1));
+            }
         }
+
+        return order;
     }
 
     /// <summary>The note alone as before, or the bundle the walk took.</summary>
     private async Task<MadeAny> MakeAnyAsync(
         VaultAccess access, EncryptedNoteStore notes, StoredNote start, PublishingRecord record, Walk walk, string baseUrl, CancellationToken ct) =>
-        walk.Notes.Count == 1 ? new MadeAny(await MakeAsync(access, notes, start, record, baseUrl, ct), null, null) : await MakeBundleAsync(access, notes, start, record, walk, baseUrl, ct);
+        walk.Notes.Count == 1 ? new MadeAny(await MakeAsync(access, notes, start, record, baseUrl, ct), null, null, null) : await MakeBundleAsync(access, notes, start, record, walk, baseUrl, ct);
 
     /// <summary>
     /// Every note of the walk as its fair copy, links to the others inside the copy (<see cref="FairCopies.NoteLinkPrefix"/>),
     /// the images numbered across the bundle, each read and stripped once. Past <see cref="CopyLimit"/> together the
     /// bundle is refused (decision 9); an image whose bytes are missing or don't strip is plain text, as for one note.
+    /// Notes and images are numbered from 0 without gaps, so the reader can't tell that one is missing (decision 3).
     /// </summary>
     private async Task<MadeAny> MakeBundleAsync(
         VaultAccess access, EncryptedNoteStore notes, StoredNote start, PublishingRecord record, Walk walk, string baseUrl, CancellationToken ct)
     {
         var (attachments, resolver) = await LinksAsync(access, notes, ct);
         var ownOrigin = new Uri(baseUrl).GetLeftPart(UriPartial.Authority);
-        var ids = walk.Notes.Select((n, i) => (Stored: access.ToVault(n.Path), i)).ToDictionary(n => n.Stored, n => n.i);
         var current = new List<StoredNote?> { start };
         foreach (var line in walk.Notes.Skip(1)) current.Add(await notes.GetAsync(line.Path, ct));
-        // A note gone since the walk leaves the bundle; links to it are plain text.
-        int? NoteId(VaultPath p) => ids.TryGetValue(p, out var id) && current[id] is not null ? id : null;
+        // A note gone since the walk leaves the bundle with what it alone reached, as from a copy (Pruned); links to them
+        // are plain text. The others are numbered in walk order: the copy's ids, not the walk's.
+        var taken = current.All(c => c is not null)
+            ? [.. walk.Notes.Select((n, i) => (i, n.Depth))]
+            : Rewalk(walk.Edges, i => current[i] is not null, walk.Depth);
+        var ids = taken.Select((t, id) => (t.Id, id)).ToDictionary(t => t.Id, t => t.id);
+        var stored = taken.Select((t, id) => (Path: access.ToVault(walk.Notes[t.Id].Path), id)).ToDictionary(t => t.Path, t => t.id);
+        int? NoteId(VaultPath p) => stored.TryGetValue(p, out var id) ? id : null;
 
         var unusable = new HashSet<VaultPath>();
         var stripped = new Dictionary<VaultPath, byte[]?>();
@@ -245,14 +271,13 @@ internal sealed partial class Publications
         var files = new List<VaultPath>();
         var bytes = new List<byte[]>();
         var plain = new List<string>();
-        var made = new List<(int Id, FairCopy Fair, List<int> Files)>();
+        var made = new List<(int Id, int Depth, FairCopy Fair, List<int> Files)>();
         var total = 0L;
-        for (var id = 0; id < current.Count; id++)
+        foreach (var (w, depth) in taken)
         {
-            if (current[id] is not { } stored) continue;
             while (true)
             {
-                var fair = Fair(access, stored, record, attachments, resolver, p => !unusable.Contains(p), NoteId, ownOrigin);
+                var fair = Fair(access, current[w]!, record, attachments, resolver, p => !unusable.Contains(p), NoteId, ownOrigin);
                 var local = new List<int>();
                 var retry = false;
                 foreach (var path in fair.Files)
@@ -293,7 +318,7 @@ internal sealed partial class Publications
 
                 if (retry) continue;
                 plain.AddRange(fair.Plain.Where(p => !plain.Contains(p)));
-                made.Add((id, fair, local));
+                made.Add((ids[w], depth, fair, local));
                 break;
             }
         }
@@ -306,47 +331,60 @@ internal sealed partial class Publications
             [.. files.Select((p, n) => new PublishedCopyFile(n, attachments[p].Current.MediaType))],
             bytes,
             plain);
-        PublishedBundleNote[] bundle = [.. made.Select(m => new PublishedBundleNote(m.Id, m.Fair.Title, m.Fair.Markdown, walk.Notes[m.Id].Depth, m.Files))];
-        BundleMember[] members = [.. made.Skip(1).Select(m => new BundleMember(m.Id, access.ToVault(walk.Notes[m.Id].Path).Value, current[m.Id]!.Version))];
-        return new MadeAny(result, bundle, members);
+        PublishedBundleNote[] bundle = [.. made.Select(m => new PublishedBundleNote(m.Id, m.Fair.Title, m.Fair.Markdown, m.Depth, m.Files))];
+        BundleMember[] members = [.. taken.Skip(1).Select(t => new BundleMember(ids[t.Id], access.ToVault(walk.Notes[t.Id].Path).Value, current[t.Id]!.Version))];
+        int[][] edges = [.. walk.Edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] }).OrderBy(e => e[0]).ThenBy(e => e[1])];
+        return new MadeAny(result, bundle, edges, members);
     }
 
+    /// <summary>A copy with notes taken out: the files freed, the kept ones whose index changed, the notes' new ids by
+    /// their old ones, and the freed files' places in the copy's (and the entry's) list of files.</summary>
+    internal sealed record PrunedCopy(
+        PublishedCopy Copy, IReadOnlyCollection<int> Freed, IReadOnlyList<(int From, int To)> Moved, IReadOnlyDictionary<int, int> Ids, IReadOnlySet<int> Positions);
+
     /// <summary>
-    /// <paramref name="copy"/> without the notes <paramref name="dropped"/> and the ones the stored edges reach only through
-    /// them (decision 3): their links in the others become plain text, edges to them go, and the files only they used
-    /// are freed. Null when nothing leaves.
+    /// <paramref name="copy"/> without the notes <paramref name="dropped"/> and what a fresh walk to
+    /// <paramref name="depth"/> over the stored edges no longer takes (decision 3): the notes only they reached, and the
+    /// ones now further than <paramref name="depth"/>. Their links in the others become plain text, edges to them go,
+    /// the files only they used are freed, and what stays is numbered again from 0, notes in the new walk's order and
+    /// at its depths, files in their order: ids with gaps would tell the reader a note left. Null when nothing leaves.
     /// </summary>
     /// <remarks>The copy's files and the entry's <see cref="PublicationEntry.Files"/> stand in the same order, and are cut
     /// alike: <c>Positions</c> are the freed files' places in both.</remarks>
-    internal static (PublishedCopy Copy, IReadOnlyCollection<int> Freed, IReadOnlySet<int> Positions, IReadOnlySet<int> Gone)? Pruned(PublishedCopy copy, IReadOnlySet<int> dropped)
+    internal static PrunedCopy? Pruned(PublishedCopy copy, IReadOnlySet<int> dropped, int depth)
     {
         if (copy.Notes is not { } notes || dropped.Count == 0) return null;
         var edges = copy.Edges ?? [];
-        var reached = new HashSet<int> { 0 };
-        var queue = new Queue<int>([0]);
-        while (queue.TryDequeue(out var from))
-        {
-            foreach (var e in edges)
-            {
-                if (e[0] == from && !dropped.Contains(e[1]) && reached.Add(e[1])) queue.Enqueue(e[1]);
-            }
-        }
+        var byId = notes.ToDictionary(n => n.Id);
+        var taken = Rewalk(edges, id => !dropped.Contains(id) && byId.ContainsKey(id), depth);
+        if (taken.Count == notes.Count) return null;
 
-        var gone = notes.Select(n => n.Id).Where(id => !reached.Contains(id)).ToHashSet();
-        if (gone.Count == 0) return null;
-        PublishedBundleNote[] kept = [.. notes.Where(n => !gone.Contains(n.Id)).Select(n => n with { Markdown = FairCopies.Unlink(n.Markdown, id => !gone.Contains(id)) })];
-        var used = kept.SelectMany(n => n.Files).ToHashSet();
-        var freed = copy.Files.Select(f => f.Index).Where(i => !used.Contains(i)).ToList();
-        var positions = copy.Files.Select((f, i) => (f, i)).Where(x => !used.Contains(x.f.Index)).Select(x => x.i).ToHashSet();
-        var start = kept[0];
+        var ids = taken.Select((t, id) => (t.Id, id)).ToDictionary(t => t.Id, t => t.id);
+        var used = taken.SelectMany(t => byId[t.Id].Files).ToHashSet();
+        var files = copy.Files.Where(f => used.Contains(f.Index)).Select((f, n) => (From: f.Index, To: n, f.MediaType)).ToList();
+        var fileIds = files.ToDictionary(f => f.From, f => f.To);
+        string? Relinked(int id, string subpath) =>
+            !ids.TryGetValue(id, out var to) ? "" : to == id ? null : FairCopies.NoteLinkPrefix + to + (subpath.Length > 0 ? "/" + subpath : "");
+        PublishedBundleNote[] kept =
+        [
+            .. taken.Select(t => byId[t.Id] with
+            {
+                Id = ids[t.Id], Depth = t.Depth, Markdown = FairCopies.Relink(byId[t.Id].Markdown, Relinked), Files = [.. byId[t.Id].Files.Select(f => fileIds[f])],
+            }),
+        ];
         var pruned = copy with
         {
-            Markdown = start.Markdown,
-            Files = [.. copy.Files.Where(f => used.Contains(f.Index))],
+            Markdown = kept[0].Markdown,
+            Files = [.. files.Select(f => new PublishedCopyFile(f.To, f.MediaType))],
             Notes = kept,
-            Edges = [.. edges.Where(e => !gone.Contains(e[0]) && !gone.Contains(e[1]))],
+            Edges = [.. edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] }).OrderBy(e => e[0]).ThenBy(e => e[1])],
         };
-        return (pruned, freed, positions, gone);
+        return new PrunedCopy(
+            pruned,
+            [.. copy.Files.Select(f => f.Index).Where(i => !used.Contains(i))],
+            [.. files.Where(f => f.From != f.To).Select(f => (f.From, f.To))],
+            ids,
+            copy.Files.Select((f, i) => (f, i)).Where(x => !used.Contains(x.f.Index)).Select(x => x.i).ToHashSet());
     }
 
     /// <summary>
@@ -357,17 +395,17 @@ internal sealed partial class Publications
         IClientSessionHandle session, PublicationEntry entry, IReadOnlySet<string> leaving, CancellationToken ct)
     {
         var dropped = (entry.Members ?? []).Where(m => leaving.Contains(m.Note)).Select(m => m.Id).ToHashSet();
-        IReadOnlySet<int> gone = new HashSet<int>();
-        IReadOnlySet<int> positions = new HashSet<int>();
+        PrunedCopy? pruned = null;
         await store.PruneCopyAsync(session, entry.Code, entry.Key, copy =>
         {
-            if (Pruned(copy, dropped) is not { } p) return null;
-            (gone, positions) = (p.Gone, p.Positions);
-            return (p.Copy, p.Freed);
+            if ((pruned = Pruned(copy, dropped, entry.Depth ?? 0)) is not { } p) return null;
+            return (p.Copy, p.Freed, p.Moved);
         }, ct);
-        // The record follows the copy; a member the copy no longer holds goes from it either way.
-        var members = (entry.Members ?? []).Where(m => !gone.Contains(m.Id) && !dropped.Contains(m.Id)).ToList();
-        IReadOnlyList<PublishedFile> files = positions.Count == 0 ? entry.Files : [.. entry.Files.Where((_, i) => !positions.Contains(i))];
+        // The record follows the copy, ids and all; a member the copy no longer holds goes from it either way.
+        List<BundleMember> members = pruned is null
+            ? [.. (entry.Members ?? []).Where(m => !dropped.Contains(m.Id))]
+            : [.. (entry.Members ?? []).Where(m => pruned.Ids.ContainsKey(m.Id)).Select(m => m with { Id = pruned.Ids[m.Id] }).OrderBy(m => m.Id)];
+        IReadOnlyList<PublishedFile> files = pruned is null ? entry.Files : [.. entry.Files.Where((_, i) => !pruned.Positions.Contains(i))];
         return (entry with { Members = members, Files = files }, (entry.Members?.Count ?? 0) - members.Count);
     }
 

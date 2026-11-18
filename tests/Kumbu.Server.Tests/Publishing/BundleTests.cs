@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
@@ -15,6 +21,7 @@ using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Publishing;
@@ -304,21 +311,65 @@ public sealed class BundleTests(KumbuAppFactory app)
             VaultEvents.TextFor(VaultEvents.PublicationUpdated, true, "You", "Work", null, null, note: "/Work/A.md", notes: 3, added: 1, removed: 0));
     }
 
+    /// <summary>A record and a copy as a server before Publish 2.0 wrote them: no depth, notes left out or members, no
+    /// notes or edges in the copy; the keys absent, not null.</summary>
+    private async Task<string> PublishedBeforeBundlesAsync(RestClient alice, string note, string markdown)
+    {
+        var (notes, access) = await AliceAsync(alice);
+        var (code, key) = (ShareCode.New(), VaultCrypto.NewKey());
+        var version = (await notes.GetAsync(P(note), Ct))!.Version;
+        var record = new PublishingRecord(
+            [new PublicationEntry(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)), note, code, key, DateTime.UtcNow, version, [], alice.Username, new WriterRefPayload(true, "session"))],
+            [], []);
+        var json = JsonSerializer.SerializeToNode(record)!;
+        foreach (var entry in json["Publications"]!.AsArray()) foreach (var later in new[] { "Depth", "Without", "Members" }) entry!.AsObject().Remove(later);
+        var seal = typeof(UnlockedVault).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance).Single(m => m.Name == "Seal" && m.IsGenericMethodDefinition).MakeGenericMethod(typeof(JsonNode));
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var id = ObjectId.GenerateNewId();
+        await catalog.Publishing.InsertOneAsync(
+            new SealedDocument { Id = id, Vault = access.Id, PathId = access.Vault.PublishingId(), Revision = 1, Blob = (byte[])seal.Invoke(access.Vault, [$"publishing:{access.Id}:{id}:1", json])! },
+            cancellationToken: Ct);
+
+        using (var session = await catalog.StartSessionAsync(Ct))
+        {
+            session.StartTransaction();
+            await Store.InsertCopyAsync(session, access.Id, code, key, alice.User.Id, new PublishedCopy("A", markdown, DateTime.UtcNow, []), [], Ct);
+            await session.CommitTransactionAsync(Ct);
+        }
+
+        var lookup = ShareCode.Lookup(code);
+        var copy = Encoding.UTF8.GetBytes($$"""{"Title":"A","Markdown":{{JsonSerializer.Serialize(markdown)}},"SnapshotAt":"2026-01-02T03:04:05Z","Files":[]}""");
+        await catalog.Publications.UpdateOneAsync(
+            d => d.Lookup == lookup,
+            Builders<PublicationDocument>.Update.Set(d => d.Blob, VaultCrypto.Seal(key, copy, $"publication:{Convert.ToHexStringLower(lookup)}:copy")),
+            cancellationToken: Ct);
+        return code;
+    }
+
     [Fact]
     public async Task A_copy_stored_before_bundles_still_opens_and_updates_as_depth_0()
     {
         var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "b"));
-        var published = await PublishAsync(alice, "/Work/A.md", 0);
+        var code = await PublishedBeforeBundlesAsync(alice, "/Work/A.md", "B\n");
+        using var reader = new ReaderApiTests.Reader(Api, "203.0.113.72");
 
-        var copy = await CopyAsync(published);
-        Assert.Null(copy.Notes);
-        Assert.Null(copy.Edges);
-        var (_, access) = await AliceAsync(alice);
+        using (var read = await reader.PostAsync(code))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            var json = await RestClient.JsonAsync(read);
+            Assert.Equal("B", json["markdown"]!.GetValue<string>().TrimEnd());
+            Assert.Null(json["notes"]);
+        }
+
+        var (notes, access) = await AliceAsync(alice);
+        var state = (await Publications.StateAsync(access, notes, P("/Work/A.md"), null, Ct))!;
+        Assert.Equal((1, 0), (state.Notes, state.Depth));
+        Assert.Empty(await Publications.BundledAsync(access, VaultPath.Root.Child("Work"), Ct));
+        var updated = await UpdateAsync(alice, "/Work/A.md");
+        Assert.Equal(["/Work/A.md"], updated.Notes!.Select(n => n.Path.Value));
+        Assert.Null((await CopyAsync(updated)).Notes);
         var entry = Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications);
-        Assert.Null(entry.Depth);
-        Assert.Null(entry.Members);
-        Assert.Equal("B", copy.Markdown.TrimEnd());
-        Assert.Equal(["/Work/A.md"], (await UpdateAsync(alice, "/Work/A.md")).Notes!.Select(n => n.Path.Value));
+        Assert.Equal((null, null), (entry.Depth, entry.Members));
     }
 
     [Fact]
@@ -377,6 +428,109 @@ public sealed class BundleTests(KumbuAppFactory app)
 
         // C stays: B still reaches it; E was reached only through D.
         Assert.Equal(["A", "B", "C"], (await CopyAsync(published)).Notes!.Select(n => n.Title));
+    }
+
+    [Fact]
+    public async Task After_a_prune_the_notes_and_files_are_numbered_without_gaps()
+    {
+        var alice = await WorkAsync();
+        await alice.CreateFileAsync("a.jpg", ImageMetadataTests.JpegWithGps(4));
+        await alice.CreateFileAsync("b.jpg", ImageMetadataTests.JpegWithGps(5));
+        await alice.CreateFileAsync("c.jpg", ImageMetadataTests.JpegWithGps(6));
+        await alice.CreateAsync("A.md", "![[a.jpg]] [[B]] [[C]]");
+        await alice.CreateAsync("B.md", "![[b.jpg]]");
+        await alice.CreateAsync("C.md", "![[c.jpg]] back to [[A]]");
+        var published = await PublishAsync(alice, "/Work/A.md", 1);
+        var c = (await Store.OpenFileAsync(CodeOf(published), 2, Ct))!.Value.Bytes;
+
+        await MarkAsync(alice, "/Work/B.md");
+
+        // The reader can't tell a note or an image left: what stays is numbered as if it had never been there.
+        var copy = await CopyAsync(published);
+        Assert.Equal([(0, "A"), (1, "C")], copy.Notes!.Select(n => (n.Id, n.Title)));
+        Assert.Equal("![a.jpg](f/0) B [C](#kn-1)", copy.Markdown.TrimEnd());
+        Assert.Equal("![c.jpg](f/0) back to [A](#kn-0)", copy.Notes![1].Markdown.TrimEnd());
+        Assert.Equal([1], copy.Notes[1].Files);
+        Assert.Equal([0, 1], copy.Files.Select(f => f.Index));
+        Assert.Equal([[0, 1], [1, 0]], copy.Edges!);
+        Assert.Equal(c, (await Store.OpenFileAsync(CodeOf(published), 1, Ct))!.Value.Bytes);
+        Assert.Null(await Store.OpenFileAsync(CodeOf(published), 2, Ct));
+        var (_, access) = await AliceAsync(alice);
+        var entry = Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications);
+        Assert.Equal([(1, "/Work/C.md")], entry.Members!.Select(m => (m.Id, m.Note)));
+        Assert.Equal(["/Work/a.jpg", "/Work/c.jpg"], entry.Files.Select(f => f.Path));
+        using var reader = new ReaderApiTests.Reader(Api, "203.0.113.73");
+        using var read = await reader.PostAsync(CodeOf(published));
+        var json = await RestClient.JsonAsync(read);
+        Assert.Equal([0, 1], json["notes"]!.AsArray().Select(n => n!["id"]!.GetValue<int>()));
+        Assert.Equal([0, 1], json["files"]!.AsArray().Select(f => f!["index"]!.GetValue<int>()));
+    }
+
+    [Fact]
+    public async Task After_a_prune_the_depths_are_a_fresh_walks_and_a_note_now_too_deep_leaves()
+    {
+        // At depth 3: A → B → D → F, and A → C → E → D. Without B, D is three links away and F four.
+        var alice = await WorkAsync(("A.md", "[[B]] [[C]]"), ("B.md", "[[D]]"), ("C.md", "[[E]]"), ("D.md", "[[F]]"), ("E.md", "[[D]]"), ("F.md", "f"));
+        var published = await PublishAsync(alice, "/Work/A.md", 3);
+        Assert.Equal(6, (await CopyAsync(published)).Notes!.Count);
+
+        await MarkAsync(alice, "/Work/B.md");
+
+        var copy = await CopyAsync(published);
+        Assert.Equal([(0, "A", 0), (1, "C", 1), (2, "E", 2), (3, "D", 3)], copy.Notes!.Select(n => (n.Id, n.Title, n.Depth)));
+        Assert.Equal(["/Work/A.md", "/Work/C.md", "/Work/E.md", "/Work/D.md"], Paths(await PreviewAsync(alice, "/Work/A.md", 3)));
+        Assert.Equal("[E](#kn-2)", copy.Notes![1].Markdown.TrimEnd());
+        Assert.Equal("F", copy.Notes[3].Markdown.TrimEnd());
+        var (_, access) = await AliceAsync(alice);
+        Assert.Equal(
+            [(1, "/Work/C.md"), (2, "/Work/E.md"), (3, "/Work/D.md")],
+            Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications).Members!.Select(m => (m.Id, m.Note)).OrderBy(m => m.Id));
+    }
+
+    [Fact]
+    public async Task A_cycle_takes_each_note_once_and_survives_a_prune()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "[[C]] [[A]]"), ("C.md", "[[A]] [[B]]"));
+        var published = await PublishAsync(alice, "/Work/A.md", 5);
+
+        var copy = await CopyAsync(published);
+        Assert.Equal([(0, "A", 0), (1, "B", 1), (2, "C", 2)], copy.Notes!.Select(n => (n.Id, n.Title, n.Depth)));
+        Assert.Equal([[0, 1], [1, 0], [1, 2], [2, 0], [2, 1]], copy.Edges!);
+
+        await MarkAsync(alice, "/Work/C.md");
+
+        copy = await CopyAsync(published);
+        Assert.Equal(["A", "B"], copy.Notes!.Select(n => n.Title));
+        Assert.Equal([[0, 1], [1, 0]], copy.Edges!);
+        Assert.Equal("C [A](#kn-0)", copy.Notes![1].Markdown.TrimEnd());
+    }
+
+    [Fact]
+    public async Task The_walk_stays_in_its_vault()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]] [[Garden/B]] [x](/Garden/B.md) [y](../Garden/B.md)"));
+        using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Garden" })) Assert.True(created.IsSuccessStatusCode);
+        using (var put = await alice.SendAsync(HttpMethod.Put, "/api/notes/Garden/B.md", new { content = "garden" })) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        var preview = await PreviewAsync(alice, "/Work/A.md", 2);
+
+        Assert.Equal(["/Work/A.md"], Paths(preview));
+        Assert.Empty(preview.LeftOut);
+    }
+
+    [Fact]
+    public async Task A_member_note_moved_into_a_skills_place_leaves_the_copy()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]] [[C]]"), ("B.md", "b"), ("C.md", "c"));
+        var published = await PublishAsync(alice, "/Work/A.md", 1);
+
+        using (var moved = await alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Work/B.md", to = "/Work/_skills/tidy/B.md" })) Assert.True(moved.IsSuccessStatusCode);
+
+        var copy = await CopyAsync(published);
+        Assert.Equal([(0, "A"), (1, "C")], copy.Notes!.Select(n => (n.Id, n.Title)));
+        Assert.Equal("B [C](#kn-1)", copy.Markdown.TrimEnd());
+        var (_, access) = await AliceAsync(alice);
+        Assert.Equal([(1, "/Work/C.md")], Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications).Members!.Select(m => (m.Id, m.Note)));
     }
 
     [Fact]
@@ -471,7 +625,7 @@ public sealed class BundleTests(KumbuAppFactory app)
             Assert.Equal("/Work/C.md", json["publications"]![0]!["without"]![0]!.GetValue<string>());
         }
 
-        using (var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0 }))
+        using (var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0, expected = new[] { "A.md" } }))
         {
             Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
             var json = await RestClient.JsonAsync(updated);
@@ -481,6 +635,79 @@ public sealed class BundleTests(KumbuAppFactory app)
 
         using var bad = await alice.GetAsync("/api/publication-previews/Work/A.md?depth=9");
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+    }
+
+    [Fact]
+    public async Task Over_http_a_bundle_goes_out_only_with_the_list_that_was_seen()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "b"), ("C.md", "c"));
+
+        using (var unseen = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 1 }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, unseen.StatusCode);
+        }
+
+        var (_, access) = await AliceAsync(alice);
+        Assert.Empty((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications);
+        using (var seen = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 1, expected = new[] { "A.md", "B.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.Created, seen.StatusCode);
+        }
+
+        await EditAsync(alice, "A.md", "[[B]] [[C]]");
+        using (var none = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md")) Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
+        using (var alone = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0 })) Assert.Equal(HttpStatusCode.BadRequest, alone.StatusCode);
+        using (var stale = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { expected = new[] { "A.md", "B.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+            Assert.Equal(["/Work/A.md", "/Work/B.md", "/Work/C.md"], (await RestClient.JsonAsync(stale))["preview"]!["notes"]!.AsArray().Select(n => n!["path"]!.GetValue<string>()));
+        }
+
+        Assert.Equal(["/Work/B.md"], Assert.Single((await Store.ReadAsync(null, access.Vault, Ct)).Record.Publications).Members!.Select(m => m.Note));
+        using var current = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { expected = new[] { "A.md", "B.md", "C.md" } });
+        Assert.Equal(HttpStatusCode.OK, current.StatusCode);
+    }
+
+    [Fact]
+    public async Task Over_http_without_names_notes_of_the_bundle_only()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]] [[C]]"), ("B.md", "[[D]]"), ("C.md", "c"), ("D.md", "d"), ("E.md", "e"));
+        await MarkAsync(alice, "/Work/C.md");
+
+        foreach (var without in new[] { "A.md", "E.md", "C.md", "D.md" })
+        {
+            using var preview = await alice.GetAsync($"/api/publication-previews/Work/A.md?depth=1&without={without}");
+            Assert.Equal(HttpStatusCode.BadRequest, preview.StatusCode);
+            using var publish = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 1, without = new[] { without }, expected = new[] { "A.md" } });
+            Assert.Equal(HttpStatusCode.BadRequest, publish.StatusCode);
+        }
+
+        using (var published = await alice.SendAsync(HttpMethod.Post, "/api/publications/Work/A.md", new { depth = 2, without = new[] { "B.md", "D.md" }, expected = new[] { "A.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        }
+
+        using (var update = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { without = new[] { "E.md" }, expected = new[] { "A.md", "B.md", "D.md" } }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, update.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task A_member_learns_a_note_is_bundled_but_not_its_start()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "b"));
+        await PublishAsync(alice, "/Work/A.md", 1);
+        var bob = await RestClient.NewAsync(Api, vault: "Garten");
+        await alice.ShareWithAsync(bob, "alices-work", MemberRole.Write);
+
+        using var list = await bob.GetAsync("/api/vaults/alices-work/publications");
+
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        var bundled = Assert.Single((await RestClient.JsonAsync(list))["bundled"]!.AsArray())!;
+        Assert.Equal("/alices-work/B.md", bundled["path"]!.GetValue<string>());
+        Assert.Null(bundled["start"]);
+        Assert.DoesNotContain("A.md", bundled.ToJsonString(), StringComparison.Ordinal);
     }
 
     [Fact]

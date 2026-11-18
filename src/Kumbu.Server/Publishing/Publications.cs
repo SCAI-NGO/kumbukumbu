@@ -134,7 +134,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at, walk), made.Made.Bytes, ct);
+                await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
@@ -184,7 +184,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
-                await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at, walk), made.Made.Bytes, ct);
+                await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
             }, ct);
@@ -573,14 +573,37 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
     }
 
     /// <summary>Every note published inside a bundle at or below <paramref name="under"/> but its start, with the start
-    /// (Publish 2.0 decision 7); a member learns as much as of a note published alone.</summary>
-    public async Task<IReadOnlyList<(VaultPath Note, VaultPath Start)>> BundledAsync(VaultAccess access, VaultPath under, CancellationToken ct)
+    /// for the owner (Publish 2.0 decision 7). A member learns as much as of a note published alone: that it is
+    /// published, once, with no start, as the start would tell her which of her notes link to it.</summary>
+    public async Task<IReadOnlyList<(VaultPath Note, VaultPath? Start)>> BundledAsync(VaultAccess access, VaultPath under, CancellationToken ct)
     {
         var scope = under.IsRoot ? null : access.ToVault(under).Value;
         var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        var owner = IsOwner(access);
         return [.. record.Publications.Where(p => p.Kind is null)
-            .SelectMany(p => (p.Members ?? []).Where(m => scope is null || Covered([scope], m.Note)).Select(m => (access.ToCaller(Parse(m.Note)), access.ToCaller(Parse(p.Note)))))
-            .OrderBy(b => b.Item1.Value, StringComparer.Ordinal).ThenBy(b => b.Item2.Value, StringComparer.Ordinal)];
+            .SelectMany(p => (p.Members ?? []).Where(m => scope is null || Covered([scope], m.Note))
+                .Select(m => (Note: access.ToCaller(Parse(m.Note)), Start: owner ? access.ToCaller(Parse(p.Note)) : (VaultPath?)null)))
+            .Distinct()
+            .OrderBy(b => b.Note.Value, StringComparer.Ordinal).ThenBy(b => b.Start?.Value, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Refuses a note of <paramref name="without"/> that the walk from <paramref name="note"/> to <paramref name="depth"/>,
+    /// with nothing left out, doesn't take, and the start itself: the publisher leaves out only notes the list showed her
+    /// (over HTTP; <c>sh publish</c> keeps its own rule).
+    /// </summary>
+    internal async Task RequireInWalkAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, int depth, IReadOnlyList<VaultPath> without, CancellationToken ct)
+    {
+        if (without.Count == 0) return;
+        Check(access, publishing: true);
+        CheckDepth(depth);
+        var record = (await store.ReadAsync(null, access.Vault, ct)).Record;
+        var walk = await WalkAsync(access, notes, record, note, depth, [], ct);
+        var taken = walk.Notes.Skip(1).Select(n => n.Path.Value).ToHashSet(StringComparer.Ordinal);
+        if (without.FirstOrDefault(w => !taken.Contains(w.Value)) is { } stray)
+        {
+            throw new PublishRefusedException($"{stray} is not among the notes {note} takes at depth {depth}; leave out only notes the list shows", ShellErrorKind.Invalid);
+        }
     }
 
     public async Task<PublicationState?> StateAsync(VaultAccess access, EncryptedNoteStore notes, VaultPath note, string? linkBase, CancellationToken ct) =>

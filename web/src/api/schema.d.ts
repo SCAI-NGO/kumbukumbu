@@ -12640,7 +12640,7 @@ export interface components {
         };
         BundledView: {
             path: string;
-            start: string;
+            start: null | string;
         };
         PublishedView: {
             link: string;

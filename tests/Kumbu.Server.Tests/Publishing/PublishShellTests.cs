@@ -351,4 +351,24 @@ public sealed partial class PublishShellTests(KumbuAppFactory app)
         Assert.Contains("notes:\n  /Work/Plan.md\n  /Work/Budget.md", added.Text);
         Assert.EndsWith("notes: 2", (await alice.ShAsync("publish ls /Work", key)).Text);
     }
+
+    [Fact]
+    public async Task A_key_without_may_publish_neither_publishes_a_bundle_nor_tries_one()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Plan.md", "[[Budget]]");
+        await alice.CreateAsync("Budget.md", "b");
+        var key = await alice.KeyAsync("Claude", KeyRight.Write);
+
+        foreach (var command in new[] { "publish add /Work/Plan.md --depth 1", "publish add /Work/Plan.md --depth 1 --dry-run" })
+        {
+            var refused = await alice.ShAsync(command, key);
+
+            Assert.True(refused.IsError, command);
+            Assert.StartsWith("publish add: this key may not publish in Work", refused.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Budget", refused.Text, StringComparison.Ordinal);
+        }
+
+        Assert.Equal((false, "no published notes below /Work"), await alice.ShAsync("publish ls /Work", key));
+    }
 }
