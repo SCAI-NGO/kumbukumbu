@@ -50,6 +50,20 @@ const bob = () => screen.findByRole("listitem", { name: "Bob" });
 const requests = (fetch: ReturnType<typeof fakeApi>, method: string) => fetch.mock.calls.map(([r]) => r as Request).filter((r) => r.method === method);
 
 describe("AccessList", () => {
+  it("filters members by name and status", async () => {
+    members = [member(), member({ id: "m2", label: "Carol", status: "pending", redeemedAt: null })];
+    accessApi();
+    renderList();
+    await userEvent.click(await screen.findByRole("radio", { name: "Invited 1" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("listitem", { name: "Carol" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: /^All/ }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Filter by name" }), "bob");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("listitem", { name: "Bob" })).toBeInTheDocument();
+  });
+
   it("raises a role after the password dialog", async () => {
     members = [member()];
     let puts = 0;

@@ -15,6 +15,7 @@ import {
   type MemberAccess,
   type Role,
 } from "../api/sharing";
+import { useListFilter, type Status } from "../components/ListFilter";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { timeText } from "../components/Sheet";
@@ -314,6 +315,14 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
   );
 }
 
+const memberStatuses: Status[] = [
+  { value: "invited", label: "Invited" },
+  { value: "confirm", label: "To confirm" },
+  { value: "member", label: "Member" },
+];
+const memberName = (m: MemberAccess) => m.label;
+const memberStatus = (m: MemberAccess) => (m.status === "active" ? "member" : m.redeemedAt ? "confirm" : "invited");
+
 /** The owner's view of who her vault is shared with, and the way to invite someone (collab design §8.6, §10.1). */
 export default function AccessList({ vault, onClose }: { vault: string; onClose(): void }) {
   const id = useId();
@@ -326,6 +335,13 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
   const [done, setDone] = useState<string | null>(null);
   const members = access.data?.members ?? [];
   const left = access.data?.left ?? [];
+  const { visible, bar } = useListFilter(members, {
+    name: memberName,
+    status: memberStatus,
+    statuses: memberStatuses,
+    searchLabel: "Filter by name",
+    noun: "members",
+  });
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
       <div
@@ -342,9 +358,10 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
         {access.isError && <FormError>{errorText(access.error)}</FormError>}
         {done && <p role="status" className="text-text-body">{done}</p>}
         {access.data && members.length === 0 && <p className="text-text-body">{vault} isn't shared with anyone.</p>}
+        {bar}
         {members.length > 0 && (
           <ul aria-label="Members" className="flex flex-col gap-2">
-            {members.map((m) => (
+            {visible.map((m) => (
               <Member
                 key={m.id}
                 vault={vault}
