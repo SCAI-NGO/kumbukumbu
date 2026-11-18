@@ -4,8 +4,8 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
-using Microsoft.Extensions.Time.Testing;
 using Kumbu.Core.Tests.Fakes;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Sh;
 

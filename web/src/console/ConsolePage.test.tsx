@@ -687,11 +687,11 @@ describe("peek", () => {
     "",
     "## Goals",
     "",
-    "Ship the [[alpha]].",
+    "Ship the [[alpha]]. ^goal",
     "",
     "## Later",
     "",
-    "Nothing yet.",
+    "Nothing yet. #work",
   ].join("\n");
   const planLinks = [
     { line: 6, raw: "[[roadmap]]", target: "roadmap", kind: "note", path: "/Work/projects/roadmap.md", candidates: [] },
@@ -803,6 +803,23 @@ describe("peek", () => {
     expect(peeked()).not.toHaveTextContent("Plan");
     expect(peeked()).not.toHaveTextContent("Nothing yet.");
     expect(within(peeked()).queryByText("draft")).toBeNull();
+  });
+
+  it("shows a block with its links", async () => {
+    peekApi();
+    await peek("p plan.md#^goal");
+    expect(lines()).toContain(`${PLAN}#^goal`);
+    expect(await within(peeked()).findByRole("link", { name: "alpha" })).toHaveAttribute("href", "/notes/Work/projects/alpha.md");
+    expect(peeked()).not.toHaveTextContent("Goals");
+    expect(peeked()).not.toHaveTextContent("Nothing yet.");
+    expect(peeked()).not.toHaveTextContent("^goal");
+  });
+
+  it("names a tag without searching for it: the shell behind the window is not to be used", async () => {
+    peekApi();
+    await peek("p plan.md");
+    expect(within(peeked()).getByText("#work")).toBeInTheDocument();
+    expect(within(peeked()).queryByRole("button", { name: "Notes tagged #work" })).toBeNull();
   });
 
   it("says so for a heading the note doesn't have", async () => {

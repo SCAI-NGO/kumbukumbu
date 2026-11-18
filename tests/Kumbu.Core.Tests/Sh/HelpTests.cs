@@ -56,7 +56,8 @@ public class HelpTests
     {
         var details = (await Run($"help {command}")).Output;
         Assert.StartsWith(help, details);
-        Assert.Contains("\n  --archive ", details);
+        // ls has a short form too, written as its -l is: "-a, --archive".
+        Assert.Matches(@"\n  (-a, )?--archive ", details);
         Assert.Contains($"\n  {usage} ", Manual.ToolDescription);
         Assert.Contains($"\n  {usage} ", (await Run("help")).Output);
     }

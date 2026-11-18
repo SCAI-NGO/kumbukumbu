@@ -40,6 +40,8 @@
 
 ### Task 2: console shortcuts and peek
 
+> Ruling during review: peek reads the note through the notes API (the note view's query), not `cat`; see the spec's Console section.
+
 **Files:** Modify `web/src/console/run.ts`, `web/src/console/help.ts`, `web/src/console/store.ts` (a new `Output` kind for a peeked note), `web/src/console/ConsolePage.tsx` (render it); tests in `web/src/console/ConsolePage.test.tsx` and/or a new `run.test.ts`.
 
 - [ ] **Step 1: failing tests:**

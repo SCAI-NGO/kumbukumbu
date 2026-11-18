@@ -27,7 +27,7 @@ public sealed class Ls(INoteReader notes) : ICommand
 
           -l, --long      add what each entry weighs and when it last changed (UTC, as 'history' shows it): a note its
                           size, a folder the newest change below it, an attachment its summary; columns aligned
-          --archive       (-a) list the vault's _archive/ too; -la and -al combine the two flags
+          -a, --archive   list the vault's _archive/ too; -la and -al combine the two flags
 
           ls
           ls /Demo/projects

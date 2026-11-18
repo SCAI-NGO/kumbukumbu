@@ -125,6 +125,9 @@ interface Props {
   ruleNotice?: (line: number) => ReactNode;
   /** Mermaid blocks stay their code, in the note and in the notes it embeds (the console's peek). */
   diagramsAsCode?: boolean;
+  /** Tags only name themselves, as in a checkpoint, in the note and the notes it embeds: no search to open (the console's
+   * peek, whose window lies over the shell that would search). */
+  tagsStill?: boolean;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
@@ -169,7 +172,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   const note = useNote(path);
   const errorFor = useErrorTextFor(path);
   const links = useLinks(path, note.data?.version);
-  const { onCreateMissing, diagramsAsCode } = useContext(NoteContext);
+  const { onCreateMissing, diagramsAsCode, tagsStill } = useContext(NoteContext);
   const inWindow = useInWindow();
   const body = useMemo(() => {
     if (!note.data) return null;
@@ -200,7 +203,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
         <p className="text-sm text-muted">{block !== null ? `This note has no block ^${block}.` : `This note has no heading “${heading}”.`}</p>
       )}
       {body !== null && (
-        <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested diagramsAsCode={diagramsAsCode} />
+        <MarkdownView source={body.source} mask={body.mask} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested diagramsAsCode={diagramsAsCode} tagsStill={tagsStill} />
       )}
     </section>
   );
@@ -345,8 +348,8 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
 
 /** An inline `#tag` (`remarkTags`); in a checkpoint it only names the tag. */
 function InlineTag({ tag }: { tag: string }) {
-  const { checkpointLink } = useContext(NoteContext);
-  return <TagChip tag={tag} still={!!checkpointLink} />;
+  const { checkpointLink, tagsStill } = useContext(NoteContext);
+  return <TagChip tag={tag} still={!!checkpointLink || !!tagsStill} />;
 }
 
 /**
@@ -617,7 +620,7 @@ function useMath(wanted: boolean): MathPlugins | null {
   return wanted ? (math ?? mathLoaded) : null;
 }
 
-function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink, ruleNotice, diagramsAsCode = false }: Props) {
+function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink, ruleNotice, diagramsAsCode = false, tagsStill = false }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   // Comments masked as the server's fair copy reads them, so the view hides exactly what the copy leaves out.
@@ -648,8 +651,8 @@ function MarkdownViewBase({ source: given, mask: givenMask, links, tasksDisabled
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
   const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
   const context = useMemo(
-    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode }),
-    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode],
+    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode, tagsStill }),
+    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink, ruleNotice, diagramsAsCode, tagsStill],
   );
 
   // Every view, an embedded note's and History's too, gets ids of its own: the same note shown twice repeats none.

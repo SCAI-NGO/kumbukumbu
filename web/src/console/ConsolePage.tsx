@@ -274,7 +274,7 @@ function Peek(props: { path: string; at: string | null; crt: boolean; onShown():
 /**
  * The note as the note view reads and renders it (the same query, renderer and sanitising), whole however long, under
  * its path: its links as the server resolves them, task boxes disabled, Mermaid as code, and no note created from a
- * link to a missing one, as the console never writes. A section or a block keeps the note's lines, which its links
+ * link to a missing one, as the console never writes; tags only name themselves. A section or a block keeps the note's lines, which its links
  * go by.
  */
 function PeekedNote({ path, at, crt, onShown }: { path: string; at: string | null; crt: boolean; onShown(): void }) {
@@ -291,8 +291,8 @@ function PeekedNote({ path, at, crt, onShown }: { path: string; at: string | nul
     const source = block !== null ? found && blockSource(body, found) : at === null ? body : section(body, at);
     return { source, mask, frontmatter };
   }, [content, at]);
-  // The log follows the newest answer; this one comes after its entry.
-  useLayoutEffect(onShown, [shown, onShown]);
+  // The log follows the newest answer; this one comes after its entry, and may end in an error after loading.
+  useLayoutEffect(onShown, [shown, note.isError, onShown]);
 
   let state: Output | null = null;
   if (note.isError) state = { kind: "text", text: `p: ${errorFor(note.error)}`, error: true };
@@ -306,7 +306,7 @@ function PeekedNote({ path, at, crt, onShown }: { path: string; at: string | nul
       ) : (
         <div data-peek style={crt ? phosphorNote : undefined} className="my-2 font-sans">
           {shown!.frontmatter !== null && <Properties yaml={shown!.frontmatter} changed={null} still />}
-          <MarkdownView source={shown!.source!} mask={shown!.mask} links={links.data} tasksDisabled onToggleTask={noop} path={path} diagramsAsCode />
+          <MarkdownView source={shown!.source!} mask={shown!.mask} links={links.data} tasksDisabled onToggleTask={noop} path={path} diagramsAsCode tagsStill />
         </div>
       )}
     </>
