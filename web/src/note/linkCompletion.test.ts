@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import { noteUrl } from "../api/paths";
-import { filterRows } from "../palette/filter";
+import { filterRows, wordMatch } from "../palette/filter";
 import { noteRows } from "../palette/rows";
 import { blocksFor, completeLink, completeMarkdown, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, markdownFragment, markdownPath, rankNotes } from "./linkCompletion";
 
@@ -110,6 +110,18 @@ describe("rankNotes", () => {
     expect(rankNotes(all, "proj")).toEqual(["/W/projects/beta.md"]);
   });
 
+  it("puts the note named as typed before notes only their folder matches", () => {
+    const planning = ["/W/Plan.md", ...Array.from({ length: 10 }, (_, i) => `/W/Planning/A${i}.md`)];
+    expect(rankNotes(planning, "plan")[0]).toBe("/W/Plan.md");
+    expect(rankNotes(planning, "plan")).toHaveLength(8);
+  });
+
+  it("finds a note by its path as typed, with or without the vault's root", () => {
+    const paths = ["/W/projects/plan.md", "/W/plan.md", "/W/old/projects.md"];
+    expect(rankNotes(paths, "projects/pl")).toEqual(["/W/projects/plan.md"]);
+    expect(rankNotes(paths, "/pro")).toEqual(["/W/old/projects.md", "/W/projects/plan.md"]);
+  });
+
   it("leaves out notes no link can name: #, |, [ or ] in their path", () => {
     const odd = ["/W/C# notes.md", "/W/a|b.md", "/W/[draft] plan.md", "/W/x#y/plan.md", "/W/plain plan.md"];
     expect(rankNotes(odd, "")).toEqual(["/W/plain plan.md"]);
@@ -132,9 +144,19 @@ describe("one ranking", () => {
     folders: ["projects", "plans", "old"].map((f) => ({ name: f, path: `/Work/${f}`, folders: [], notes: paths.filter((p) => p.startsWith(`/Work/${f}/`)).map(note) })),
   };
 
-  it.each(["plan", "PL RO", "road", "an", ""])("ranks the notes for %j as the palette does", (query) => {
+  // The same notes match, and those where every word starts a word come first in both; within that the link list
+  // takes the note's own name before its folder (8 rows shown, not the palette's 50).
+  const startsFirst = (query: string, ranked: string[]) => {
+    const match = wordMatch(query);
+    return ranked.map((url) => match(paths.find((p) => noteUrl(p) === url)!.split("/").slice(2).join(" ").replace(/\.md$/, "")));
+  };
+  it.each(["plan", "PL RO", "road", "an", ""])("finds the notes for %j as the palette does, starts of words first", (query) => {
     const palette = filterRows(noteRows("Work", root), query, new Set()).map((r) => ("to" in r.run ? r.run.to : ""));
-    expect(rankNotes(paths, query).map(noteUrl)).toEqual(palette);
+    const links = rankNotes(paths, query).map(noteUrl);
+    expect([...links].sort()).toEqual([...palette].sort());
+    const classes = startsFirst(query, links);
+    expect(classes).toEqual([...classes].sort());
+    expect(classes).toEqual(startsFirst(query, palette).sort());
   });
 });
 
