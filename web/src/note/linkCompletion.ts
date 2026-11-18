@@ -133,24 +133,26 @@ export const linkable = (path: string) => !/[#|[\]]/.test(linkPath(path));
 const MAX = 8;
 
 /**
- * The notes (and attachments) for a query, best first, as the palette ranks them (`wordMatch`): every word of the
- * query in the note's folder or name, those where each starts a word first; then those that hold every word in their
- * own name before those that need the folder (the list shows 8, and the note named as typed must not fall off it);
- * then by name. Last, the notes whose path holds the query as typed (`projects/pl`, `/pro`). Searched within the
- * vault, so without its name. An empty query lists the vault's notes by name. Notes no link can name (`linkable`) are
- * left out.
+ * The notes (and attachments) for a query, best first: the notes whose own name is the query (ignoring case, `.md`
+ * dropped); then as the palette ranks them (`wordMatch`): every word of the query in the note's folder or name, those
+ * where each starts a word first; then those that hold every word in their own name before those that need the folder
+ * (the list shows 8, and the note named as typed must not fall off it); then by name. Last, the notes whose path holds
+ * the query as typed (`projects/pl`, `/pro`). Searched within the vault, so without its name. An empty query lists
+ * the vault's notes by name. Notes no link can name (`linkable`) are left out.
  */
 export function rankNotes(paths: string[], query: string): string[] {
   const match = wordMatch(query);
   const typed = query.trim().replace(/^\//, "").toLowerCase();
   const inName = wordMatch(typed);
+  const name = query.trim().toLowerCase().replace(/\.md$/, "");
   return paths
     .filter(linkable)
     .flatMap((p) => {
-      const rank = match(`${folderOf(p).split("/").slice(2).join(" / ")} ${titleOf(p)}`) ?? (linkPath(p).toLowerCase().includes(typed) ? 2 : null);
-      return rank === null ? [] : [{ p, rank, folderOnly: inName(titleOf(p)) === null ? 1 : 0 }];
+      const exact = titleOf(p).toLowerCase() === name ? 0 : 1;
+      const rank = match(`${folderOf(p).split("/").slice(2).join(" / ")} ${titleOf(p)}`) ?? (linkPath(p).toLowerCase().includes(typed) || !exact ? 2 : null);
+      return rank === null ? [] : [{ p, exact, rank, folderOnly: inName(titleOf(p)) === null ? 1 : 0 }];
     })
-    .sort((a, b) => a.rank - b.rank || a.folderOnly - b.folderOnly || titleOf(a.p).localeCompare(titleOf(b.p)) || a.p.localeCompare(b.p))
+    .sort((a, b) => a.exact - b.exact || a.rank - b.rank || a.folderOnly - b.folderOnly || titleOf(a.p).localeCompare(titleOf(b.p)) || a.p.localeCompare(b.p))
     .slice(0, MAX)
     .map(({ p }) => p);
 }

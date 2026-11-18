@@ -153,6 +153,12 @@ describe("rankNotes", () => {
     expect(rankNotes(planning, "plan")).toHaveLength(8);
   });
 
+  it("puts the note whose name is the query first, ignoring case and .md, before eight others with the word", () => {
+    const plans = ["/W/Plan.md", ..."ABCDEFGH".split("").map((c) => `/W/${c} plan.md`)];
+    expect(rankNotes(plans, "plan")[0]).toBe("/W/Plan.md");
+    expect(rankNotes(plans, "PLAN.md")[0]).toBe("/W/Plan.md");
+  });
+
   it("finds a note by its path as typed, with or without the vault's root", () => {
     const paths = ["/W/projects/plan.md", "/W/plan.md", "/W/old/projects.md"];
     expect(rankNotes(paths, "projects/pl")).toEqual(["/W/projects/plan.md"]);
