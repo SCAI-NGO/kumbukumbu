@@ -171,3 +171,20 @@ describe("names are escaped so the tokeniser reads them back", () => {
     expect((await tab("cat projects/'My Folder'/In")).applied).toBe("cat 'projects/My Folder/Inner Note.md' ");
   });
 });
+
+describe("a chosen match", () => {
+  it("completes as the only match would, for a path and a command", async () => {
+    const meeting = await complete("cat Mee", 7, "/Work", list, "Meeting Plan.md");
+    expect(meeting).toMatchObject({ matches: ["Meeting Plan.md"], insert: "Meeting\\ Plan.md " });
+    expect((await complete("cat pro", 7, "/Work", list, "projects/")).insert).toBe("projects/");
+    expect((await complete("l", 1, "/Work", list, "ls")).insert).toBe("ls ");
+  });
+});
+
+describe("an empty stage", () => {
+  it("offers nothing, rather than every command", async () => {
+    expect(await tab("")).toMatchObject({ matches: [], insert: null });
+    expect(await tab("cat a.md | ")).toMatchObject({ matches: [], insert: null });
+    expect(await tab("cat a.md |")).toMatchObject({ matches: [], insert: null });
+  });
+});

@@ -559,7 +559,26 @@ html {
   }
 }
 
+/* The console's visual bell, for a Tab that found nothing: the command line lights up and fades (console autocomplete). */
+.k-bell {
+  --bell: var(--accent);
+  animation: k-bell 0.2s ease-out;
+}
+[data-crt] .k-bell {
+  --bell: var(--crt-fg);
+}
+@keyframes k-bell {
+  from {
+    background-color: color-mix(in srgb, var(--bell) 35%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* A colour, not a movement: lit for as long as the class stays, without the fade. */
+  .k-bell {
+    animation: none;
+    background-color: color-mix(in srgb, var(--bell) 35%, transparent);
+  }
   /* No fade: an outline for as long as the class stays. */
   .k-flash {
     animation: none;

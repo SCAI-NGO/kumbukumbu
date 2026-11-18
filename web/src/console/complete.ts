@@ -98,12 +98,14 @@ function inQuote(word: string, typed: "'" | '"' | null, close: boolean) {
 /**
  * What Tab completes at `cursor` in `line`: a command as the first word of a stage, else a path in the folder the
  * word's directory part names (relative to `cwd`). `list` gives a folder's entries, folders with their `/`, or null.
+ * With `pick`, one of the matches is completed as if it were the only one (a chip tapped on the phone).
  */
 export async function complete(
   line: string,
   cursor: number,
   cwd: string,
   list: (folder: string) => Promise<string[] | null>,
+  pick?: string,
 ): Promise<Completion> {
   const none: Completion = { replaceFrom: cursor, replaceTo: cursor, matches: [], insert: null };
   const word = wordAt(line.slice(0, cursor));
@@ -111,7 +113,9 @@ export async function complete(
   const range = { replaceFrom: word.start, replaceTo: cursor };
 
   if (word.before.length === 0) {
-    const matches = commands.filter((c) => c.startsWith(word.value));
+    // Nothing typed yet: every command would match, which is no help.
+    if (word.value === "" && !word.quoted) return none;
+    const matches = commands.filter((c) => c.startsWith(word.value) && (pick === undefined || c === pick));
     return { ...range, matches, insert: matches.length === 1 ? `${matches[0]} ` : null };
   }
   // An option, not a path; no listing for it.
@@ -131,7 +135,7 @@ export async function complete(
   if (base.startsWith(".") && "..".startsWith(base) && folder !== "/") names.add("../");
 
   const foldersOnly = word.before[0] === "cd";
-  const matches = [...names].filter((n) => n.startsWith(base) && (!foldersOnly || n.endsWith("/")));
+  const matches = [...names].filter((n) => n.startsWith(base) && (!foldersOnly || n.endsWith("/")) && (pick === undefined || n === pick));
   if (matches.length === 0) return { ...range, matches, insert: null };
 
   // Where the word opened a quote, completion stays inside it; else names are escaped, so that typing goes on after a
