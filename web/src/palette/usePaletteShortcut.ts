@@ -7,9 +7,12 @@ import { useWindows } from "../windows/store";
 /** A Mac's keyboard: Cmd is the shortcuts' key there, and Ctrl+P stays the editor's "line up". */
 export const isMac = () => /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 
-/** Ctrl (Cmd on a Mac) with the letter `key`, and no other modifier; `code` too, for layouts without Latin letters. */
+/**
+ * Ctrl (Cmd on a Mac) with the letter `key`, and no other modifier. By its place (`code`) only where the key types no
+ * Latin letter (Cyrillic, Greek): on Dvorak the place of P types L, and Ctrl+L stays the browser's.
+ */
 export const withMod = (e: Pick<KeyboardEvent, "key" | "code" | "altKey" | "shiftKey" | "metaKey" | "ctrlKey">, key: string) =>
-  (e.key.toLowerCase() === key || e.code === `Key${key.toUpperCase()}`) && !e.altKey && !e.shiftKey && (isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
+  (/^[a-z]$/i.test(e.key) ? e.key.toLowerCase() === key : e.code === `Key${key.toUpperCase()}`) && !e.altKey && !e.shiftKey && (isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
 
 /**
  * Ctrl+P (Cmd+P on a Mac) opens the palette, and closes it again: in the capture phase, before the editor or the

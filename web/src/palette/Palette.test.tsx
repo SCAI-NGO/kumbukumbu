@@ -137,6 +137,14 @@ describe("the palette's ways in", () => {
     expect(await screen.findByRole("dialog", { name: "Favourites and commands" })).toBeInTheDocument();
   });
 
+  it("Ctrl+L stays the browser's where P's key types L (Dvorak)", async () => {
+    signedInApi();
+    await shown();
+    fireEvent.keyDown(document.body, { key: "l", code: "KeyP", ctrlKey: true });
+    await act(async () => {});
+    expect(queryPalette()).not.toBeInTheDocument();
+  });
+
   it("Ctrl+P again closes it", async () => {
     signedInApi();
     await shown();
