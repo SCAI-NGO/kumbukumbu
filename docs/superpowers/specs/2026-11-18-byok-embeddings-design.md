@@ -92,7 +92,15 @@ Vitest:
 
 ## Left to the builder
 
-- The exact model key's name.
-- Where the account's sealed secrets live today, and the matching field.
-- The settings section's place in the settings window.
-- The wording of the error messages.
+The builder's calls (2026-11-18):
+
+- **The model key** is `tensorx-byok:qwen/qwen3-embedding-8b@1024`. Every person's key shares it, so a replaced key re-embeds nothing.
+- **A driver per key** (`ByokDrivers`), cached by a 16-hex SHA-256 prefix of the key, its *route*. The index has a queue per route and the search one query per route (`EmbeddingProviders.Resolve` and `RouteOf`), so one key's pause holds up only its own vaults.
+- **Where the account's key lives:** the user document's `embeddingsKey`, sealed under a key derived from the user key, as the discreet list is (`EmbeddingsKeys`). It is resealed on every rotation of the user key, as that list is.
+- **The status is a separate endpoint** rather than a field of `GET /api/embeddings`, because that endpoint answers with an array: `GET /api/account/embeddings-key` answers `{ offered, keySaved, last4, refusedAt }`. The list gains a `tensorx-byok` entry with `needsKey` while no key is saved.
+- **"Refused at"** is kept in memory and resets at a restart. It is a hint for the settings, not a record.
+- **BYOK off** falls back in memory at unlock (`VaultCatalog.Provider`) and leaves the meta as it is, so switching BYOK on again restores the vaults without a write.
+- **Marking an owned BYOK vault discreet** switches it to `internal` first. Its members get the usual "provider changed" event, as for any switch.
+- **The settings section** sits under Settings, Vaults, as "Search by meaning", and is shown only where BYOK is offered. The "move these vaults" prompt lists the person's own vaults that are not discreet, not being re-encrypted and not already on TensorX.
+- **The New vault dialog** shows a ticked "Search by meaning with TensorX (your own key)" box. Unticked, the vault is created on TensorX and moved to `internal` straight away, before anything is embedded with the key.
+- **`web/src/api/schema.d.ts`** gets only the new paths and schemas, from a generated copy. A full regeneration would also bring in drift from earlier pull requests, and that drift breaks the build.
