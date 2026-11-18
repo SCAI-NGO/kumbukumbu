@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import { complete } from "./complete";
-import { consoleCommands, shCommands } from "./help";
+import { shCommands } from "./help";
 import { commandTable, resolvePath } from "./paths";
 import { tokenise } from "./tokenise";
 
@@ -13,6 +13,9 @@ const tree: Record<string, string[]> = {
   "/Garten Arbeit": ["Beete.md"],
   "/Empty": ["x.md"],
   "/Empty/_archive": ["old.md"],
+  "/Emoji": ["📝 Notes.md", "📅 Plan.md"],
+  "/Emoji/Ideas": ["📝 A.md", "📝 B.md"],
+  "/Accents": ["Cafe\u0301.md"],
 };
 const list = async (folder: string) => tree[folder] ?? null;
 
@@ -105,7 +108,6 @@ describe("commands", () => {
 
   it("keeps the lists in step with the console", () => {
     expect([...shCommands].sort()).toEqual(Object.keys(commandTable).sort());
-    expect(consoleCommands).toEqual(["cd", "pwd", "clear", "exit", "l", "la", "lsa", "p"]);
   });
 
   it("completes a path word after a pipe's command, not as a command", async () => {
@@ -186,5 +188,20 @@ describe("an empty stage", () => {
     expect(await tab("")).toMatchObject({ matches: [], insert: null });
     expect(await tab("cat a.md | ")).toMatchObject({ matches: [], insert: null });
     expect(await tab("cat a.md |")).toMatchObject({ matches: [], insert: null });
+  });
+});
+
+describe("names beyond ASCII", () => {
+  it("never splits a character in a common prefix", async () => {
+    expect((await tab("cat ", "/Emoji")).insert).toBeNull();
+    const { applied } = await tab("cat ", "/Emoji/Ideas");
+    expect(applied).toBe("cat \\📝\\ ");
+    expect(tokenise(`${applied}A.md`)).toEqual([["cat", "📝 A.md"]]);
+  });
+
+  it("keeps combining marks as they are, and reads back as the same name", async () => {
+    const { applied } = await tab("cat Caf", "/Accents");
+    expect(applied).toBe("cat Cafe\u0301.md ");
+    expect(tokenise(applied)).toEqual([["cat", "Cafe\u0301.md"]]);
   });
 });

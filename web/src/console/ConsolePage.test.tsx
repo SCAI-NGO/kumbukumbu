@@ -976,15 +976,32 @@ describe("completion", () => {
       expect(listed(posted)).toHaveLength(1);
     });
 
-    it("doesn't list after a Tab that inserted, or once the line changed", async () => {
+    it("lists on the Tab after one that put in only a common prefix, as bash does", async () => {
       desktop();
-      const { posted } = shell();
+      shell();
       await open("/Work");
       await userEvent.type(input(), "cat Mee");
       tab();
       await waitFor(() => expect(input()).toHaveValue("cat Meeting\\ "));
       tab();
+      await waitFor(() => expect(lines()).toEqual(["/Work", "> cat Meeting\\ ", "Meeting Notes.md  Meeting Plan.md"]));
+    });
+
+    it("doesn't list after a Tab that completed a unique match, or once the line changed", async () => {
+      desktop();
+      const { posted } = shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      tab();
+      await act(async () => {});
+      expect(lines()).toEqual([]);
+      await userEvent.clear(input());
+      await userEvent.type(input(), "cat Meeting\\ ");
+      tab();
       await waitFor(() => expect(listed(posted).length).toBeGreaterThan(0));
+      await act(async () => {});
       await userEvent.type(input(), "N{Backspace}");
       tab();
       await act(async () => {});
@@ -1101,12 +1118,17 @@ describe("completion", () => {
     });
 
     it("drops the chips when the console resets, as a discreet vault hides", async () => {
-      shell();
+      let hidden = false;
+      // Once hidden, the vault is gone from the listing too.
+      consoleApi((body) => text(body.command === "ls" && !hidden ? "Work/" : ""));
       await open("/");
       await userEvent.type(input(), "ls Wo");
       await waitFor(() => expect(chips()).toEqual(["Work/"]));
+      hidden = true;
       act(() => useConsole.getState().reset());
-      await waitFor(() => expect(row()).toBeNull());
+      expect(row()).toBeNull();
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(row()).toBeNull();
     });
 
     it("offers commands for the first word", async () => {
@@ -1142,12 +1164,12 @@ describe("completion", () => {
     it("grows the output's bottom padding with the row, so it never covers the last line", async () => {
       shell();
       await open("/Work");
-      expect(log()).not.toHaveClass("pb-14");
+      expect(log()).not.toHaveClass("pb-16");
       await userEvent.type(input(), "cat pl");
       await waitFor(() => expect(row()).not.toBeNull());
-      expect(log()).toHaveClass("pb-14");
+      expect(log()).toHaveClass("pb-16");
       await userEvent.clear(input());
-      await waitFor(() => expect(log()).not.toHaveClass("pb-14"));
+      await waitFor(() => expect(log()).not.toHaveClass("pb-16"));
     });
 
     it("outlines the chips in phosphor in Green", async () => {

@@ -79,14 +79,16 @@ function wordAt(text: string): Word | null {
   return { start: inToken ? start : text.length, value, before: words, quoted, open };
 }
 
-const common = (names: string[]) => names.reduce((prefix, name) => {
-  let n = 0;
-  while (n < prefix.length && prefix[n] === name[n]) n++;
-  return prefix.slice(0, n);
-});
+/** The prefix the names share, by code point: an emoji's surrogate pair is never split. */
+const common = (names: string[]) =>
+  names.map((name) => Array.from(name)).reduce((prefix, name) => {
+    let n = 0;
+    while (n < prefix.length && prefix[n] === name[n]) n++;
+    return prefix.slice(0, n);
+  }).join("");
 
 /** The word with a backslash before every character the tokeniser would not read as itself; a line break can't be escaped. */
-const escape = (word: string) => (/[\r\n]/.test(word) ? quote(word) : word.replace(/[^\p{L}\p{N}_\-./:#,=+@%]/gu, "\\$&"));
+const escape = (word: string) => (/[\r\n]/.test(word) ? quote(word) : word.replace(/[^\p{L}\p{M}\p{N}_\-./:#,=+@%]/gu, "\\$&"));
 
 /** The word inside the quote it was typed in, or in the other kind where it holds that one; closed when `close`. */
 function inQuote(word: string, typed: "'" | '"' | null, close: boolean) {

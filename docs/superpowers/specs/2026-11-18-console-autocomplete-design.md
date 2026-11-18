@@ -29,13 +29,14 @@ Typing paths in full is the console's slowest part, on the phone above all. A sh
 - The first word of a stage: commands, those of `sh` (from `help`'s list or a fixed list kept with the console's help) plus the console's own (`cd`, `pwd`, `clear`, `exit`, `l`, `la`, `lsa`, `p`).
 - Any other word: a path. At `/` the vaults; otherwise the entries of the folder the word's directory part names, relative to the working directory as console paths are (`..`, `.` work). `cd` completes folders and vaults only.
 - Names with spaces, quotes or other characters the tokeniser wouldn't read as themselves are put in with backslash escapes (`Meeting\ Notes.md`, `it\'s.md`), unless the word already opened a quote: then completion stays inside it and closes it only on a unique file match. Why: typing goes on after a folder (`My\ Folder/` then the next name) and a partial completion never leaves a quote open, which a closing quote would block or an open one would leave unreadable.
-- A word that names a note or an attachment followed by `/` completes nothing; a vault's `_archive/` is offered only once `_` is typed and only if the vault has one (the vault is listed with `ls -a` for that).
+- A word that names a note or an attachment followed by `/` completes nothing.
+- A vault's `_archive/` is offered only once its `_` is typed, as `ls` leaves it out, and only if the vault has one (the vault is listed with `ls -a` for that).
 - A folder or vault completes with a trailing `/`, a file with a trailing space.
-- `_archive/` is offered only once its first letter is typed (as `ls` leaves it out).
 
 ## Desktop
 
-- **Tab:** one match completes fully; several complete to their common prefix; a second Tab with nothing new lists the matches in the output (one line, as zsh does), without running anything. No match: the command line flashes once, briefly (its background lights up and fades in about 200 ms, in the accent colour, or the phosphor colour in Green and Amber), like a terminal's visual bell; no sound, no line in the output, no movement. Why: the maintainer wanted a small, transient sign that Tab was heard; a flash of colour rather than a shake keeps it calm and works under `prefers-reduced-motion` as it is.
+- **Tab:** one match completes fully; several complete to their common prefix; the next Tab, when the one before put in nothing new or only that common prefix, lists the matches in the output (one line, as bash and zsh do), without running anything. No match: the command line flashes once, briefly (its background lights up and fades in about 200 ms, in the accent colour, or the phosphor colour in Green and Amber), like a terminal's visual bell; no sound, no line in the output, no movement. Why: the maintainer wanted a small, transient sign that Tab was heard; a flash of colour rather than a shake keeps it calm and works under `prefers-reduced-motion` as it is.
+- Tab on an empty line or an empty command word (after a `|`) does nothing. Why: listing some 30 commands unasked is noise.
 - Tab never leaves the input (it's the console's key while the input has focus); Shift+Tab keeps moving the focus as usual.
 
 ## Phone (below the desktop breakpoint, `useDesktop()`)

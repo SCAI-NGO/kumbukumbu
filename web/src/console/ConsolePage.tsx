@@ -104,9 +104,12 @@ export default function ConsolePage() {
   const still = (line: string, cursor: number) =>
     !useConsole.getState().running && input.current?.value === line && input.current.selectionStart === cursor;
 
+  /** Puts a completion in; gives the new line and caret. */
   const put = (line: string, { replaceFrom, replaceTo, insert }: Completion) => {
-    caretTo.current = replaceFrom + insert!.length;
-    setValue(line.slice(0, replaceFrom) + insert + line.slice(replaceTo));
+    const next = { line: line.slice(0, replaceFrom) + insert + line.slice(replaceTo), cursor: replaceFrom + insert!.length };
+    caretTo.current = next.cursor;
+    setValue(next.line);
+    return next;
   };
 
   const ring = () => {
@@ -128,8 +131,10 @@ export default function ConsolePage() {
       return;
     }
     if (result.insert !== null && line.slice(result.replaceFrom, result.replaceTo) !== result.insert) {
-      lastTab.current = null;
-      return put(line, result);
+      const next = put(line, result);
+      // Only a common prefix went in: the next Tab lists, as bash does.
+      lastTab.current = result.matches.length > 1 ? next : null;
+      return;
     }
     // Nothing new twice on the same line: the matches, as zsh lists them.
     if (lastTab.current?.line === line && lastTab.current.cursor === cursor) listMatches(line, result.matches);
@@ -198,8 +203,8 @@ export default function ConsolePage() {
             }}
             // A click in the output goes on typing, unless it selected something to copy.
             onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-            // The chips sit over the output's foot: it grows by their height, so they never cover its last line.
-            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"} ${chips.length > 0 ? "pb-14" : ""}`}
+            // The chips sit over the output's foot: it grows by their height and a scrollbar's, so they never cover its last line.
+            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"} ${chips.length > 0 ? "pb-16" : ""}`}
           >
             <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
             {entries.map((entry, i) => (
