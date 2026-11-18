@@ -6,6 +6,15 @@ export interface ReaderFile {
   mediaType: string;
 }
 
+/** A note of a bundle (Publish 2.0): `files[n]` is the copy's file its `f/n` shows; links to the others are `#kn-<id>`. */
+export interface ReaderNote {
+  id: number;
+  title: string;
+  markdown: string;
+  depth: number;
+  files: number[];
+}
+
 export interface ReaderCopy {
   title: string;
   markdown: string;
@@ -13,6 +22,8 @@ export interface ReaderCopy {
   files: ReaderFile[];
   /** The copy's id, sent with each of its files: the one reader cookie may be another tab's copy's by then. */
   copy: string;
+  /** A bundle's notes in walk order, the start (id 0) first; absent or null for a single note. */
+  notes?: ReaderNote[] | null;
 }
 
 export type ReadResult = { kind: "copy"; copy: ReaderCopy } | { kind: "none" } | { kind: "off" } | { kind: "busy" };

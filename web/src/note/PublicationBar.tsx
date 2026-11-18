@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useId, useState } from "react";
+import { lazy, Suspense, useId, useState } from "react";
+import { Link } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
+import { noteUrl } from "../api/paths";
+import { useBundledIn, useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
+const PublishDialog = lazy(() => import("../shell/PublishDialog"));
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -31,9 +34,13 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
   const update = useUpdatePublication(path);
   const withdraw = useWithdraw(path);
   const [asking, setAsking] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const starts = useBundledIn(path);
 
   const p = publication.data;
+  // A note published with another one's bundle (Publish 2.0 decision 7): where it went out, for owner and member alike.
+  if (!p && starts.length > 0) return <BundledBar starts={starts} />;
   if (!p) return null;
 
   if (!owner) {
@@ -49,6 +56,8 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
   const older = p.older === true && enabled;
   const tone = !enabled ? undefined : older ? "yellow" : "green";
   const error = update.error ?? withdraw.error;
+  const depth = Number(p.depth ?? 0);
+  const bundle = depth > 0;
   return (
     <>
       <section aria-label="Publication" data-tone={tone} className={barClass}>
@@ -60,12 +69,19 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
             : older
               ? `Published copy is older than this note.${p.snapshotAt ? ` ${olderText(p.snapshotAt, p.changedAt)}` : ""}`
               : "Published, up to date"}
+          {bundle && Number(p.notes ?? 1) > 1 && ` · with ${Number(p.notes) - 1} linked ${Number(p.notes) === 2 ? "note" : "notes"}`}
           {error && <span className="block text-text">{errorText(error)}</span>}
           {copyFailed && <span className="block text-text">Copying didn't work. Try again.</span>}
         </span>
         {/* The answer holds the link: reset once in, so the mutation keeps none. */}
+        {/* A bundle's update walks again: its list is shown first, as when it was published. */}
         {enabled && older && (
-          <button type="button" disabled={update.isPending} onClick={() => update.mutate(undefined, { onSuccess: () => update.reset() })} className={buttonClass}>
+          <button
+            type="button"
+            disabled={update.isPending}
+            onClick={() => (bundle ? setUpdating(true) : update.mutate(undefined, { onSuccess: () => update.reset() }))}
+            className={buttonClass}
+          >
             Update copy
           </button>
         )}
@@ -74,6 +90,11 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
           Unpublish
         </button>
       </section>
+      {updating && (
+        <Suspense fallback={null}>
+          <PublishDialog path={path} update={{ depth, without: p.without ?? [] }} onClose={() => setUpdating(false)} />
+        </Suspense>
+      )}
       {asking && (
         <ConfirmWithdraw
           busy={withdraw.isPending}
@@ -82,6 +103,27 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
         />
       )}
     </>
+  );
+}
+
+const titleOf = (path: string) => path.split("/").at(-1)!.replace(/\.md$/i, "");
+
+/** "Published with Plan": this note went out inside the bundle of each start note named. */
+function BundledBar({ starts }: { starts: string[] }) {
+  return (
+    <section aria-label="Publication" className={barClass}>
+      <span className="py-2">
+        Published with{" "}
+        {starts.map((start, i) => (
+          <span key={start}>
+            {i > 0 && (i === starts.length - 1 ? " and " : ", ")}
+            <Link to={noteUrl(start)} className="font-medium text-accent-text underline underline-offset-2">
+              {titleOf(start)}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </section>
   );
 }
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Reader from "./Reader";
+import Reader, { copyMarkdown } from "./Reader";
 import { snapshotText } from "./snapshot";
 
 // Counts the loads of the Mermaid module: the reader page never loads it. The factory runs only on the first import in
@@ -451,5 +451,52 @@ describe("snapshotText", () => {
   it("names the snapshot's time", () => {
     expect(snapshotText("2026-11-05T14:32:00Z", "UTC")).toBe("Snapshot of 5 Nov 2026, 14:32");
     expect(snapshotText("2026-11-05T14:32:00Z", "Asia/Tokyo")).toBe("Snapshot of 5 Nov 2026, 23:32");
+  });
+
+  describe("a bundle", () => {
+    const bundle = {
+      ...copy("See [Plan](#kn-1/Big%20idea), [Gone](#kn-7) and ![Budget](#kn-2)."),
+      notes: [
+        { id: 0, title: "Questions on routing", markdown: "See [Plan](#kn-1/Big%20idea), [Gone](#kn-7) and ![Budget](#kn-2).", depth: 0, files: [] },
+        { id: 1, title: "Plan", markdown: "## Big idea\n\nBack to [the start](#kn-0).", depth: 1, files: [] },
+        { id: 2, title: "Budget", markdown: "Spend less. ![Plan](#kn-1)", depth: 1, files: [] },
+      ],
+    };
+
+    it("goes between its notes, with contents, and shows an embedded note in place", async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      stubFetch({ "GET /api/s": () => json(200, bundle) });
+
+      render(<Reader />);
+
+      expect(await screen.findByText(/Spend less\./)).toBeInTheDocument();
+      // A note that left the copy is its text; one embedded inside an embed is a link.
+      expect(screen.queryByRole("link", { name: "Gone" })).not.toBeInTheDocument();
+      expect(screen.getByText(/Gone/)).toBeInTheDocument();
+      await userEvent.click(screen.getAllByRole("link", { name: "Plan" })[0]);
+      expect(await screen.findByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+      expect(location.hash).toBe("#/1");
+      await userEvent.click(screen.getByRole("button", { name: "Contents" }));
+      const contents = screen.getByRole("navigation", { name: "Contents" });
+      expect(contents).toHaveTextContent("Questions on routingPlanBudget");
+      await userEvent.click(within(contents).getByRole("link", { name: "Budget" }));
+      expect(await screen.findByRole("heading", { level: 1, name: "Budget" })).toBeInTheDocument();
+    });
+
+    it("opens the note the address names on a reload", async () => {
+      history.replaceState(null, "", "/s#/2");
+      const fetch = stubFetch({ "GET /api/s": () => json(200, bundle) });
+
+      render(<Reader />);
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Budget" })).toBeInTheDocument();
+      expect(fetch.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+    });
+
+    it("copies the whole bundle as Markdown", () => {
+      expect(copyMarkdown(bundle)).toBe(
+        "# Questions on routing\n\nSee [Plan](#n1), Gone and ![Budget](#n2).\n\n---\n\n# Plan {#n1}\n\n## Big idea\n\nBack to [the start](#n0).\n\n---\n\n# Budget {#n2}\n\nSpend less. ![Plan](#n1)",
+      );
+    });
   });
 });

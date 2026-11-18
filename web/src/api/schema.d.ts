@@ -9157,6 +9157,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/publication-previews/{vault}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    depth?: number;
+                    without?: string[];
+                };
+                header?: never;
+                path: {
+                    vault: string;
+                    path: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PublicationPreviewView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/publications/{vault}/{path}": {
         parameters: {
             query?: never;
@@ -9242,7 +9310,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["UpdateRequest"];
+                };
+            };
             responses: {
                 /** @description OK */
                 200: {
@@ -12537,15 +12609,60 @@ export interface components {
             changedAt: null | string;
             publishedBy: null | string;
             link: null | string;
+            /** Format: int32 */
+            notes?: null | number | string;
+            /** Format: int32 */
+            depth?: null | number | string;
+            without?: null | string[];
+        };
+        PublicationPreviewView: {
+            notes: components["schemas"]["PreviewNoteView"][];
+            leftOut: components["schemas"]["PreviewLeftOutView"][];
+            plain: string[];
+            /** Format: int64 */
+            bytes: number | string;
+            tooMany: boolean;
+            tooLarge: boolean;
+        };
+        PreviewNoteView: {
+            path: string;
+            title: string;
+            /** Format: int32 */
+            depth: number | string;
+        };
+        PreviewLeftOutView: {
+            path: string;
+            reason: string;
+        };
+        BundleChangedView: {
+            message: string;
+            preview: components["schemas"]["PublicationPreviewView"];
+        };
+        BundledView: {
+            path: string;
+            start: string;
         };
         PublishedView: {
             link: string;
             /** Format: date-time */
             snapshotAt: string;
             plain: string[];
+            notes?: null | string[];
+            added?: null | string[];
+            removed?: null | string[];
         };
         PublishRequest: {
             password?: null | string;
+            /** Format: int32 */
+            depth?: number | string;
+            without?: null | string[];
+            expected?: null | string[];
+        };
+        UpdateRequest: {
+            /** Format: int32 */
+            depth?: null | number | string;
+            without?: null | string[];
+            expected?: null | string[];
         };
         PurgedTrashView: {
             /** Format: int32 */
@@ -12980,6 +13097,7 @@ export interface components {
         VaultPublicationsView: {
             publications: components["schemas"]["PublicationView"][];
             unpublishable: string[];
+            bundled?: null | components["schemas"]["BundledView"][];
         };
         VaultView: {
             id: string;

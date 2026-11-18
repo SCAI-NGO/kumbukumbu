@@ -8,6 +8,66 @@ export type PublicationView = components["schemas"]["PublicationView"];
 export type VaultPublicationsView = components["schemas"]["VaultPublicationsView"];
 export type PublicationOverviewView = components["schemas"]["PublicationOverviewView"];
 export type PublishedView = components["schemas"]["PublishedView"];
+export type PublicationPreviewView = components["schemas"]["PublicationPreviewView"];
+
+/** The deepest a publication goes (Publish 2.0); from this many notes on the dialog warns. */
+export const maxDepth = 5;
+export const manyNotes = 50;
+
+/** The paths of a preview's notes, sorted: what a publication sends as `expected`. */
+export const previewSet = (preview: PublicationPreviewView) => preview.notes.map((n) => n.path).sort();
+
+/** A path in the vault (`Plan.md`), as the publication endpoints take the notes they name. */
+const inItsVault = (path: string) => inVault(path);
+
+/** The notes a publication would take changed since the list was shown (409): nothing went out; the list as it is now. */
+export class BundleChangedError extends Error {
+  constructor(readonly preview: PublicationPreviewView) {
+    super("Something changed in the vault: check the list again.");
+  }
+}
+
+type Answer<T> = { data?: T; error?: unknown; response: Response };
+
+/** A 409 with the walk as it is now is a {@link BundleChangedError}; everything else as `call` reads it. */
+async function bundled<T>(request: Promise<Answer<T>>): Promise<T> {
+  const answer = await request;
+  const error = answer.error;
+  if (answer.response.status === 409 && error && typeof error === "object" && "preview" in error) {
+    throw new BundleChangedError((error as { preview: PublicationPreviewView }).preview);
+  }
+  return call(Promise.resolve(answer));
+}
+
+/**
+ * What publishing the note `depth` links deep, without the notes `without`, would take. Asked only while `enabled`;
+ * depth 0 needs no list (the note alone, as before Publish 2.0).
+ */
+export const usePublicationPreview = (path: string, depth: number, without: readonly string[], enabled: boolean) =>
+  useQuery({
+    queryKey: ["publication-preview", path, depth, [...without].sort()],
+    enabled,
+    queryFn: () =>
+      call(
+        api.GET("/api/publication-previews/{vault}/{path}", {
+          params: { ...params(path), query: { depth, ...(without.length > 0 ? { without: without.map(inItsVault) } : {}) } },
+        }),
+      ),
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+/** The start notes of the bundles `path` is published in, not as their start (Publish 2.0 decision 7). */
+export function useBundledIn(path: string): string[] {
+  const list = usePublications(vaultOf(path)).data;
+  return (list?.bundled ?? []).filter((b) => b.path === path).map((b) => b.start);
+}
+
+/** The notes of `start`'s bundle as the vault's list names them, the start first. */
+export function useBundleOf(start: string): string[] {
+  const list = usePublications(vaultOf(start)).data;
+  return [start, ...(list?.bundled ?? []).filter((b) => b.start === start).map((b) => b.path)];
+}
 
 /** What `plain` holds besides the embeds' names when one of them was a PDF (publish plan, decision 1). */
 export const pdfsNotYet = "PDFs are not published yet";
@@ -93,8 +153,16 @@ function invalidate(queryClient: QueryClient, path: string, { note = true } = {}
 export function usePublish(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ password }: { password?: string }) =>
-      call(api.POST("/api/publications/{vault}/{path}", { params: params(path), body: password ? { password } : {} })),
+    mutationFn: ({ password, depth = 0, without = [], expected }: { password?: string; depth?: number; without?: string[]; expected?: string[] }) =>
+      bundled(
+        api.POST("/api/publications/{vault}/{path}", {
+          params: params(path),
+          body: {
+            ...(password ? { password } : {}),
+            ...(depth > 0 ? { depth, without: without.map(inItsVault), ...(expected ? { expected: expected.map(inItsVault) } : {}) } : {}),
+          },
+        }),
+      ),
     gcTime: 0,
     onSettled: () => Promise.all([invalidate(queryClient, path), queryClient.invalidateQueries({ queryKey: ["session"] })]),
   });
@@ -104,7 +172,13 @@ export function usePublish(path: string) {
 export function useUpdatePublication(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => call(api.PUT("/api/publications/{vault}/{path}", { params: params(path) })),
+    mutationFn: (walk?: { depth: number; without: string[]; expected: string[] }) =>
+      bundled(
+        api.PUT("/api/publications/{vault}/{path}", {
+          params: params(path),
+          ...(walk ? { body: { depth: walk.depth, without: walk.without.map(inItsVault), expected: walk.expected.map(inItsVault) } } : {}),
+        }),
+      ),
     gcTime: 0,
     onSettled: () => invalidate(queryClient, path),
   });
