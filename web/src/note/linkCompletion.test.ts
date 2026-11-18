@@ -124,6 +124,13 @@ describe("linkedNote", () => {
     expect(linkedNote("a/status", all, "/W/Plan.md")).toBe("/W/a/status.md");
   });
 
+  it("takes a path with a folder below the open note's folder first, then from the vault's root, when several fit", () => {
+    expect(linkedNote("a/status", ["/W/a/status.md", "/W/x/a/status.md"], "/W/x/today.md")).toBe("/W/x/a/status.md");
+    expect(linkedNote("a/status", ["/W/a/status.md", "/W/X/a/status.md"], "/W/X/today.md")).toBe("/W/X/a/status.md");
+    expect(linkedNote("a/status", ["/W/0/a/status.md", "/W/a/status.md"], "/W/b/today.md")).toBe("/W/a/status.md");
+    expect(linkedNote("A/Status", ["/W/0/a/status.md", "/W/1/a/status.md"], "/W/b/today.md")).toBe("/W/0/a/status.md");
+  });
+
   it("is none for a name no note ends with, an attachment, or a part of a name", () => {
     expect(linkedNote("nothing", all, "/W/Plan.md")).toBeNull();
     expect(linkedNote("shot.png", all, "/W/Plan.md")).toBeNull();

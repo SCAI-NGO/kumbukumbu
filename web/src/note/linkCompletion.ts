@@ -97,8 +97,12 @@ export function linkTarget(path: string, all: string[]): string {
 /**
  * The note a link from `from` leads to, as the server's `LinkResolver` (src/Kumbu.Core/Links/LinkResolver.cs) finds
  * it: the note whose path in the vault ends with the link (from the vault's root for a leading `/`), ignoring case;
- * `all` comes from the tree, which leaves the archive out. Of several, the server takes the one in the source's folder
- * and calls the others ambiguous; the list takes the first in text order then. Null when no note fits.
+ * `all` comes from the tree, which leaves the archive out. Of several, a link with a folder (`a/status`) takes the one
+ * at that path below the open note's folder, then the one at that path from the vault's root; then, as for a bare
+ * name, the only one in the open note's folder. Where none of these is, the server calls the link ambiguous and lets
+ * the reader choose; the list needs one note and takes the first in text order. Null when no note fits. Left out, as
+ * the list doesn't need them: `./` and `../` (read as part of the path), aliases (0.7.0), and candidates only in the
+ * archive (not in the tree).
  */
 export function linkedNote(link: string, all: string[], from: string): string | null {
   const target = link.trim().normalize("NFC").replace(/\.md$/i, "").toLowerCase();
@@ -111,6 +115,11 @@ export function linkedNote(link: string, all: string[], from: string): string | 
     })
     .sort((a, b) => a.localeCompare(b));
   const folder = from.slice(0, from.lastIndexOf("/") + 1);
+  if (fits.length > 1 && target.includes("/") && !target.startsWith("/")) {
+    const below = `/${linkPath(`${folder}${target}`).toLowerCase()}`;
+    const preferred = fits.find((p) => `/${linkPath(p).toLowerCase()}` === below) ?? fits.find((p) => `/${linkPath(p).toLowerCase()}` === `/${target}`);
+    if (preferred) return preferred;
+  }
   const beside = fits.filter((p) => p.slice(0, p.lastIndexOf("/") + 1) === folder);
   return (beside.length === 1 ? beside[0] : fits[0]) ?? null;
 }
