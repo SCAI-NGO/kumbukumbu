@@ -26,7 +26,7 @@ export default function ByokSection() {
   const [offer, setOffer] = useState<string[] | null>(null);
 
   const save = useMutation({
-    mutationFn: () => call(api.PUT("/api/account/embeddings-key", { body: { key } })),
+    mutationFn: () => call(api.PUT("/api/account/embeddings-key", { body: { key: key.trim() } })),
     onSuccess: async (view) => {
       const first = !byok.data?.keySaved;
       setKey("");

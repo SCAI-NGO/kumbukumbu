@@ -65,7 +65,8 @@ describe("Settings: Search by meaning with your own key", () => {
     renderApp("/settings/vaults");
     const region = await section();
     expect(region).toHaveTextContent("TensorX");
-    await userEvent.type(within(region).getByLabelText("TensorX key"), "sk-test-key-abcd");
+    // With the spaces a paste may bring along: the key goes without them.
+    await userEvent.type(within(region).getByLabelText("TensorX key"), "  sk-test-key-abcd ");
     await userEvent.click(within(region).getByRole("button", { name: "Save key" }));
 
     const prompt = await screen.findByRole("dialog", { name: "Move these 2 vaults to TensorX too?" });

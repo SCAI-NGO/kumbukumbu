@@ -553,17 +553,17 @@ describe("the shell", () => {
 
   it("says a new vault goes to TensorX with the person's own key, and keeps it on this server when unticked", async () => {
     let vaults: { name: string; notes: number; embeddings?: string }[] = [];
-    let moved: unknown;
+    const created: unknown[] = [];
     signedInApi({
       "GET /api/vaults": () => json(200, vaults),
       "GET /api/account/embeddings-key": () => json(200, { offered: true, keySaved: true, last4: "abcd", refusedAt: null }),
-      "POST /api/vaults": () => {
-        vaults = [{ name: "Ideas", notes: 0, embeddings: "tensorx-byok" }];
+      "POST /api/vaults": async (r) => {
+        created.push(await r.json());
+        vaults = [{ name: "Ideas", notes: 0, embeddings: "internal" }];
         return json(201, vaults[0]);
       },
-      "PUT /api/vaults/Ideas/embeddings": async (r) => {
-        moved = await r.json();
-        return json(200, { name: "Ideas", notes: 0, embeddings: "internal" });
+      "PUT /api/vaults/Ideas/embeddings": () => {
+        throw new Error("the provider goes with the create, in one request");
       },
       "GET /api/vaults/Ideas/tree": () => json(200, { damaged: 0, root: { name: "Ideas", path: "/Ideas", folders: [], notes: [] } }),
     });
@@ -578,7 +578,7 @@ describe("the shell", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create vault" }));
 
     expect(await screen.findByRole("dialog", { name: "File tree" })).toBeInTheDocument();
-    expect(moved).toEqual({ provider: "internal" });
+    expect(created).toEqual([{ name: "Ideas", provider: "internal" }]);
   });
 
   it("shows the server's sentence when a vault can't be created", async () => {

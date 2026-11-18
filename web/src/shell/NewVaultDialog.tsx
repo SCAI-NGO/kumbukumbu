@@ -19,13 +19,8 @@ export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void
   const withKey = byok.data?.offered === true && byok.data.keySaved;
   const [tensorx, setTensorx] = useState(true);
   const create = useMutation({
-    mutationFn: async () => {
-      const vault = await call(api.POST("/api/vaults", { body: { name } }));
-      if (vault.embeddings === byokProvider && !tensorx) {
-        await call(api.PUT("/api/vaults/{vault}/embeddings", { params: { path: { vault: vault.name } }, body: { provider: "internal" } }));
-      }
-      return vault;
-    },
+    // The choice goes with the create: unticked, nothing of the vault is ever embedded with the key.
+    mutationFn: () => call(api.POST("/api/vaults", { body: withKey ? { name, provider: tensorx ? byokProvider : "internal" } : { name } })),
     onSuccess: async (vault) => {
       await queryClient.invalidateQueries({ queryKey: ["vaults"] });
       onCreated(vault.name);

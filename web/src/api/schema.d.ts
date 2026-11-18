@@ -12299,6 +12299,7 @@ export interface components {
         };
         CreateVaultRequest: {
             name: string;
+            provider?: null | string;
         };
         CurrentNoteView: {
             content: string;
