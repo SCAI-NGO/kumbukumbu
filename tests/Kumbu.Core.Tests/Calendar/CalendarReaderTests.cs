@@ -33,6 +33,21 @@ public class CalendarReaderTests
     }
 
     [Fact]
+    public async Task A_board_with_frontmatter_longer_than_aliases_are_read_from_is_one_that_cannot_be_read()
+    {
+        const string start = "---\nkumbu-board: 1\ncolumns: [Ideas]\nnotes: ";
+        var store = new InMemoryNoteStore(
+            ("/Work/Board/Board.md", start + new string('x', Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength) + "\n---\n"),
+            ("/Work/Board/Offsite.md", "---\ncolumn: Ideas\ndue: 2026-11-27\n---\n"));
+
+        var calendar = await CalendarReader.ReadAsync(store, "Work", null, CancellationToken.None);
+
+        Assert.Null(calendar.Board);
+        Assert.Empty(calendar.Entries);
+        Assert.Contains("board that can't be read", Assert.Single(calendar.Problems).What);
+    }
+
+    [Fact]
     public async Task A_tag_narrows_to_whole_notes()
     {
         var store = new InMemoryNoteStore(

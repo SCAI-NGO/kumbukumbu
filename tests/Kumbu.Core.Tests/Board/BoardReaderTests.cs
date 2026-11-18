@@ -185,6 +185,38 @@ public class BoardReaderTests
         Assert.Contains("version 9", badProblem);
     }
 
+    // A definition whose frontmatter, its "---" lines included, is the given number of characters long.
+    private static string DefinitionOf(int length)
+    {
+        const string start = "---\nkumbu-board: 1\ncolumns: [A]\nnotes: ";
+        const string end = "\n---\n";
+        return start + new string('x', length - start.Length - end.Length) + end;
+    }
+
+    [Fact]
+    public async Task A_definition_with_frontmatter_longer_than_aliases_are_read_from_is_not_read()
+    {
+        var (fits, fitsProblem) = BoardDefinition.Parse(DefinitionOf(Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength));
+        var (over, overProblem) = BoardDefinition.Parse(DefinitionOf(Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength + 1));
+        var (board, boardProblem) = await Read(("/Work/Board/Board.md", DefinitionOf(Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength + 1)));
+
+        Assert.Null(fitsProblem);
+        Assert.Equal(["A"], fits!.Columns.Select(c => c.Name));
+        Assert.Null(over);
+        Assert.Equal($"Board.md: the frontmatter does not parse: {Frontmatter.TooLargeProblem}", overProblem);
+        Assert.Null(board);
+        Assert.Equal(overProblem, boardProblem);
+    }
+
+    [Fact]
+    public void Readers_of_the_same_definition_share_one_read()
+    {
+        var content = Header;
+
+        Assert.Same(BoardDefinition.Parse(content).Definition, BoardDefinition.Parse(content).Definition);
+        Assert.NotSame(BoardDefinition.Parse(content).Definition, BoardDefinition.Parse(new string(content.AsSpan())).Definition);
+    }
+
     [Fact]
     public async Task Works_on_a_checkpoint_view()
     {
