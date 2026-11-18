@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Favourite, FavouriteInput } from "../api/favourites";
+import { hideAgain } from "../discreet/hideAgain";
 import { useDiscreet } from "../discreet/state";
 import { startOver } from "../shell/lastNote";
 import { useEditor } from "../state/editor";
@@ -29,14 +31,15 @@ const tree = (name: string, notes: string[]) => json(200, { damaged: 0, root: { 
 const vault = (name: string, discreet = false) => ({ name, notes: 2, embeddings: "internal", discreet });
 
 /** Work, and while `shown` the discreet Tagebuch; the favourites are kept as the server would, and written back as they are put. */
-function signedInApi({ shown = false, favourites = [] as FavouriteInput[] } = {}) {
+function signedInApi({ shown = false, favourites = [] as FavouriteInput[], workTree = () => tree("Work", ["inbox.md", "plan.md"]) as Response | Promise<Response> } = {}) {
+  const at = { shown };
   let held: Favourite[] = favourites.map((f) => ({ ...f, added: "2026-11-18T09:00:00Z" }));
   const puts: FavouriteInput[][] = [];
   const fetch = fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown, until: null } }),
-    "GET /api/vaults": () => json(200, shown ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: at.shown, until: null } }),
+    "GET /api/vaults": () => json(200, at.shown ? [vault("Work"), vault("Tagebuch", true)] : [vault("Work")]),
     "GET /api/embeddings": () => json(200, []),
-    "GET /api/vaults/Work/tree": () => tree("Work", ["inbox.md", "plan.md"]),
+    "GET /api/vaults/Work/tree": () => workTree(),
     "GET /api/vaults/Tagebuch/tree": () => tree("Tagebuch", ["heute.md"]),
     "GET /api/vaults/Work/publications": () => json(200, { publications: [], unpublishable: [] }),
     "GET /api/notes/*": (r) => {
@@ -62,7 +65,7 @@ function signedInApi({ shown = false, favourites = [] as FavouriteInput[] } = {}
       return json(200, { favourites: held });
     },
   });
-  return { fetch, puts };
+  return { fetch, puts, at };
 }
 
 const palette = () => screen.getByRole("dialog", { name: "Favourites and commands" });
@@ -71,8 +74,8 @@ const field = () => within(palette()).getByRole("combobox");
 const options = () => within(palette()).queryAllByRole("option").map((o) => o.getAttribute("aria-label"));
 const highlighted = () => within(palette()).getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true")?.getAttribute("aria-label");
 
-async function shown(path = "/notes/Work/inbox.md") {
-  const router = renderApp(path);
+async function shown(path = "/notes/Work/inbox.md", queryClient?: QueryClient) {
+  const router = renderApp(path, queryClient);
   await screen.findByText(`Text of ${path.slice("/notes".length)}.`);
   return router;
 }
@@ -127,6 +130,13 @@ describe("the palette's ways in", () => {
     expect(field()).toHaveFocus();
   });
 
+  it("Ctrl+P opens it by the key's place too, on a layout without Latin letters", async () => {
+    signedInApi();
+    await shown();
+    fireEvent.keyDown(document.body, { key: "з", code: "KeyP", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Favourites and commands" })).toBeInTheDocument();
+  });
+
   it("Ctrl+P again closes it", async () => {
     signedInApi();
     await shown();
@@ -156,8 +166,8 @@ describe("the palette's ways in", () => {
   });
 });
 
-async function openPalette(path?: string) {
-  const router = await shown(path);
+async function openPalette(path?: string, queryClient?: QueryClient) {
+  const router = await shown(path, queryClient);
   await userEvent.click(screen.getByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
   await screen.findByRole("dialog", { name: "Favourites and commands" });
   return router;
@@ -174,6 +184,25 @@ describe("the empty palette", () => {
     expect(within(palette()).getByRole("group", { name: "Favourites" })).toBeInTheDocument();
     expect(within(palette()).getByRole("group", { name: "Recent" })).toBeInTheDocument();
     expect(within(palette()).queryByText("Star anything here to keep it on top.")).not.toBeInTheDocument();
+  });
+
+  it("with favourites, no hint while the trees are still on their way", async () => {
+    let send = (_: Response) => {};
+    let first = true;
+    signedInApi({
+      favourites: [{ kind: "note", vault: "Work", path: "plan.md" }],
+      // The shell's first read answers; the palette's waits.
+      workTree: () => (first ? ((first = false), tree("Work", ["inbox.md", "plan.md"])) : new Promise<Response>((resolve) => (send = resolve))),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await openPalette(undefined, queryClient);
+    await waitFor(() => expect(queryClient.getQueryData(["favourites"])).toBeDefined());
+    queryClient.removeQueries({ queryKey: ["tree", "Work"] });
+    await userEvent.type(field(), "x");
+    await userEvent.clear(field());
+    await act(async () => {});
+    expect(within(palette()).queryByText("Star anything here to keep it on top.")).not.toBeInTheDocument();
+    send(await tree("Work", ["inbox.md", "plan.md"]));
   });
 
   it('without favourites: "Star anything here to keep it on top."', async () => {
@@ -194,6 +223,30 @@ describe("rows", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/plan.md"));
     expect(queryPalette()).not.toBeInTheDocument();
     expect(await screen.findByText("Text of /Work/plan.md.")).toBeInTheDocument();
+  });
+
+  it("Enter on ✕ closes it, without opening a row", async () => {
+    signedInApi();
+    const router = await openPalette();
+    await userEvent.type(field(), "plan");
+    await waitFor(() => expect(highlighted()).toBe("plan, Work"));
+    within(palette()).getByRole("button", { name: "Close" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(queryPalette()).not.toBeInTheDocument());
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
+  });
+
+  it("opened again, it reads no tree again while they are fresh", async () => {
+    const { fetch } = signedInApi();
+    await openPalette();
+    await waitFor(() => expect(options()).toContain("inbox, Work"));
+    const reads = () => fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/api/vaults/Work/tree").length;
+    const before = reads();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await act(async () => {});
+    expect(reads()).toBe(before);
   });
 
   it("arrow keys move the highlight", async () => {
@@ -251,5 +304,19 @@ describe("rows", () => {
     await waitFor(() => expect(options()).toEqual(expect.arrayContaining(["Tagebuch, Vault", "heute, Tagebuch"])));
     act(() => useDiscreet.setState({ revealed: false }));
     await waitFor(() => expect(options()).toEqual(["Search notes for ‘tagebuch’"]));
+  });
+
+  it("closes when the discreet vaults are hidden again, and opens again with an empty field", async () => {
+    const { at } = signedInApi({ shown: true });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = await openPalette(undefined, queryClient);
+    await userEvent.type(field(), "tagebuch");
+    await waitFor(() => expect(options()).toContain("heute, Tagebuch"));
+    at.shown = false;
+    await act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname: router.state.location.pathname }));
+    expect(queryPalette()).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Favourites and commands (Ctrl+P)" }));
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    expect(field()).toHaveValue("");
   });
 });

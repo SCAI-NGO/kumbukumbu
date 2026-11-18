@@ -160,8 +160,15 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // the editor saves nothing more (text typed in the moment since, as the server is told of a ✕, isn't kept).
     useDiscreet.setState({ gone: new Set([...useDiscreet.getState().gone, ...names]) });
     for (const name of names) useEditor.getState().forgetVault(name);
-    // What was looked for, and the note's tools, may name what was in them.
-    useEditor.setState({ searchQuery: "", searchTag: null, find: { query: "", index: 0, count: 0 }, noteTool: null, mode: "read" });
+    // What was looked for, and the note's tools, may name what was in them; so may what the palette has typed, which closes.
+    useEditor.setState((s) => ({
+      searchQuery: "",
+      searchTag: null,
+      find: { query: "", index: 0, count: 0 },
+      noteTool: null,
+      mode: "read",
+      ...(s.overlay === "palette" ? { overlay: "none" as const } : {}),
+    }));
     if (vault) useEditor.getState().setActiveVault(vault);
     useDiscreet.getState().reset();
     // The address bar shows /discreet for a discreet view whatever the router's location says.

@@ -23,6 +23,8 @@ import { withMod } from "./usePaletteShortcut";
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 // Structurally shared by the query: the same trees give the same array, so the rows are built again only when one changes.
 const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r) => r.data);
+// Opened again within a minute, the palette takes the trees it read as they are, rather than asking for every vault's again.
+const FRESH = 60_000;
 
 /** Every row the person may open: the commands she has, and the vaults and notes of the vaults the session lists. */
 function useRows(): Row[] {
@@ -32,7 +34,7 @@ function useRows(): Row[] {
   const marketplaces = useMarketplaces().data?.enabled === true;
   const vaults = useVaults().data;
   // Each vault's tree as the drawer has it, from the cache where it was read before.
-  const trees = useQueries({ queries: (vaults ?? []).map((v) => treeQuery(v.name)), combine: treesOf });
+  const trees = useQueries({ queries: (vaults ?? []).map((v) => ({ ...treeQuery(v.name), staleTime: FRESH })), combine: treesOf });
   return useMemo(
     () => [
       ...commandRows({ admin, shared, marketplaces }),
@@ -175,7 +177,8 @@ export default function Palette() {
   };
 
   const shown = sections.filter((s) => s.rows.length);
-  const hint = !typed && favourites.ready && sections[0].rows.length === 0;
+  // On the list, not its rows: while the trees load, a starred note has no row yet.
+  const hint = !typed && favourites.ready && favourites.list.length === 0;
   const listId = `${id}-list`;
   const list = (
     <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -207,6 +210,8 @@ export default function Palette() {
         aria-autocomplete="list"
         aria-activedescendant={at >= 0 ? optionId(at) : undefined}
         data-autofocus
+        // On the field only: Enter on ✕ is ✕'s.
+        onKeyDown={onKeyDown}
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -226,7 +231,6 @@ export default function Palette() {
         role="dialog"
         aria-modal="true"
         aria-label="Favourites and commands"
-        onKeyDown={onKeyDown}
         className={
           desktop
             ? "flex max-h-[70vh] w-[min(640px,100vw-32px)] flex-col overflow-hidden rounded-[14px] border border-line bg-surface shadow-2xl"
