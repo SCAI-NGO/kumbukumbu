@@ -503,6 +503,33 @@ describe("the note's actions", () => {
     await waitFor(() => expect(highlighted()).toBe("Publish…, inbox"));
   });
 
+  it("find_in_note_leaves_the_focus_in_the_find_field", async () => {
+    signedInApi();
+    await openPalette();
+    await userEvent.type(field(), "find in note");
+    await waitFor(() => expect(highlighted()).toBe("Find in note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const find = await screen.findByRole("searchbox", { name: "Find in note" });
+    await act(async () => {});
+    expect(queryPalette()).not.toBeInTheDocument();
+    expect(find).toHaveFocus();
+  });
+
+  it("over_a_window_the_window_closes_before_the_action_runs", async () => {
+    signedInApi();
+    const router = await shown();
+    await navigateAway(router, "/console");
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    ctrlP();
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await userEvent.type(field(), "delete note");
+    await waitFor(() => expect(highlighted()).toBe("Delete note, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const question = await screen.findByRole("dialog", { name: "Delete inbox?" });
+    expect(question.closest("[inert]")).toBeNull();
+    await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
+  });
+
   it("the_palette_closes_before_the_action_runs", async () => {
     signedInApi();
     await openPalette();

@@ -2,7 +2,7 @@
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import { Search, Star, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type KeyboardEvent, type SyntheticEvent } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { favouriteKey, useFavourites, type FavouriteInput } from "../api/favourites";
 import { treeQuery, useVaults, type TreeView } from "../api/notes";
@@ -22,6 +22,15 @@ import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows, type Read
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
+
+/** Runs `then` once the window closing now is gone: the closing navigation goes through the router, not at once. */
+function afterWindow(then: () => void) {
+  const stop = useWindows.subscribe((s) => {
+    if (s.open) return;
+    stop();
+    then();
+  });
+}
 // Structurally shared by the query: the same trees give the same array, so the rows are built again only when one changes.
 // A tree whose last read failed counts as not loaded: nothing is taken as gone from it.
 const treesOf = (results: UseQueryResult<TreeView>[]) => results.map((r): ReadTree | undefined => (r.isSuccess ? { tree: r.data, at: r.dataUpdatedAt } : undefined));
@@ -120,15 +129,25 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
   }, [id, at]);
 
   const run = (entry: Row | null) => {
-    close();
+    // Search and the note's actions are the shell's: under a window they would be out of reach, so the window closes
+    // first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
+    const overWindow = (entry === null || entry.group === "Note") && useWindows.getState().open;
+    if (overWindow) closeWindow();
     if (entry === null) {
-      // Search is the shell's sheet: under a window it would be out of reach, so the window closes first.
-      if (useWindows.getState().open) closeWindow();
+      close();
       useEditor.getState().setSearchQuery(typed);
       useEditor.getState().setOverlay("search");
-    } else if ("action" in entry.run) entry.run.action();
-    else if ("scheme" in entry.run) applyScheme(entry.run.scheme);
-    else void navigate(entry.run.to);
+    } else if ("action" in entry.run) {
+      const action = entry.run.action;
+      // Gone, and its focus given back, before the action: what it opens (the find field, a question) keeps the focus.
+      flushSync(close);
+      if (overWindow) afterWindow(action);
+      else action();
+    } else {
+      close();
+      if ("scheme" in entry.run) applyScheme(entry.run.scheme);
+      else void navigate(entry.run.to);
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent) => {

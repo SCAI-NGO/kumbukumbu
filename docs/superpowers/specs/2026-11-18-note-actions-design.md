@@ -54,6 +54,7 @@ While a note is shown or edited, the palette has a group **Note** before Command
 - **The same list as the menu,** from one source, so the two never drift; only the items that fit the mode, as in the menu.
 - **Not pinnable:** they act on the note that is open. The rows have no star, and Ctrl+D does nothing on them.
 - **Delete note asks first,** as the menu does (decided by the maintainer: without the question it would be done too quickly). Every row runs exactly what the menu item runs, dialogs included.
+- **The palette is gone before a row runs,** and over a window the window closes first, as for Search, and the row runs once it is gone. Why: what the row opens (the find field, Delete's question) must have the focus, and the shell under a window is inert.
 - **Filtering** as for every row: "no pub" finds "Note: Publish". In the empty palette the Note group is not shown (favourites and Recent stay the empty palette's); it appears once something is typed.
 
 ## The note's menu from the keyboard
