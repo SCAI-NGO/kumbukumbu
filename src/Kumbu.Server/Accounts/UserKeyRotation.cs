@@ -81,6 +81,9 @@ public sealed record PreparedRotation(
 
     /// <summary>Her list of discreet vaults, sealed again under the new user key.</summary>
     public ListReseal DiscreetList { get; init; } = new(null, null);
+
+    /// <summary>Her own TensorX key (BYOK), sealed again under the new user key.</summary>
+    public ListReseal EmbeddingsKey { get; init; } = new(null, null);
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -170,6 +173,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             Notices = await Sharing.MemberNotices.PrepareResealAsync(db, userId, oldUserKey, newUserKey, ct),
             DavShareMetas = shares,
             DiscreetList = await PrepareDiscreetListAsync(userId, oldUserKey, newUserKey, ct),
+            EmbeddingsKey = await PrepareEmbeddingsKeyAsync(userId, oldUserKey, newUserKey, ct),
         };
     }
 
@@ -186,6 +190,20 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         }
 
         return new ListReseal(old, DiscreetVaults.SealList(userId, newUserKey, ids));
+    }
+
+    /// <summary>Her TensorX key sealed again under the new key; one that doesn't open with the old key is left as it is.</summary>
+    private async Task<ListReseal> PrepareEmbeddingsKeyAsync(string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
+    {
+        var old = await Users.Find(u => u.Id == userId).Project(u => u.EmbeddingsKey).FirstOrDefaultAsync(ct);
+        if (old is null) return new ListReseal(null, null);
+        if (EmbeddingsKeys.Open(userId, oldUserKey, old, out var failure) is not { } key)
+        {
+            log.LogWarning("The embeddings key of user {UserId} does not open: {Reason}; it is left as it is", userId, failure);
+            return new ListReseal(old, old);
+        }
+
+        return new ListReseal(old, EmbeddingsKeys.Seal(userId, newUserKey, key));
     }
 
     /// <summary>
@@ -298,6 +316,18 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         else if (!await Users.Find(session, unchanged).AnyAsync(ct))
         {
             // None prepared: nothing to write, but there must still be none.
+            throw new RotationConflictException();
+        }
+
+        // Her TensorX key likewise: a key saved meanwhile, under the old user key, would be lost.
+        var embeddings = rotation.EmbeddingsKey;
+        var keyUnchanged = users.Eq(u => u.Id, userId) & (embeddings.Old is { } oldKey ? users.Eq(u => u.EmbeddingsKey, oldKey) : users.Exists(u => u.EmbeddingsKey, false));
+        if (embeddings.New is { } resealedKey)
+        {
+            Require(await Users.UpdateOneAsync(session, keyUnchanged, Builders<UserDocument>.Update.Set(u => u.EmbeddingsKey, resealedKey), cancellationToken: ct));
+        }
+        else if (!await Users.Find(session, keyUnchanged).AnyAsync(ct))
+        {
             throw new RotationConflictException();
         }
 

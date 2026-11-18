@@ -3,16 +3,24 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
+import { byokProvider, useByok } from "../api/notes";
 import { useDialog } from "../hooks/useDialog";
 import { FormError, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
 
-/** Asks for a vault's name and creates it; the server says what a name may be. */
+/**
+ * Asks for a vault's name and creates it; the server says what a name may be. With her own TensorX key saved, the server
+ * starts the vault on TensorX (BYOK spec): the dialog says so in one line, and unticked, the vault stays on this server.
+ */
 export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void; onCreated(name: string): void }) {
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
   const dialog = useDialog<HTMLFormElement>(onClose);
+  const byok = useByok();
+  const withKey = byok.data?.offered === true && byok.data.keySaved;
+  const [tensorx, setTensorx] = useState(true);
   const create = useMutation({
-    mutationFn: () => call(api.POST("/api/vaults", { body: { name } })),
+    // The choice goes with the create: unticked, nothing of the vault is ever embedded with the key.
+    mutationFn: () => call(api.POST("/api/vaults", { body: withKey ? { name, provider: tensorx ? byokProvider : "internal" } : { name } })),
     onSuccess: async (vault) => {
       await queryClient.invalidateQueries({ queryKey: ["vaults"] });
       onCreated(vault.name);
@@ -38,6 +46,24 @@ export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void
           New vault
         </h2>
         <TextField label="Name" value={name} onChange={setName} autoComplete="off" />
+        {withKey && (
+          <div className="flex min-h-11 items-start gap-3 text-text">
+            <input
+              id="new-vault-tensorx"
+              type="checkbox"
+              checked={tensorx}
+              onChange={(e) => setTensorx(e.target.checked)}
+              aria-describedby="new-vault-tensorx-note"
+              className="mt-1 size-4 flex-none accent-accent"
+            />
+            <span className="flex flex-col gap-0.5">
+              <label htmlFor="new-vault-tensorx">Search by meaning with TensorX (your own key)</label>
+              <span id="new-vault-tensorx-note" className="text-sm text-muted">
+                Its text and the searches that include it go to TensorX. Unticked, it stays on this server.
+              </span>
+            </span>
+          </div>
+        )}
         {create.isError && <FormError>{errorText(create.error)}</FormError>}
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className={secondaryButtonClass}>
