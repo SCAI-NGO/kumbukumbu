@@ -20,6 +20,11 @@ public interface IAttachmentStore
     /// get the same id within a vault.</summary>
     Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct);
 
+    /// <summary>As the bytes' overload, from <paramref name="content"/>, read once to its end, and of any size up to the
+    /// server's bound (<see cref="FileTooLargeException"/> beyond it, before a byte is read when
+    /// <paramref name="declaredLength"/> says so).</summary>
+    Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct);
+
     /// <summary>Trashed attachments at <paramref name="path"/> or below it (every one for null), most recently deleted
     /// first.</summary>
     Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct);

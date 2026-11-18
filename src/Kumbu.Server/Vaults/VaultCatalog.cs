@@ -136,6 +136,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary><see cref="Blobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
     private IMongoCollection<SealedDocument> BlobsByVault { get; } = db.GetCollection<SealedDocument>("blobs");
 
+    /// <summary>The chunks of files larger than 15 MB, under their head in <see cref="Blobs"/> (files spec, decision 9).</summary>
+    internal IMongoCollection<BlobChunkDocument> BlobChunks { get; } = db.GetCollection<BlobChunkDocument>("blob_chunks");
+
+    /// <summary>The largest file a vault keeps (<see cref="VaultOptions.MaxFileBytes"/>).</summary>
+    internal long MaxFileBytes => options.Value.Vaults.MaxFileBytes;
+
     /// <summary>The analyses of PDFs, in parts under their blob's id (<see cref="Attachments.PdfAnalyses"/>); they go with the blob.</summary>
     internal IMongoCollection<PdfAnalysisDocument> PdfParts { get; } = db.GetCollection<PdfAnalysisDocument>("pdf_analyses");
 
@@ -1445,24 +1451,71 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// A blob's bytes, read from MongoDB and opened; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/>
     /// if it doesn't open (changed or damaged outside Kumbu²). The read and the decryption take one of the server's
     /// <see cref="FileReads"/> slots, waiting for one if all are taken; the slot goes back before the bytes are returned.
+    /// Whole bytes are for files up to 15 MB, which is what its callers are sized for: a larger file's head is checked,
+    /// then refused with <see cref="Kumbu.Core.Attachments.TooLargeToReadException"/> (files spec, decision 12).
     /// </summary>
     internal async Task<byte[]?> ReadBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
     {
         await FileReads.WaitAsync(ct);
         try
         {
-            var doc = await Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct);
+            var doc = await FindBlobAsync(vault, blobId, ct);
+            if (doc?.Chunks is not null)
+            {
+                vault.OpenLargeBlobHead(doc);
+                throw new Kumbu.Core.Attachments.TooLargeToReadException();
+            }
+
             return doc is null ? null : vault.OpenBlob(doc);
         }
-        catch (Exception e) when (e is CryptographicException or InvalidDataException)
+        catch (Exception e) when (e is CryptographicException or InvalidDataException or JsonException)
         {
-            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+            throw Damaged();
         }
         finally
         {
             FileReads.Release();
         }
     }
+
+    /// <summary>
+    /// A blob's bytes as a stream; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/> if it doesn't
+    /// open. Up to 15 MB, as <see cref="ReadBlobAsync"/> reads them; a larger file's head is opened and its chunks
+    /// counted here, and the chunks are read one at a time as the stream is (<see cref="LargeBlobStream"/>), each under a
+    /// slot of its own: a file cut off or added to fails here, before its first byte.
+    /// </summary>
+    internal async Task<Stream?> OpenBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
+    {
+        await FileReads.WaitAsync(ct);
+        try
+        {
+            if (await FindBlobAsync(vault, blobId, ct) is not { } doc) return null;
+            if (doc.Chunks is null) return new MemoryStream(vault.OpenBlob(doc), writable: false);
+            var head = vault.OpenLargeBlobHead(doc);
+            var c = Builders<BlobChunkDocument>.Filter;
+            if (await BlobChunks.CountDocumentsAsync(c.Eq(d => d.Vault, vault.Id) & c.Eq(d => d.Head, doc.Id), cancellationToken: ct) != head.Chunks)
+            {
+                throw new InvalidDataException($"Large blob {doc.Id} does not have its {head.Chunks} chunks");
+            }
+
+            return new LargeBlobStream(this, vault, doc.Id, head);
+        }
+        catch (Exception e) when (e is CryptographicException or InvalidDataException or JsonException)
+        {
+            throw Damaged();
+        }
+        finally
+        {
+            FileReads.Release();
+        }
+    }
+
+    private Task<BlobDocument?> FindBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct) =>
+        Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct)!;
+
+    /// <summary>What a blob, or a chunk of one, that doesn't open is.</summary>
+    internal static VaultUnavailableException Damaged() =>
+        new("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
 
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => UnlockedCount;
@@ -1963,6 +2016,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<BlobDocument>(BlobSweep.CandidateIndex),
                 // Whether blobs exist, and since when, without fetching them (EncryptedNoteStore.RequireBlobsAsync).
                 new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
+            ],
+            ct);
+        await BlobChunks.Indexes.CreateManyAsync(
+            [
+                // A file's chunks in order, each number once; counted from the index alone.
+                new CreateIndexModel<BlobChunkDocument>(
+                    Builders<BlobChunkDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.Head).Ascending(d => d.N), new CreateIndexOptions { Unique = true }),
+                // Chunks by age, for the sweep of uploads that stopped half way.
+                new CreateIndexModel<BlobChunkDocument>(Builders<BlobChunkDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.At)),
             ],
             ct);
         await PdfParts.Indexes.CreateOneAsync(

@@ -28,11 +28,12 @@ public sealed class VaultWorld
 
     /// <summary>A catalog as one server process has it; a second call is a second process.</summary>
     public VaultCatalog Catalog(
-        int idleMinutes = 15, int memoryMegabytes = 512, TimeProvider? time = null, string embeddingsDefault = "internal", int fileReads = 4, bool byok = false) => new(
+        int idleMinutes = 15, int memoryMegabytes = 512, TimeProvider? time = null, string embeddingsDefault = "internal", int fileReads = 4, bool byok = false,
+        long maxFileBytes = VaultOptions.DefaultMaxFileBytes) => new(
         Db,
         Options.Create(new KumbuOptions
         {
-            Vaults = new VaultOptions { IdleMinutes = idleMinutes, MemoryLimitMegabytes = memoryMegabytes, ConcurrentFileReads = fileReads },
+            Vaults = new VaultOptions { IdleMinutes = idleMinutes, MemoryLimitMegabytes = memoryMegabytes, ConcurrentFileReads = fileReads, MaxFileBytes = maxFileBytes },
             Embeddings = new EmbeddingsOptions { Default = embeddingsDefault, Byok = byok },
         }),
         time ?? TimeProvider.System,

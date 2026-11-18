@@ -892,4 +892,40 @@ public sealed class QuotaApiTests(KumbuAppFactory app) : IAsyncDisposable
         var other = await store.PutBlobAsync("Work", System.Security.Cryptography.RandomNumberGenerator.GetBytes(part), Ct);
         Assert.NotEqual(id, other);
     }
+
+    /// <summary>A large file is checked chunk by chunk: one that runs out of space half way is refused, its chunks go
+    /// and the space they held is given back; one whose declared length doesn't fit is refused before it is read.</summary>
+    [Fact]
+    public async Task A_large_file_that_runs_out_of_space_half_way_is_refused_and_gives_it_back()
+    {
+        var api = Own(quotaDefault: "30MB");
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        await Quota(api).FigureAsync(user.User.Id, Ct);
+        var store = QuotaStore(user);
+        var chunks = api.Services.GetRequiredService<IMongoDatabase>().GetCollection<MongoDB.Bson.BsonDocument>("blob_chunks");
+        var ofVault = Builders<MongoDB.Bson.BsonDocument>.Filter.Eq("vault", await user.VaultIdAsync());
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes((int)(40 * OneMb));
+
+        await Assert.ThrowsAsync<QuotaExceededException>(() => store.PutBlobAsync("Work", new MemoryStream(bytes), null, Ct));
+        Assert.Equal(0, Quota(api).ReservedBy(user.User.Id));
+        Assert.Equal(0, await chunks.CountDocumentsAsync(ofVault, cancellationToken: Ct));
+
+        await Assert.ThrowsAsync<QuotaExceededException>(() => store.PutBlobAsync("Work", new UnreadableStream(), 40 * OneMb, Ct));
+
+        // The space came back: 20 MB fit.
+        var fits = System.Security.Cryptography.RandomNumberGenerator.GetBytes((int)(20 * OneMb));
+        await store.PutBlobAsync("Work", new MemoryStream(fits), fits.Length, Ct);
+        Assert.Equal(0, Quota(api).ReservedBy(user.User.Id));
+        Assert.Equal(5, await chunks.CountDocumentsAsync(ofVault, cancellationToken: Ct));
+    }
+
+    /// <summary>A body that must not be read.</summary>
+    private sealed class UnreadableStream : MemoryStream
+    {
+        public override int Read(byte[] buffer, int offset, int count) => throw new InvalidOperationException("read");
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => throw new InvalidOperationException("read");
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => throw new InvalidOperationException("read");
+    }
 }

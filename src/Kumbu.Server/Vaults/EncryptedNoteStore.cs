@@ -471,14 +471,15 @@ public sealed class EncryptedNoteStore(
     }
 
     /// <summary>
-    /// The blob read from MongoDB and opened (<see cref="VaultCatalog.ReadBlobAsync"/>): the read and the decryption,
+    /// The blob read from MongoDB and opened (<see cref="VaultCatalog.OpenBlobAsync"/>): the read and the decryption,
     /// when a file costs about twice its size, take one of the server's <see cref="VaultCatalog.FileReads"/> slots, so a
-    /// slow download holds only its own bytes, never a slot.
+    /// slow download holds only its own bytes, never a slot. A file larger than 15 MB is read a chunk at a time, a slot
+    /// for each.
     /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v } || !TryParseBlobId(blobId, out var id)) return null;
-        return await catalog.ReadBlobAsync(v, id, ct) is { } bytes ? new MemoryStream(bytes, writable: false) : null;
+        return await catalog.OpenBlobAsync(v, id, ct);
     }
 
     /// <summary>The unlocked vault of a path, as every read finds it; null if the credential has no such vault.</summary>
@@ -535,6 +536,174 @@ public sealed class EncryptedNoteStore(
         }
 
         return Convert.ToBase64String(id);
+    }
+
+    /// <summary>
+    /// Stores a file from <paramref name="content"/>, read once to its end, up to the server's bound
+    /// (<see cref="VaultCatalog.MaxFileBytes"/>; <see cref="FileTooLargeException"/> beyond it, before a byte is read if
+    /// <paramref name="declaredLength"/> says so, which is also checked against the quota first). Up to 15 MB it is one
+    /// document, exactly as the bytes' overload stores it, and gets the same id; above, chunks and a head
+    /// (<see cref="PutLargeBlobAsync"/>). What tells the two apart is reading past 15 MB, so up to that much is held
+    /// while it is read, unless the declared length is larger.
+    /// </summary>
+    public async Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct)
+    {
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v }) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
+        var bound = catalog.MaxFileBytes;
+        if (declaredLength > bound) throw new FileTooLargeException(bound);
+        catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+        // A check only: each chunk holds its own space as it is written.
+        if (declaredLength is { } declared) _quota?.Release(RequireSpace(v, declared));
+
+        var start = new MemoryStream();
+        if (declaredLength is not > AttachmentFormat.MaxBytes)
+        {
+            var buffer = new byte[81920];
+            int read;
+            while (start.Length <= AttachmentFormat.MaxBytes && (read = await content.ReadAsync(buffer, ct)) > 0) start.Write(buffer, 0, read);
+            if (start.Length <= AttachmentFormat.MaxBytes) return await PutBlobAsync(vault, start.GetBuffer().AsMemory(0, (int)start.Length), ct);
+            start.Position = 0;
+        }
+
+        return await PutLargeBlobAsync(v, start, content, bound, ct);
+    }
+
+    /// <summary>
+    /// A file larger than 15 MB (files spec, decisions 9–11): its chunks are sealed and written as they arrive, under a
+    /// random data key of the file's own, then its head, so it exists only once the head does. Each chunk passes the
+    /// quota before it is written and holds its space until the head commits it, or the put gives up and gives it back.
+    /// The chunks are written outside the vault's gate: a gigabyte arriving over a slow link must not hold up every other
+    /// write to the vault, and chunks no head names are harmless. Only the head's insert takes the gate, as the bytes'
+    /// overload does. A put that fails or is refused half way deletes the chunks it wrote (as far as it can: the sweep
+    /// takes what it leaves once it is older than <see cref="BlobSweep.Grace"/>); one whose head finds the same bytes
+    /// stored makes that blob young again and deletes its own chunks.
+    /// </summary>
+    private async Task<string> PutLargeBlobAsync(UnlockedVault v, MemoryStream start, Stream content, long bound, CancellationToken ct)
+    {
+        var headId = ObjectId.GenerateNewId();
+        var key = Kumbu.Core.Crypto.VaultCrypto.NewKey();
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var reservations = new List<Accounts.QuotaReservation>();
+        var c = Builders<BlobChunkDocument>.Filter;
+        var ours = c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, headId);
+        try
+        {
+            var chunk = new byte[LargeBlobHead.ChunkBytes];
+            var next = new byte[LargeBlobHead.ChunkBytes];
+            var length = await FillAsync(start, content, chunk, ct);
+            var (size, n) = (0L, 0);
+            while (true)
+            {
+                // The next chunk is read before this one is sealed: only then is it known whether this is the last.
+                var nextLength = length == chunk.Length ? await FillAsync(start, content, next, ct) : 0;
+                size += length;
+                if (size > bound) throw new FileTooLargeException(bound);
+                if (RequireSpace(v, length) is { } reservation) reservations.Add(reservation);
+                hash.AppendData(chunk, 0, length);
+                await catalog.BlobChunks.InsertOneAsync(
+                    new BlobChunkDocument
+                    {
+                        Id = ObjectId.GenerateNewId(), Vault = v.Id, Head = headId, N = n, Blob = v.SealChunk(key, headId, n, nextLength == 0, chunk.AsSpan(0, length)),
+                        At = catalog.Now,
+                    },
+                    cancellationToken: ct);
+                if (nextLength == 0) break;
+                (chunk, next, length, n) = (next, chunk, nextLength, n + 1);
+            }
+
+            var sha = hash.GetHashAndReset();
+            var id = v.LargeBlobId(sha);
+            if (await PutHeadAsync(v, headId, id, new LargeBlobHead(LargeBlobHead.Marker, key, size, n + 1, LargeBlobHead.ChunkBytes, sha), ct))
+            {
+                foreach (var reservation in reservations) _quota!.Commit(reservation);
+            }
+            else
+            {
+                await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+            }
+
+            return Convert.ToBase64String(id);
+        }
+        catch
+        {
+            try
+            {
+                await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+            }
+            catch (MongoException)
+            {
+                // The sweep's to take, past its grace; the put's own failure is what the caller learns.
+            }
+
+            throw;
+        }
+        finally
+        {
+            foreach (var reservation in reservations) _quota?.Release(reservation);
+        }
+    }
+
+    /// <summary>
+    /// The head of a large file, under the vault's gate: true if it was inserted, false if the vault holds the same bytes
+    /// already, whose blob is made young again. The sweep, under the same gate, takes chunks without a head once the
+    /// newest of them is older than its grace: an upload that waited longer than that between two chunks may have lost
+    /// some. It counts its chunks before the head goes in, so a file the sweep cut short is refused, never stored.
+    /// </summary>
+    private async Task<bool> PutHeadAsync(UnlockedVault v, ObjectId headId, byte[] id, LargeBlobHead head, CancellationToken ct)
+    {
+        var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
+        var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
+        var c = Builders<BlobChunkDocument>.Filter;
+        await v.Gate.WaitAsync(ct);
+        try
+        {
+            catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+            if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount > 0) return false;
+            if (await catalog.BlobChunks.CountDocumentsAsync(c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, headId), cancellationToken: ct) != head.Chunks)
+            {
+                throw new ContentMissingException("The upload was too slow: part of the file was removed meanwhile, so nothing was stored. Try again.");
+            }
+
+            try
+            {
+                await catalog.Blobs.InsertOneAsync(
+                    new BlobDocument { Id = headId, Vault = v.Id, BlobId = id, Blob = v.SealLargeBlobHead(id, head), At = catalog.Now, Chunks = head.Chunks },
+                    cancellationToken: ct);
+                return true;
+            }
+            catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Another process put the same bytes meanwhile.
+                await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct);
+                return false;
+            }
+        }
+        finally
+        {
+            v.Gate.Release();
+        }
+    }
+
+    /// <summary>Fills <paramref name="buffer"/> from what was read already, then from <paramref name="content"/>; less
+    /// only at the end. What was read already is let go once it is used up.</summary>
+    private static async Task<int> FillAsync(MemoryStream start, Stream content, byte[] buffer, CancellationToken ct)
+    {
+        var filled = 0;
+        while (filled < buffer.Length)
+        {
+            var read = await start.ReadAsync(buffer.AsMemory(filled), ct);
+            if (read == 0 && start.Capacity > 0)
+            {
+                start.SetLength(0);
+                start.Capacity = 0;
+            }
+
+            if (read == 0) read = await content.ReadAsync(buffer.AsMemory(filled), ct);
+            if (read == 0) break;
+            filled += read;
+        }
+
+        return filled;
     }
 
     internal static bool TryParseBlobId(string blobId, out byte[] id)
