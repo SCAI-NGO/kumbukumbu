@@ -760,6 +760,32 @@ describe("[[ completion of headings and blocks", () => {
   });
 });
 
+describe("Markdown link completion", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const roadmap = ["# Roadmap", "", "## Next steps"].join("\n");
+  const options = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
+
+  it("lists the notes after ](, and inserts the one picked by its path from the vault's root", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[the road](ro");
+    expect(options("Notes to link")).toEqual(["roadmapWork / projects"]);
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [the road](/projects/roadmap.md)`);
+    expect(editorBox().selectionStart).toBe(editorBox().value.length);
+  });
+
+  it("lists that note's headings after #, and inserts the one picked encoded", async () => {
+    editorApi([ok], undefined, { [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, roadmap, "r1")) });
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[next](/projects/roadmap.md#ne");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(options("Headings to link")).toEqual(["Next stepsH2"]);
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [next](/projects/roadmap.md#Next%20steps)`);
+  });
+});
+
 describe("Named from its heading", () => {
   const UNTITLED = "/Home/Garden/Untitled.md";
   const untitledUrl = "/notes/Home/Garden/Untitled.md";

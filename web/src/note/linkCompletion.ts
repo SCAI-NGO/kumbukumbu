@@ -154,3 +154,29 @@ export function completeSubpath(value: string, caret: number, at: LinkQuery & { 
   const text = `[[${at.note}#${subpath}]]`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }
+
+/**
+ * A segment of a Markdown link's destination as the server's `MarkdownLink.Encode` writes it
+ * (src/Kumbu.Core/Links/MarkdownLink.cs): control characters and ` %#?()<>[]^|\`"{}` percent-encoded, every other
+ * letter as it is.
+ */
+const encodeSegment = (text: string) =>
+  [...text]
+    .map((c) => {
+      if (!/\p{Cc}/u.test(c) && !' %#?()<>[]^|\\`"{}'.includes(c)) return c;
+      return c.charCodeAt(0) < 0x80 ? `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}` : encodeURIComponent(c);
+    })
+    .join("");
+
+/** `/Work/My Folder/Plan.md` → `/My%20Folder/Plan.md`: a note's path from the vault's root, as we write Markdown links everywhere. */
+export const markdownPath = (path: string) => `/${path.split("/").slice(2).map(encodeSegment).join("/")}`;
+
+/** A heading after a Markdown link's `#`: as a wiki link holds it (`headingLink`), encoded (`#Next%20steps`). */
+export const markdownFragment = (text: string) => `#${encodeSegment(headingLink(text))}`;
+
+/** The edit that completes a Markdown link's destination (and a `)` right after the caret): `[x](/plan.md)`. */
+export function completeMarkdown(value: string, caret: number, at: LinkQuery, destination: string) {
+  const end = value[caret] === ")" ? caret + 1 : caret;
+  const text = `${destination})`;
+  return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
+}

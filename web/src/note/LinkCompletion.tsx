@@ -5,6 +5,7 @@ import { crumbOf, titleOf, vaultOf } from "../api/paths";
 import {
   blocksFor,
   completeLink,
+  completeMarkdown,
   completeSubpath,
   embedsAsImage,
   headingLink,
@@ -12,6 +13,8 @@ import {
   linkedNote,
   linkQuery,
   linkTarget,
+  markdownFragment,
+  markdownPath,
   notePaths,
   rankNotes,
   type LinkQuery,
@@ -22,6 +25,15 @@ const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
 /** A row of the list: what it shows, and what picking it inserts (a note's path, a heading's link text, `^id`). */
 type Option = { key: string; label: string; detail: string; value: string };
+
+/** A Markdown link's path as written (`/My%20Plan.md`), decoded where it is well-formed, as the server reads it. */
+function decoded(path: string) {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
 
 const listNames: Record<LinkQuery["kind"], string> = {
   note: "Notes to link",
@@ -50,8 +62,7 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   // The note whose headings or blocks are asked for: the open one for `[[#`, else the one the name leads to.
   const target = useMemo(() => {
     if (!at || at.kind === "note" || at.kind === "markdown") return null;
-    if (at.kind === "markdownHeading") return null;
-    return at.note === "" ? path : linkedNote(at.note, all, path);
+    return at.note === "" ? path : linkedNote(at.kind === "markdownHeading" ? decoded(at.note) : at.note, all, path);
   }, [all, at, path]);
   // Another note is read as the note view reads it, so it comes from the cache when it was open before.
   const other = useNote(target !== path ? target : null);
@@ -59,17 +70,14 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   const loading = target !== null && target !== path && other.isPending;
 
   const options = useMemo((): Option[] => {
-    if (at?.kind === "note") {
+    if (at?.kind === "note" || at?.kind === "markdown") {
       return rankNotes(all.filter((p) => p !== path), at.query).map((p) => ({ key: p, label: titleOf(p), detail: crumbOf(p), value: p }));
     }
     if (!at || content === undefined) return [];
     if (at.kind === "block") return blocksFor(content, at.query).map((b) => ({ key: b.id, label: b.text, detail: `^${b.id}`, value: `^${b.id}` }));
-    if (at.kind === "heading") {
-      return headingsFor(content, at.query)
-        .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: headingLink(h.text) }))
-        .filter((o) => o.value !== "");
-    }
-    return [];
+    return headingsFor(content, at.query)
+      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: headingLink(h.text) }))
+      .filter((o) => o.value !== "");
   }, [all, at, content, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
 
@@ -89,6 +97,8 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     const caret = area.selectionStart;
     if (at.kind === "note") apply(area, completeLink(area.value, caret, at, linkTarget(option.value, all), embedsAsImage(option.value)), onChange);
     else if (at.kind === "heading" || at.kind === "block") apply(area, completeSubpath(area.value, caret, at, option.value), onChange);
+    else if (at.kind === "markdown") apply(area, completeMarkdown(area.value, caret, at, markdownPath(option.value)), onChange);
+    else apply(area, completeMarkdown(area.value, caret, at, `${at.note}${markdownFragment(option.label)}`), onChange);
     setAt(null);
   };
 

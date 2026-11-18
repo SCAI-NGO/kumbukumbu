@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { blocksFor, completeLink, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
+import { blocksFor, completeLink, completeMarkdown, completeSubpath, embedsAsImage, headingLink, headingsFor, linkedNote, linkQuery, linkTarget, markdownFragment, markdownPath, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
   it("finds an open [[ on the caret's line", () => {
@@ -158,6 +158,26 @@ describe("headings and blocks of a note", () => {
     expect(completeSubpath("See [[Plan#Go", 13, at, "Goals")).toEqual({ start: 4, end: 13, text: "[[Plan#Goals]]", selStart: 18, selEnd: 18 });
     expect(completeSubpath("See [[Plan#Go]] x", 13, at, "Goals")).toMatchObject({ end: 15 });
     expect(completeSubpath("![[#^s", 6, { kind: "block", start: 1, note: "", query: "s" }, "^ship")).toMatchObject({ start: 1, text: "[[#^ship]]" });
+  });
+});
+
+describe("Markdown links", () => {
+  it("writes a note's path from the vault's root, encoded as the server writes it", () => {
+    expect(markdownPath("/Work/Folder/Note.md")).toBe("/Folder/Note.md");
+    expect(markdownPath("/Work/My Folder/Plan (v2) #1.md")).toBe("/My%20Folder/Plan%20%28v2%29%20%231.md");
+    expect(markdownPath("/Work/Größe 100%.md")).toBe("/Größe%20100%25.md");
+    expect(markdownPath("/Work/Screenshots/shot.png")).toBe("/Screenshots/shot.png");
+  });
+
+  it("writes a heading after # as a link can hold it, encoded", () => {
+    expect(markdownFragment("Next steps")).toBe("#Next%20steps");
+    expect(markdownFragment("C# (later)")).toBe("#C%20%28later%29");
+  });
+
+  it("completes the destination, and a ) right after the caret", () => {
+    const at = { kind: "markdown" as const, start: 8, query: "pl" };
+    expect(completeMarkdown("See [x](pl", 10, at, "/Folder/plan.md")).toEqual({ start: 8, end: 10, text: "/Folder/plan.md)", selStart: 24, selEnd: 24 });
+    expect(completeMarkdown("See [x](pl) and", 10, at, "/Folder/plan.md")).toMatchObject({ end: 11 });
   });
 });
 
