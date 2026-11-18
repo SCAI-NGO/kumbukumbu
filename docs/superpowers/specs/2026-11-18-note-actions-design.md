@@ -39,7 +39,7 @@ Removing a key removes its whole entry, a multi-line value (a list, a map) inclu
 
 **What is copied.** The text as the person sees it: in Write mode with unsaved text, that text is saved first (the editor's own save), then copied; if the save fails, nothing is copied and the failure is shown as the save's. Claude's call: copying the server's older text would lose what is on screen.
 
-**Where it is offered.** In the note's menu as "Duplicate" (lucide `Copy`), where the person may write the folder (as "Rename or move" is offered), and as "Note: Duplicate" in the palette. Not for a note under `_archive/`: the copy would be archived too, which nobody asks for.
+**Where it is offered.** In the note's menu as "Duplicate" (lucide `CopyPlus`: "Copy file path" beside it has `Copy`), where the person may write the folder (as "Rename or move" is offered), and as "Note: Duplicate" in the palette. Not for a note under `_archive/`: the copy would be archived too, which nobody asks for.
 
 **After duplicating** (decided by the maintainer): the original stays open. A short notice "Copy of plan.md created" with **Open** goes to the copy. Why: the intention isn't visible, so staying is the safe case; editors tend to open the copy (Obsidian, Google Docs), file managers stay (Finder, Explorer, Dolphin), so there is no standard, and the notice gives the one click for those who want to edit the copy and names it. It goes after a few seconds or on Esc, as the shell's other notices do.
 
@@ -71,7 +71,7 @@ While a note is shown or edited, the palette has a group **Note** before Command
 - **The row model:** `Row.favourite` becomes optional (absent on Note rows) and `run` gains `{ action(): void }`; the star, Ctrl+D and the favourite key skip rows without `favourite`.
 - **The keyboard menu reuses the dock's `Menu` component** with a position given (the caret's coordinates) in Write mode, rendered by the shell outside the dock so it exists while the dock is hidden; in Read mode it opens the dock's own menu.
 - **The notice** follows the shell's alert pattern (`ConflictToast`'s look), with **Open** and ✕; Esc closes it while it has the focus. It goes by itself after 8 seconds unless the focus is in it.
-- **Naming retries:** the note write without a version is create-only and answers 409 when the note exists (`createEmpty`, `web/src/api/notes.ts:179`, relies on that); the next number is tried on each 409, up to 99, then the error is shown.
+- **Naming retries:** the note write without a version is create-only and answers 409 when the note exists (`createEmpty`, `web/src/api/notes.ts:179`, relies on that); the next number is tried on each 409, up to 99, then "There are already 99 copies of <name>; rename one and try again." (the server's 409 sentence names no copies).
 
 ## Left to the builder
 

@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - British English in code, comments and UI copy; `// SPDX-License-Identifier: AGPL-3.0-or-later` at the top of every new source file.
-- Copy fixed by the spec: menu item "Duplicate" (lucide `Copy`); name "Copy of <name>.md", then "Copy of <name> 2.md", … up to 99; notice "Copy of <name>.md created" with **Open**; palette group "Note"; the palette rows carry the menu's labels verbatim.
+- Copy fixed by the spec: menu item "Duplicate" (lucide `CopyPlus`); name "Copy of <name>.md", then "Copy of <name> 2.md", … up to 99, then "There are already 99 copies of <name>; rename one and try again."; notice "Copy of <name>.md created" with **Open**; palette group "Note"; the palette rows carry the menu's labels verbatim.
 - Removed from the copy: `when`, `until`, `due`, `task`, `upcoming`, `tz`, `closed`, `reason`, `rank`, `moved`. Kept: everything else, `column` included.
 - Keys: Shift+F10 and `ContextMenu` open the note's menu; never over a dialog (`topDialog()`), the palette or another menu, never without an open note. No Ctrl+Space, no right-click override.
 - No Duplicate for notes under `_archive/` or where the folder isn't writable.

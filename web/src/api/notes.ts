@@ -237,7 +237,8 @@ export function useDuplicateNote() {
           return (await call(api.PUT("/api/notes/{vault}/{path}", { params: params(copyName(path, n)), body: { content } }))).path;
         } catch (e) {
           // Without a version the write only creates: a 409 is a note of that name.
-          if (!(e instanceof HttpError && e.status === 409) || n === 99) throw e;
+          if (!(e instanceof HttpError && e.status === 409)) throw e;
+          if (n === 99) throw new HttpError(409, `There are already 99 copies of ${path.slice(path.lastIndexOf("/") + 1)}; rename one and try again.`);
         }
       }
     },

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Copy, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { mayChange, useDuplicateNote, useLevel, useNoteText, useTree, useVaults } from "../api/notes";
@@ -55,7 +55,12 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   const renaming = useEditor((s) => !!path && s.renaming.includes(path));
   const [history, setHistory] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
-  // A sheet or dialog about a vault hidden again goes with it: its title and its answers name the note.
+  const duplicating = useDuplicateNote();
+  /** The copy just made, whose notice is up. */
+  const [copy, setCopy] = useState<string | null>(null);
+  const failedCopy = useRef<{ of?: string; reset(): void }>({ reset: () => {} });
+  failedCopy.current = { of: duplicating.variables, reset: duplicating.reset };
+  // A sheet, dialog or notice about a vault hidden again goes with it: its title and its answers name the note.
   useEffect(
     () =>
       useDiscreet.subscribe((s, previous) => {
@@ -63,6 +68,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
         const gonePath = (path: string | null) => !!path && goneVault(s, vaultOf(path));
         setHistory((path) => (gonePath(path) ? null : path));
         setPublishing((path) => (gonePath(path) ? null : path));
+        setCopy((path) => (gonePath(path) ? null : path));
+        if (gonePath(failedCopy.current.of ?? null)) failedCopy.current.reset();
       }),
     [],
   );
@@ -94,8 +101,6 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   // The copy is made of the text as it is shown: in Write mode what is unsaved is saved first, without ending Write
   // mode. A failed save copies nothing; the editor says why, as for any save. The original stays open.
   const navigate = useNavigate();
-  const duplicating = useDuplicateNote();
-  const [copy, setCopy] = useState<string | null>(null);
   const duplicate = async (path: string) => {
     duplicating.reset();
     const save = useEditor.getState().beforeRead;
@@ -125,7 +130,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           ? [
               // Not while it is being named from its heading: a name given by hand must not lose that race. No copy of
               // an archived note: it would be archived too.
-              ...(renaming || inVault(path).startsWith("_archive/") ? [] : [{ label: "Duplicate", icon: Copy, onSelect: () => void duplicate(path) }]),
+              ...(renaming || inVault(path).startsWith("_archive/") ? [] : [{ label: "Duplicate", icon: CopyPlus, onSelect: () => void duplicate(path) }]),
               ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => shell.onMove({ kind: "note", path }) }]),
               { label: "Delete note", icon: Trash2, onSelect: () => shell.onDelete({ kind: "note", path }) },
               ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path) }] : []),

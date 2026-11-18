@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DuplicateNotice from "../note/DuplicateNotice";
 import { copyText } from "../note/duplicate";
+import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -18,6 +19,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.setState({ gone: new Set() });
 });
 
 const ORIGINAL = "---\nwhen: 2026-11-20\ntags: [plan]\n---\n# inbox\n\nText.";
@@ -159,7 +161,7 @@ describe("the note's actions", () => {
     const state = server({ taken: () => true });
     renderApp("/notes/Work/inbox.md");
     await duplicate();
-    expect(await screen.findByRole("alert")).toHaveTextContent("There is a note at that path already.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("There are already 99 copies of inbox.md; rename one and try again.");
     expect(state.copies).toHaveLength(99);
     expect(state.copies.at(-1)!.path).toBe("/Work/Copy of inbox 99.md");
     expect(screen.queryByRole("status", { name: "Copy created" })).not.toBeInTheDocument();
@@ -202,6 +204,24 @@ describe("the note's actions", () => {
     await userEvent.click(within(notice).getByRole("button", { name: "Open" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Copy%20of%20inbox.md"));
     expect(screen.queryByRole("status", { name: "Copy created" })).not.toBeInTheDocument();
+  });
+
+  it("hiding_the_vault_again_forgets_the_notice_and_the_error", async () => {
+    server({ taken: (path) => path !== "/Work/Copy of inbox 3.md" && !path.endsWith(" 4.md") });
+    renderApp("/notes/Work/inbox.md");
+    await duplicate();
+    await screen.findByRole("status", { name: "Copy created" });
+    act(() => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    expect(screen.queryByRole("status", { name: "Copy created" })).not.toBeInTheDocument();
+    cleanup();
+    useDiscreet.setState({ gone: new Set() });
+
+    server({ taken: () => true });
+    renderApp("/notes/Work/inbox.md");
+    await duplicate();
+    expect(await screen.findByRole("alert")).toHaveTextContent("99 copies of inbox.md");
+    act(() => useDiscreet.setState({ gone: new Set(["Work"]) }));
+    expect(screen.queryByText(/99 copies of inbox\.md/)).not.toBeInTheDocument();
   });
 
   it("the_original_stays_open", async () => {
