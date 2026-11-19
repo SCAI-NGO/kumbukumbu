@@ -605,6 +605,9 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
         Assert.Equal(AccountLimits.HistoryScansRefused, await RestClient.ErrorAsync(limited));
         using var laterStage = await ShAsync(user, "cat /Work/plan.md | history /Work");
         Assert.Equal(HttpStatusCode.TooManyRequests, laterStage.StatusCode);
+        // blame reads the histories of notes from before the record, as many as history does.
+        using var blame = await ShAsync(user, "blame /Work");
+        Assert.Equal(HttpStatusCode.TooManyRequests, blame.StatusCode);
         Assert.Equal("rm: not in this console, which only reads", Text(await ConsoleAsync(user, "history /Work | rm /Work/plan.md")));
     }
 

@@ -16,7 +16,7 @@ export const consoleCommands = ["cd", "pwd", "clear", "exit", "l", "la", "lsa", 
 
 /** The shell's commands the console runs (the writing ones are refused here), for completion; `paths.ts` has the same names. */
 export const shCommands = [
-  "backlinks", "board", "calendar", "cat", "df", "diff", "du", "graph", "head", "help", "history", "img", "links",
+  "backlinks", "blame", "board", "calendar", "cat", "df", "diff", "du", "graph", "head", "help", "history", "img", "links",
   "ls", "lscp", "outline", "pdf", "publish", "rg", "semsearch", "skills", "sort", "tags", "tail", "trash", "uname", "wc",
 ];
 
