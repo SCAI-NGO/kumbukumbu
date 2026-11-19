@@ -63,14 +63,16 @@ A new type in Core, `src/Kumbu.Core/Notes/Authorship.cs` *(Claude's call: Core, 
 
 ```
 Authorship(string Hash, DateTime? Earlier, bool Dropped, IReadOnlyList<Write> Writes, IReadOnlyList<Run> Runs)
-Write(string Label, WriterRef Ref, DateTime At)
+Write(string Label, WriterRef? Ref, DateTime At)
 Run(int Lines, int Write)          // Write: an index into Writes, or -1: not recorded
 ```
+
+*Amended while building:* `Write` and `Run` are nested in `Authorship` (`Authorship.Write`, a name too general for the namespace), and `Ref` is nullable, as `HistoryEntry.Ref` is: a write backfilled from the history keeps the reference its entry carries, and the payload keeps a legacy and an unknown reference apart (§5.3).
 
 - `Hash`: the SHA-256 of the content it describes (`VersionToken.Hash`), the full hash as for extracts. A record whose hash isn't the content's is treated as missing (§5.2). Why: a downgrade to a server without the record, then an upgrade, or any future bug, would otherwise show a record of another text.
 - `Runs`: consecutive lines of one write, in order; their `Lines` add up to the content's line count. Adjacent runs of the same write are merged; writes no run names are dropped on every update. So the record grows with the number of changes of writer in the note, not with its length.
 - `Earlier`: for runs with `-1`, the time they were last changed at or before (§5.2); null when every line is recorded.
-- `Dropped`: the record outgrew its bound and started again (§5.5).
+- `Dropped`: the record outgrew its bound and started again (§5.5). *Amended while building:* set while lines from before the restart are left, so it goes with `Earlier` when the last of them does; the line `blame` adds for it (§6) needs `Earlier`'s time.
 
 `StoredNote` gets `Authorship? Authorship = null` (`src/Kumbu.Core/Notes/StoredNote.cs:93`); null means none recorded.
 
@@ -228,8 +230,19 @@ The content and its version come in the same answer, so the text and the record 
 
 ## 9. Performance
 
-- **Per write:** splitting both texts into lines and comparing the common start and end, O(n) with no allocation beyond the split; then Myers on the middle within the budget. An autosave that changes a line of a 1 MiB note costs a few ms of the write, which already seals up to 11 states of the note. The first task measures it on a 1 MiB note of 20,000 lines (one line changed, a section rewritten, the budget's fallback) and records the figures here.
-- **Per read:** none for a recorded note; up to 10 bounded diffs for one from before the record (§5.2). `blame <folder>` over 1,600 such notes of ~1.5 KB is a few hundred ms; the 200-note cap bounds the rest.
+- **Per write:** splitting both texts into lines and comparing the common start and end, O(n); then Myers on the middle within the budget. Measured on 2026-11-19 *(replacing the estimates)*, `Authorship.After` in a Release build on a cloud machine shared with other jobs (4 vCPUs, Intel Xeon @ 2.10 GHz, .NET 10), a note of 20,000 lines and 1.16 MB, averaged over 10 runs:
+
+  | Write | Time | Allocated | Diff |
+  |---|---|---|---|
+  | one line changed | 11 ms | 13 MiB | within the budget |
+  | a section of 200 lines rewritten | 15 ms | 14 MiB | within |
+  | the first and the last line changed | 10 ms | 15 MiB | within |
+  | 12 lines changed across the note | 14 ms | 21 MiB | within, at the budget's edge |
+  | 30 lines changed across the note | 13 ms | 21 MiB | over: the fallback |
+  | every 10th line changed | 10 ms | 21 MiB | over: the fallback |
+
+  Most of it is the fixed part, not the diff: splitting both texts (about 2 ms each, which also makes most of the allocation), hashing the old and the new content (about 1 ms each) and the common start and end (under 1 ms). So the cost is about 10 ms for any write to a note that size, and scales with its length; a note of 100 KB pays a tenth. The search up to the budget is cheap, and 2,000,000 cells stay: on the 1 MiB note the budget allows about 12 changed lines spread over the whole note, on a note of 2,000 lines about 125, so the fallback stays the rare case §5.5 describes. The write already seals up to 11 states of the note.
+- **Per read:** none for a recorded note; up to 10 bounded diffs for one from before the record (§5.2). Measured as above: the backfill of the 1 MiB note from 10 states, 83 ms; of 1,600 notes of 1.2 KB with 10 states each (the `blame <folder>` case), 184 ms in all. The 200-note cap bounds the rest.
 - **Memory:** a run is two ints, a write a label, a reference and a time; counted in `ApproxBytes`.
 
 ## 10. Tests, written first
