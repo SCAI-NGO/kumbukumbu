@@ -51,7 +51,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
           The links that lead to no note, by how many notes write them, with the notes and lines.
 
           --tag T         only notes with the tag (several: all of them); attachments and names stay when a kept note links to them
-          --archive       take in the notes of the archive (_archive/); a path inside it always does
+          --archive       take in the notes and attachments of the archive (_archive/); a path inside it always does
           --no-days       leave out day and week notes
           --no-attachments, --no-ghosts   leave out attachments, or the links that lead to nothing
 

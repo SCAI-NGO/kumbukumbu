@@ -56,6 +56,15 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public void Writes_path_and_content_parameters_name_notes_SVGs_and_skill_text_files()
+    {
+        var parameters = typeof(Kumbu.Server.Mcp.WriteTools).GetMethod(nameof(Kumbu.Server.Mcp.WriteTools.Write))!.GetParameters();
+        string Text(string name) => parameters.Single(p => p.Name == name).GetCustomAttribute<DescriptionAttribute>()!.Description;
+        Assert.Contains("Absolute path of the note, SVG or skill text file", Text("path"));
+        Assert.Contains("Markdown for a note", Text("content"));
+    }
+
+    [Fact]
     public void Writes_message_parameter_says_an_SVG_and_a_skill_file_keep_none()
     {
         var message = typeof(Kumbu.Server.Mcp.WriteTools).GetMethod(nameof(Kumbu.Server.Mcp.WriteTools.Write))!

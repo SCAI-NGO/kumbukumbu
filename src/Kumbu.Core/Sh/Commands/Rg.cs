@@ -99,7 +99,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      Regions come from the PDF itself each time, for up to {MaxRegionPdfs} PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
-          --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
+          --archive                  search a vault's archive (_archive/) too: its notes, text files and PDFs; a path inside it always is
           -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules, {"{a,b}"} too; repeatable)
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search

@@ -303,6 +303,13 @@ public class ArchiveHiddenTests
     }
 
     [Fact]
+    public async Task Help_rg_says_archive_covers_notes_text_files_and_pdfs()
+    {
+        var help = System.Text.RegularExpressions.Regex.Replace((await Run("help rg")).Output, @"\s+", " ");
+        Assert.Contains("its notes, text files and PDFs", help);
+    }
+
+    [Fact]
     public async Task Help_rg_and_semsearch_name_archive()
     {
         Assert.Contains("\n  --archive ", (await Run("help rg")).Output);
