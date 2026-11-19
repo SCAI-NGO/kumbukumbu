@@ -48,6 +48,8 @@ async function startSplit(page: Page, alphaPath: string) {
 
 /** Where on screen the `into`th character of `word` (the first such text in `where`) starts, a pixel in. */
 async function pointAt(where: Locator, word: string, into = 1) {
+  // The pane's note may still be rendering after open(): wait until its article shows the word.
+  await expect(where.locator("article").getByText(word).first()).toBeVisible();
   return where.evaluate(
     (root, [word, into]) => {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

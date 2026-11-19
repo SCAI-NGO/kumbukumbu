@@ -129,6 +129,14 @@ export async function seed(api: Api, files: { source: string; path: string }[]) 
   }
 }
 
+export type JsonRpcMessage = { result?: unknown; error?: { code: number; message: string } };
+export type InitializeResult = {
+  protocolVersion: string;
+  serverInfo: { name: string; version?: string };
+  capabilities: Record<string, unknown>;
+  instructions?: string;
+};
+
 /**
  * An agent's `sh`, `write` or `board` through MCP with an API key of Alice's (Streamable HTTP, stateless), for the
  * writing steps the read-only console refuses. The key lives in memory for one worker.
@@ -156,23 +164,50 @@ export class Mcp {
     return new Mcp(await request.newContext({ baseURL }), created.key, { api, id: created.apiKey.id });
   }
 
-  async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+  /**
+   * One JSON-RPC request with the key: the HTTP status and the message, parsed from a JSON answer or from the one
+   * server-sent event carrying it (undefined if the body holds neither).
+   */
+  async raw(method: string, params: Record<string, unknown>, what = `MCP ${method}`): Promise<{ status: number; message: JsonRpcMessage | undefined }> {
     // Guarded: the call log of a request that doesn't complete would show the key.
     const response = await guarded(
       () =>
         this.context.post("/mcp", {
           headers: { Authorization: `Bearer ${this.key}`, Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
-          data: { jsonrpc: "2.0", id: ++this.id, method: "tools/call", params: { name: tool, arguments: args } },
+          data: { jsonrpc: "2.0", id: ++this.id, method, params },
         }),
-      `MCP ${tool}`,
+      what,
     );
-    expect(response.status(), `MCP ${tool}`).toBe(200);
     const body = await response.text();
     // Either a JSON answer or one server-sent event carrying it.
     const json = body.trimStart().startsWith("{") ? body : (body.split("\n").find((l) => l.startsWith("data:")) ?? "").slice(5);
-    const message = JSON.parse(json) as { result?: { content: { type: string; text: string }[]; isError?: boolean }; error?: { message: string } };
+    try {
+      return { status: response.status(), message: JSON.parse(json) as JsonRpcMessage };
+    } catch {
+      return { status: response.status(), message: undefined };
+    }
+  }
+
+  /** The handshake, as a client opens it; instructions come only from here and `server/discover`. */
+  async initialize(): Promise<InitializeResult> {
+    const { status, message } = await this.raw("initialize", {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "kumbu-e2e", version: "0" },
+    });
+    expect(status, "MCP initialize").toBe(200);
+    if (!message) throw new Error("MCP initialize: the answer held no JSON-RPC message");
+    if (message.error) throw new Error(`MCP initialize: ${message.error.message}`);
+    return message.result as InitializeResult;
+  }
+
+  async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+    const { status, message } = await this.raw("tools/call", { name: tool, arguments: args }, `MCP ${tool}`);
+    expect(status, `MCP ${tool}`).toBe(200);
+    if (!message) throw new Error(`MCP ${tool}: the answer held no JSON-RPC message`);
     if (message.error) throw new Error(`MCP ${tool}: ${message.error.message}`);
-    return { text: message.result!.content.map((c) => c.text).join("\n"), isError: !!message.result!.isError };
+    const result = message.result as { content: { type: string; text: string }[]; isError?: boolean };
+    return { text: result.content.map((c) => c.text).join("\n"), isError: !!result.isError };
   }
 
   sh(command: string) {
