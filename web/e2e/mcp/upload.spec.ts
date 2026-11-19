@@ -171,7 +171,6 @@ test("upload: refuses a note's path, an existing file without its version, a wro
 });
 
 test("upload: refuses a read-only key at the tool, before a URL exists @upload", async ({ aliceApi, folder }) => {
-  test.fail(true, "M-02 (Low, bug): the refusal of a read-only key says 'upload: ' twice");
   const reader = await Mcp.create(aliceApi, `e2e upload reader ${randomBytes(3).toString("hex")}`, { Work: "read" });
   try {
     const answer = await reader.call("upload", { path: `/Work/${folder}/diagram.png` });

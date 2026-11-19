@@ -52,7 +52,6 @@ public static class UploadTool
                 return ShellResult.Error($"upload: '{path}' is no file path; give an absolute path like /Work/images/diagram.png");
             filePath = ApiPaths.Parse(parsed.Segments[0], string.Join('/', parsed.Segments.Skip(1)), PathKind.Attachment);
             await NoteApi.RequireVaultAsync(store, filePath, ct);
-            NoteApi.Refuse(caller, "upload", filePath);
         }
         catch (ApiException e)
         {
@@ -61,6 +60,9 @@ public static class UploadTool
                 ? $"upload: {note.Value} is a note; create or replace it with the write tool"
                 : $"upload: {e.Message}") with { Kind = e.Status switch { StatusCodes.Status403Forbidden => ShellErrorKind.Refused, StatusCodes.Status404NotFound => ShellErrorKind.NotFound, _ => ShellErrorKind.Invalid } };
         }
+
+        // After the catch, so a note's path still points at write; the refusal names the tool itself.
+        if (((ICaller)caller).Refuse("upload", filePath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
 
         // What the PUT refuses by the name alone; a format's bytes it checks then.
         var skillsVault = await store.SkillsVaultAsync(ct);
