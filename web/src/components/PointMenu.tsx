@@ -3,22 +3,26 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { itemButtons, MenuList, MIN_HEIGHT, type MenuItem } from "./Menu";
 
-/** Where a menu opens: from `left`, below `bottom` (a line's, else `top`), or above `top` where there is no room below. */
+/**
+ * Where a menu opens: from `left` (or, with `align: "end"`, ending at it, as a menu at a button's right edge does),
+ * below `bottom` (a line's, else `top`), or above `top` where there is no room below.
+ */
 export interface MenuPoint {
   left: number;
   top: number;
   bottom?: number;
+  align?: "start" | "end";
 }
 
 /**
  * `Menu`'s list at a point instead of a button, a context menu: at the caret, say. It opens to the right of the point
- * and below it, flips to the left and above where there is no room, and scrolls within the side with more room where
- * it fits on neither, and is placed again when its items or its size change. The focus starts on the first item, once
- * the list is placed and visible; Escape, Tab past either end, a tap outside, a scroll or a resize close it (`onClose`,
- * which puts the focus back), as does a chosen item, before it runs.
+ * (or to its left, with `align: "end"`) and below it, flips where there is no room, and scrolls within the side with
+ * more room where it fits on neither, and is placed again when its items or its size change. The focus starts on the
+ * first item, once the list is placed and visible; Escape, Tab past either end, a tap outside, a scroll or a resize
+ * close it (`onClose`, which puts the focus back), as does a chosen item, before it runs.
  */
 export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoint; onClose(): void }) {
-  const { left, top, bottom = top } = props.at;
+  const { left, top, bottom = top, align = "start" } = props.at;
   const list = useRef<HTMLDivElement>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
   const close = useRef(props.onClose);
@@ -38,20 +42,21 @@ export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoi
     const shown = Math.min(height, maxHeight);
     // On screen whatever the point: a caret scrolled out of the editor's view stands outside the window.
     const within = (at: number, size: number, room: number) => Math.max(8, Math.min(at, room - 8 - size));
+    const rightwards = align === "end" ? left - box.width < 8 : left + box.width + 8 <= window.innerWidth;
     const next = {
-      left: within(left + box.width + 8 <= window.innerWidth ? left : left - box.width, box.width, window.innerWidth),
+      left: within(rightwards ? left : left - box.width, box.width, window.innerWidth),
       top: within(down ? below : above - shown, shown, window.innerHeight),
       maxHeight,
     };
     setPlaced((p) => (p && p.left === next.left && p.top === next.top && p.maxHeight === next.maxHeight ? p : next));
   };
-  useLayoutEffect(place, [left, top, bottom, props.items]);
+  useLayoutEffect(place, [left, top, bottom, align, props.items]);
   useLayoutEffect(() => {
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(place);
     observer.observe(list.current!);
     return () => observer.disconnect();
-  }, [left, top, bottom]);
+  }, [left, top, bottom, align]);
 
   // Once it is visible: a browser doesn't focus a hidden element. Placing it again leaves the focus where it is.
   const visible = placed !== null;

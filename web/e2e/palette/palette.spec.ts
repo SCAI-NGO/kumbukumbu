@@ -477,7 +477,6 @@ test("palette #9: Shift+F10 straight after the note opens gives a menu that fits
 });
 
 test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ opens it @palette", async ({ page, aliceApi, folder }) => {
-  test.fail(true, "F-14 (Low, bug): in Read mode the keyboard menu opens right of the dock's ⋯ where there is room, while the dock's own menu ends at the button");
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
   await openNote(page, path);
@@ -493,7 +492,8 @@ test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ op
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.activeElement?.getAttribute("role")), "F-12: the focus on a menu item in Read mode too").toBe("menuitem");
   const byKey = await boxOf(menu);
-  expect({ left: Math.round(byKey.left), right: Math.round(byKey.right) }, "F-14: the same place as the dock's own menu").toEqual({ left: Math.round(byMouse.left), right: Math.round(byMouse.right) });
+  const place = (box: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom) });
+  expect(place(byKey), "F-14: the same place as the dock's own menu").toEqual(place(byMouse));
 });
 
 test("palette #11: Duplicate in Write mode saves the unsaved text first, and the copy holds it @palette", async ({ page, aliceApi, folder }) => {

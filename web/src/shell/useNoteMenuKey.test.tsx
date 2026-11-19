@@ -81,6 +81,15 @@ describe("the note's menu from the keyboard", () => {
     expect(within(menu).getByRole("menuitem", { name: "Find in note" })).toBeInTheDocument();
   });
 
+  it("in_read_mode_it_ends_at_the_dock_button_even_with_room_to_the_right", async () => {
+    // A wide window: room to the button's right, where a menu from its right edge would open.
+    vi.stubGlobal("innerWidth", 1280);
+    await readNote();
+    shiftF10();
+    const menu = await screen.findByRole("menu", { name: "Note actions" });
+    expect(menu.style.left).toBe(`${DOCK_BUTTON.right - MENU.width}px`);
+  });
+
   it("context_menu_key_too", async () => {
     await readNote();
     expect(fireEvent.keyDown(document.body, { key: "ContextMenu", code: "ContextMenu" })).toBe(false);

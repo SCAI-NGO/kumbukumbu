@@ -60,6 +60,17 @@ describe("PointMenu", () => {
     expect(menu.style.left).toBe(`${900 - 192}px`);
   });
 
+  it("ends_at_the_point_with_align_end", () => {
+    layout();
+    const { unmount } = render(<PointMenu label="Note actions" items={items()} at={{ left: 600, top: 500, align: "end" }} onClose={vi.fn()} />);
+    // Room on the left: it ends at the point, as a menu at a button's right edge does.
+    expect(screen.getByRole("menu").style.left).toBe(`${600 - 192}px`);
+    unmount();
+    // No room on the left: from the point rightwards, within the window.
+    render(<PointMenu label="Note actions" items={items()} at={{ left: 100, top: 500, align: "end" }} onClose={vi.fn()} />);
+    expect(screen.getByRole("menu").style.left).toBe("100px");
+  });
+
   it("scrolls_within_the_side_with_more_room_where_it_fits_on_neither", () => {
     layout(900);
     render(<PointMenu label="Note actions" items={items()} at={{ left: 300, top: 300 }} onClose={vi.fn()} />);
