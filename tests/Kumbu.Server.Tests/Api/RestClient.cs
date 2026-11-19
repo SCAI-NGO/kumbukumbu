@@ -67,6 +67,26 @@ public sealed class RestClient
         return new RestClient(api, username, session, user, userKey, vault);
     }
 
+    /// <summary>A new user signed in whose skills vault is marked under another name, <paramref name="vault"/>, beside a
+    /// vault named Skills that isn't marked: the server names the marked one Skills, but the mark, not the name, decides
+    /// what a skill's folder is.</summary>
+    public static async Task<RestClient> MarkedUnderAnotherNameAsync(WebApplicationFactory<Program> api, string vault = "Tools")
+    {
+        var users = api.Services.GetRequiredService<UserCatalog>();
+        var username = "u" + Guid.NewGuid().ToString("N")[..12];
+        await users.CreateAsync(username, Password, Roles.User, Ct);
+        var (user, userKey, _) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        await catalog.CreateForUserAsync(vault, user.Id, userKey, Ct, kind: VaultKinds.Skills);
+        await catalog.CreateForUserAsync("Skills", user.Id, userKey, Ct);
+
+        // Signing in finds the marked vault, so it neither makes another nor renames the unmarked Skills.
+        using var signIn = await SendAsync(api, HttpMethod.Post, "/api/session", new { username, password = Password }, session: null, bearer: null);
+        Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
+        var cookie = signIn.Headers.GetValues("Set-Cookie").First(v => v.StartsWith(CallerMiddleware.SessionCookie + "=", StringComparison.Ordinal));
+        return new RestClient(api, username, cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0], user, userKey, vault);
+    }
+
     /// <summary>A user the test made and signed in itself, with <paramref name="session"/>.</summary>
     internal static RestClient Existing(WebApplicationFactory<Program> api, User user, byte[] userKey, string session, string vault) =>
         new(api, user.Username, session, user, userKey, vault);

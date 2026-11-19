@@ -191,7 +191,8 @@ public static class FileApi
         using var body = new ReceivedBody();
         if (!await body.ReadAsync(request, declared, ct)) return await StoreLargeAsync(filePath, version, body.Bytes, request, declared, bound, files, writer, store, labels, ct);
         var bytes = body.Bytes;
-        if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        if (AttachmentFormat.Problem(filePath, bytes.Span, skillsVault) is { } problem) throw ApiErrors.BadRequest(problem + ".");
 
         // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's; an SVG's
         // the writer reads itself, and no pixel count limits it, as it is rendered at the size asked for.
@@ -210,8 +211,9 @@ public static class FileApi
         VaultPath filePath, string? version, ReadOnlyMemory<byte> head, HttpRequest request, long? declared, long bound, IAttachmentStore files, AttachmentWriter writer,
         INoteStore store, WriterLabels labels, CancellationToken ct)
     {
-        if (AttachmentFormat.TooLargeToCheck(filePath) is { } tooLarge) throw new ApiException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
-        if (AttachmentFormat.LargeProblem(filePath, head.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        if (AttachmentFormat.TooLargeToCheck(filePath, skillsVault) is { } tooLarge) throw new ApiException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
+        if (AttachmentFormat.LargeProblem(filePath, head.Span, skillsVault) is { } problem) throw ApiErrors.BadRequest(problem + ".");
         var dimensions = AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } ? ImageHeader.Size(head.Span) : null;
         if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
         RequireLargeBodyRate(request.HttpContext);

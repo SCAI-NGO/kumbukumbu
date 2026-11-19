@@ -113,6 +113,20 @@ public sealed class LargeFileTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_large_file_finds_a_skills_folder_by_the_mark_not_the_name()
+    {
+        var alice = await RestClient.MarkedUnderAnotherNameAsync(Api);
+        var bytes = LargeFiles.Of(16 * 1024 * 1024, 4);
+
+        using var unmarked = await alice.SendContentAsync(HttpMethod.Put, "/api/files/Skills/x/big.bin", new LargeFiles.Streamed(bytes, true), followRedirects: false);
+        using var marked = await alice.SendContentAsync(HttpMethod.Put, alice.Url("x/big.bin", "files"), new LargeFiles.Streamed(bytes, true), followRedirects: false);
+
+        await StoredAsync(unmarked);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, marked.StatusCode);
+        Assert.Equal("big.bin is larger than 15 MB; a skill's folder keeps files up to 15 MB, as a skill is read whole when it is copied or shared.", await RestClient.ErrorAsync(marked));
+    }
+
+    [Fact]
     public async Task A_large_file_is_overwritten_with_its_version()
     {
         var user = await RestClient.NewAsync(Api);
