@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNote, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
-import { besideOf, folderOf, noteUrl, paneUrl, pathFromRoute, vaultOf } from "../api/paths";
+import { besideOf, folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PointMenu } from "../components/PointMenu";
@@ -46,7 +46,6 @@ import { useNoteMenuKey } from "./useNoteMenuKey";
 import DateDialog from "../calendar/DateDialog";
 import { useFlagging } from "../flags/FlagMenu";
 import { ShellRedirect } from "../windows/context";
-import { useWindows } from "../windows/store";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -341,15 +340,6 @@ export default function MobileShell() {
     if (beside) openNote(beside, "read", "right");
     else void closePane("right");
   }, [path, beside]);
-  // The other way round for the right pane, as a new entry: the store opens a note there, or closes a pane. Not from
-  // under a window, whose address the router's is.
-  const besidePane = useEditor((s) => s.panes.right?.path ?? null);
-  useEffect(() => {
-    if (!path || hiding || useWindows.getState().open) return;
-    const { panes } = useEditor.getState();
-    const right = panes.right?.path ?? null;
-    if (right !== beside) navigate(paneUrl(panes.left.path ?? path, right));
-  }, [besidePane, hiding]);
 
   // A note named from its heading: the URL goes along, unless the user has gone on to another note meanwhile.
   const shownPath = useRef(path);

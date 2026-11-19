@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { besideOf, paneUrl } from "../api/paths";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
+import { usePaneUrl } from "./usePaneUrl";
 
 const note = (path: string) => ({ name: path.split("/").at(-1)!, path, size: 10 });
 
@@ -67,26 +69,23 @@ describe("the right pane's URL", () => {
     expect(panes()).toEqual(["/Work/a.md", null]);
   });
 
-  it("is written from the store, a note opened in the right pane pushing a history entry, and back and forward restore both", async () => {
+  it("restores both panes going back and forward", async () => {
     signedIn();
     const router = renderApp("/notes/Work/a.md");
     await screen.findByRole("heading", { name: "Note a" });
-
-    act(() => useEditor.getState().openNote("/Work/b.md", "read", "right"));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md"));
-    expect(router.state.historyAction).toBe("PUSH");
-    act(() => useEditor.getState().focus("right"));
-    act(() => useEditor.getState().openNote("/Work/c.md"));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/c.md"));
-    expect(router.state.historyAction).toBe("PUSH");
+    await act(() => router.navigate(paneUrl("/Work/a.md", "/Work/b.md")));
+    await waitFor(() => expect(panes()).toEqual(["/Work/a.md", "/Work/b.md"]));
+    await act(() => router.navigate(paneUrl("/Work/c.md", "/Work/d.md")));
+    await waitFor(() => expect(panes()).toEqual(["/Work/c.md", "/Work/d.md"]));
 
     await act(() => router.navigate(-1));
     await waitFor(() => expect(panes()).toEqual(["/Work/a.md", "/Work/b.md"]));
     await act(() => router.navigate(-1));
     await waitFor(() => expect(panes()).toEqual(["/Work/a.md", null]));
     await act(() => router.navigate(2));
-    await waitFor(() => expect(panes()).toEqual(["/Work/a.md", "/Work/c.md"]));
-    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/c.md");
+    await waitFor(() => expect(panes()).toEqual(["/Work/c.md", "/Work/d.md"]));
+    await screen.findByRole("heading", { name: "Note c" });
+    expect(useEditor.getState()).toMatchObject({ focused: "left", currentPath: "/Work/c.md" });
   });
 
   it("restores both panes going back to a URL with both", async () => {
@@ -98,20 +97,47 @@ describe("the right pane's URL", () => {
     await waitFor(() => expect(panes()).toEqual(["/Work/a.md", "/Work/b.md"]));
     await screen.findByRole("heading", { name: "Note a" });
   });
+});
 
-  it("goes when the right pane closes, and the left's note follows when the left one does", async () => {
-    signedIn();
-    const router = renderApp("/notes/Work/a.md?beside=Work/b.md");
-    await waitFor(() => expect(panes()).toEqual(["/Work/a.md", "/Work/b.md"]));
+describe("the panes written to the URL", () => {
+  let panesUrl: ReturnType<typeof usePaneUrl>;
+  function Probe() {
+    panesUrl = usePaneUrl();
+    return null;
+  }
+  function on(url: string) {
+    const router = createMemoryRouter([{ path: "*", element: <Probe /> }], { initialEntries: [url] });
+    render(<RouterProvider router={router} />);
+    return router;
+  }
 
-    await act(() => useEditor.getState().closePane("right"));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+  it("opens a note in the right pane as a new entry", async () => {
+    useEditor.getState().openNote("/Work/a.md");
+    const router = on("/notes/Work/a.md");
+    await act(async () => panesUrl.openBeside("/Work/b.md"));
+    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md");
+    expect(router.state.historyAction).toBe("PUSH");
+  });
 
-    act(() => useEditor.getState().openNote("/Work/b.md", "read", "right"));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md"));
-    await act(() => useEditor.getState().closePane("left"));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
-    await screen.findByRole("heading", { name: "Note b" });
-    expect(panes()).toEqual(["/Work/b.md", null]);
+  it("closes a pane once it is closed in the store, the right one left as the only pane when the left closes", async () => {
+    useEditor.getState().openNote("/Work/a.md");
+    useEditor.getState().openNote("/Work/b.md", "read", "right");
+    const router = on("/notes/Work/a.md?beside=Work/b.md");
+    await act(() => panesUrl.close("right"));
+    expect(at(router)).toBe("/notes/Work/a.md");
+
+    useEditor.getState().openNote("/Work/b.md", "read", "right");
+    await act(() => panesUrl.close("left"));
+    expect(at(router)).toBe("/notes/Work/b.md");
+  });
+
+  it("keeps the URL while a writing pane's save fails, and the pane with it", async () => {
+    useEditor.getState().openNote("/Work/a.md", "write");
+    useEditor.getState().openNote("/Work/b.md", "read", "right");
+    useEditor.getState().setBeforeRead(async () => false, () => ({ text: "Not saved yet.", version: "v1" }));
+    const router = on("/notes/Work/a.md?beside=Work/b.md");
+    await act(() => panesUrl.close("left"));
+    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md");
+    expect(panes()).toEqual(["/Work/a.md", "/Work/b.md"]);
   });
 });
