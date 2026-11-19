@@ -10,7 +10,9 @@ namespace Kumbu.Core.Sh.Commands;
 /// <summary>
 /// Reads an XML file (spec 2026-11-19, decision 9): its shape, or the nodes an XPath 1.0 expression picks. A document
 /// with a DTD is refused rather than read without it: an entity left out would give wrong values. So no entity is
-/// expanded and nothing outside the file is read (no XXE): the reader prohibits DTDs and has no resolver.
+/// expanded and nothing outside the file is read (no XXE): the reader prohibits DTDs and has no resolver. An XPath is
+/// evaluated over a navigator that checks the call's token at every step, as one can walk the document once for every
+/// node ('//*[count(//*) > 0]'): evaluating and printing stop at <see cref="Budget"/>.
 /// </summary>
 public sealed partial class Xml(INoteReader notes) : ICommand
 {
@@ -23,6 +25,9 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         // 0 would mean no limit; with DTDs prohibited no entity can be declared, and the predefined ones (&amp;) don't count.
         MaxCharactersFromEntities = 1,
     };
+
+    /// <summary>How long one call may evaluate and print; the steps of an ordinary XPath over a 15 MB file take well under a second.</summary>
+    internal TimeSpan Budget { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>The prefix the document's default namespace is offered as.</summary>
     private const string DefaultPrefix = "d";
@@ -105,6 +110,21 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         if (defaultNamespace.Length > 0 && !declared.ContainsKey(DefaultPrefix)) manager.AddNamespace(DefaultPrefix, defaultNamespace);
         foreach (var (prefix, uri) in prefixes) manager.AddNamespace(prefix, uri);
 
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(Budget);
+        try
+        {
+            return Picked(new Guarded(root, budget.Token), expression, manager, xpath, modes, options.Has("xml"), defaultNamespace, budget.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ShellResult.Error($"xml: '{xpath}' took longer than {Budget.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} seconds on {Shown(path)}; narrow the XPath");
+        }
+    }
+
+    private static ShellResult Picked(
+        XPathNavigator root, XPathExpression expression, XmlNamespaceManager manager, string xpath, List<string> modes, bool asXml, string defaultNamespace, CancellationToken ct)
+    {
         object result;
         try
         {
@@ -128,7 +148,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
 
         var picked = new List<XPathNavigator>();
         while (nodes.MoveNext()) picked.Add(nodes.Current!.Clone());
-        if (options.Has("count")) return ShellResult.Ok(picked.Count.ToString(CultureInfo.InvariantCulture));
+        if (modes.Contains("count")) return ShellResult.Ok(picked.Count.ToString(CultureInfo.InvariantCulture));
         if (picked.Count == 0)
         {
             var hint = defaultNamespace.Length > 0 && !HasPrefix(xpath)
@@ -137,8 +157,63 @@ public sealed partial class Xml(INoteReader notes) : ICommand
             return ShellResult.Ok("") with { NoMatchHint = hint };
         }
 
-        var lines = picked.Select(n => options.Has("xml") ? Outer(n) : TextFiles.Collapse(n.Value)).ToList();
-        return TextFiles.Listed(Name, lines, "\n", "nodes", "narrow the XPath");
+        // Made one by one, as the output takes them: an element's XML or text holds all below it.
+        return TextFiles.Listed("xml", picked.Count, picked.Select(n => asXml ? Outer(n) : TextFiles.Collapse(n.Value)), "\n", "nodes", "narrow the XPath");
+    }
+
+    /// <summary>A navigator that checks the token at every step and every value it reads, so that whatever an XPath
+    /// walks, it stops soon after the token is cancelled: a step costs at most one walk of the document.</summary>
+    private sealed class Guarded(XPathNavigator inner, CancellationToken ct) : XPathNavigator
+    {
+        private XPathNavigator Step()
+        {
+            ct.ThrowIfCancellationRequested();
+            return inner;
+        }
+
+        public override string BaseURI => inner.BaseURI;
+
+        public override bool IsEmptyElement => inner.IsEmptyElement;
+
+        public override string LocalName => inner.LocalName;
+
+        public override string Name => inner.Name;
+
+        public override string NamespaceURI => inner.NamespaceURI;
+
+        public override XmlNameTable NameTable => inner.NameTable;
+
+        public override XPathNodeType NodeType => inner.NodeType;
+
+        public override string Prefix => inner.Prefix;
+
+        public override string Value => Step().Value;
+
+        public override XPathNavigator Clone() => new Guarded(Step().Clone(), ct);
+
+        public override bool IsSamePosition(XPathNavigator other) => other is Guarded guarded && inner.IsSamePosition(guarded.Inner);
+
+        public override bool MoveTo(XPathNavigator other) => other is Guarded guarded && Step().MoveTo(guarded.Inner);
+
+        public override bool MoveToFirstAttribute() => Step().MoveToFirstAttribute();
+
+        public override bool MoveToNextAttribute() => Step().MoveToNextAttribute();
+
+        public override bool MoveToFirstNamespace(XPathNamespaceScope namespaceScope) => Step().MoveToFirstNamespace(namespaceScope);
+
+        public override bool MoveToNextNamespace(XPathNamespaceScope namespaceScope) => Step().MoveToNextNamespace(namespaceScope);
+
+        public override bool MoveToNext() => Step().MoveToNext();
+
+        public override bool MoveToPrevious() => Step().MoveToPrevious();
+
+        public override bool MoveToFirstChild() => Step().MoveToFirstChild();
+
+        public override bool MoveToParent() => Step().MoveToParent();
+
+        public override bool MoveToId(string id) => Step().MoveToId(id);
+
+        private XPathNavigator Inner => inner;
     }
 
     private static readonly XmlWriterSettings Unindented = new() { OmitXmlDeclaration = true, Indent = false, ConformanceLevel = ConformanceLevel.Fragment };

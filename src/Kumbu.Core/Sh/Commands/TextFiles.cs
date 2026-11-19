@@ -44,29 +44,36 @@ internal static partial class TextFiles
     /// then a line saying how many were shown of how many <paramref name="noun"/>, and how to <paramref name="narrow"/> it,
     /// so the shell's own cut never ends inside an item.
     /// </summary>
-    public static ShellResult Listed(string command, IReadOnlyList<string> items, string separator, string noun, string narrow, int reserve = 0)
+    public static ShellResult Listed(string command, IReadOnlyList<string> items, string separator, string noun, string narrow, int reserve = 0) =>
+        Listed(command, items.Count, items, separator, noun, narrow, reserve);
+
+    /// <summary>As above, for <paramref name="count"/> items made one by one: those past the limit are never made, as
+    /// an element's HTML or a node's XML holds all below it, and all of them together can be the file's size squared.</summary>
+    public static ShellResult Listed(string command, int count, IEnumerable<string> items, string separator, string noun, string narrow, int reserve = 0)
     {
         var budget = OutputLimit.MaxChars - 200 - reserve;
         var output = new StringBuilder();
         var shown = 0;
+        string? first = null;
         foreach (var item in items)
         {
+            first ??= item;
             if (output.Length + separator.Length + item.Length > budget) break;
             if (shown > 0) output.Append(separator);
             output.Append(item);
             shown++;
         }
 
-        if (shown == 0 && items.Count > 0)
+        if (shown == 0 && first is not null)
         {
             // One item longer than the call: its beginning, said to be cut.
-            var cut = items[0][..Math.Min(items[0].Length, budget)];
-            return ShellResult.Ok(cut + string.Create(CultureInfo.InvariantCulture, $"\n{command}: the first of {items.Count:N0} {noun} is cut at the output limit; {narrow}"));
+            var cut = first[..Math.Min(first.Length, budget)];
+            return ShellResult.Ok(cut + string.Create(CultureInfo.InvariantCulture, $"\n{command}: the first of {count:N0} {noun} is cut at the output limit; {narrow}"));
         }
 
-        if (shown < items.Count)
+        if (shown < count)
         {
-            output.Append(string.Create(CultureInfo.InvariantCulture, $"\n{command}: {shown:N0} of {items.Count:N0} {noun} shown; {narrow}"));
+            output.Append(string.Create(CultureInfo.InvariantCulture, $"\n{command}: {shown:N0} of {count:N0} {noun} shown; {narrow}"));
         }
 
         return ShellResult.Ok(output.ToString());

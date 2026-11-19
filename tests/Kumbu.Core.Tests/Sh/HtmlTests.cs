@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
 using Microsoft.Extensions.Time.Testing;
 
@@ -215,6 +217,83 @@ public class HtmlTests
         {
             listener.Stop();
         }
+    }
+
+    [Theory]
+    [InlineData("table.costs tr")]
+    [InlineData("body > p a")]
+    [InlineData("h2 + h3")]
+    [InlineData("h1 ~ h2")]
+    [InlineData("h1 ~ table td")]
+    [InlineData("a, h1, h3")]
+    [InlineData("thead th, tbody td")]
+    [InlineData("tbody tr:nth-child(2) td")]
+    [InlineData("p a:not(.ext)")]
+    [InlineData("tr:has(> td)")]
+    [InlineData(":is(h2, h3) ~ h2")]
+    [InlineData("html body h1")]
+    [InlineData("body * a")]
+    public async Task A_selector_picks_what_AngleSharp_picks(string selector)
+    {
+        var expected = new AngleSharp.Html.Parser.HtmlParser().ParseDocument(Page).QuerySelectorAll(selector).Select(e => e.OuterHtml);
+
+        Assert.Equal(string.Join('\n', expected), (await Run($"html --html /Work/page.html '{selector}'")).Output);
+    }
+
+    [Fact]
+    public async Task Combinators_take_time_linear_in_the_page()
+    {
+        // AngleSharp alone tries every ancestor for each space: on 1,000 nested divs this takes minutes.
+        _store.AddTextFile("/Work/deep.html", string.Concat(Enumerable.Repeat("<div>", 1000)));
+        var started = Stopwatch.GetTimestamp();
+
+        Assert.Equal("html: nothing matched 'p div div div div'", (await Run("html /Work/deep.html 'p div div div div'")).Output);
+        Assert.Equal("998", (await Run("html --count /Work/deep.html 'div div div'")).Output);
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5));
+    }
+
+    [Theory]
+    [InlineData("ul:has(li:has(b))", ":has() inside :has()")]
+    [InlineData("ul:has(li:nth-child(2))", "inside :has(), :nth-child()")]
+    [InlineData("ul:has(li:only-child)", "inside :has(), :only-child")]
+    [InlineData("ul:has(:not(li:first-of-type))", "inside :has(), :first-of-type")]
+    [InlineData("tr:has(td a)", "inside :has() only >")]
+    [InlineData("div:has(+ p)", "inside :has() only >")]
+    [InlineData("a:not(p div)", "inside :not(), :is() and :where() only > and +")]
+    [InlineData("a:is(p ~ b)", "inside :not(), :is() and :where() only > and +")]
+    [InlineData("svg|rect", "the combinator |")]
+    public async Task Selectors_that_could_take_hours_are_refused(string selector, string why)
+    {
+        var result = await Run($"html /Work/page.html '{selector}'");
+
+        Assert.True(result.IsError);
+        Assert.StartsWith($"html: '{selector}': {why}", result.Output);
+    }
+
+    [Fact]
+    public async Task Matching_stops_at_the_time_budget()
+    {
+        // :nth-child counts the siblings before each element: quadratic in a long list.
+        _store.AddTextFile("/Work/flat.html", $"<ul>{string.Concat(Enumerable.Repeat("<li>x</li>", 30_000))}</ul>");
+        _sh.Register(new Html(_store) { Budget = TimeSpan.FromMilliseconds(100) });
+        var started = Stopwatch.GetTimestamp();
+
+        Assert.Equal(
+            ShellResult.Error("html: 'li:nth-child(2n)' took longer than 0.1 seconds on /Work/flat.html; narrow the selector or the page"),
+            await Run("html /Work/flat.html 'li:nth-child(2n)'"));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Parsing_stops_at_the_time_budget()
+    {
+        // The tree builder looks through every open element for each tag: quadratic in the depth.
+        _store.AddTextFile("/Work/deep.html", string.Concat(Enumerable.Repeat("<div>", 60_000)));
+        _sh.Register(new Html(_store) { Budget = TimeSpan.FromMilliseconds(100) });
+        var started = Stopwatch.GetTimestamp();
+
+        Assert.Equal(ShellResult.Error("html: /Work/deep.html took longer than 0.1 seconds to parse; Kumbu² reads it no further"), await Run("html /Work/deep.html div"));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
     }
 
     [Fact]

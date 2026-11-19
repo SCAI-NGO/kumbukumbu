@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
+using AngleSharp.Css.Dom;
+using AngleSharp.Css.Parser;
 using AngleSharp.Dom;
 using AngleSharp.Html.Dom;
 using AngleSharp.Html.Parser;
@@ -9,11 +12,16 @@ namespace Kumbu.Core.Sh.Commands;
 /// <summary>
 /// Reads an HTML file (spec 2026-11-19, decisions 7 and 8): its outline, or the elements a CSS selector picks. AngleSharp's
 /// parser on its own, with no loader and no scripting engine: no <c>&lt;script&gt;</c> runs, and no source a page refers
-/// to (<c>&lt;img&gt;</c>, <c>&lt;link&gt;</c>, <c>&lt;iframe&gt;</c>, <c>&lt;object&gt;</c>) is fetched.
+/// to (<c>&lt;img&gt;</c>, <c>&lt;link&gt;</c>, <c>&lt;iframe&gt;</c>, <c>&lt;object&gt;</c>) is fetched. Parsing, matching
+/// and printing stop at <see cref="Budget"/>: AngleSharp's tree builder is quadratic in a page's depth, and some
+/// selectors in a page's length (<see cref="CssSelection"/>).
 /// </summary>
 public sealed class Html(INoteReader notes) : ICommand
 {
     private static readonly Option[] Spec = [new(null, "html"), new(null, "attr", TakesValue: true), new(null, "count")];
+
+    /// <summary>How long one call may parse, match and print; a 15 MB page of ordinary depth parses in about a second.</summary>
+    internal TimeSpan Budget { get; init; } = TimeSpan.FromSeconds(10);
 
     public string Name => "html";
 
@@ -53,37 +61,77 @@ public sealed class Html(INoteReader notes) : ICommand
         var file = await TextFiles.ReadAsync(Name, "HTML", notes, options.Operands[0], ct);
         if (file.IsError) return file;
 
-        // No context given: the parser's default has neither a loader nor scripting, so nothing is fetched or run.
-        using var document = new HtmlParser().ParseDocument(file.Output);
-        if (options.Operands.Count == 1) return Overview(document, options.Operands[0]);
+        var selector = options.Operands.Count == 2 ? options.Operands[1] : null;
+        ISelector? parsed = null;
+        if (selector is not null)
+        {
+            parsed = new CssSelectorParser().ParseSelector(selector);
+            if (parsed is null) return ShellResult.Error($"html: not a CSS selector: '{selector}'");
+            if (CssSelection.Refusal(parsed) is { } refusal) return ShellResult.Error($"html: '{selector}': {refusal}");
+        }
 
-        var selector = options.Operands[1];
-        IHtmlCollection<IElement> matched;
+        var path = Shown(options.Operands[0]);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(Budget);
+        IHtmlDocument document;
         try
         {
-            matched = document.QuerySelectorAll(selector);
+            // No context given: the parser's default has neither a loader nor scripting, so nothing is fetched or run.
+            document = await new HtmlParser().ParseDocumentAsync(file.Output, budget.Token);
         }
-        catch (DomException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return ShellResult.Error($"html: not a CSS selector: '{selector}'");
+            return ShellResult.Error($"html: {path} took longer than {Seconds} to parse; Kumbu² reads it no further");
         }
 
-        if (options.Has("count")) return ShellResult.Ok(matched.Length.ToString());
-        if (matched.Length == 0) return ShellResult.Ok("") with { NoMatchHint = $"html: nothing matched '{selector}'" };
+        using (document)
+        {
+            if (parsed is null) return Overview(document, options.Operands[0]);
+            try
+            {
+                return Picked(document, parsed, selector!, options, budget.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return ShellResult.Error($"html: '{selector}' took longer than {Seconds} on {path}; narrow the selector or the page");
+            }
+        }
+    }
+
+    private string Seconds => $"{Budget.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} seconds";
+
+    private ShellResult Picked(IHtmlDocument document, ISelector selector, string text, Options options, CancellationToken ct)
+    {
+        var matched = CssSelection.Select(document, selector, ct);
+        if (options.Has("count")) return ShellResult.Ok(matched.Count.ToString(CultureInfo.InvariantCulture));
+        if (matched.Count == 0) return ShellResult.Ok("") with { NoMatchHint = $"html: nothing matched '{text}'" };
 
         if (options.Value("attr") is { } name)
         {
             var values = matched.Select(e => e.GetAttribute(name)).OfType<string>().ToList();
             return values.Count > 0
                 ? TextFiles.Listed(Name, values, "\n", "elements", "narrow the selector")
-                : ShellResult.Ok("") with { NoMatchHint = $"html: {Elements(matched.Length)} matched '{selector}', none with the attribute {name}" };
+                : ShellResult.Ok("") with { NoMatchHint = $"html: {Elements(matched.Count)} matched '{text}', none with the attribute {name}" };
         }
 
-        if (options.Has("html")) return TextFiles.Listed(Name, [.. matched.Select(e => e.OuterHtml)], "\n", "elements", "narrow the selector");
+        // Made one by one, as the output takes them: an element's HTML or text holds all below it.
+        IEnumerable<string> Each(Func<IElement, string> print)
+        {
+            foreach (var element in matched)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return print(element);
+            }
+        }
+
+        if (options.Has("html")) return TextFiles.Listed(Name, matched.Count, Each(e => e.OuterHtml), "\n", "elements", "narrow the selector");
 
         var tables = matched.Any(e => e is IHtmlTableElement);
-        return TextFiles.Listed(Name, [.. matched.Select(e => e is IHtmlTableElement t ? Table(t) : TextFiles.Collapse(e.TextContent))], tables ? "\n\n" : "\n", "elements", "narrow the selector");
+        return TextFiles.Listed(Name, matched.Count, Each(e => e is IHtmlTableElement t ? Table(t) : TextFiles.Collapse(e.TextContent)), tables ? "\n\n" : "\n", "elements", "narrow the selector");
     }
+
+    // The path as the other errors name it; ReadAsync has parsed it already.
+    private static string Shown(string path) => Paths.VaultPath.TryParse(path, out var parsed) ? parsed.Value : path;
 
     private static ShellResult Overview(IHtmlDocument document, string path)
     {

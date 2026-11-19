@@ -221,6 +221,36 @@ public class XmlTests
         Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(1));
     }
 
+    [Theory]
+    [InlineData("//*[count(//*) > 0]")]
+    [InlineData("count(//*[count(//*) > 0])")]
+    [InlineData("//*[string-length(string(/)) > 0]")]
+    public async Task An_xpath_stops_at_the_time_budget(string xpath)
+    {
+        // Each of these walks the whole document once for every element: quadratic.
+        _store.AddTextFile("/Work/big.xml", $"<r>{string.Concat(Enumerable.Repeat("<a>x</a>", 30_000))}</r>");
+        _sh.Register(new Kumbu.Core.Sh.Commands.Xml(_store) { Budget = TimeSpan.FromMilliseconds(100) });
+        var started = Stopwatch.GetTimestamp();
+
+        Assert.Equal(
+            ShellResult.Error($"xml: '{xpath}' took longer than 0.1 seconds on /Work/big.xml; narrow the XPath"),
+            await Run($"xml /Work/big.xml '{xpath}'"));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Printing_the_xml_of_nested_nodes_stops_at_the_output_limit()
+    {
+        // Each element's XML holds all below it: printed whole for every one, 20,000 nested elements would be 4 GB.
+        _store.AddTextFile("/Work/deep.xml", string.Concat(Enumerable.Repeat("<a>", 20_000)) + string.Concat(Enumerable.Repeat("</a>", 20_000)));
+        var started = Stopwatch.GetTimestamp();
+
+        var output = (await Run("xml --xml /Work/deep.xml '//a'")).Output;
+
+        Assert.EndsWith("\nxml: the first of 20,000 nodes is cut at the output limit; narrow the XPath", output);
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5));
+    }
+
     [Fact]
     public async Task Many_nodes_are_cut_with_a_line_that_says_how_many()
     {
