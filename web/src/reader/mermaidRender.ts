@@ -8,7 +8,8 @@ import { keyword, lines } from "./diagramSize";
 const maxTextSize = 50_000;
 
 // `secure` keeps a diagram's `%%{init}%%` directive from undoing any of these (Mermaid's own list protects only the
-// first five). Labels as SVG text, no `foreignObject`, and a font an image has: it can load none.
+// first five). Labels as SVG text (maths and journeys still get a `foreignObject`: Mermaid spec §2.2), and a font an
+// image has: it can load none.
 const config = (dark: boolean): MermaidConfig => ({
   startOnLoad: false,
   securityLevel: "strict",

@@ -33,7 +33,7 @@ public static class UploadTool
         INoteStore store,
         IHttpContextAccessor http,
         IOptions<KumbuOptions> options,
-        [Description("Absolute path the file is to have, e.g. /Work/images/diagram.png; it ends in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf")] string path,
+        [Description("Absolute path the file is to have, e.g. /Work/images/diagram.png or /Work/data/report.xlsx; any name but a note's (.md)")] string path,
         [Description("Version token of the file when it exists and is to be replaced; leave out to create a new file")] string? version = null,
         CancellationToken ct = default) =>
         await ToolResult.RunAsync(KumbuMetrics.Tool.Upload, () => IssueAsync(tickets, caller, store, http, options, path, version, ct));
@@ -62,8 +62,14 @@ public static class UploadTool
                 : $"upload: {e.Message}") with { Kind = e.Status switch { StatusCodes.Status403Forbidden => ShellErrorKind.Refused, StatusCodes.Status404NotFound => ShellErrorKind.NotFound, _ => ShellErrorKind.Invalid } };
         }
 
-        if (AttachmentFormat.ForPath(filePath) is not { } format || format == AttachmentFormat.Marker || format.Kind == AttachmentKind.Text)
-            return ShellResult.Error($"upload: {filePath.Value}: {AttachmentFormat.UnsupportedMessage}") with { Kind = ShellErrorKind.Invalid };
+        // What the PUT refuses by the name alone; a format's bytes it checks then.
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        var format = AttachmentFormat.ForPath(filePath, skillsVault);
+        var refusal = format == AttachmentFormat.Marker ? "a folder is made with sh mkdir, not uploaded"
+            : format?.Kind == AttachmentKind.Text ? "a skill's text file is written with the write tool, not uploaded"
+            // The path names the file once, before the sentence.
+            : format == AttachmentFormat.File && AttachmentFormat.Problem(filePath, [], skillsVault) is not null ? AttachmentFormat.SkillFolderMessage : null;
+        if (refusal is not null) return ShellResult.Error($"upload: {filePath.Value}: {refusal}") with { Kind = ShellErrorKind.Invalid };
 
         var existing = await FileApi.Files(store).GetAttachmentAsync(filePath, ct);
         if (existing is not null && existing.Version != version)
@@ -91,7 +97,7 @@ public static class UploadTool
             expires {expiresAt:yyyy-MM-ddTHH:mm:ssZ}
             curl -sS -X PUT --data-binary @<local file> '{url}'
 
-            Run that curl line in a shell on the machine that holds the file, with <local file> its path. The URL works once and until the time above; at most 15 MB, and its content must be what the name {filePath.Name} says (the format is checked from the bytes). If the PUT fails, call upload again for a new URL.
+            Run that curl line in a shell on the machine that holds the file, with <local file> its path. The URL works once and until the time above; at most {FileTooLargeException.Shown(options.Value.Vaults.MaxFileBytes)}{(format == AttachmentFormat.File ? "" : $", and its content must be what the name {filePath.Name} says (the format is checked from the bytes)")}. If the PUT fails, call upload again for a new URL.
             """);
     }
 

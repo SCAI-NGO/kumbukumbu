@@ -53,9 +53,10 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
           --images          also show the mixed and image pages of the range as an image, after their text
           --images=all      show every page of the range as an image, whatever its type
           --crop x,y,w,h    one page only: a part of it, rendered anew, without the text; drawings stay sharp,
-                            but a photo in the PDF has only the detail it was stored with; in points of the
-                            page as displayed (1 pt = 1/72 inch), x and y from the top left, as 'pdf info'
-                            gives the regions, which leave out a figure's labels and legend when those are text
+                            but a part within a photo or scan comes at most at its own resolution, as it has
+                            no more detail than it was stored with; in points of the page as displayed
+                            (1 pt = 1/72 inch), x and y from the top left, as 'pdf info' gives the regions,
+                            which leave out a figure's labels and legend when those are text
           --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
                             on its side; needs --images, --images=all or --crop, and leaves the text as it is. With
                             it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
@@ -230,6 +231,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             return (null, Invalid($"pdf: {path.Value} is an image; look at it with img {SectionLookup.Quote(path)} (see 'help img')"));
         }
 
+        if (AttachmentFormat.IsLarge(attachment.Current.Size)) return (null, Invalid($"pdf: {path.Value} is {AttachmentFormat.NotRead}"));
         return ((path, attachment.Current), null);
     }
 

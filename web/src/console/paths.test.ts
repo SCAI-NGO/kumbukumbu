@@ -33,6 +33,8 @@ const rows: [string, string][] = [
   ["tags x sub", "tags x /Gartenarbeit/Shopping/sub"],
   ["history", "history /Gartenarbeit/Shopping"],
   ["history --since 2h a.md", "history --since 2h /Gartenarbeit/Shopping/a.md"],
+  ["blame", "blame /Gartenarbeit/Shopping"],
+  ["blame --lines plan.md#Goals", "blame --lines /Gartenarbeit/Shopping/plan.md#Goals"],
   ["trash", "trash /Gartenarbeit/Shopping"],
   ["lscp", "lscp /Gartenarbeit/Shopping"],
   ["board", "board /Gartenarbeit"],

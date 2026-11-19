@@ -68,7 +68,7 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         var text = Text(result);
         Assert.Matches(new Regex(@"/api/agent-upload/[A-Za-z0-9_-]{43}\b"), text);
         Assert.Contains("curl -sS -X PUT --data-binary @<local file> '", text, StringComparison.Ordinal);
-        Assert.Contains("15 MB", text, StringComparison.Ordinal);
+        Assert.Contains("at most 1 GiB", text, StringComparison.Ordinal);
         Assert.Contains("once", text, StringComparison.Ordinal);
         Assert.Matches(new Regex(@"^expires \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", RegexOptions.Multiline), text);
         Assert.Matches(new Regex(@"^https?://\S+/api/agent-upload/", RegexOptions.Multiline), text);
@@ -101,7 +101,23 @@ public sealed class UploadToolTests(KumbuAppFactory app)
     }
 
     [Theory]
-    [InlineData("x.docx")]
+    [InlineData("report.xlsx")]
+    [InlineData("Makefile")]
+    public async Task Answers_a_url_for_any_file(string name)
+    {
+        var (vault, _, key, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/{name}");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Contains("/api/agent-upload/", Text(result), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("_skills/x/tool.bin")]
+    [InlineData("_skills/x/run.py")]
+    [InlineData("a/.vaultkeep")]
     [InlineData("x.md")]
     [InlineData("../x.png")]
     public async Task Refuses_a_path_it_cannot_take(string name)
@@ -114,6 +130,17 @@ public sealed class UploadToolTests(KumbuAppFactory app)
 
         Assert.True(result.IsError);
         Assert.Equal(before, Tickets);
+    }
+
+    [Fact]
+    public async Task Names_a_file_a_skills_folder_refuses_once()
+    {
+        var (vault, _, key, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/_skills/x/tool.bin");
+
+        Assert.Equal($"upload: /{vault}/_skills/x/tool.bin: {Kumbu.Core.Attachments.AttachmentFormat.SkillFolderMessage}", Text(result));
     }
 
     [Fact]
@@ -219,7 +246,7 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         Assert.Contains("curl", description, StringComparison.Ordinal);
         Assert.Contains("shell", description, StringComparison.Ordinal);
         Assert.Contains("once", description, StringComparison.Ordinal);
-        Assert.Contains("15 MB", description, StringComparison.Ordinal);
+        Assert.Contains("1 GiB unless its admin set another", description, StringComparison.Ordinal);
         Assert.Contains("call upload again", description, StringComparison.Ordinal);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.ReadOnlyHint);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.OpenWorldHint);

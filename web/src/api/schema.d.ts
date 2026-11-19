@@ -4750,6 +4750,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/blame/{vault}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    vault: string;
+                    path: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BlameView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/search": {
         parameters: {
             query?: never;
@@ -7146,7 +7220,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            /** @description The file's bytes, at most 15 MB; the Content-Type is ignored. */
+            /** @description The file's bytes, up to the server's bound per file (Kumbu:Vaults:MaxFileBytes, 1 GiB by default); the Content-Type is ignored. */
             requestBody: {
                 content: {
                     "application/octet-stream": string;
@@ -12257,6 +12331,40 @@ export interface components {
             text: string;
             ambiguous: boolean;
         };
+        BlameCountView: {
+            /** Format: int32 */
+            writer: null | number | string;
+            display: string;
+            /** Format: int32 */
+            lines: number | string;
+            /** Format: date-time */
+            at: string;
+        };
+        BlameSectionView: {
+            /** Format: int32 */
+            start: number | string;
+            /** Format: int32 */
+            end: number | string;
+            title: string;
+            /** Format: int32 */
+            writer: null | number | string;
+            others: boolean;
+            counts: components["schemas"]["BlameCountView"][];
+        };
+        BlameView: {
+            path: string;
+            version: string;
+            content: string;
+            /** Format: date-time */
+            earlier: null | string;
+            dropped: boolean;
+            writers: components["schemas"]["BlameWriterView"][];
+            sections: components["schemas"]["BlameSectionView"][];
+        };
+        BlameWriterView: {
+            display: string;
+            kind: null | string;
+        };
         BoardView: {
             title: string;
             instructions: null | string;
@@ -13119,6 +13227,8 @@ export interface components {
             passwordWindowOpen: boolean;
             publishEnabled: boolean;
             storageLimited: boolean;
+            /** Format: int64 */
+            maxFileBytes: number | string;
             discreet: components["schemas"]["DiscreetView"];
             skillsNotice?: null | components["schemas"]["SkillsNoticeView"];
         };

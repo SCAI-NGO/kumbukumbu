@@ -30,8 +30,8 @@ public sealed record ConsoleView(ConsolePartView[] Parts, bool IsError, ConsoleV
 /// <summary>
 /// The web app's console (console design §4, §5): the shell for a session, reading only. Every stage's command is
 /// checked against <see cref="Allowed"/> before anything of the line runs; a command the shell doesn't have, and a
-/// line that doesn't parse, go on to the shell, so that the error is its own. A line with <c>history</c> in any stage
-/// takes a permit of <see cref="AccountLimits.HistoryScan"/>. <c>cd</c> says whether a path is a directory, answering
+/// line that doesn't parse, go on to the shell, so that the error is its own. A line with <c>history</c> or <c>blame</c>
+/// (which reads the histories of notes from before the record, of every note below a folder) in any stage takes a permit of <see cref="AccountLimits.HistoryScan"/>. <c>cd</c> says whether a path is a directory, answering
 /// it normalised. Neither the line nor what it answers is logged, and MCP's tool metrics don't count it.
 /// </summary>
 public static class ConsoleApi
@@ -40,7 +40,7 @@ public static class ConsoleApi
     internal static readonly FrozenSet<string> Allowed = FrozenSet.Create(
         StringComparer.Ordinal,
         "ls", "cat", "outline", "rg", "semsearch", "img", "pdf", "links", "backlinks", "graph", "tags", "board", "calendar", "head", "tail", "wc", "sort",
-        "history", "diff", "trash", "df", "du", "lscp", "publish", "skills", "uname", "help");
+        "history", "blame", "diff", "trash", "df", "du", "lscp", "publish", "skills", "uname", "help");
 
     /// <summary>The commands that write. Not what the check reads (that is <see cref="Allowed"/>): it is for the test
     /// that every command of the shell has been decided on, and for the web app's help.</summary>
@@ -100,7 +100,7 @@ public static class ConsoleApi
             }
 
             // Also when the shell then refuses the line: the check stays as simple as the read-only one.
-            if (stages.Any(s => s[0] == "history") && limits.HistoryScan(caller.User!.Id) is { } retryAfter)
+            if (stages.Any(s => s[0] is "history" or "blame") && limits.HistoryScan(caller.User!.Id) is { } retryAfter)
             {
                 throw ApiErrors.TooMany(retryAfter, AccountLimits.HistoryScansRefused);
             }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readDirectory, readEntry, type ZipEntry } from "./zipReader";
-import { isSkillTextFile, MARKER } from "../api/paths";
-import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
+import { MARKER } from "../api/paths";
+import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, OBSIDIAN, TOO_LARGE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
 export interface ImportNote {
@@ -11,7 +11,7 @@ export interface ImportNote {
 }
 
 /**
- * An image or PDF to import, at its path below the vault. Its bytes stay in the ZIP until it is sent: `read` reads and
+ * A file to import (an image, a PDF or any other), at its path below the vault. Its bytes stay in the ZIP until it is sent: `read` reads and
  * unpacks them (again) each time, so no more than one file's bytes are in memory at once.
  */
 export interface ImportFile {
@@ -32,6 +32,9 @@ export interface ImportVault {
 }
 
 const NOT_UTF8 = "not UTF-8 text";
+/** An import keeps the 15 MB of old per file: each file is unpacked into memory (twice, for its version and to send it),
+ * which for a file of the upload's bound (1 GiB) the browser can't be asked to hold. The upload streams larger ones. */
+export const TOO_LARGE_TO_IMPORT = "larger than 15 MB, the limit for a file in an import; upload it on its own";
 const SAME_PATH = "another file of this upload has the same path";
 // The ZIP's own compression methods: stored and deflate. Anything else the browser can't unpack.
 const UNREADABLE = "packed in a way this browser can't unpack (only stored and deflate are)";
@@ -57,15 +60,14 @@ function noteName(name: string): string | null {
 
 /**
  * Why a path below the vault isn't imported, in the server's words and order (`UploadApi.Target`, then the dot rule of
- * `NoteNames.Problem`); null for a note, an image, a PDF or a skill folder's text file. The server checks again.
+ * `NoteNames.Problem`); null for a note or any other file. The server checks again.
  */
-function reasonAgainst(relative: string, vault: string): string | null {
+function reasonAgainst(relative: string): string | null {
   const segments = relative.split("/");
   if (relative.includes("\\")) return "folders are separated by '/', not '\\'";
   if (relative.startsWith("/")) return "an absolute path; paths are relative to the folder uploaded into";
   if (segments.some((s) => s === "" || s === "." || s === "..")) return "empty, '.' and '..' segments aren't allowed";
   if (segments.slice(0, -1).some((s) => /^\.(obsidian|trash)$/i.test(s))) return OBSIDIAN;
-  if (!noteName(segments.at(-1)!) && !isAttachmentName(segments.at(-1)!) && !isSkillTextFile(vault, relative)) return NOT_SUPPORTED;
   const hidden = segments.find((s) => s.startsWith("."));
   if (hidden) return `'${hidden}' starts with '.', which hides it in Obsidian`;
   return null;
@@ -110,7 +112,7 @@ const isSystem = (name: string) => /^__MACOSX(\/|$)/.test(name) || name.startsWi
  * The vaults of an import ZIP: each top-level folder is one, or, when any note, image or PDF sits at the ZIP's root (an
  * Obsidian vault zipped directly), the whole ZIP is one, named after the file. Which entries are unpacked is decided by
  * name and size alone, so other files are never inflated. The ZIP is read in slices, never whole (`zipReader`): its
- * directory, then one entry at a time. Images and PDFs (up to 15 MB) are unpacked one at a time for their version and
+ * directory, then one entry at a time. Files that aren't notes (up to 15 MB) are unpacked one at a time for their version and
  * dropped again; `read` unpacks one when it is sent. Notes that aren't UTF-8 are skipped, never imported with
  * replacement characters. Names come in NFC, as the server stores them (macOS writes NFD). Rejects when the bytes
  * aren't a ZIP, and with `ImportTooLarge` when the notes would unpack to more than `budget` bytes.
@@ -131,8 +133,12 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
   const seen = new Map<string, number>();
   for (const e of entries) seen.set(e.name, (seen.get(e.name) ?? 0) + 1);
   const whole = zipName.replace(/\.zip$/i, "").normalize("NFC").trim();
-  // One vault when an entry at the root is a note or file: a folder per vault has nothing but folders there.
-  const single = entries.some((e) => isFile(e) && !nameOf(e.name).includes("/") && reasonAgainst(nameOf(e.name), whole) === null);
+  // One vault when an entry at the root is a note, an image or a PDF: a folder per vault has nothing but folders
+  // there, or an export's MISSING.txt.
+  const single = entries.some((e) => {
+    const name = nameOf(e.name);
+    return isFile(e) && !name.includes("/") && reasonAgainst(name) === null && (noteName(name) !== null || isAttachmentName(name));
+  });
   // Keyed as the server tells vaults apart; the first spelling met names the vault.
   const vaults = new Map<string, { vault: ImportVault; paths: Set<string> }>();
   const vaultOf = (name: string) => {
@@ -170,9 +176,9 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
     const note = noteName(relative.split("/").at(-1)!);
     const reason =
       (seen.get(entry.name)! > 1 ? TWICE : null) ??
-      reasonAgainst(relative, vault) ??
+      reasonAgainst(relative) ??
       (note && entry.originalSize > MAX_NOTE_BYTES ? TOO_LARGE : null) ??
-      (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_FILE : null) ??
+      (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_TO_IMPORT : null) ??
       (entry.compression !== 0 && entry.compression !== 8 ? UNREADABLE : null);
     if (reason) {
       target.skipped.push({ path: relative, reason });
@@ -222,7 +228,7 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
   for (const [entry, { into, path }] of files) {
     const bytes = await readEntry(zip, entry);
     if (bytes.length > MAX_ATTACHMENT_BYTES) {
-      into.skipped.push({ path, reason: TOO_LARGE_FILE });
+      into.skipped.push({ path, reason: TOO_LARGE_TO_IMPORT });
       continue;
     }
     into.files.push({ path, size: bytes.length, version: await versionOfBytes(bytes), read: () => readEntry(zip, entry) });

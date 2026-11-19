@@ -60,6 +60,12 @@ public sealed class CheckpointView(Checkpoint checkpoint, IReadOnlyList<Note> no
     public Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct) =>
         throw new NotSupportedException("A checkpoint is read-only");
 
+    public Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct) =>
+        throw new NotSupportedException("A checkpoint is read-only");
+
+    public Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct) =>
+        throw new NotSupportedException("A checkpoint is read-only");
+
     public Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<TrashedAttachment>>([]);
 }

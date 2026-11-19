@@ -153,7 +153,7 @@ public class SemsearchPdfTests
         var help = (await sh.RunAsync("help semsearch", Ct)).Output;
 
         Assert.Contains("Pages of PDFs rank among the sections by meaning", help);
-        Assert.Contains("Pages without a text layer (scans) and images are not searched.", help);
+        Assert.Contains("Pages without a text layer (scans), images and other files are not searched.", help);
         Assert.DoesNotContain("semsearch skips", (await sh.RunAsync("help attachments", Ct)).Output);
         Assert.DoesNotContain("semsearch skips", Manual.ToolDescription);
     }

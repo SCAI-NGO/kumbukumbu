@@ -95,14 +95,12 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
             : await mover.MoveAsync(source, target, rewriteLinks: true, Name, exact: true, ct);
     }
 
-    /// <summary>The name without and with the extension the stamp goes before: a note's <c>.md</c>, an attachment's
-    /// format's extension as the name spells it, nothing for a folder.</summary>
+    /// <summary>The name without and with the extension the stamp goes before (<see cref="ArchiveFolder.ExtensionOf"/>),
+    /// nothing for a folder.</summary>
     private static (string Stem, string Extension) Split(VaultPath source, bool folder)
     {
         var name = source.Name;
-        var length = folder ? 0
-            : source.IsNote ? ".md".Length
-            : AttachmentFormat.ForPath(source)?.Extension.Length ?? 0;
+        var length = folder ? 0 : ArchiveFolder.ExtensionOf(name).Length;
         return (name[..^length], name[^length..]);
     }
 

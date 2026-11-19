@@ -91,8 +91,8 @@ public class ImgTests
 
     private const string Dropped = "If no image follows, your client dropped it: tell the user so instead of guessing what it shows.";
 
-    private static string Reduced(int percent, string part = "a part") =>
-        $"Reduced to {percent} %: small text and digits may be misread; look at {part} with --crop x,y,w,h before quoting them.";
+    private static string Reduced(int percent, string factor, string part = "a part") =>
+        $"Reduced to {percent} % (1 px here is {factor} px of the original): small text and digits may be misread; look at {part} with --crop x,y,w,h before quoting them.";
 
     [Fact]
     public async Task The_image_follows_a_text_block_that_says_what_it_is()
@@ -104,7 +104,7 @@ public class ImgTests
 
         Assert.False(result.IsError, result.Output);
         Assert.Equal(2, result.Parts!.Count);
-        Assert.Equal($"/Work/Screens/shot.png (version {version}): image (PNG), original 1440×3120 px; medium: 724×1568 px PNG, 312 KB\n{Reduced(50)}\n{Dropped}", Text(result));
+        Assert.Equal($"/Work/Screens/shot.png (version {version}): image (PNG), original 1440×3120 px; medium: 724×1568 px PNG, 312 KB\n{Reduced(50, "1.99")}\n{Dropped}", Text(result));
         var image = Assert.IsType<ImagePart>(result.Parts[1]);
         Assert.Equal("image/png", image.MediaType);
         Assert.Equal(312 * 1024, image.Data.Length);
@@ -153,13 +153,13 @@ public class ImgTests
     }
 
     [Theory]
-    [InlineData(1440, 6000, 376, 1568, 26)]
-    [InlineData(6000, 1440, 1568, 376, 26)]
-    [InlineData(1440, 3120, 723, 1568, 50)]
-    [InlineData(1000, 1000, 749, 749, 75)]
-    [InlineData(1000, 1000, 750, 750, null)]
-    [InlineData(800, 600, 800, 600, null)]
-    public async Task An_image_reduced_a_lot_warns_about_small_text(int ow, int oh, int w, int h, int? percent)
+    [InlineData(1440, 6000, 376, 1568, 26, "3.83")]
+    [InlineData(6000, 1440, 1568, 376, 26, "3.83")]
+    [InlineData(1440, 3120, 723, 1568, 50, "1.99")]
+    [InlineData(1000, 1000, 749, 749, 75, "1.34")]
+    [InlineData(1000, 1000, 750, 750, null, null)]
+    [InlineData(800, 600, 800, 600, null, null)]
+    public async Task An_image_reduced_a_lot_warns_about_small_text(int ow, int oh, int w, int h, int? percent, string? factor)
     {
         await Upload("/Work/Screens/long.png", Png(1000), (ow, oh));
         _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", w, h, ow, oh);
@@ -167,7 +167,7 @@ public class ImgTests
         var lines = Text(await Run("img /Work/Screens/long.png")).Split('\n');
 
         Assert.Equal(percent is null ? 2 : 3, lines.Length);
-        if (percent is { } shown) Assert.Equal(Reduced(shown), lines[1]);
+        if (percent is { } shown) Assert.Equal(Reduced(shown, factor!), lines[1]);
         Assert.Equal(Dropped, lines[^1]);
     }
 
@@ -182,7 +182,7 @@ public class ImgTests
         var reduced = Text(await Run("img /Work/Screens/shot.png --crop 0,0,1000,1000"));
 
         Assert.Equal(2, full.Split('\n').Length);
-        Assert.Equal(Reduced(50, "a smaller part"), reduced.Split('\n')[1]);
+        Assert.Equal(Reduced(50, "2", "a smaller part"), reduced.Split('\n')[1]);
     }
 
     [Fact]
@@ -397,7 +397,7 @@ public class ImgTests
         Assert.Equal(
             [
                 $"/Work/Scans/sheet.jpg (version {version}): image (JPEG), original 3000×2000 px, turned 90° clockwise to 2000×3000 px; medium: 894×1341 px PNG, {AttachmentText.Size(4)}",
-                Reduced(45),
+                Reduced(45, "2.24"),
                 TurnedImage,
                 Dropped,
             ],
@@ -413,7 +413,7 @@ public class ImgTests
         var lines = Text(await Run("img /Work/Scans/sheet.jpg --rotate 180")).Split('\n');
 
         Assert.Contains("original 3000×2000 px, turned 180° clockwise to 3000×2000 px; medium: 1341×894 px PNG", lines[0]);
-        Assert.Equal(Reduced(45), lines[1]);
+        Assert.Equal(Reduced(45, "2.24"), lines[1]);
         Assert.Equal("With --rotate 180, --crop counts from the top left of this turned image, in its pixels.", lines[2]);
     }
 

@@ -12,10 +12,9 @@ import {
   imagesOf,
   listImages,
   quietly,
-  renderRegion,
 } from "../src/extract.js";
 import { PdfError, openPdf } from "../src/pdfjs.js";
-import { renderPage } from "../src/render.js";
+import { renderPage, renderRegion } from "../src/render.js";
 import {
   A4,
   CORNER_COLOURS,

@@ -15,7 +15,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
         help [command]
           List the commands, or show the options and examples of one. 'cmd --help' does the same.
           'help checkpoints' explains reading, comparing and restoring named checkpoints;
-          'help attachments' what Kumbu² keeps besides notes (images and PDFs) and what works on them;
+          'help attachments' what Kumbu² keeps besides notes (every file type) and what works on them;
           'help archive' the command and the vault's archive: what is hidden where, and what is not.
         """;
 
@@ -41,14 +41,20 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             """,
         ["attachments"] = $"""
             attachments
-              Besides notes, a vault keeps images and PDFs: .png, .jpg, .jpeg, .gif, .webp, .svg and .pdf, up
-              to 15 MB each. Nothing else is accepted. People upload them (the web app, Obsidian); the write,
-              edit and replace tools refuse an attachment path, since they only write text.
+              Besides notes, a vault keeps every file type, up to the server's bound each (1 GiB unless its
+              admin set another): images (.png, .jpg, .jpeg, .gif, .webp, .svg), PDFs, and any other file (a
+              spreadsheet, a CSV, a script) as it is. A name ending in an image's or PDF's extension must hold
+              that format. A file and a folder never share a name. A file larger than 15 MB is kept and
+              downloaded, but not read: pdf, img, pdfimages and rg say so, and an SVG can't be that large.
+              People upload them (the web app, Obsidian, the upload tool); the write, edit and replace tools
+              refuse an attachment path, since they only write text.
               An SVG is the exception: write takes it whole, as for a note (no version creates it, the version
               replaces it), once it is well-formed XML with an svg root; edit and replace refuse it. Draw it,
               look at it with img, and write it again: cat prints its source after its line.
               A note links to one by its name with the extension: ![[shot.png]], ![alt](/Screens/shot.png),
-              [[report.pdf]]; the rules are those of 'help links'.
+              [[report.pdf]], [[data.csv]]; the rules are those of 'help links'.
+              A file that is UTF-8 text without NUL bytes is a text file: cat prints it and rg searches it.
+              Any other file is kept as bytes: cat describes it in one line (report.docx: file, 2.1 MB).
 
               What works on an attachment:
                 ls         lists it with its kind and size, an image with its pixel size:
@@ -64,12 +70,12 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 pdf        reads a PDF page by page: its text, pages as images, a part of a page ('help pdf')
                 pdfimages  stores the images of a PDF, or a region of a page, as attachments to place in notes:
                              at most 8 megapixels each, small ones left out; it never overwrites ('help pdfimages')
-                rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
+                rg         searches the text of PDFs (not scans) and text files as well as notes: /Work/paper.pdf:p7: text
                 semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
                              1. /Work/paper.pdf p7  score 0.61
               What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
-              neither rg nor semsearch searches images (an SVG's source neither), and rg not PDFs in a checkpoint; head, tail,
-              wc, sort and outline read notes, not attachments.
+              neither rg nor semsearch searches images (an SVG's source neither) or other files, semsearch no text
+              files, and rg not PDFs in a checkpoint; head, tail, wc, sort and outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 
               ls /Work/Screens
@@ -147,7 +153,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
 
             '|' pipes the output of one command into the next; right of a pipe only {filters} work.
             All paths are absolute (there is no working directory). Run 'help <command>' for details,
-            'help checkpoints' for reading a checkpoint, 'help attachments' for images and PDFs,
+            'help checkpoints' for reading a checkpoint, 'help attachments' for images, PDFs and other files,
             'help archive' for what a vault's _archive/ hides. 'help skills' for the user's skills.
             A vault someone shared with you is listed by 'ls' with its owner and your level, e.g.
             garten/ (shared by "Alice", read); in a shared vault, cat, rg and semsearch mark a note

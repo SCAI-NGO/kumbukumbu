@@ -41,6 +41,9 @@ public class ArchiveFolderTests
     [InlineData("report 2026-11-08 213005-2.pdf", "report.pdf", "2026-11-08T21:30:05")]
     [InlineData("Manual 2026-01-31 000000-12", "Manual", "2026-01-31T00:00:00")]
     [InlineData("a 2026 plan 2026-11-08 213005.md", "a 2026 plan.md", "2026-11-08T21:30:05")]
+    [InlineData("sheet 2026-11-08 213005.xlsx", "sheet.xlsx", "2026-11-08T21:30:05")]
+    [InlineData("Makefile 2026-11-08 213005", "Makefile", "2026-11-08T21:30:05")]
+    [InlineData("v1.2 2026-11-08 213005", "v1.2", "2026-11-08T21:30:05")]
     public void A_stamped_name_gives_the_original_and_the_local_time(string name, string original, string local)
     {
         Assert.True(ArchiveFolder.TryParseStamp(name, out var parsed, out var at));
@@ -55,7 +58,6 @@ public class ArchiveFolderTests
     [InlineData("2026-11-08 213005.pdf")]
     [InlineData("report 2026-13-08 213005.pdf")]
     [InlineData("report 2026-11-08 246005.pdf")]
-    [InlineData("report 2026-11-08 213005.docx")]
     [InlineData("report 2026-11-08 213005-.pdf")]
     [InlineData("report 2026-11-08 213005-x")]
     [InlineData("report2026-11-08 213005")]

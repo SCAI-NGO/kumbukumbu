@@ -216,7 +216,7 @@ For the web app, in 0.7.0; built and tested now, under `/api/graph` beside `/api
 - `GET /api/graph/node?path=…`: one node.
 - `GET /api/graph/paths?from=…&to=…&dir=…&<filter>`: paths, walking only the notes the filter keeps (the two ends always), as `graph --path` does.
 
-JSON shapes are the builder's, with this constraint: nodes as a list of objects (`path`, `title`, `kind`, `tags`, `when`, `archived`, `in`, `out`; the times only in `/api/graph/node`, §4.4), edges as `[from, to, flags]` with indices into that list, so that 1,600 notes and 20,000 edges stay around 200 to 300 KB before compression. Parameters are validated at the boundary: depth 1 to 3, cap 1 to 100, at most as many vaults as the caller has, paths parsed with `VaultPath.TryParse`; anything else is a `400`.
+JSON shapes are the builder's, with this constraint: nodes as a list of objects (`path`, `title`, `kind`, `tags`, `when`, `archived`, `in`, `out`; the times only in `/api/graph/node`, §4.4), edges as `[from, to, flags]` with indices into that list, so that 1,600 notes and 20,000 edges stay around 200 to 300 KB before compression. Parameters are validated at the boundary: depth 1 to 3, cap 1 to 100, at most as many vaults as the caller has, at most 50 `path` and 50 `tag` *(amended 2026-11-18: a person picks a handful, and each costs a pass over the notes, so a query repeating them by the thousand was walked in full)*, paths parsed with `VaultPath.TryParse`; anything else is a `400`.
 
 ### 7.3 Live
 

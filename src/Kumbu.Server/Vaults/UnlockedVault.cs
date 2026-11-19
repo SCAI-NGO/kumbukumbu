@@ -27,6 +27,7 @@ public sealed class UnlockedVault
     private readonly byte[] _pathKey;
     private readonly byte[] _textKey;
     private readonly byte[] _blobKey;
+    private readonly byte[] _largeBlobKey;
     private readonly IReadOnlyDictionary<string, byte[]> _membershipKeys;
     private long _lastUsed;
     private readonly Lock _graphLock = new();
@@ -50,6 +51,7 @@ public sealed class UnlockedVault
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
         _blobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/blob-id", []);
+        _largeBlobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/large-blob-id", []);
         var salt = System.Text.Encoding.UTF8.GetBytes(id);
         var membershipKeys = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var purpose in new[] { Sharing.Memberships.LabelPurpose, Sharing.Memberships.WritersPurpose, Sharing.Memberships.WriterIdsPurpose })
@@ -84,6 +86,9 @@ public sealed class UnlockedVault
     public byte[] KeyId { get; }
 
     public string Name { get; }
+
+    /// <summary>The id of the account that owns the vault; null for a vault without one, the dev token's.</summary>
+    public string? Owner { get; init; }
 
     /// <summary>The name its owner renamed the vault to (rename spec §1.2), or null; <see cref="Name"/>, in every stored
     /// path, never changes. Set under <see cref="Gate"/>; after a rename, on the object current then, under the catalog's
@@ -366,6 +371,56 @@ public sealed class UnlockedVault
 
     private string BlobContext(byte[] blobId) => $"blob:{Id}:{Convert.ToBase64String(blobId)}";
 
+    /// <summary>
+    /// The blob id of a file larger than 15 MB, from the SHA-256 of its bytes, computed while they stream in: equal
+    /// bytes still get equal ids within the vault. Under a key of its own, derived from the vault key beside the blob-id
+    /// key, not under that key with a prefix: a blob's id is the keyed hash of whatever bytes it holds, so a small file
+    /// holding exactly the prefix and a hash would get the id of the large file with that hash, and one upload could
+    /// stand in for the other. A re-keying computes it from the hash in the head, never reading a chunk.
+    /// </summary>
+    public byte[] LargeBlobId(ReadOnlySpan<byte> sha256) => VaultCrypto.Mac(_largeBlobKey, sha256);
+
+    /// <summary>A large file's head, sealed under the content key and bound to its blob id as a blob is
+    /// (<see cref="BlobContext"/>).</summary>
+    internal byte[] SealLargeBlobHead(byte[] blobId, LargeBlobHead head) => Seal(BlobContext(blobId), head);
+
+    /// <summary>
+    /// Opens a large file's head and checks it: its format, the chunk count against the one in the clear, a size the
+    /// count and chunk size can hold, and its id against the hash it names. A blob whose <c>chunks</c> field was added or
+    /// taken away doesn't open either way: a blob's bytes don't parse as a head whose id is their keyed hash, nor does a
+    /// head's id match the keyed hash of its sealed bytes (<see cref="OpenBlob"/>), the two ids being under different keys.
+    /// </summary>
+    internal LargeBlobHead OpenLargeBlobHead(BlobDocument doc)
+    {
+        var head = Checked(Open<LargeBlobHead>(BlobContext(doc.BlobId), doc.Blob), doc.Chunks);
+        if (!CryptographicOperations.FixedTimeEquals(LargeBlobId(head.Sha256), doc.BlobId)) throw new InvalidDataException($"Large blob {doc.Id} does not match its id");
+        return head;
+    }
+
+    /// <summary>A head that holds together: its format, and a size that <paramref name="chunks"/> chunks hold, as the clear
+    /// field gives their number.</summary>
+    private static LargeBlobHead Checked(LargeBlobHead head, int? chunks)
+    {
+        if (head.Format != LargeBlobHead.Marker || head.Key is not { Length: VaultCrypto.KeySize } || head.Sha256 is not { Length: 32 }
+            || head.ChunkSize <= 0 || head.Chunks < 1 || head.Chunks != chunks
+            || head.Size <= (long)(head.Chunks - 1) * head.ChunkSize || head.Size > (long)head.Chunks * head.ChunkSize)
+        {
+            throw new InvalidDataException("A large blob's head does not hold together");
+        }
+
+        return head;
+    }
+
+    /// <summary>A chunk of a large file, under its data key, bound to the vault, the head's document id, its number and
+    /// whether it is the last: swapped, moved to another file, renumbered or cut off, it doesn't open.</summary>
+    internal byte[] SealChunk(byte[] dataKey, ObjectId headId, int n, bool last, ReadOnlySpan<byte> bytes) =>
+        VaultCrypto.Seal(dataKey, bytes, ChunkContext(headId, n, last));
+
+    internal byte[] OpenChunk(byte[] dataKey, ObjectId headId, int n, bool last, byte[] sealedChunk) =>
+        VaultCrypto.Open(dataKey, sealedChunk, ChunkContext(headId, n, last));
+
+    private string ChunkContext(ObjectId headId, int n, bool last) => $"chunk:{Id}:{headId}:{n}:{(last ? "last" : "more")}";
+
     /// <summary>A part of a PDF's analysis, bound to its blob's id and its part number: moved to another blob or part,
     /// it doesn't open.</summary>
     internal byte[] SealPdfAnalysis<T>(byte[] blobId, int part, T payload) => Seal(PdfAnalysisContext(blobId, part), payload);
@@ -593,6 +648,16 @@ public sealed class UnlockedVault
                     return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
                 }
 
+                case "blobs" when doc.Revision > 0:
+                {
+                    // A large file's head, its chunk count standing in for the revision: its id comes from the hash it
+                    // seals, and only it is sealed again. The chunks stay as they are: under the file's own data key,
+                    // bound to the head's _id, which the update keeps.
+                    var head = Checked(Parse<LargeBlobHead>(plain), (int)doc.Revision);
+                    var pid = to.LargeBlobId(head.Sha256);
+                    return new Resealed(pid, LargeBlobId(head.Sha256), SealPlain(to.BlobContext(pid)), null, []) { Sha256 = seal ? null : head.Sha256 };
+                }
+
                 case "blobs":
                 {
                     var pid = to.BlobId(plain);
@@ -652,6 +717,10 @@ public sealed class UnlockedVault
         /// <summary>A blob's bytes when it was opened but not sealed (<c>seal: false</c>): its id under the old key is
         /// computed from them.</summary>
         public byte[]? Bytes { get; init; }
+
+        /// <summary>A large file's hash when its head was opened but not sealed: its id under the old key is computed
+        /// from it.</summary>
+        public byte[]? Sha256 { get; init; }
     }
 
     /// <summary>Every blob id an attachment record names, current and history, mapped to the new key's.</summary>
@@ -685,7 +754,12 @@ public sealed class UnlockedVault
         JsonSerializer.Deserialize<T>(VaultCrypto.Open(_contentKey, blob, context))
         ?? throw new InvalidDataException($"Empty payload in {context}");
 
-    private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length));
+    private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length)) + Size(n.Authorship);
+
+    /// <summary>A run's two ints, each write's label and a rough allowance for its reference and time.</summary>
+    private static long Size(Authorship? a) => a is null ? 0 : 8L * a.Runs.Count + a.Writes.Sum(w => 2L * w.Label.Length + WriteBytes);
+
+    private const long WriteBytes = 96;
 
     /// <summary>A record's strings and a rough allowance per state for the rest.</summary>
     private static long Size(StoredAttachment a) => 2L * (a.Path.Value.Length + a.LastWriter.Length) + StateBytes * (1 + a.History.Count);
@@ -764,14 +838,51 @@ internal sealed record NotePayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Restored = null,
     [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonPropertyName("created"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? CreatedAt = null,
-    [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null)
+    [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null,
+    [property: JsonPropertyName("by"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AuthorshipPayload? By = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new HistoryEntry(
             h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref), h.Message))],
         SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true, Message,
-        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true);
+        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true, By?.ToAuthorship());
+}
+
+/// <summary>
+/// Who wrote which line (<see cref="Authorship"/>, blame spec §5.3), compact: each write as <c>[label, ref, at]</c>, the
+/// runs as one flat array <c>[lines, write, lines, write, …]</c>. The reference is a <see cref="WriterRefPayload"/>,
+/// <c>"legacy"</c> for a write from before references (backfilled from such a history entry), or null for one sealed
+/// without a reference, so that each reads back as it was.
+/// </summary>
+internal sealed record AuthorshipPayload(
+    [property: JsonPropertyName("h")] string Hash,
+    [property: JsonPropertyName("w")] List<JsonElement[]> Writes,
+    [property: JsonPropertyName("r")] List<int> Runs,
+    [property: JsonPropertyName("e"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? Earlier = null,
+    [property: JsonPropertyName("d"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Dropped = null)
+{
+    private const string Legacy = "legacy";
+
+    public static AuthorshipPayload? From(Authorship? a) => a is null ? null : new(
+        a.Hash,
+        [.. a.Writes.Select(w => new[]
+        {
+            JsonSerializer.SerializeToElement(w.Label),
+            w.Ref is { IsLegacy: true } ? JsonSerializer.SerializeToElement(Legacy) : JsonSerializer.SerializeToElement(WriterRefPayload.From(w.Ref)),
+            JsonSerializer.SerializeToElement(w.At),
+        })],
+        [.. a.Runs.SelectMany(r => new[] { r.Lines, r.Write })],
+        a.Earlier, a.Dropped ? true : null);
+
+    public Authorship ToAuthorship() => new(
+        Hash, Earlier is { } earlier ? DateTime.SpecifyKind(earlier, DateTimeKind.Utc) : null, Dropped == true,
+        [.. Writes.Select(w => new Authorship.Write(
+            w[0].GetString() ?? "",
+            w[1].ValueKind == JsonValueKind.String && w[1].GetString() == Legacy ? WriterRef.Legacy
+            : WriterRefPayload.Read(WriterRefPayload.Version, w[1].Deserialize<WriterRefPayload>()),
+            DateTime.SpecifyKind(w[2].GetDateTime(), DateTimeKind.Utc)))],
+        [.. Runs.Chunk(2).Select(r => new Authorship.Run(r[0], r[1]))]);
 }
 
 /// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
@@ -938,7 +1049,7 @@ internal static class Payload
         [.. n.History.Select(h => new HistoryPayload(
             h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref), h.Message))],
         n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null, n.Message,
-        n.CreatedAt, n.CreatedAtLeast ? true : null);
+        n.CreatedAt, n.CreatedAtLeast ? true : null, AuthorshipPayload.From(n.Authorship));
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");
