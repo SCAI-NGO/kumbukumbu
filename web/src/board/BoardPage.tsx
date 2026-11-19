@@ -5,7 +5,8 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useBoard, useBoardAction, type BoardCard, type BoardView } from "../api/board";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
-import { checkpointUrl, folderOf, noteUrl, titleOf } from "../api/paths";
+import { checkpointUrl, folderOf, titleOf } from "../api/paths";
+import { useNoteHref } from "../shell/openInPane";
 import { FormError, primaryButtonClass } from "../components/form";
 import { useDesktop } from "../hooks/useDesktop";
 import CardTile, { DRAG_TYPE, type CardActions } from "./CardTile";
@@ -80,6 +81,7 @@ export default function BoardPage() {
 type Asking = { card: string; label?: string; column: string; position: string };
 
 function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string | null; view: BoardView }) {
+  const noteHref = useNoteHref();
   const id = useId();
   const desktop = useDesktop();
   const action = useBoardAction(vault);
@@ -94,7 +96,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
   const readOnly = checkpoint !== null;
   const columns = view.columns.map((c) => (tag ? { ...c, cards: c.cards.filter((k) => k.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) } : c));
   const laneId = (i: number) => `${id}-lane-${i}`;
-  const href = (path: string) => (checkpoint ? checkpointUrl(vault, checkpoint, path) : noteUrl(path));
+  const href = (path: string) => (checkpoint ? checkpointUrl(vault, checkpoint, path) : noteHref(path));
 
   const columnOf = (card: string) => view.columns.find((c) => c.cards.some((k) => k.title === card));
   const send = (card: string, column: string, position: string, reason?: string) =>

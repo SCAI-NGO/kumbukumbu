@@ -2,8 +2,8 @@
 import { useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, call } from "./client";
-import { noteUrl } from "./paths";
-import { movedPath, useEditor } from "../state/editor";
+import { useEditor } from "../state/editor";
+import { movedPanesUrl, panesNow } from "../shell/openInPane";
 import type { components } from "./schema";
 
 export type MemberAccess = components["schemas"]["MemberAccessView"];
@@ -170,11 +170,12 @@ function forgetOnceUnused(queryClient: QueryClient, matches: (query: Query) => b
 export function followRename(queryClient: QueryClient, navigate: NavigateFunction, vault: string, name: string) {
   const [from, to] = [`/${vault}/`, `/${name.normalize("NFC").trim()}/`];
   const editor = useEditor.getState();
-  const open = editor.currentPath;
+  // Either pane's note may be in it.
+  const url = movedPanesUrl(panesNow(editor), from, to);
   editor.moved(from, to);
   if (editor.activeVault === vault) editor.setActiveVault(to.slice(1, -1));
   // The drawer shows only on `/` and on a note, so an open note is all there is to follow.
-  if (open?.startsWith(from)) navigate(noteUrl(movedPath(open, from, to)), { replace: true });
+  if (url) navigate(url, { replace: true });
   forgetOnceUnused(queryClient, (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(from))));
   void Promise.all(["vaults", "keys", "connections", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
 }

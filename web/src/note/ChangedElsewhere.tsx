@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { deviceOf } from "../api/activity";
 import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
-import { noteUrl } from "../api/paths";
+import { useNoteHref } from "../shell/openInPane";
 import { ago, shownWriter } from "./AgentBanner";
 
 /**
@@ -42,11 +42,12 @@ export function movedTo(message: string): string | null {
 
 /** "This note was moved elsewhere, to <link>", or "… moved or removed elsewhere." */
 export function GoneText({ movedTo }: { movedTo: string | null }) {
+  const noteHref = useNoteHref();
   if (!movedTo) return <>This note was moved or removed elsewhere.</>;
   return (
     <>
       This note was moved elsewhere, to{" "}
-      <Link to={noteUrl(movedTo)} className="font-medium text-accent-text underline underline-offset-2">
+      <Link to={noteHref(movedTo)} className="font-medium text-accent-text underline underline-offset-2">
         {movedTo.slice(1)}
       </Link>
       .

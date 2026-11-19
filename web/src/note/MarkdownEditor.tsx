@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useBlocker, useNavigate, type BlockerFunction } from "react-router-dom";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useBlocker, type BlockerFunction, type Location } from "react-router-dom";
 import { api, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
-import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { besideOf, folderOf, inVault, titleOf, vaultOf } from "../api/paths";
 import { goneVault, useDiscreet } from "../discreet/state";
 import { topDialog } from "../hooks/useDialog";
-import { useEditor } from "../state/editor";
+import { PaneSide, useOpenNote } from "../shell/openInPane";
+import { useEditor, type Pane, type Side } from "../state/editor";
 import { useSession } from "../state/session";
 import { isWindowLocation, useWindows } from "../windows/store";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
@@ -33,6 +34,13 @@ function lineStart(text: string, line: number) {
   }
   return at;
 }
+
+/**
+ * Whether going from `from` to `to` leaves the editor of pane `side` in place: the left pane is the path, the right one
+ * `beside`, which only a note's URL has.
+ */
+const keepsPane = (side: Side, from: Location, to: Location) =>
+  side === "left" ? from.pathname === to.pathname : to.pathname.startsWith("/notes/") && besideOf(to.search) === besideOf(from.search);
 
 /** The selection's moving end, where the caret stands. */
 const headOf = (area: HTMLTextAreaElement) => (area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd);
@@ -110,7 +118,9 @@ export default function MarkdownEditor({
     draft,
   );
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved, savedText } = autosave;
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
+  // The pane the editor is in: what it holds while a navigation waits for its save, and where its new note opens.
+  const side = useContext(PaneSide) ?? "left";
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [initialScroll] = useState(() => takeScrollTop?.());
   useLayoutEffect(() => {
@@ -144,8 +154,7 @@ export default function MarkdownEditor({
       }
       release();
       void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(target)] });
-      useEditor.getState().openNote(target, "write");
-      navigate(noteUrl(target));
+      openNote(target, { side, mode: "write" });
       return;
     }
     setKeepProblem("Couldn't save it as a new note. Copy the text instead.");
@@ -269,13 +278,14 @@ export default function MarkdownEditor({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Opening another note: openNote() has already moved the store on (and to Read mode) when the navigation
-  // comes here. While saves are pending the store goes back to this note, and on to the other once they are done.
-  const held = useRef<{ currentPath: string | null; mode: "read" | "write" } | null>(null);
+  // Opening another note in the editor's pane: openNote() has already moved the store on (and to Read mode) when the
+  // navigation comes here. While saves are pending the pane goes back to this note, and on to the other once they are
+  // done. A navigation that leaves this pane as it is (the other pane's note) needn't wait.
+  const held = useRef<(Pane & { path: string }) | null>(null);
   const shouldBlock = useCallback<BlockerFunction>(
     ({ currentLocation, nextLocation }) => {
       // A session that ended goes to sign-in regardless; the text can't be saved without one.
-      if (currentLocation.pathname === nextLocation.pathname || nextLocation.pathname === "/signin" || !unresolved()) return false;
+      if (keepsPane(side, currentLocation, nextLocation) || nextLocation.pathname === "/signin" || !unresolved()) return false;
       // A window opens over the note, and closes back to it: the editor stays, and so does what it holds unsaved.
       if (isWindowLocation(nextLocation)) return false;
       if (isWindowLocation(currentLocation) && nextLocation.pathname === useWindows.getState().behind?.pathname) return false;
@@ -289,12 +299,12 @@ export default function MarkdownEditor({
         stop();
         return false;
       }
-      const { currentPath, mode } = useEditor.getState();
-      held.current = { currentPath, mode };
-      useEditor.setState({ currentPath: path, mode: "write" });
+      const pane = useEditor.getState().panes[side];
+      held.current = pane?.path ? { path: pane.path, mode: pane.mode } : null;
+      useEditor.getState().setPane(side, { path, mode: "write" });
       return true;
     },
-    [path, unresolved, stop],
+    [path, side, unresolved, stop],
   );
   const blocker = useBlocker(shouldBlock);
   useEffect(() => {
@@ -302,9 +312,9 @@ export default function MarkdownEditor({
     void flush().then((done) => {
       if (!done) return blocker.reset();
       blocker.proceed();
-      if (held.current) useEditor.setState(held.current);
+      if (held.current) useEditor.getState().setPane(side, held.current);
     });
-  }, [blocker, flush]);
+  }, [blocker, flush, side]);
 
   const chooseKeepMine = () => {
     setDiff(false);

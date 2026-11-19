@@ -2,7 +2,7 @@
 import { lazy, Suspense, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { noteUrl } from "../api/paths";
+import { useNoteHref } from "../shell/openInPane";
 import { useBundledIn, useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
 const PublishDialog = lazy(() => import("../shell/PublishDialog"));
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -111,6 +111,7 @@ const titleOf = (path: string) => path.split("/").at(-1)!.replace(/\.md$/i, "");
 /** "Published with Plan": this note went out inside the bundle of each start note named; a member learns only that
  * it is published (publish spec §3.10). */
 function BundledBar({ starts }: { starts: string[] | null }) {
+  const noteHref = useNoteHref();
   if (!starts) {
     return (
       <section aria-label="Publication" className={barClass}>
@@ -125,7 +126,7 @@ function BundledBar({ starts }: { starts: string[] | null }) {
         {starts.map((start, i) => (
           <span key={start}>
             {i > 0 && (i === starts.length - 1 ? " and " : ", ")}
-            <Link to={noteUrl(start)} className="font-medium text-accent-text underline underline-offset-2">
+            <Link to={noteHref(start)} className="font-medium text-accent-text underline underline-offset-2">
               {titleOf(start)}
             </Link>
           </span>

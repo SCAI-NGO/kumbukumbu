@@ -3,10 +3,11 @@ import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { findFolder, useMove, useTree, type TreeFolder } from "../api/notes";
-import { fileKindOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { fileKindOf, folderOf, titleOf, vaultOf } from "../api/paths";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
-import { movedPath, useEditor } from "../state/editor";
+import { useEditor } from "../state/editor";
+import { movedPanesUrl, panesNow } from "./openInPane";
 
 /** What is being moved: a note (`/Work/plan.md`), an image or PDF (`/Work/shot.png`) or a folder (`/Work/projects`). */
 export type MoveSubject = { kind: "note" | "attachment" | "folder"; path: string };
@@ -72,9 +73,10 @@ export default function MoveDialog({ subject, onClose, onMoved }: { subject: Mov
       { from, to: target },
       {
         onSuccess: (result) => {
-          const { currentPath } = useEditor.getState();
+          // Either pane's note may have moved; the URL follows both.
+          const url = movedPanesUrl(panesNow(useEditor.getState()), from, target);
           useEditor.getState().moved(from, target);
-          if (currentPath && movedPath(currentPath, from, target) !== currentPath) navigate(noteUrl(movedPath(currentPath, from, target)), { replace: true });
+          if (url) navigate(url, { replace: true });
           onMoved?.(target);
           setDone(linksSentence(result.message) ?? "Moved.");
         },

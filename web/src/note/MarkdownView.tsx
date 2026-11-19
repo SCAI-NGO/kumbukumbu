@@ -6,7 +6,7 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { useLinks, useNote } from "../api/notes";
-import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
+import { fileKindOf, isAttachment, titleOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { useErrorTextFor } from "../discreet/errorText";
 import { remarkHideBlockIds } from "../reader/blockIds";
@@ -15,6 +15,7 @@ import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
 import { useDarkScheme } from "../theme/dark";
+import { useNoteHref } from "../shell/openInPane";
 import { useInWindow } from "../windows/context";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { blockSource, findBlock } from "./blocks";
@@ -174,6 +175,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   const links = useLinks(path, note.data?.version);
   const { onCreateMissing, diagramsAsCode, tagsStill } = useContext(NoteContext);
   const inWindow = useInWindow();
+  const noteHref = useNoteHref();
   const body = useMemo(() => {
     if (!note.data) return null;
     const masked = maskComments(note.data.content);
@@ -189,8 +191,9 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   return (
     <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
       <Link
-        to={noteUrl(path)}
+        to={noteHref(path)}
         replace={inWindow}
+        data-note-path={path}
         className="-mx-1 flex min-h-11 items-center gap-1.5 rounded-[6px] px-1 font-mono text-[12px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
       >
         <CornerDownRight size={14} aria-hidden className="flex-none" />
@@ -256,6 +259,8 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   const [choosing, setChoosing] = useState(false);
   // From a window (the console's peek), the note takes the window's place in the history.
   const inWindow = useInWindow();
+  // Into the pane the link is in (workspace spec §3), which Ctrl+Alt+click turns to the right one (`data-note-path`).
+  const noteHref = useNoteHref();
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
   if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
     return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} block={subpathBlock(link.raw)} />;
@@ -269,9 +274,10 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
     case "note": {
       return (
         <Link
-          to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
+          to={checkpointLink ? checkpointLink(link.path!) : noteHref(link.path!)}
           replace={inWindow}
           state={noteAt(link.raw)}
+          {...(checkpointLink ? {} : { "data-note-path": link.path!, "data-note-at": JSON.stringify(noteAt(link.raw) ?? null) })}
           className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
         >
           {children}
@@ -324,7 +330,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
             <AmbiguousLinkDialog
               target={link.target}
               candidates={link.candidates}
-              hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
+              hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteHref(p))}
               stateOf={(p) => (isAttachment(p) ? undefined : noteAt(link.raw))}
               onClose={() => setChoosing(false)}
             />
@@ -336,7 +342,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       const block = link?.kind === "self" ? subpathBlock(link.raw) : null;
       if (block && path && !checkpointLink) {
         return (
-          <Link to={noteUrl(path)} replace={inWindow} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+          <Link to={noteHref(path)} replace={inWindow} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
             {children}
           </Link>
         );

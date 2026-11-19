@@ -3,7 +3,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { useLocation, useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, HttpError } from "../api/client";
-import { inVault, noteUrl, vaultOf } from "../api/paths";
+import { inVault, noteUrl, paneUrl, vaultOf } from "../api/paths";
 import { clearAppBadge } from "../calendar/useBadge";
 import { useConsole } from "../console/store";
 import { onDiscreetFrame } from "../hooks/useSyncSocket";
@@ -180,7 +180,9 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // The address bar shows /discreet for a discreet view whatever the router's location says.
     if ((shown !== null && names.has(shown)) || besideShown || showsDiscreet()) {
       const to = stays ?? ordinary;
-      navigate(to ? noteUrl(to) : "/", { replace: true });
+      // Both panes, where neither showed one of theirs (a window over them, say, had the neutral address).
+      const { left, right } = useEditor.getState().panes;
+      navigate(stays && left.path ? paneUrl(left.path, right?.path ?? null) : to ? noteUrl(to) : "/", { replace: true });
       // The shell doesn't follow the URL while hiding: the note it goes to opens here.
       if (to) useEditor.getState().openNote(to);
     }

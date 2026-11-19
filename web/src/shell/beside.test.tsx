@@ -6,6 +6,7 @@ import { besideOf, paneUrl } from "../api/paths";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
+import { useOpenNote } from "./openInPane";
 import { usePaneUrl } from "./usePaneUrl";
 
 const note = (path: string) => ({ name: path.split("/").at(-1)!, path, size: 10 });
@@ -101,8 +102,10 @@ describe("the right pane's URL", () => {
 
 describe("the panes written to the URL", () => {
   let panesUrl: ReturnType<typeof usePaneUrl>;
+  let openNote: ReturnType<typeof useOpenNote>;
   function Probe() {
     panesUrl = usePaneUrl();
+    openNote = useOpenNote();
     return null;
   }
   function on(url: string) {
@@ -111,12 +114,26 @@ describe("the panes written to the URL", () => {
     return router;
   }
 
-  it("opens a note in the right pane as a new entry", async () => {
+  it("opens a note in the right pane as a new entry, focused, and in the focused pane with the other kept", async () => {
     useEditor.getState().openNote("/Work/a.md");
     const router = on("/notes/Work/a.md");
-    await act(async () => panesUrl.openBeside("/Work/b.md"));
+    await act(async () => openNote("/Work/b.md", { side: "right" }));
     expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md");
     expect(router.state.historyAction).toBe("PUSH");
+    expect(useEditor.getState()).toMatchObject({ focused: "right", currentPath: "/Work/b.md" });
+
+    await act(async () => openNote("/Work/c.md"));
+    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/c.md");
+    act(() => useEditor.getState().focus("left"));
+    await act(async () => openNote("/Work/d.md", { replace: true }));
+    expect(at(router)).toBe("/notes/Work/d.md?beside=Work/c.md");
+    expect(router.state.historyAction).toBe("REPLACE");
+  });
+
+  it("opens a note on the left when no note is open there yet, beside nothing", async () => {
+    const router = on("/");
+    await act(async () => openNote("/Work/b.md", { side: "right" }));
+    expect(at(router)).toBe("/notes/Work/b.md");
   });
 
   it("closes a pane once it is closed in the store, the right one left as the only pane when the left closes", async () => {

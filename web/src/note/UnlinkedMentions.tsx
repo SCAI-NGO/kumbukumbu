@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ChevronDown, ChevronRight, TextSearch } from "lucide-react";
 import { Fragment, useId, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useMentions } from "../api/notes";
-import { crumbOf, noteUrl, titleOf, type NoteAt } from "../api/paths";
+import { crumbOf, titleOf, type NoteAt } from "../api/paths";
+import { useOpenNote } from "../shell/openInPane";
 
 type Mention = NonNullable<ReturnType<typeof useMentions>["data"]>[number];
 
@@ -38,7 +38,7 @@ export default function UnlinkedMentions({ path, linked = false, panel = false }
   const [openFor, setOpenFor] = useState<string | null>(null);
   const open = openFor === path;
   const mentions = useMentions(path, open);
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   const id = useId();
   const Chevron = open ? ChevronDown : ChevronRight;
 
@@ -73,7 +73,7 @@ export default function UnlinkedMentions({ path, linked = false, panel = false }
               <li key={`${m.path}:${m.line}`}>
                 <button
                   type="button"
-                  onClick={() => navigate(noteUrl(m.path), { state: { line: Number(m.line) } satisfies NoteAt })}
+                  onClick={() => openNote(m.path, { state: { line: Number(m.line) } satisfies NoteAt })}
                   className="flex min-h-12 w-full items-center gap-2.5 border-b border-line px-1 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
                 >
                   <TextSearch size={18} strokeWidth={1.8} aria-hidden className="flex-none text-accent-text" />

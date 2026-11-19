@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useOpenNote } from "./openInPane";
 import { errorText } from "../api/error-text";
 import { usePurgeTrash, useRestoreNote, useTrash, type TrashEntry } from "../api/history";
 import { useLevel } from "../api/notes";
 import { usePasswordWindowOpen } from "../api/publications";
-import { crumbOf, fileKindOf, folderOf, isAttachment, isMarker, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { crumbOf, fileKindOf, folderOf, isAttachment, isMarker, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { FormError } from "../components/form";
@@ -29,6 +30,7 @@ const placeOf = (path: string) => crumbOf(isMarker(path) ? folderOf(path) : path
 export default function TrashSheet({ vault, onClose }: { vault: string; onClose(): void }) {
   const trash = useTrash(vault);
   const navigate = useNavigate();
+  const openNote = useOpenNote();
   const [restored, setRestored] = useState<string[]>([]);
   // Unknown until the vault list is in, and so not the owner's yet: nothing is offered before.
   const owner = useLevel(vault) === "owner";
@@ -39,7 +41,7 @@ export default function TrashSheet({ vault, onClose }: { vault: string; onClose(
     onClose();
     useEditor.getState().setOverlay("none");
     if (isAttachment(path)) navigate(viewUrl(path), { state: { paths: [path] } satisfies LightboxState });
-    else navigate(noteUrl(path));
+    else openNote(path);
   };
   return (
     <Sheet title="Trash" onClose={onClose}>

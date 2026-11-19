@@ -2,10 +2,11 @@
 import { ChevronRight } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useOpenNote } from "./openInPane";
 import { useArchive, useArchivedFiles, useDeleteArchived, useRestoreArchived, type ArchiveItem } from "../api/archive";
 import { errorText } from "../api/error-text";
 import { storageText } from "../api/storage";
-import { crumbOf, fileKindOf, folderOf, isAttachment, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { crumbOf, fileKindOf, folderOf, isAttachment, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
@@ -31,6 +32,7 @@ const restoredText = (item: ArchiveItem, to: string) => `Restored ${item.folder 
 export default function ArchiveSheet({ vault, onClose }: { vault: string; onClose(): void }) {
   const archive = useArchive(vault);
   const navigate = useNavigate();
+  const openNote = useOpenNote();
   const [done, setDone] = useState<string | null>(null);
   const [restoringAs, setRestoringAs] = useState<{ item: ArchiveItem; message?: string } | null>(null);
   const [deleting, setDeleting] = useState<ArchiveItem | null>(null);
@@ -38,7 +40,7 @@ export default function ArchiveSheet({ vault, onClose }: { vault: string; onClos
     onClose();
     useEditor.getState().setOverlay("none");
     if (isAttachment(path)) navigate(viewUrl(path), { state: { paths: [path] } satisfies LightboxState });
-    else navigate(noteUrl(path));
+    else openNote(path);
   };
   const items = archive.data?.items;
   const canWrite = archive.data?.canWrite === true;

@@ -3,11 +3,11 @@ import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { calendarUrl, noteUrl } from "../api/paths";
+import { calendarUrl } from "../api/paths";
+import { useOpenNote } from "../shell/openInPane";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { useDesktop } from "../hooks/useDesktop";
 import { topDialog } from "../hooks/useDialog";
-import { useEditor } from "../state/editor";
 import { useCalendar, useCalendarAction, useCalendarViewState, useEntryAction, useSetCalendarView, type CalendarView, type EntryView } from "./api";
 import { cameFromHere, withCameFrom } from "./backLink";
 import { addDays, formatWeekTitle, monthId, monthName, monthTitle, weekId, weekOf } from "./dates";
@@ -84,6 +84,7 @@ export default function CalendarPage() {
 
 function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string; view: CalendarView; month?: string; tag?: string; chooseTag(next: string | null): void; grid: boolean }) {
   const navigate = useNavigate();
+  const openNote = useOpenNote();
   const location = useLocation();
   const { hash } = location;
   const desktop = useDesktop();
@@ -96,8 +97,7 @@ function Calendar({ vault, view, month, tag, chooseTag, grid }: { vault: string;
 
   /** Opens a note the calendar just made or found in Write mode, to write in at once. */
   const open = (path: string) => {
-    useEditor.getState().openNote(path, "write");
-    navigate(noteUrl(path), { state: withCameFrom(undefined, cameFromHere(location)) });
+    openNote(path, { mode: "write", state: withCameFrom(undefined, cameFromHere(location)) });
   };
   const make = (kind: "today" | "this-week") => {
     setProblem(null);
