@@ -11,8 +11,13 @@
 //    file, so no link: the test builds it in the spec's form from the id `GET /api/vaults` names.
 // 4. A link to a removed note leads to the one "Not here" page, which offers the search filled with the note's name
 //    → "a link to a removed note leads to Not here …". Search is off on the stack: no results are asserted.
-// Left out: sign-in coming back to the link (needs a sign-in of its own; covered by SignIn.test.tsx); the one page for a
-// discreet vault while hidden (Task 8, @serial); an archived note's link (covered by DeepLink.test.tsx, and over MCP by
+// 5. Opening a link needs a sign-in: without a session it leads to `/signin?next=<the link's path>` and shows no note
+//    → "a link opened without a session leads to the sign-in".
+// 6. The same "Not here" page when the vault isn't in the reader's list: Bob opens a link into a vault of Alice's he
+//    isn't a member of → "a link into a vault Bob isn't a member of leads to the same Not here". Alice's `Welcome`, not
+//    `Home`: her saved session keeps Home hidden, so its id isn't in her vault list without a PIN entry (Task 8's).
+// Left out: the sign-in coming back to the link afterwards (needs a sign-in of its own; covered by
+// SignIn.test.tsx:134-155); the one page for a discreet vault while hidden (Task 8, @serial); an archived note's link (covered by DeepLink.test.tsx, and over MCP by
 // e2e/mcp/deeplinks.spec.ts).
 import type { Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
@@ -32,17 +37,35 @@ async function writeWithLink(mcp: Mcp, path: string, content: string) {
   return link!;
 }
 
-/** Lands on the note: its address, and its heading in the article. On the phone the install hint is answered. */
+const notHere = "This link leads to a note that isn't here: it was moved or removed, or it's in a vault you can't see right now.";
+
+const vaultId = async (api: Api, name: string) => {
+  const vault = (await api.json<{ id: string; name: string }[]>("GET", "/api/vaults")).find((v) => v.name === name);
+  expect(vault, `${name} in the vault list`).toBeDefined();
+  return vault!.id;
+};
+
+/** On the phone the install hint is answered with Not now, as a person would, whenever it comes up. */
+const handled = new WeakSet<Page>();
+async function answerInstallHint(page: Page) {
+  if (handled.has(page)) return;
+  handled.add(page);
+  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
+  await page.addLocatorHandler(hint, async () => {
+    await hint.getByRole("button", { name: "Not now" }).click();
+  });
+}
+
+/** Lands on the note: its address, and its heading in the article. */
 async function expectNote(page: Page, path: string, heading: string) {
   await expect(page).toHaveURL(new RegExp(`${escape(noteUrl(path))}$`));
   await expect(page.locator("article").getByRole("heading", { name: heading, level: 1 })).toBeVisible();
-  const notNow = page.getByRole("button", { name: "Not now" });
-  if (await notNow.isVisible()) await notNow.click();
 }
 
 test("deeplinks: the link in a write's answer opens the note for Alice @deeplinks @phone", async ({ page, mcp, folder }, testInfo) => {
   const path = `/Work/${folder}/Garten Ü/Rosen ${folder}.md`;
   const link = await writeWithLink(mcp, path, "# Rosen\n\nPrune in March.\n");
+  await answerInstallHint(page);
   await page.goto(link);
   await expectNote(page, path, "Rosen");
   await shot(page, testInfo, "deeplinks");
@@ -51,7 +74,8 @@ test("deeplinks: the link in a write's answer opens the note for Alice @deeplink
 test("deeplinks: a file's link opens the viewer @deeplinks @phone", async ({ page, aliceApi, seedAs, folder }) => {
   const path = `/Work/${folder}/pixel.png`;
   await seedAs("tags/smoke/pixel.png", path);
-  const work = (await aliceApi.json<{ id: string; name: string }[]>("GET", "/api/vaults")).find((v) => v.name === "Work")!.id;
+  const work = await vaultId(aliceApi, "Work");
+  await answerInstallHint(page);
   await page.goto(`/n/${work}/${folder}/pixel.png`);
   await expect(page).toHaveURL(new RegExp(`/view/Work/${escape(folder)}/pixel\\.png$`));
   const image = page.getByRole("main", { name: "pixel.png" }).getByRole("img", { name: "pixel.png" });
@@ -66,16 +90,48 @@ test("deeplinks: a link to a removed note leads to Not here, whose search holds 
   const removed = await mcp.sh(`rm "${path}"`);
   expect(removed.isError, removed.text).toBe(false);
 
+  // No install-hint handler here: the hint comes with the shell, under the modal search sheet, which covers its Not now;
+  // nothing this test does needs it answered.
   await page.goto(link);
   await expect(page.getByRole("heading", { name: "Not here", level: 1 })).toBeVisible();
-  await expect(page.getByText("This link leads to a note that isn't here: it was moved or removed, or it's in a vault you can't see right now.")).toBeVisible();
-  // The link stays the link: the page names no other address.
-  expect(page.url()).toBe(link);
+  await expect(page.getByText(notHere, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Search for it" }).click();
   const search = page.getByRole("dialog", { name: "Search" });
   await expect(search).toBeVisible();
   await expect(search.getByRole("searchbox", { name: "Search" })).toHaveValue(name);
+});
+
+test("deeplinks: a link opened without a session leads to the sign-in @deeplinks @phone", async ({ browser, projectContextOptions, mcp, folder }) => {
+  const path = `/Work/${folder}/Private ${folder}.md`;
+  const link = await writeWithLink(mcp, path, "# Private\n\nNot for strangers.\n");
+  const context = await browser.newContext({ ...projectContextOptions, storageState: { cookies: [], origins: [] } });
+  try {
+    const page = await context.newPage();
+    await page.goto(link);
+    const { pathname } = new URL(link);
+    await expect(page).toHaveURL(`${new URL(link).origin}/signin?next=${encodeURIComponent(pathname)}`);
+    await expect(page.getByRole("heading", { name: "Private" })).toHaveCount(0);
+    await expect(page.getByText("Not for strangers.")).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("deeplinks: a link into a vault Bob isn't a member of leads to the same Not here @deeplinks @phone", async ({ aliceApi, bobApi, bobPage }) => {
+  const welcome = await vaultId(aliceApi, "Welcome");
+  // A note that is there, so only the vault decides.
+  const tree = await aliceApi.json<{ root: { notes: { path: string }[] } }>("GET", "/api/vaults/Welcome/tree");
+  const note = tree.root.notes[0]?.path;
+  expect(note, "a note at the top of Alice's Welcome").toBeDefined();
+  const bobIds = (await bobApi.json<{ id: string }[]>("GET", "/api/vaults")).map((v) => v.id);
+  expect(bobIds, "Welcome of Alice's isn't in Bob's list").not.toContain(welcome);
+
+  await answerInstallHint(bobPage);
+  await bobPage.goto(`/n/${welcome}/${note!.split("/").slice(2).map(encodeURIComponent).join("/")}`);
+  await expect(bobPage.getByRole("heading", { name: "Not here", level: 1 })).toBeVisible();
+  await expect(bobPage.getByText(notHere, { exact: true })).toBeVisible();
+  await expect(bobPage.getByRole("button", { name: "Search for it" })).toBeVisible();
 });
 
 test.describe("deeplinks in a shared vault", () => {
@@ -102,6 +158,8 @@ test.describe("deeplinks in a shared vault", () => {
     const alias = `Ours-${randomBytes(3).toString("hex")}`;
     await bobApi.json("PUT", `/api/memberships/${encodeURIComponent(share.membershipId)}/alias`, { alias });
     try {
+      await answerInstallHint(bobPage);
+      await answerInstallHint(page);
       await bobPage.goto(link);
       await expectNote(bobPage, `/${alias}/${folder}/Plan.md`, "Plan");
       // And for Alice, the owner, under her name.

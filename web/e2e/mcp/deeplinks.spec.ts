@@ -14,11 +14,16 @@
 // 5. The id is the vault's, the same for the owner and a member whatever each calls the vault
 //    → "the link is the same for Alice and for Bob …" (Bob renames his alias, and back in `finally`).
 // 6. `GET /api/vaults` names each vault's id → the id every test expects comes from it (and Bob's from his own list).
-// Left out: KUMBU_PUBLIC_URL winning over the request's origin (the stack always sets it; the `Mcp` client has no way to
-// call through another host; covered by the xUnit tests the spec names); the upload's answer (@upload, Task 10); a file
-// has no version block in `cat`, so no link there (the browser test opens a file's link built in the spec's form).
+// 7. KUMBU_PUBLIC_URL wins over the request's origin → "the link's origin is KUMBU_PUBLIC_URL, not the request's"
+//    (a write through http://127.0.0.1:8080).
+// 8. The tool descriptions say once that the link opens the note after sign-in and is the thing to show the user
+//    (Sh/Manual.cs) → "the descriptions of the tools that carry a link say so".
+// Left out: the upload's answer (@upload, Task 10); a file has no version block in `cat`, so no link there (the browser
+// test opens a file's link built in the spec's form).
+import { request } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { Api, Mcp } from "../support/api";
+import { baseURL } from "../support/env";
 import { shareWithBob, unshare, type Share } from "../support/share";
 import { expect, test } from "./fixtures";
 
@@ -117,17 +122,61 @@ test("deeplinks: an archived note's answers carry its link @deeplinks", async ({
   const path = `/Work/${folder}/Old.md`;
   expect((await mcp.call("write", { path, content: "# Old\n" })).isError).toBe(false);
   const archived = await mcp.sh(`archive ${path}`);
-  expect(archived.isError, archived.text).toBe(false);
   // The archive adds the time to the name: read it from the answer.
   const moved = archived.text.match(/^moved \S+ to (\/Work\/_archive\/.+\.md); /m)?.[1];
-  expect(moved, archived.text).toMatch(new RegExp(`^/Work/_archive/${folder}/Old \\d{4}-\\d{2}-\\d{2} \\d{6}\\.md$`));
   try {
+    expect(archived.isError, archived.text).toBe(false);
+    expect(moved, archived.text).toMatch(new RegExp(`^/Work/_archive/${folder}/Old \\d{4}-\\d{2}-\\d{2} \\d{6}\\.md$`));
     expect(blocks(archived.text)).toEqual(linked(work, [moved!]));
     const read = await mcp.sh(`cat "${moved}"`);
     expect(read.isError, read.text).toBe(false);
     expect(blocks(read.text)).toEqual(linked(work, [moved!]));
   } finally {
-    await mcp.sh(`rm "${moved}"`);
+    if (moved) {
+      const removed = await mcp.sh(`rm "${moved}"`);
+      expect(removed.isError, removed.text).toBe(false);
+    }
+  }
+});
+
+const linkSentence = "The answer carries the note's link into the web app (it opens after sign-in): show it to the user.";
+const catLine =
+  "cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block, followed by its link into the web app (show it to the user)";
+
+test("deeplinks: the descriptions of the tools that carry a link say so @deeplinks", async ({ mcp }) => {
+  const { status, message } = await mcp.raw("tools/list", {});
+  expect(status).toBe(200);
+  const tools = (message?.result as { tools: { name: string; description?: string }[] }).tools;
+  const description = (name: string) => tools.find((t) => t.name === name)?.description ?? "";
+  for (const name of ["write", "edit", "replace"]) {
+    expect(description(name).split("\n").map((l) => l.trim()), `${name}'s description`).toContain(linkSentence);
+  }
+  // The sh tool's names it on cat's line, where the link comes.
+  expect(description("sh").split("\n").map((l) => l.trim()), "sh's description").toContain(catLine);
+});
+
+test("deeplinks: the link's origin is KUMBU_PUBLIC_URL, not the request's @deeplinks", async ({ aliceApi, folder }) => {
+  const work = await vaultId(aliceApi, "Work");
+  // A key of Alice's, used through another host for the same server; revoked by dispose.
+  const body = { data: { name: `e2e deeplinks origin ${randomBytes(3).toString("hex")}`, vaults: { Work: "write" }, expiresInDays: 30 } };
+  let response = await aliceApi.send("POST", "/api/keys", body);
+  if (response.status() === 401) {
+    await aliceApi.confirmPassword();
+    response = await aliceApi.send("POST", "/api/keys", body);
+  }
+  // Never the body: it holds the key.
+  expect(response.ok(), `POST /api/keys: ${response.status()}`).toBe(true);
+  const created = (await response.json()) as { key: string; apiKey: { id: string } };
+  const otherHost = baseURL.replace("localhost", "127.0.0.1");
+  const key = new Mcp(await request.newContext({ baseURL: otherHost }), created.key, { api: aliceApi, id: created.apiKey.id });
+  try {
+    const path = `/Work/${folder}/Origin.md`;
+    const written = await key.call("write", { path, content: "# Origin\n" });
+    expect(written.isError, written.text).toBe(false);
+    expect(blocks(written.text)).toEqual(linked(work, [path]));
+    expect(lines(written.text).at(-1)).toMatch(/^link to \S+: http:\/\/localhost:8080\/n\//);
+  } finally {
+    await key.dispose();
   }
 });
 
