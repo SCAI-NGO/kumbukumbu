@@ -24,7 +24,7 @@
 #
 # Left as it is, on purpose: Strict-Transport-Security and the other security headers come from Kumbu² itself (with
 # an https public URL, on every response), so Traefik adds none. Traefik sets no limit on request bodies, so uploads up
-# to Kumbu²'s 15 MB pass and a larger one gets Kumbu²'s own 413. WebSockets (Obsidian sync hints on /api/ws) pass
+# to Kumbu²'s bound per file (Kumbu:Vaults:MaxFileBytes, 1 GiB by default) pass and a larger one gets Kumbu²'s own 413. WebSockets (Obsidian sync hints on /api/ws) pass
 # without configuration. Traefik keeps no access log (its default); if you turn one on, keep /api out of it (README,
 # "Security notes for a public instance").
 #
@@ -51,6 +51,7 @@ services:
       - --entryPoints.websecure.address=:443
       # Traefik's default of 60 s for reading a whole request would cut off a 15 MB upload slower than about
       # 2 Mbit/s (a phone on a weak network). Kestrel drops a body that trickles in below 240 bytes a second.
+      # At 10 minutes a 1 GiB upload needs about 1.8 MB/s: raise this, or lower the bound, for slow links.
       - --entryPoints.websecure.transport.respondingTimeouts.readTimeout=10m
       - --certificatesResolvers.letsencrypt.acme.tlsChallenge=true
       # The HTTP challenge on port 80 works as well (in place of the line above), for instance where 443 is
