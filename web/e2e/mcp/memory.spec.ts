@@ -11,26 +11,33 @@
 // 4. Hint only names the start-up skills, never a shared one, and no task skills (§2) → "hint only names …".
 // 5. Only her own vault Skills replaces a system skill; a `_skills/project-memory` (Bob's, in the shared vault) doesn't, in the list or in
 //    `skills cat` (§1) → "a _skills/project-memory doesn't replace the system skill".
-//    Left out: the replacement by `/Skills/project-memory` itself: it would change the handshake of every key of
-//    Alice's that the other workers' tests open at the same time.
+//    Left out: the replacement by `/Skills/project-memory` itself: Alice has no vault Skills, and creating one would
+//    change her vault list while the browser projects run.
+// 5a. A start-up skill a former member last changed stays another user's once the vault is no longer shared (PR #250)
+//    → "a start-up skill a former member wrote stays another user's".
 // 6. A missing skills section (left out silently past 5 s, HandshakeInstructions.cs) fails every handshake test above:
 //    each one asserts the section's heads, so it can't pass by omission.
 // 7. `cat` with several paths (§3): each under '==> path <==' with a version token of its own, a failing path in place,
 //    a note that doesn't fit prints its outline, `--version` takes one path → "cat prints several notes …".
 // 8. `rm` and `mv` with several paths (§4): one line per path, a failing one reported and the others done, several
-//    sources into a folder, a link between two notes moved together pointing at the moved note, no -r
+//    sources (notes, an attachment, a folder) into a folder, a link between two notes moved together pointing at the moved note, no -r
 //    → "rm and mv take several paths …".
 // 9. `rg -g` with ripgrep's rules (§5): `*.md` at any depth, `!**/Archive/**`, `{a,b}`, a glob with `/` anchored to the
 //    path given, also with `--files` → "rg -g filters paths …".
-// 10. A message with `write`, `edit`, `replace` (§6): shown by `history`; over 200 characters or not one line refused
+// 10. A message with `write`, `edit`, `replace` (§6): shown by `history`, a multi-note `replace` giving it to every
+//     note it changes; over 200 characters or not one line refused
 //     → "a message with write, edit and replace …".
-// 11. Several replacements in one `edit` (§7): in order, one version, all or none; the single pair still works
-//     → "edit applies a list of replacements …".
+// 11. Several replacements in one `edit` (§7): in order, all or none; the single pair still works
+//     → "edit applies a list of replacements …". That they make one version can't be seen from outside: one key's
+//     writes join one version anyway (NoteWriter.cs:106-108).
 // Left out: the web app's history showing the message (browser, not this project); the three-client session test
-// (§Testing: a model in the loop); which message a coalesced version keeps (left to the builder; whether two writes
-// coalesce depends on timing the run can't state, so the message test reads history after each write).
+// (§Testing: a model in the loop); which message a coalesced version keeps: the spec leaves keeping the last or joining
+// them to the builder. (Within one key's changeset the writes coalesce deterministically, so the message test reads
+// history after each write.)
 import { randomBytes } from "node:crypto";
 import { Api, Mcp } from "../support/api";
+import { secrets } from "../support/env";
+import { reservePassword } from "../support/session";
 import { shareWithBob, unshare, type Share } from "../support/share";
 import { expect, test } from "./fixtures";
 
@@ -184,7 +191,10 @@ test.describe("memory", () => {
 
   // Bob writes it in the shared vault: a member must not swap the skill every session follows for its readers.
   test("memory: a _skills/project-memory doesn't replace the system skill @memory", async () => {
-    test.fail(true, "M-01 (Medium, bug): a _skills/project-memory in a shared vault makes `skills cat project-memory` ambiguous");
+    test.fail(
+      true,
+      "M-01 (Medium, unclear): a _skills/project-memory in any vault (a shared one, or Alice's own /Work after `skills copy project-memory /Work`) makes `skills cat project-memory`, which the start-up head tells agents to run, ambiguous; `skills cat system:project-memory` still reads it",
+    );
     const path = `/${share.vault}/_skills/project-memory/SKILL.md`;
     const content = `---\nname: project-memory\ndescription: A stand-in from the e2e suite.\nmetadata:\n  kumbu-when: session-start\n---\nStand-in body ${randomBytes(3).toString("hex")}.\n`;
     const written = await bobKey.call("write", { path, content });
@@ -195,7 +205,12 @@ test.describe("memory", () => {
       expect(start, "the start-up head is in the instructions").toBeDefined();
       expect(start![0]).toMatch(memoryLine);
       expect(start!.filter((l) => l.startsWith("- project-memory ")), "only the system skill at the start").toHaveLength(1);
-      // The head says to read it with `skills cat <name>`: the name still finds the system skill (spec §1).
+      // The system skill is still there by its full name.
+      const bySystem = await aliceKey.sh("skills cat system:project-memory");
+      expect(bySystem.isError, bySystem.text).toBe(false);
+      expect(bySystem.text).toContain("A memory is a folder with a `MEMORY.md`");
+      // The head says to read it with `skills cat <name>`. Spec §1's literal promise (it doesn't take the system skill's
+      // place) holds; the ambiguity is pinned by SkillsCommandTests.cs:209-214, hence unclear.
       const cat = await aliceKey.sh("skills cat project-memory");
       expect(cat.isError, `M-01: skills cat project-memory reads the system skill, not: ${cat.text}`).toBe(false);
       expect(cat.text).toContain("A memory is a folder with a `MEMORY.md`");
@@ -206,9 +221,60 @@ test.describe("memory", () => {
   });
 });
 
+test("memory: a start-up skill a former member wrote stays another user's @memory", async ({ folder }) => {
+  // A share of its own: Bob leaves it, which the describe's shared vault must not see.
+  const former = await shareWithBob("Former", "write");
+  const name = folder;
+  const path = `/${former.vault}/_skills/${name}/SKILL.md`;
+  const alice = await Api.as("alice");
+  const bob = await Api.as("bob");
+  let left = false;
+  try {
+    const bobKey = await Mcp.create(bob, `e2e memory former ${randomBytes(3).toString("hex")}`, { [former.vault]: "write" });
+    try {
+      const written = await bobKey.call("write", { path, content: manifest(name, "Left behind.") });
+      expect(written.isError, written.text).toBe(false);
+    } finally {
+      await bobKey.dispose();
+    }
+    await bob.json("POST", `/api/memberships/${encodeURIComponent(former.membershipId)}/leave`);
+    left = true;
+
+    const aliceKey = await Mcp.create(alice, `e2e memory former ${randomBytes(3).toString("hex")}`, { [former.vault]: "read" });
+    try {
+      const { instructions = "" } = await aliceKey.initialize();
+      const start = entries(instructions, startHead);
+      expect(start, "the start-up head is in the instructions").toBeDefined();
+      expect(start!.some((l) => l.startsWith(`- ${name} `)), "not under the start-up head").toBe(false);
+      const list = entries(instructions, listHead);
+      expect(list, "the list head").toBeDefined();
+      expect(list).toContainEqual(
+        expect.stringMatching(new RegExp(`^- ${escape(name)} \\(/${escape(former.vault)}/_skills/${escape(name)}, last changed by .+, another user\\): Left behind\\.$`)),
+      );
+    } finally {
+      await aliceKey.dispose();
+    }
+  } finally {
+    await alice.dispose();
+    await bob.dispose();
+    if (left) {
+      const owner = await Api.as("alice");
+      try {
+        await reservePassword("alice");
+        await owner.json("POST", `/api/vaults/${encodeURIComponent(former.vault)}/delete`, { password: secrets().passwords.alice, confirm: former.vault });
+      } finally {
+        await owner.dispose();
+      }
+    } else {
+      await unshare(former);
+    }
+  }
+});
+
 test("memory: a message with write, edit and replace shows in history; a long or broken one is refused @memory", async ({ mcp, folder }) => {
   const dir = `/Work/${folder}`;
   const note = `${dir}/Why.md`;
+  const also = `${dir}/Also.md`;
   const other = `${dir}/Never.md`;
   try {
     // Writes close together may join one version (NoteWriter.cs:71); the version shows the last message brought.
@@ -223,6 +289,8 @@ test("memory: a message with write, edit and replace shows in history; a long or
     const v2 = versionOf(edited.text, note)!;
     expect(await current()).toMatch(new RegExp(`^${v2} .* — second: why it changed {2}\\(current\\)$`));
 
+    // A second note for the multi-note replace.
+    expect((await mcp.call("write", { path: also, content: "beta too\n" })).isError).toBe(false);
     const preview = await mcp.call("replace", { path: dir, old_text: "beta", new_text: "gamma" });
     const plan = preview.text.match(/^plan: (\w+)$/m)?.[1];
     expect(plan, preview.text).toBeTruthy();
@@ -230,6 +298,9 @@ test("memory: a message with write, edit and replace shows in history; a long or
     expect(replaced.isError, replaced.text).toBe(false);
     const v3 = versionOf((await mcp.sh(`cat ${note}`)).text, note)!;
     expect(await current()).toMatch(new RegExp(`^${v3} .* — third: why it was replaced {2}\\(current\\)$`));
+    // Every note it changes gets the message.
+    expect((await historyLines(mcp, also))[0]).toMatch(/ — third: why it was replaced {2}\(current\)$/);
+    expect((await mcp.sh(`cat ${also}`)).text.startsWith("gamma too\n")).toBe(true);
 
     // Exactly 200 characters is one line still.
     const at200 = "x".repeat(200);
@@ -253,7 +324,7 @@ test("memory: a message with write, edit and replace shows in history; a long or
     expect(versionOf(after.text, note)).toBe(v4);
     expect(after.text.startsWith("delta\n")).toBe(true);
   } finally {
-    await mcp.sh(`rm ${note}`);
+    await mcp.sh(`rm ${note} ${also}`);
   }
 });
 
@@ -274,7 +345,6 @@ test("memory: edit applies a list of replacements in order as one version, or no
     expect(edited.isError, edited.text).toBe(false);
     expect(edited.text).toContain(`edited ${note}: 2 changes`);
     const v2 = versionOf(edited.text, note)!;
-    expect(await historyLines(mcp, note), "one version for the list").toHaveLength(2);
     let read = await mcp.sh(`cat ${note}`);
     expect(read.text.startsWith("two gamma\n")).toBe(true);
     expect(versionOf(read.text, note)).toBe(v2);
@@ -295,7 +365,6 @@ test("memory: edit applies a list of replacements in order as one version, or no
     read = await mcp.sh(`cat ${note}`);
     expect(read.text.startsWith("two gamma\n")).toBe(true);
     expect(versionOf(read.text, note)).toBe(v2);
-    expect(await historyLines(mcp, note)).toHaveLength(2);
 
     // Today's single pair still works.
     const single = await mcp.call("edit", { path: note, version: v2, old_text: "gamma", new_text: "delta" });
@@ -317,7 +386,7 @@ test("memory: cat prints several notes, each under its header with its own versi
     const read = await mcp.sh(`cat ${a} ${missing} ${b}`);
     // Each under its header, the failing path's error in its place, the others go on.
     const body = read.text.split("\n\nversion of ")[0];
-    expect(body).toMatch(new RegExp(`^==> ${escape(a)} <==\nnote a\n\n.*${escape(missing)}.*\n\n==> ${escape(b)} <==\nnote b\n?$`));
+    expect(body).toMatch(new RegExp(`^==> ${escape(a)} <==\nnote a\n\ncat: ${escape(missing)}: No such file or directory\n\n==> ${escape(b)} <==\nnote b\n?$`));
     expect(versionOf(read.text, a)).toBe(va);
     expect(versionOf(read.text, b)).toBe(vb);
     expect(versionOf(read.text, missing)).toBeUndefined();
@@ -343,13 +412,16 @@ test("memory: cat prints several notes, each under its header with its own versi
   }
 });
 
-test("memory: rm and mv take several paths, each on its own @memory", async ({ mcp, folder }) => {
+test("memory: rm and mv take several paths, each on its own @memory", async ({ mcp, aliceApi, folder }) => {
   const dir = `/Work/${folder}`;
   try {
     // A and C link to each other through relative paths that break when both move.
     expect((await mcp.call("write", { path: `${dir}/A.md`, content: "see [c](Other/C.md)\n" })).isError).toBe(false);
     expect((await mcp.call("write", { path: `${dir}/Other/C.md`, content: "back to [a](../A.md)\n" })).isError).toBe(false);
     expect((await mcp.call("write", { path: `${dir}/B.md`, content: "b\n" })).isError).toBe(false);
+    // Sources may mix notes, attachments and folders.
+    await aliceApi.putFile(`${dir}/plain.txt`, Buffer.from("plain\n"));
+    expect((await mcp.call("write", { path: `${dir}/Folder/F.md`, content: "f\n" })).isError).toBe(false);
     expect((await mcp.sh(`mkdir ${dir}/Sub`)).isError).toBe(false);
 
     // More than one source needs a folder target.
@@ -358,10 +430,12 @@ test("memory: rm and mv take several paths, each on its own @memory", async ({ m
       text: "mv: with several sources the target must be a folder, ending in '/'",
     });
 
-    const moved = await mcp.sh(`mv ${dir}/A.md ${dir}/Other/C.md ${dir}/B.md ${dir}/Sub/`);
+    const moved = await mcp.sh(`mv ${dir}/A.md ${dir}/Other/C.md ${dir}/B.md ${dir}/plain.txt ${dir}/Folder/ ${dir}/Sub/`);
     expect(moved.isError, moved.text).toBe(false);
     const lines = moved.text.trim().split("\n");
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(5);
+    expect(lines[3]).toMatch(new RegExp(`^moved ${escape(dir)}/plain\\.txt to ${escape(dir)}/Sub/plain\\.txt\\b`));
+    expect(lines[4]).toMatch(new RegExp(`^moved ${escape(dir)}/Folder/? to ${escape(dir)}/Sub/Folder/?[; ]`));
     expect(lines[0]).toMatch(new RegExp(`^moved ${escape(dir)}/A\\.md to ${escape(dir)}/Sub/A\\.md; `));
     expect(lines[1]).toMatch(new RegExp(`^moved ${escape(dir)}/Other/C\\.md to ${escape(dir)}/Sub/C\\.md; `));
     expect(lines[2]).toBe(`moved ${dir}/B.md to ${dir}/Sub/B.md; no links needed rewriting`);
@@ -370,6 +444,8 @@ test("memory: rm and mv take several paths, each on its own @memory", async ({ m
     expect(read.text).toContain(`see [c](/${folder}/Sub/C.md)\n`);
     expect(read.text).toContain(`back to [a](/${folder}/Sub/A.md)\n`);
     expect((await mcp.sh(`ls ${dir}`)).text.trim().split("\n")).toEqual(["Sub/"]);
+    expect((await mcp.sh(`ls ${dir}/Sub`)).text.trim().split("\n").sort()).toEqual(["A.md", "B.md", "C.md", "Folder/", "plain.txt  text 6 B"]);
+    expect((await mcp.sh(`ls ${dir}/Sub/Folder`)).text.trim().split("\n")).toEqual(["F.md"]);
 
     // A folder with notes needs no -r, and has none.
     const folderRm = await mcp.sh(`rm ${dir}/Sub`);
@@ -384,10 +460,12 @@ test("memory: rm and mv take several paths, each on its own @memory", async ({ m
     expect(rmLines[0]).toMatch(new RegExp(`^removed ${escape(dir)}/Sub/A\\.md; it stays in the trash for 30 days`));
     expect(rmLines[1]).toBe(`rm: ${dir}/Sub/Nope.md: No such file or directory`);
     expect(rmLines[2]).toMatch(new RegExp(`^removed ${escape(dir)}/Sub/B\\.md; it stays in the trash for 30 days`));
-    expect((await mcp.sh(`ls ${dir}/Sub`)).text.trim().split("\n")).toEqual(["C.md"]);
+    expect((await mcp.sh(`ls ${dir}/Sub`)).text.trim().split("\n").sort()).toEqual(["C.md", "Folder/", "plain.txt  text 6 B"]);
   } finally {
-    await mcp.sh(`rm ${dir}/A.md ${dir}/B.md ${dir}/Other/C.md ${dir}/Sub/A.md ${dir}/Sub/B.md ${dir}/Sub/C.md`);
-    await mcp.sh(`rm ${dir}/Sub ${dir}/Other`);
+    for (const at of [dir, `${dir}/Sub`]) {
+      await mcp.sh(`rm ${["A.md", "B.md", "Other/C.md", "C.md", "plain.txt", "Folder/F.md"].map((p) => `${at}/${p}`).join(" ")}`);
+    }
+    await mcp.sh(`rm ${dir}/Sub/Folder ${dir}/Folder ${dir}/Sub ${dir}/Other`);
   }
 });
 
