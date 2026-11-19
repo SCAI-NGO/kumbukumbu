@@ -111,6 +111,8 @@ test("deeplinks: a link opened without a session leads to the sign-in @deeplinks
     await page.goto(link);
     const { pathname } = new URL(link);
     await expect(page).toHaveURL(`${new URL(link).origin}/signin?next=${encodeURIComponent(pathname)}`);
+    // The sign-in page has rendered, so the absences below are of a page, not of a blank screen.
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Private" })).toHaveCount(0);
     await expect(page.getByText("Not for strangers.")).toHaveCount(0);
   } finally {
