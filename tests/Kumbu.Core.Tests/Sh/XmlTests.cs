@@ -240,6 +240,18 @@ public class XmlTests
     }
 
     [Fact]
+    public async Task A_union_over_a_large_feed_finishes_well_within_the_budget()
+    {
+        // A union sorts its nodes into document order: a navigator that compared positions by walking siblings took
+        // 15 seconds for 50,000 pairs, so 100,000 would run into the budget.
+        var items = string.Concat(Enumerable.Range(1, 100_000).Select(i => $"<item><title>t{i}</title><link>l{i}</link></item>"));
+        _store.AddTextFile("/Work/feed.xml", $"<rss><channel>{items}</channel></rss>");
+
+        Assert.Equal(ShellResult.Ok("200000"), await Run("xml --count /Work/feed.xml '//item/title | //item/link'"));
+        Assert.StartsWith("t1\nl1\nt2\n", (await Run("xml /Work/feed.xml '//item/link | //item/title'")).Output);
+    }
+
+    [Fact]
     public async Task Printing_the_xml_of_nested_nodes_stops_at_the_output_limit()
     {
         // Each element's XML holds all below it: printed whole for every one, 20,000 nested elements would be 4 GB.

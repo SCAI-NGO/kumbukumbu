@@ -193,6 +193,13 @@ public sealed partial class Xml(INoteReader notes) : ICommand
 
         public override bool IsSamePosition(XPathNavigator other) => other is Guarded guarded && inner.IsSamePosition(guarded.Inner);
 
+        // The inner navigator compares by its nodes' place in the document; the base class walks siblings to find out,
+        // which made sorting a union quadratic.
+        public override XmlNodeOrder ComparePosition(XPathNavigator? other) =>
+            other is Guarded guarded ? Step().ComparePosition(guarded.Inner) : XmlNodeOrder.Unknown;
+
+        public override bool IsDescendant(XPathNavigator? other) => other is Guarded guarded && Step().IsDescendant(guarded.Inner);
+
         public override bool MoveTo(XPathNavigator other) => other is Guarded guarded && Step().MoveTo(guarded.Inner);
 
         public override bool MoveToFirstAttribute() => Step().MoveToFirstAttribute();
