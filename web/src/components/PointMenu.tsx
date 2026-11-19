@@ -13,8 +13,9 @@ export interface MenuPoint {
 /**
  * `Menu`'s list at a point instead of a button, a context menu: at the caret, say. It opens to the right of the point
  * and below it, flips to the left and above where there is no room, and scrolls within the side with more room where
- * it fits on neither. The focus starts on the first item; Escape, Tab past either end, a tap outside, a scroll or a
- * resize close it (`onClose`, which puts the focus back), as does a chosen item, before it runs.
+ * it fits on neither, and is placed again when its items or its size change. The focus starts on the first item, once
+ * the list is placed and visible; Escape, Tab past either end, a tap outside, a scroll or a resize close it (`onClose`,
+ * which puts the focus back), as does a chosen item, before it runs.
  */
 export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoint; onClose(): void }) {
   const { left, top, bottom = top } = props.at;
@@ -23,7 +24,8 @@ export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoi
   const close = useRef(props.onClose);
   close.current = props.onClose;
 
-  useLayoutEffect(() => {
+  // Placed again when its items or its size change: items that arrive after it opens make it taller.
+  const place = () => {
     const box = list.current!.getBoundingClientRect();
     // Its whole height, not the part its limit shows: the scroll height once it scrolls.
     const height = Math.max(box.height, list.current!.scrollHeight);
@@ -36,14 +38,29 @@ export function PointMenu(props: { label: string; items: MenuItem[]; at: MenuPoi
     const shown = Math.min(height, maxHeight);
     // On screen whatever the point: a caret scrolled out of the editor's view stands outside the window.
     const within = (at: number, size: number, room: number) => Math.max(8, Math.min(at, room - 8 - size));
-    setPlaced({
+    const next = {
       left: within(left + box.width + 8 <= window.innerWidth ? left : left - box.width, box.width, window.innerWidth),
       top: within(down ? below : above - shown, shown, window.innerHeight),
       maxHeight,
-    });
-    itemButtons(list.current)[0]?.focus();
+    };
+    setPlaced((p) => (p && p.left === next.left && p.top === next.top && p.maxHeight === next.maxHeight ? p : next));
+  };
+  useLayoutEffect(place, [left, top, bottom, props.items]);
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    observer.observe(list.current!);
+    return () => observer.disconnect();
+  }, [left, top, bottom]);
 
-    // The point stays where it was; what it stood for moves with a scroll or a resize.
+  // Once it is visible: a browser doesn't focus a hidden element. Placing it again leaves the focus where it is.
+  const visible = placed !== null;
+  useLayoutEffect(() => {
+    if (visible) itemButtons(list.current)[0]?.focus();
+  }, [visible]);
+
+  // The point stays where it was; what it stood for moves with a scroll or a resize.
+  useLayoutEffect(() => {
     const onScroll = (e: Event) => !list.current?.contains(e.target as Node) && close.current();
     const onResize = () => close.current();
     window.addEventListener("scroll", onScroll, true);

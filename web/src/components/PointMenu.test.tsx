@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { History, Pencil } from "lucide-react";
@@ -7,14 +7,20 @@ import { PointMenu } from "./PointMenu";
 
 const rect = (r: Partial<DOMRect>) => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON() {}, ...r }) as DOMRect;
 
-/** jsdom has no layout: the viewport is 1000 × 800 and the list 192 × `height`. */
-function layout(height = 120) {
+/** jsdom has no layout: the viewport is 1000 × 800 and the list 192 × `height` (of the list, given as a function). */
+function layout(height: number | ((list: HTMLElement) => number) = 120) {
   vi.stubGlobal("innerHeight", 800);
   vi.stubGlobal("innerWidth", 1000);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    return this.getAttribute("role") === "menu" ? rect({ width: 192, height }) : rect({});
+    if (this.getAttribute("role") !== "menu") return rect({});
+    return rect({ width: 192, height: typeof height === "number" ? height : height(this) });
   });
 }
+
+/** 36 px an item: jsdom's scroll height is 0, so the list's height follows its items. */
+const byItems = (list: HTMLElement) => 36 * list.querySelectorAll("[role=menuitem]").length;
+
+const many = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `Item ${i + 1}`, icon: Pencil, onSelect: vi.fn() }));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -93,5 +99,61 @@ describe("PointMenu", () => {
     const menu = screen.getByRole("menu");
     expect(menu.style.top).toBe(`${800 - 8 - 120}px`);
     expect(menu.style.left).toBe("8px");
+  });
+
+  it("is_placed_again_when_its_items_change_and_keeps_the_focus_where_it_is", async () => {
+    layout(byItems);
+    const at = { left: 300, top: 700 };
+    const { rerender } = render(<PointMenu label="Note actions" items={many(2)} at={at} onClose={vi.fn()} />);
+    const menu = screen.getByRole("menu");
+    expect(menu.style.top).toBe("704px");
+    // Twelve items, 432 px: no room below, so above the point, ending at it.
+    rerender(<PointMenu label="Note actions" items={many(12)} at={at} onClose={vi.fn()} />);
+    expect(menu.style.top).toBe(`${700 - 4 - 432}px`);
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Item 2" })).toHaveFocus();
+    // Placed again, taller: the focus stays on the second item.
+    rerender(<PointMenu label="Note actions" items={many(13)} at={at} onClose={vi.fn()} />);
+    expect(menu.style.top).toBe(`${700 - 4 - 468}px`);
+    expect(screen.getByRole("menuitem", { name: "Item 2" })).toHaveFocus();
+  });
+
+  it("is_placed_again_when_its_size_changes", () => {
+    // jsdom has no ResizeObserver: this one reports a change in size when asked.
+    let resized = () => {};
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe() {}
+        disconnect() {
+          resized = () => {};
+        }
+      },
+    );
+    let height = 72;
+    layout(() => height);
+    render(<PointMenu label="Note actions" items={items()} at={{ left: 300, top: 700 }} onClose={vi.fn()} />);
+    const menu = screen.getByRole("menu");
+    expect(menu.style.top).toBe("704px");
+    height = 432;
+    act(() => resized());
+    expect(menu.style.top).toBe(`${700 - 4 - 432}px`);
+  });
+
+  it("focuses_the_first_item_only_once_it_is_visible", () => {
+    layout();
+    // A browser doesn't focus a hidden element, jsdom does: record whether the list was hidden at each focus.
+    const focus = HTMLElement.prototype.focus;
+    const hidden: [string, boolean][] = [];
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      hidden.push([this.textContent ?? "", this.closest<HTMLElement>("[role=menu]")?.style.visibility === "hidden"]);
+      focus.call(this, options);
+    });
+    render(<PointMenu label="Note actions" items={items()} at={{ left: 300, top: 200 }} onClose={vi.fn()} />);
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toHaveFocus();
+    expect(hidden).toEqual([["Rename", false]]);
   });
 });
