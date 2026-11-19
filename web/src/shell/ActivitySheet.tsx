@@ -67,7 +67,7 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
             </button>
           </>
         ) : (
-          <CompareVersions path={chosen.path} version={chosen.version} before={chosen.before} trashed={chosen.trashed} beforeLost={chosen.beforeLost} />
+          <CompareVersions path={chosen.path} kind={kindOf(chosen)} version={chosen.version} before={chosen.before} trashed={chosen.trashed} beforeLost={chosen.beforeLost} />
         )}
       </Sheet>
     );

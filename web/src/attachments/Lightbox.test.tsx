@@ -289,6 +289,12 @@ describe("Lightbox", () => {
     expect(writeText).toHaveBeenCalledWith("[[data.xlsx]]");
   });
 
+  it("goes by the server's kind: a .csv of bytes in an ordinary vault named Skills is a file", async () => {
+    api({ "GET /api/version/*": () => json(200, { ...fileInfo("/Skills/x/data.csv"), kind: "file", mediaType: "application/octet-stream", width: undefined, height: undefined }) });
+    renderApp(opened("/Skills/x/data.csv", ["/Skills/x/data.csv"]));
+    expect(await screen.findByText("No preview for this file")).toBeInTheDocument();
+  });
+
   it("downloads by a button, from the bar and the menu, with no link that names the vault", async () => {
     api();
     renderApp(opened("/W/shots/b.png"));

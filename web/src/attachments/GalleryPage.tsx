@@ -5,8 +5,8 @@ import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, u
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useDeleteFile, useMayChange, useTree, type TreeFolder } from "../api/notes";
-import { fileKindOf, folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { fileKindOfEntry, useDeleteFile, useMayChange, useTree, type TreeFolder } from "../api/notes";
+import { folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { folderOrder, textOrder } from "../api/textOrder";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import ConfirmTyped from "../components/ConfirmTyped";
@@ -62,7 +62,7 @@ export interface GalleryFile {
 /** Every image and PDF in the folder and below it. */
 function filesOf(folder: TreeFolder): GalleryFile[] {
   const here = folder.notes
-    .filter((n) => ["image", "pdf"].includes(fileKindOf(n.path)))
+    .filter((n) => ["image", "pdf"].includes(fileKindOfEntry(n)))
     .map((n) => ({ path: n.path, name: n.name, size: Number(n.size), version: n.version ?? undefined, writtenAt: n.writtenAt ?? undefined }));
   return [...here, ...folder.folders.flatMap(filesOf)];
 }

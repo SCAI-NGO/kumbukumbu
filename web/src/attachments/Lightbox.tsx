@@ -3,8 +3,9 @@ import { ChevronLeft, ChevronRight, Download, Ellipsis, File as FileIcon, Folder
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCheckpointTree } from "../api/history";
-import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
+import { fileKindOfEntry, findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
+import { noPreviewText } from "../components/fileKindIcon";
 import { Menu } from "../components/Menu";
 import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
@@ -70,7 +71,9 @@ export default function Lightbox() {
   const shownVersion = version ? history.data?.find((v) => v.version === version) : undefined;
   const checkpointRoot = checkpoint ? checkpointTree.data?.root : undefined;
   const checkpointFile = checkpointRoot && findFolder(checkpointRoot, folderOf(path))?.notes.find((n) => n.path === path);
-  const kind = fileKindOf(path, vault);
+  // The server's kind once it is known (it knows which vault holds skills), until then the path's.
+  const served = readOnly ? (shownVersion ?? checkpointFile) : info.data;
+  const kind = served ? fileKindOfEntry(served) : fileKindOf(path, vault);
   const name = titleOf(path);
 
   const [showInfo, setShowInfo] = useState(false);
@@ -332,7 +335,7 @@ function FileCard({ name, size, onDownload }: { name: string; size?: number; onD
       <FileIcon size={48} strokeWidth={1.5} aria-hidden className="text-[#a09d96]" />
       <p className="max-w-full text-[15px] font-medium [overflow-wrap:anywhere]">{name}</p>
       {size !== undefined && <p className="text-[13px] text-[#a09d96]">{sizeText(size)}</p>}
-      <p className="text-[13px] text-[#a09d96]">No preview for this file</p>
+      <p className="text-[13px] text-[#a09d96]">{noPreviewText}</p>
       <button
         type="button"
         onClick={onDownload}

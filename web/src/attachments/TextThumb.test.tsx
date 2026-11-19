@@ -25,3 +25,9 @@ it.each(["/Work/data.xlsx", "/Work/IMG_0001.HEIC", "/Work/Makefile"])("shows the
   expect(container.querySelector("svg.lucide-file[aria-label='the file']")).not.toBeNull();
   vi.unstubAllGlobals();
 });
+
+it("takes the server's kind over the one its path suggests", () => {
+  // An ordinary vault named Skills: its .csv of bytes is a file, though the path reads as a skill's text.
+  const { container } = render(<FileThumb vault="Skills" path="/Skills/x/data.csv" kind="file" alt="the file" />);
+  expect(container.querySelector("svg.lucide-file[aria-label='the file']")).not.toBeNull();
+});
