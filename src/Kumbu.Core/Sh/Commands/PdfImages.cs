@@ -50,16 +50,17 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
           --list            only list the images: page, number, pixel size, where on the page in points; writes nothing
           --all             also the small ones (under 1 % of their page: bullets, rules, icons), left out otherwise
           An image is stored at 8 megapixels at most (a larger one is scaled down, and the output says from what), as
-          a PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
+          a PNG, or a JPEG where the PNG would pass {AttachmentFormat.MaxBytes / (1024 * 1024)} MB. An image painted on several pages is stored once, its line
           naming every page; duplicates are found within one call, so a later call stores a repeated image again.
           It stores at most {MaxImages} images in one call; for more, it stores nothing and names a page range that fits;
           when the first page alone has more than {MaxImages}, it suggests storing its pictures in regions with --crop.
           pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
           can't be read: the output names their pages, to look at with pdf --crop. A long PDF stops early, the last
-          line naming the pages to go on with: --list stops after about {Seconds(Budget / 2)} seconds; storing stops at the first
-          page boundary after {Seconds(Budget)} seconds; after {Seconds(Ceiling)} it stops even within a page, and names that page as
-          partly stored. A call stopped within a page says which of its files are stored. A writing command: it
-          needs write access to the folder.
+          line naming the pages to go on with: --list stops after about {Seconds(Budget / 2)} seconds; a call that stores lists its pages
+          first, also for about {Seconds(Budget / 2)} seconds, and stores only those listed; storing stops at the first page boundary
+          after {Seconds(Budget)} seconds; after {Seconds(Ceiling)} it stops even within a page, and names that page as partly stored.
+          A call stopped within a page says which of its files are stored. A writing command: it needs write access
+          to the folder.
 
           pdfimages --list "/Work/Pump manual.pdf" 1-10
           pdfimages "/Work/Pump manual.pdf" 1-10 "/Work/Pump manual/images/"

@@ -41,9 +41,9 @@ public sealed class Html(INoteReader notes) : ICommand
           Nothing a page refers to is fetched and no script runs: html reads the file as it is.
           Parsing the page, and a selector's matching and printing, stop after {Seconds}; reading the file and the
           outline have no time limit. Matching is linear for combinators; a few pseudo-classes (:nth-child()) cost
-          more and are stopped by that time limit. Inside :not() and :is() only >
-          and + combine selectors, as a space or ~ there would try every ancestor or sibling of every element;
-          inside :has() only type, class, id and attribute selectors, combined by > or in :not() and :is().
+          more and are stopped by that time limit. Inside :not() and :is() only > and + combine selectors, as a
+          space or ~ there would try every ancestor or sibling of every element; inside :has() only type, class,
+          id and attribute selectors, combined by > or in :not() and :is().
           A selector is at most {CssSelection.MaxLength.ToString("N0", CultureInfo.InvariantCulture)} characters long, with at most {CssSelection.MaxAlternatives} alternatives.
 
           html /Work/page.html

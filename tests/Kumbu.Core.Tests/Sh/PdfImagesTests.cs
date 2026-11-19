@@ -1250,7 +1250,10 @@ public class PdfImagesTests
         Assert.Equal(TimeSpan.FromSeconds(50), command.Ceiling);
         Assert.Equal(500, PdfImages.MaxImages);
         Assert.Contains("--list stops after about 10 seconds", help);
+        Assert.Contains("a call that stores lists its pages first, also for about 10 seconds, and stores only those listed", help);
         Assert.Contains("storing stops at the first page boundary after 20 seconds; after 50 it stops even within a page, and names that page as partly stored", help);
+        Assert.Equal(15, AttachmentFormat.MaxBytes / (1024 * 1024));
+        Assert.Contains("a JPEG where the PNG would pass 15 MB", help);
         Assert.DoesNotContain("stops after about 20 seconds", help);
         Assert.Contains("<pdf name>-p<page>-<n>.png (.jpg where it is stored as a JPEG)", help);
         Assert.Contains("when the first page alone has more than 500, it suggests storing its pictures in regions with --crop", help);
