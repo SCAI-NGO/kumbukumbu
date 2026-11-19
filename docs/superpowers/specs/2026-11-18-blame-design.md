@@ -1,6 +1,6 @@
 # Who wrote what (`blame`) — design
 
-Date: 2026-11-18. Status: decisions by Chris on 2026-11-18 (§3); the rest is Claude's proposal, marked *(Claude's call)*, open to correction. Size: M (server record, `sh`, REST, a web window).
+Date: 2026-11-18. Status: approved by Chris on 2026-11-18 ("ja zu allem"), decisions in §3; the points marked *(Claude's call)* were approved with it. Size: M (server record, `sh`, REST, a web window).
 
 Sources:
 - the idea and the UX review with Chris's answers: `/SWE/Kumbu/Ideas/Who wrote what 2026-11-08.md`;
@@ -265,7 +265,7 @@ Then the 0.6.0 changelog entry in Kumbu² (`/SWE/Kumbu/Versions/`), the day the 
 ## 12. UX re-read, as a user who expects Kumbu² to be human-centric
 
 - **Brita, polishing her protocol.** She opens "Who wrote what" and sees her sections and the agent's, named, in her text's order. Good. Where the agent fixed one typo of hers, the section reads "Brita and others": true, and the detail shows it is one line. Acceptable; a threshold would hide exactly what she checks.
-- **She renamed a note the protocol links to.** The lines holding those links now read "Brita (mv)" if she renamed it, or the agent's name with "(mv)" if it did. By the rule (decision 5) that is right, and the mark says why; it could still surprise. **Open point for Chris:** should a rewrite Kumbu² makes on its own (mv's links) keep the line's writer? It would be an exception to the one rule.
+- **She renamed a note the protocol links to.** The lines holding those links now read "Brita (mv)" if she renamed it, or the agent's name with "(mv)" if it did. By the rule (decision 5) that is right, and the mark says why; it could still surprise. **Decided by Chris on 2026-11-18: no exception.** mv's rewrite gives the line to the mover, marked "(mv)", because one rule holds (decision 5) and the anti-goal forbids a changed line under an earlier writer; the mark says what happened.
 - **The day of the upgrade.** Older lines read "earlier than …" with one plain sentence why; nothing claims more than is known.
 - **Duplicate of a protocol** makes every line hers. Right for templates; for a "Protocol v2" it loses the agent's part in the copy, while the original keeps it. Worth a line in the help of `blame`, not more for now.
 - **The word.** The web app never says "blame"; it says "Who wrote what". Only the console has `blame`, for agents and those who know git.
@@ -284,6 +284,5 @@ Then the 0.6.0 changelog entry in Kumbu² (`/SWE/Kumbu/Versions/`), the day the 
 
 ## 14. Open points
 
-- Whether mv's link rewrite keeps the line's writer (§12), Chris to decide.
 - Rendering a section on its own breaks footnotes and reference-style links whose definition sits in another section; accepted for a read-only view, to revisit if it shows.
 - A checkpoint restore of a removed note gives every line to the restorer; a record per checkpoint note would keep them, at a small cost, if people miss it.
