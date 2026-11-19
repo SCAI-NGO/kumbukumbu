@@ -39,6 +39,8 @@ public sealed class Html(INoteReader notes) : ICommand
           --attr <name>  the value of one attribute; elements without it are left out
           --count        how many elements the selector picks
           Nothing a page refers to is fetched and no script runs: html reads the file as it is.
+          A call stops after 10 seconds. Inside :has() only > combines selectors, inside :not() and :is()
+          only > and +, as a space or ~ there would try every ancestor or sibling of every element.
 
           html /Work/page.html
           html /Work/page.html 'table.costs'

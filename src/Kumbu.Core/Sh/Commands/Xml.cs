@@ -50,7 +50,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
                              element declares work as they are, and the document's default namespace is the prefix d:
                              in an Atom feed, //d:entry/d:title. XPath names an element without a prefix only in no namespace.
           A document with a DTD (<!DOCTYPE …>) is refused: Kumbu² neither expands its entities nor reads anything
-          outside the file.
+          outside the file. A call stops after 10 seconds.
 
           xml /Work/feed.xml
           xml /Work/feed.xml '//item/title'
