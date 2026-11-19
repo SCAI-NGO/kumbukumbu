@@ -12,26 +12,31 @@
 //    vaults are shown → "palette: …" (the favourites answer read back, the empty palette as without favourites).
 // 2. The palette's vaults and notes follow the discreet state → "palette: …" (Zahnarzt and Home's rows gone).
 // 3. Hiding the vaults again closes an open palette or drops its rows of hidden vaults at once → "palette: hidden from
-//    elsewhere while the palette is open … (F-10)", fixme while F-10 stands.
+//    elsewhere while it is open, the palette closes …"; where the address goes then is "palette: hidden from elsewhere
+//    … the address leaves the note (F-10)", fixme while F-10 stands.
 // 4. Recent in the empty palette: a discreet note opened before is not offered once hidden → "palette: …".
 // Workspace (2026-11-18-workspace-design.md, anti-goal 3, §3 "Discreet vaults"):
 // 5. Hiding closes a pane whose note is in a discreet vault, both panes alike → "split view: …" (right, then left).
-// 6. A discreet vault named in `?beside=` makes the address neutral (`/discreet`) → "split view: …".
+// 6. A discreet vault named in `?beside=` makes the address neutral (`/discreet`), opened from the palette or loaded as
+//    an address → "split view: …".
 // 7. The side panel follows the focused pane, so nothing of the closed pane stays in it → "split view: …". The spec
 //    promises nothing more of the panel (a Work note can't link into Home: links resolve within a vault).
 // Windows (2026-11-17-windows-over-the-notes-design.md, "A discreet vault hiding while a window is open"):
 // 8. A window's content follows the discreet state → "windows: hidden with ✕ …" (What's on, Recent, Settings' Vaults and
-//    Security). Hidden while a window is open, the window stays and ✕ then shows the vault list → "windows: hidden from
-//    elsewhere while a window is open … (F-10, F-11)", fixme while F-10 stands (the pill is out of reach under a window).
+//    Security). Hidden while a window is open, the window stays without Home → the same test, its second half (What's
+//    on, hidden from elsewhere: the pill is out of reach under a window); ✕ then shows the vault list, and Recent and
+//    Settings after it → "windows: hidden from elsewhere while a window is open … (F-10, F-11)", fixme while F-10 stands.
 // Console (2026-11-18-console-autocomplete-design.md, "Data"; the console resets on hiding):
 // 9. Completion's listings go with the reset: `cat /H` Tab completes nothing, the vaults listed by Tab or offered as
 //    chips leave Home out → "console: …".
+// Console peek (2026-11-18-console-shortcuts-and-peek-design.md): a peeked note of a discreet vault leaves nothing of
+// itself on screen once hidden → "console: …" (`p /Home/Zahnarzt.md`, then neither its text nor its name).
 // Note deep links (2026-11-17-note-deep-links-design.md, rule 4):
 // 10. A link into a discreet vault not revealed leads to the one "Not here" page, word for word the page of a vault that
 //     doesn't exist → "deep links: …"; shown, the same link opens the note under the neutral address.
-// Left out: the peeked note collapsing to "(a note that's hidden again)" (console shortcuts spec): `p` peeks a note
-// inline, and the console's reset on hiding clears the scrollback before such a line could be seen in a browser (covered
-// by the web app's unit tests); the split view and the side panel on the phone (they exist from 1280 px only).
+// Left out: the peek's neutral line "(a note that's hidden again)": a render may come before the console's reset or not,
+// a timing the spec leaves open, so the test asserts only that nothing of the note stays; the split view and the side
+// panel on the phone (they exist from 1280 px only).
 import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { guarded } from "../support/api";
@@ -158,7 +163,7 @@ test("discreet-0-6-0 palette: Home's favourite and rows leave with the hide and 
     await expect(page.getByText("Zahnarzt")).toHaveCount(0);
 
     // Opened again: as if she had no favourite at all, Recent without Zahnarzt, and no row of Home's.
-    if (!(await paletteDialog(page).count())) await openPalette(page);
+    await openPalette(page);
     await expect(paletteDialog(page).getByText("Star anything here to keep it on top.")).toBeVisible();
     await expect(paletteDialog(page).getByRole("group", { name: "Favourites" })).toHaveCount(0);
     await expect(paletteDialog(page).getByRole("group", { name: "Recent" }).getByRole("option", { name: `${note.name}, Work / ${folder}` })).toBeVisible();
@@ -193,8 +198,30 @@ test("discreet-0-6-0 palette: Home's favourite and rows leave with the hide and 
   }
 });
 
-// F-10, a race: seen in about 2 of 5 runs on the phone and 1 of 10 on the desktop; with the palette closed before the
-// hide, 5 of 5 passed. Evidence: every history.pushState/replaceState recorded with an init script shows exactly one
+test("discreet-0-6-0 palette: hidden from elsewhere while it is open, the palette closes and offers nothing of Home @palette @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
+  const { page } = await start(freshSession, aliceApi, folder);
+  try {
+    await reveal(page, testInfo);
+    await runFromPalette(page, "Zahnarzt", "Zahnarzt, Home");
+    await expect(page.locator("article").getByRole("heading", { name: "Zahnarzt", level: 1 })).toBeVisible();
+    await openPalette(page);
+    await paletteField(page).fill("Zahnarzt");
+    await expect(paletteDialog(page).getByRole("option", { name: "Zahnarzt, Home", exact: true })).toBeVisible();
+
+    // The hide closes it in the same step as it forgets the vaults (hideAgain), whatever the address does after (F-10).
+    await hideElsewhere(page);
+    await expect(paletteDialog(page)).toHaveCount(0);
+    await expect(page.getByRole("option", { name: /Zahnarzt/ })).toHaveCount(0);
+  } finally {
+    await endHidden(page);
+  }
+});
+
+// F-10, a race, and not one of the open palette's. Hidden from elsewhere with the palette open (this test's steps): the
+// address kept the Home note in 2 of 5 repeats on the phone, and in about 1 of 10 runs on the desktop. Hidden from
+// elsewhere with the palette closed: 5 of 5 repeats on the phone were clean, then the next run on the phone kept the
+// address too, and another put Zahnarzt back into the palette's Recent while hidden. Under a window: see the windows
+// fixme test. Hidden with ✕ in the tab itself, it was never seen (the green tests). Evidence: every history.pushState/replaceState recorded with an init script shows exactly one
 // write after the hide, `replaceState /notes/Home/Zahnarzt.md`, from React Router's history.replace (a
 // `navigate(…, { replace: true })`), made once the discreet state was reset, so the neutral window let it through; the
 // page then says "There is no such note" under that address. Likely places: web/src/discreet/hideAgain.ts:183-201 (the
@@ -202,8 +229,8 @@ test("discreet-0-6-0 palette: Home's favourite and rows leave with the hide and 
 // palette closes (web/src/palette/Palette.tsx, the URL effects in web/src/shell/MobileShell.tsx around line 336); and
 // web/src/discreet/neutralWindow.ts write(), which guards a replace without a URL only, not one naming a vault that was
 // discreet a moment before.
-test("discreet-0-6-0 palette: hidden from elsewhere while the palette is open, the address leaves the note (F-10) @palette @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
-  test.fixme(true, "F-10 (High, bug, intermittent): hidden from elsewhere while the palette is open, the address bar shows /notes/Home/Zahnarzt.md in the clear; about 2 in 5 phone runs, 1 in 10 desktop; one replaceState to /notes/Home/… after the reset");
+test("discreet-0-6-0 palette: hidden from elsewhere (here with the palette open), the address leaves the note (F-10) @palette @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
+  test.fixme(true, "F-10 (High, bug, intermittent): hidden from elsewhere, palette open or not, the address bar can show /notes/Home/Zahnarzt.md in the clear; with the palette open about 2 in 5 phone runs, 1 in 10 desktop; one replaceState to /notes/Home/… after the reset");
   const { context, page, note } = await start(freshSession, aliceApi, folder);
   try {
     await reveal(page, testInfo);
@@ -250,8 +277,15 @@ async function outline(page: Page): Promise<Locator> {
 test("discreet-0-6-0 split view: a Home note in either pane leaves the address neutral and closes on the hide, the side panel with it @workspace @serial", async ({ freshSession, aliceApi, folder }) => {
   const { page, note } = await start(freshSession, aliceApi, folder);
   try {
-    // Zahnarzt beside the Work note (Ctrl+Enter in the palette): the address names neither pane.
     await reveal(page, test.info());
+    // Zahnarzt in ?beside=, loaded as an address while shown: its pane shows it, and the address bar turns neutral.
+    await page.goto(splitUrl(note.path, zahnarzt));
+    await expect(pane(page, "right").getByRole("heading", { name: "Zahnarzt", level: 1 })).toBeVisible();
+    await expect(pane(page, "left").getByRole("heading", { name: "Desk", level: 1 })).toBeVisible();
+    await expect(page).toHaveURL(`${baseURL}/discreet`);
+
+    // Zahnarzt beside the Work note (Ctrl+Enter in the palette): the address names neither pane.
+    await openNote(page, note.path);
     await openPalette(page);
     await paletteField(page).fill("Zahnarzt");
     await expect(paletteDialog(page).getByRole("option", { name: "Zahnarzt, Home", exact: true })).toBeVisible();
@@ -305,15 +339,28 @@ const windowNamed = (page: Page, name: string) => page.getByRole("dialog", { nam
 const whatsOnItem = (page: Page, title: string) =>
   windowNamed(page, "What's on").getByRole("list").first().getByRole("listitem").filter({ has: page.getByRole("link", { name: title, exact: true }) });
 
-/** Zahnarzt overdue, through this session, which shows Home; and an agent for Home that takes the date off whatever happens. */
-async function datedZahnarzt(context: BrowserContext) {
-  const home = await makeAgent({ Home: "write" }, "discreet", context);
-  const set = await guarded(
-    () => context.request.post("/api/vaults/Home/calendar/set", { data: { path: zahnarzt, when: addDays(today(), -1), task: true }, headers }),
-    "POST calendar set",
-  );
+/** An overdue to-do, set through this session. */
+async function overdue(context: BrowserContext, path: string) {
+  const vault = path.split("/")[1];
+  const set = await guarded(() => context.request.post(`/api/vaults/${vault}/calendar/set`, { data: { path, when: addDays(today(), -1), task: true }, headers }), "POST calendar set");
   expect(set.status()).toBe(200);
+}
+
+/**
+ * Zahnarzt and the Desk note overdue, through this session, which shows Home; and an agent for Home that takes
+ * Zahnarzt's date off whatever happens (the Desk note goes in afterEach). The Desk note's entry says What's on has loaded.
+ */
+async function datedNotes(context: BrowserContext, deskPath: string) {
+  const home = await makeAgent({ Home: "write" }, "discreet", context);
+  await overdue(context, zahnarzt);
+  await overdue(context, deskPath);
   return home;
+}
+
+/** What's on has answered: no "Loading …", and the Desk note's entry is there. Before every check of what it lacks. */
+async function whatsOnLoaded(page: Page, deskName: string) {
+  await expect(windowNamed(page, "What's on").getByText(/^Loading/)).toHaveCount(0);
+  await expect(whatsOnItem(page, deskName)).toBeVisible();
 }
 
 /** Shown: Zahnarzt open, and the windows over it (Settings' Vaults, Recent, What's on) name Home. */
@@ -360,12 +407,12 @@ async function endWindows(page: Page, home: Awaited<ReturnType<typeof makeAgent>
   }
 }
 
-test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings show nothing of Home, and ✕ goes back to the note @windows @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
+test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings show nothing of Home; hidden from elsewhere under What's on, it stays without Home @windows @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
   const { context, page, note } = await start(freshSession, aliceApi, folder);
   let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {
     await reveal(page, testInfo);
-    home = await datedZahnarzt(context);
+    home = await datedNotes(context, note.path);
     await windowsShowHome(page);
 
     // ✕ on the pill, from the Work note (under a window the pill can't be reached; hidden while one is open is F-10's test).
@@ -373,6 +420,7 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
     await hideDiscreet(page);
     await runFromPalette(page, "what's on", "What's on, Open");
     await expect(windowNamed(page, "What's on")).toBeVisible();
+    await whatsOnLoaded(page, note.name);
     await expect(windowNamed(page, "What's on")).not.toContainText("Zahnarzt");
     await expect(windowNamed(page, "What's on")).not.toContainText("Home");
     const settings = await windowsWithoutHome(page);
@@ -385,12 +433,27 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
     await expect(windowNamed(page, "Recent changes")).toBeVisible();
     await windowNamed(page, "Recent changes").getByRole("button", { name: "Close" }).click();
     await expect(windowNamed(page, "What's on")).toBeVisible();
+    await whatsOnLoaded(page, note.name);
     await expect(windowNamed(page, "What's on")).not.toContainText("Home");
     await windowNamed(page, "What's on").getByRole("button", { name: "Close" }).click();
     await expect(page.getByRole("dialog", { name: /^(Settings|Recent changes|What's on)$/ })).toHaveCount(0);
     await expect(page).toHaveURL(`${baseURL}${noteUrl(note.path)}`);
     await expect(page.locator("article").getByRole("heading", { name: "Desk", level: 1 })).toBeVisible();
     await expect(page.getByText("Zahnarzt")).toHaveCount(0);
+
+    // Shown again, What's on open over Zahnarzt, hidden from elsewhere: the window stays, without Home. Where the shell
+    // behind it goes, and ✕, are the fixme test's (F-10).
+    await reveal(page, testInfo);
+    await runFromPalette(page, "Zahnarzt", "Zahnarzt, Home");
+    await expect(page.locator("article").getByRole("heading", { name: "Zahnarzt", level: 1 })).toBeVisible();
+    await runFromPalette(page, "what's on", "What's on, Open");
+    await expect(whatsOnItem(page, "Zahnarzt")).toContainText("Home");
+    await hideElsewhere(page);
+    await expect(windowNamed(page, "What's on")).toBeVisible();
+    await whatsOnLoaded(page, note.name);
+    await expect(whatsOnItem(page, "Zahnarzt")).toHaveCount(0);
+    await expect(windowNamed(page, "What's on")).not.toContainText("Zahnarzt");
+    await expect(windowNamed(page, "What's on")).not.toContainText("Home");
   } finally {
     await endWindows(page, home);
   }
@@ -403,16 +466,17 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
 // waits here too.
 test("discreet-0-6-0 windows: hidden from elsewhere while a window is open over a Home note, the window stays without Home, and ✕ shows the vault list (F-10, F-11) @windows @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
   test.fixme(true, "F-10 (High, bug, intermittent): hidden from elsewhere under a window, the shell behind can go back to Home's note in the clear; then F-11 (Low, unclear): ✕ on a window over a note hidden again shows the last ordinary note, not the vault list the windows spec names");
-  const { context, page } = await start(freshSession, aliceApi, folder);
+  const { context, page, note } = await start(freshSession, aliceApi, folder);
   let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {
     await reveal(page, testInfo);
-    home = await datedZahnarzt(context);
+    home = await datedNotes(context, note.path);
     await windowsShowHome(page);
 
     // Hidden elsewhere: What's on stays open, without Home.
     await hideElsewhere(page);
     await expect(windowNamed(page, "What's on")).toBeVisible();
+    await whatsOnLoaded(page, note.name);
     await expect(whatsOnItem(page, "Zahnarzt")).toHaveCount(0);
     await expect(windowNamed(page, "What's on")).not.toContainText("Zahnarzt");
     await expect(windowNamed(page, "What's on")).not.toContainText("Home");
@@ -420,11 +484,10 @@ test("discreet-0-6-0 windows: hidden from elsewhere while a window is open over 
 
     // ✕: nothing of Home (F-10), then the spec's vault list (F-11).
     await settings.getByRole("button", { name: "Close" }).click();
-    await expect(windowNamed(page, "Settings"), "F-10: ✕ closes the window").toHaveCount(0);
-    await expect(page).not.toHaveURL(/\/discreet$|\/Home\//);
-    await expect(page.getByRole("button", { name: /^Switch vault|^Open file tree$/ }).first().or(page.getByRole("heading", { name: "Your vaults" }))).toBeVisible();
+    await expect(windowNamed(page, "Settings")).toHaveCount(0);
+    await expect(page, "F-10: the address names no discreet note").not.toHaveURL(/\/discreet$|\/Home\//);
     await expect(page.getByText("Zahnarzt"), "F-10: nothing of Zahnarzt").toHaveCount(0);
-    await expect(page.getByText("Home"), "F-10: nothing of Home").toHaveCount(0);
+    await expect(page.getByText("Home", { exact: true }), "F-10: nothing of Home").toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Your vaults" }), "F-11: ✕ on a window over a note hidden again shows the vault list").toBeVisible();
     await expect(page).toHaveURL(`${baseURL}/`);
     await expect(page.getByRole("list", { name: "Your vaults" }).getByRole("listitem")).toHaveText([/^Skills/, /^Welcome/, /^Work/]);
@@ -433,7 +496,7 @@ test("discreet-0-6-0 windows: hidden from elsewhere while a window is open over 
   }
 });
 
-test("discreet-0-6-0 console: completion forgets Home with the hide, by Tab and by the phone's chips @console @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
+test("discreet-0-6-0 console: completion and a peeked note forget Home with the hide, by Tab and by the phone's chips @console @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
   const { page } = await start(freshSession, aliceApi, folder);
   const command = page.getByRole("textbox", { name: "Command" });
   const output = page.getByRole("log", { name: "Console output" });
@@ -462,10 +525,16 @@ test("discreet-0-6-0 console: completion forgets Home with the hide, by Tab and 
     await command.fill("ls");
     await command.press("Enter");
     await expect(output).toContainText("Home");
+    await command.fill(`p ${zahnarzt}`);
+    await command.press("Enter");
+    await expect(output).toContainText("Check-up at the dentist.");
 
     // Hidden elsewhere, with the listings still fresh (they are kept 10 s): the console starts again, without Home.
     await hideElsewhere(page);
     await expect(output).not.toContainText("Home");
+    // Nothing of the peeked note stays (its neutral line, "(a note that's hidden again)", is left to the timing).
+    await expect(output).not.toContainText("Check-up");
+    await expect(output).not.toContainText("Zahnarzt");
     if (onPhone(testInfo)) {
       await command.fill("cat /");
       await expect(chips.getByRole("button", { name: "Work/", exact: true })).toBeVisible();

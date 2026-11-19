@@ -30,7 +30,8 @@
 // other vault the console reaches is ours to write); the cache's 10 s refresh (timing, Vitest); the row hiding while
 // a command runs (a read-only command answers in milliseconds, so no step can hold one running; Vitest); the chips'
 // phosphor colours and peek's brighter headings in Green and Amber (style without a promise a structural assertion can
-// read, beyond console #7's phosphor text colour); a peeked discreet note collapsing on hide (discreet task, @serial);
+// read, beyond console #7's phosphor text colour); a peeked discreet note on hide (e2e/discreet/discreet-0-6-0.spec.ts,
+// "console: …", @serial: nothing of it stays; its neutral line is left to the timing);
 // Mermaid as code and images in peek (the renderer's own tests).
 import type { Locator, Page } from "@playwright/test";
 import { encodePath, type Api } from "../support/api";
