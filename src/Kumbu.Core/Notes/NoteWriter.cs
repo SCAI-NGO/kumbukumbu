@@ -130,10 +130,16 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         {
             if (ForAttachments() is not { } files) return ShellResult.Error($"{tool}: {path.Name}: this server keeps no files besides notes") with { Kind = ShellErrorKind.Invalid };
             var (written, stored) = await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct);
-            // The attachment writer speaks as "upload"; this call was a write.
-            if (written.IsError && written.Output.StartsWith("upload:", StringComparison.Ordinal)) return written with { Output = tool + written.Output["upload".Length..] };
+            if (written.IsError)
+            {
+                // The attachment writer speaks as "upload"; this call was a write.
+                return written.Output.StartsWith("upload:", StringComparison.Ordinal)
+                    ? written with { Output = tool + written.Output["upload".Length..] }
+                    : written;
+            }
+
             // An attachment's versions have no message field: say so, unless the write made no version ("is unchanged").
-            return !written.IsError && message is not null && stored?.Version != version
+            return message is not null && stored?.Version != version
                 ? written with { Output = written.Output + MessageNotKept }
                 : written;
         }
