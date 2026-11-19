@@ -39,6 +39,10 @@ describe("fillPlaceholders", () => {
     expect(fillPlaceholders(text, at)).toBe(text);
   });
 
+  it("takes an empty format for the default", () => {
+    expect(fillPlaceholders("{{date:}} {{time:}}", at)).toBe("2026-11-19 14:05");
+  });
+
   it("fills every placeholder of a text, also several on a line", () => {
     expect(fillPlaceholders("{{date:YYYY}}-{{date:MM}} {{title}} {{title}}", at)).toBe("2026-11 Weekly Weekly");
   });
@@ -77,6 +81,22 @@ describe("formatMoment", () => {
 
   it("shows midnight as 00, not 24", () => {
     expect(formatMoment(new Date("2026-03-06T23:00:00Z"), "Europe/Vienna", "HH:mm H")).toBe("00:00 0");
+  });
+
+  it.each([
+    [1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [11, "11th"], [12, "12th"], [13, "13th"], [21, "21st"], [22, "22nd"], [23, "23rd"], [31, "31st"],
+  ])("Do gives the day %i as %s", (day, expected) => {
+    const month = day > 28 ? "01" : "03";
+    expect(formatMoment(new Date(`2026-${month}-${String(day).padStart(2, "0")}T10:00:00Z`), "Europe/Vienna", "Do")).toBe(expected);
+  });
+
+  it("fills Obsidian's dddd, MMMM Do YYYY whole", () => {
+    expect(formatMoment(saturday, "Europe/Vienna", "dddd, MMMM Do YYYY")).toBe("Saturday, March 7th 2026");
+  });
+
+  it.each([["DDDD"], ["DDD"], ["YYYYY"], ["Wo"], ["Qo"], ["dd"], ["hh:mm A"]])("leaves a token it doesn't fill, %s, as written", (format) => {
+    const out = formatMoment(saturday, "Europe/Vienna", format);
+    expect(out).toBe(format === "hh:mm A" ? "hh:04 A" : format);
   });
 
   it("names days and months in English whatever the browser's language", () => {
@@ -178,5 +198,58 @@ describe("templateEdit", () => {
   it("keeps a note's BOM and CRLF line endings", () => {
     const { text } = inserted("﻿---\r\nstatus: open\r\n---\r\n", "---\ntype: meeting\n---\n");
     expect(text).toBe("﻿---\r\nstatus: open\r\ntype: meeting\r\n---\r\n");
+  });
+
+  it.each([
+    ["---\ntags: [x]\n---", "---\ntags: [x]\n---\n## Agenda\n"],
+    ["---\n---", "---\n---\n## Agenda\n"],
+    ["---\r\ntags: [x]\r\n---", "---\r\ntags: [x]\r\n---\r\n## Agenda\r\n"],
+  ])("starts the body on a line of its own after a closing --- without a line break, %j", (note, expected) => {
+    const { text, caret } = inserted(note, "## Agenda\n");
+    expect(text).toBe(expected);
+    expect(caret).toEqual([text.length, text.length]);
+  });
+
+  it("starts the body on a line of its own also when the template adds properties", () => {
+    const { text, caret } = inserted("---\ntags: [x]\n---", "---\ntype: meeting\n---\n## Agenda\n");
+    expect(text).toBe("---\ntags: [x]\ntype: meeting\n---\n## Agenda\n");
+    expect(caret[0]).toBe(text.length);
+  });
+
+  it("writes the body with the note's CRLF line endings", () => {
+    const note = "---\r\nstatus: open\r\n---\r\n# Notes\r\n";
+    const { text, caret } = inserted(note, "---\ntype: meeting\n---\n## Agenda\n\n- one\n");
+    expect(text).toBe("---\r\nstatus: open\r\ntype: meeting\r\n---\r\n# Notes\r\n## Agenda\r\n\r\n- one\r\n");
+    expect(caret[0]).toBe(text.length);
+  });
+
+  it.each([
+    ["title: '{{title}}'", "Bob's plan", "title: \"Bob's plan\""],
+    ["title: {{title}}", "Meeting: Q3", 'title: "Meeting: Q3"'],
+    ["title: {{title}}", "@home", 'title: "@home"'],
+    ['title: "{{title}}"', 'Say "hi"', 'title: "Say \\"hi\\""'],
+    ["title: {{title}}", "Müller", 'title: "Müller"'],
+  ])("writes %s for the title %j as valid YAML", (line, title, written) => {
+    const { edit } = templateEdit("", 0, 0, `---\n${line}\n---\n`, { ...at, title });
+    expect(edit.text).toBe(`---\n${written}\n---\n`);
+  });
+
+  it("keeps a date or a number as the template writes it", () => {
+    const { edit } = templateEdit("", 0, 0, "---\ncreated: {{date}}\nyear: {{date:YYYY}}\nat: '{{time}}'\n---\n", at);
+    expect(edit.text).toBe("---\ncreated: 2026-11-19\nyear: 2026\nat: '14:05'\n---\n");
+  });
+
+  it("keeps a key the note writes in quotes, adding no second one", () => {
+    const note = '---\n"status": a\n---\n';
+    const { text, hint } = inserted(note, "---\nstatus: b\n---\nbody");
+    expect(text).toBe(`${note}body`);
+    expect(hint).toBeNull();
+  });
+
+  it("inserts only the body, with its own hint, where the properties can't be merged safely", () => {
+    const note = "---\nstatus: open\n---\n";
+    const { text, hint } = inserted(note, "---\ntype: a\ntype: b\n---\nbody");
+    expect(text).toBe(`${note}body`);
+    expect(hint).toBe("The template's properties weren't added: they couldn't be merged safely into this note's.");
   });
 });

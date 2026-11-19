@@ -30,6 +30,13 @@ function partsOf(now: Date, zone: string): Parts {
 
 const pad = (n: string) => n.padStart(2, "0");
 
+/** The day of the month with its English ordinal suffix: 1st, 2nd, 3rd, 4th, 11th, 21st. */
+const ordinal = (day: string) => {
+  const n = Number(day);
+  const suffix = n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix}`;
+};
+
 const tokens: Record<string, (p: Parts) => string> = {
   YYYY: (p) => p.year,
   YY: (p) => p.year.slice(-2),
@@ -39,6 +46,7 @@ const tokens: Record<string, (p: Parts) => string> = {
   M: (p) => String(Number(p.month)),
   DD: (p) => pad(p.day),
   D: (p) => String(Number(p.day)),
+  Do: (p) => ordinal(p.day),
   dddd: (p) => p.weekday,
   ddd: (p) => p.weekday.slice(0, 3),
   HH: (p) => pad(p.hour),
@@ -47,13 +55,14 @@ const tokens: Record<string, (p: Parts) => string> = {
   ss: (p) => pad(p.second),
 };
 
-// Longest first, so `MMMM` isn't read as `MM` twice; `[…]` is text, as in Moment.
-const token = new RegExp(`\\[([^\\]]*)\\]|${Object.keys(tokens).sort((a, b) => b.length - a.length).join("|")}`, "g");
+// Moment's tokens, read as Moment reads them (its format regex), so that one this doesn't fill (`DDDD`, `Wo`) stays
+// as written rather than come out half-filled; `[…]` is text.
+const token = /\[([^\]]*)\]|Mo|M{1,4}|Do|DDDo|D{1,4}|d{2,4}|do?|w[ow]?|W[oW]?|Qo?|N{1,5}|Y{5,6}|YYYY|YY|y{2,4}|yo?|gg(?:ggg?)?|GG(?:GGG?)?|[eEaAxX]|hh?|HH?|kk?|mm?|ss?|S{1,9}|zz?|ZZ?/g;
 
-/** The moment in `zone` as a Moment format (`dddd, D MMMM YYYY`) of the tokens above; any other text stays as written. */
+/** The moment in `zone` as a Moment format (`dddd, MMMM Do YYYY`) of the tokens above; any other text, and any other token, stays as written. */
 export function formatMoment(now: Date, zone: string, format: string): string {
   const parts = partsOf(now, zone);
-  return format.replace(token, (match, literal: string | undefined) => literal ?? tokens[match](parts));
+  return format.replace(token, (match, literal: string | undefined) => literal ?? tokens[match]?.(parts) ?? match);
 }
 
 /**
@@ -63,12 +72,16 @@ export function formatMoment(now: Date, zone: string, format: string): string {
 export function fillPlaceholders(text: string, at: Context): string {
   return text.replace(/\{\{(title|date|time)(?::([^}]*))?\}\}/g, (match, name: string, format: string | undefined) => {
     if (name === "title") return format === undefined ? at.title : match;
-    return formatMoment(at.now, at.zone, format ?? (name === "date" ? "YYYY-MM-DD" : "HH:mm"));
+    return formatMoment(at.now, at.zone, format || (name === "date" ? "YYYY-MM-DD" : "HH:mm"));
   });
 }
 
 export const noteUnreadable = "The template's properties weren't added: this note's properties can't be read.";
 export const templateUnreadable = "The template's properties weren't added: the template's properties can't be read.";
+export const notMerged = "The template's properties weren't added: they couldn't be merged safely into this note's.";
+
+/** A filled value that is a date, a time or a number, which YAML (and Obsidian) read as such where written plain. */
+const dateLike = /^\d[\d :.T+-]*$/;
 
 /** A template's properties and body, its placeholders filled; null for properties it has that can't be read. */
 function readTemplate(template: string, at: Context): { props: Merged[] | null; body: string } {
@@ -84,10 +97,13 @@ function readTemplate(template: string, at: Context): { props: Merged[] | null; 
     props: props.map(({ key, value }): Merged => {
       if (Array.isArray(value)) return { key, value: value.map((v) => fillPlaceholders(v, at)) };
       const filled = fillPlaceholders(value, at);
-      // As the template writes it (`created: {{date}}` stays a date for Obsidian) where that still reads as the value.
+      // `created: {{date}}` stays a date for Obsidian.
       const line = yaml.find((l) => /^[^\s:#][^:]*:/.test(l) && l.slice(0, l.indexOf(":")).trim() === key)!.replace(/\r$/, "");
       const raw = fillPlaceholders(line.slice(line.indexOf(":") + 1).trim(), at);
-      return { key, value: filled, written: parseProperties(`k: ${raw}`)?.[0]?.value === filled ? raw : yamlValue(filled) };
+      // As the template writes it only where that is how it would be written anyway, or where it is a date, a time or
+      // a number that reads back as written: parseProperties is too lenient to vouch for other quoting (`'Bob's plan'`).
+      const keep = raw === yamlValue(filled) || (dateLike.test(filled) && parseProperties(`k: ${raw}`)?.[0]?.value === filled);
+      return { key, value: filled, written: keep ? raw : yamlValue(filled) };
     }),
   };
 }
@@ -99,19 +115,23 @@ function readTemplate(template: string, at: Context): { props: Merged[] | null; 
  * the body. A hint says why properties weren't added.
  */
 export function templateEdit(value: string, start: number, end: number, template: string, at: Context): { edit: Edit; hint: string | null } {
-  const { props, body } = readTemplate(template, at);
+  const { props, body: filled } = readTemplate(template, at);
   let merged = value;
   let hint = props ? null : templateUnreadable;
   if (props?.length) {
     const result = mergeProperties(value, props);
     if ("content" in result) merged = result.content;
-    else hint = noteUnreadable;
+    else hint = result.refused === "unreadable" ? noteUnreadable : notMerged;
   }
   // Where the note's body starts: past its frontmatter's closing line (and its BOM).
   const bom = value.startsWith("\uFEFF") ? 1 : 0;
   const lines = value.slice(bom).split("\n");
   const close = frontmatterEnd(lines);
   const floor = close < 0 ? bom : bom + lines.slice(0, close + 1).join("\n").length + (close + 1 < lines.length ? 1 : 0);
+  // The body in the note's line endings, where it has any; on a line of its own after a closing `---` that ends the note.
+  const eol = lines.length > 1 ? (lines[0].endsWith("\r") ? "\r\n" : "\n") : null;
+  const converted = eol ? filled.replace(/\r?\n/g, eol) : filled;
+  const body = close >= 0 && close + 1 === lines.length ? (lines[close].endsWith("\r") ? "\n" : eol) + converted : converted;
   const from = Math.max(start, floor);
   const to = Math.max(end, from);
   // The merge changes only what is above the body.
