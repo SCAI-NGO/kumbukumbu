@@ -79,9 +79,9 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 html       reads a text file as HTML: its headings, or what a CSS selector picks ('help html')
                 xml        reads a text file as XML: its elements, or what an XPath picks ('help xml')
               What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes and text files
-              only (with --tag, notes only);
-              neither rg nor semsearch searches images (an SVG's source neither) or other files, semsearch no text
-              files, and rg not PDFs in a checkpoint; head, tail, wc, sort and outline read notes, not attachments.
+              only (with --tag, notes only); neither rg nor semsearch searches images (an SVG's source neither) or
+              other files, semsearch no text files, and rg not PDFs in a checkpoint; head, tail, wc, sort and
+              outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 
               ls /Work/Screens
@@ -100,7 +100,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 semsearch  ranks neither its notes nor its PDF pages
                 tags       counts no tag of its notes
                 backlinks  lists no note in it that links to the path
-                graph      leaves its notes out; --archive takes them in
+                graph      leaves its notes and attachments out; --archive takes them in
                 calendar   leaves archived notes out
                 the web app's tree and search leave it out too; the tree shows it as one entry, Archive.
               Asking: --archive on each of them, or a path inside the archive: ls /Work/_archive/,

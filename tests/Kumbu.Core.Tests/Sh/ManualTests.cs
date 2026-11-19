@@ -18,6 +18,10 @@ public class ManualTests
         Assert.Equal("  rg --files [path...]            list note and text file paths; find a note by name: rg --files | rg -i kumbu", Line("  rg --files "));
 
     [Fact]
+    public void Manual_rg_searches_notes_text_files_and_PDF_text() =>
+        Assert.Equal("  rg [options] <regex> [path...]  search notes, text files and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths", Line("  rg [options] "));
+
+    [Fact]
     public void Manual_says_rg_searches_text_files_in_a_checkpoint()
     {
         Assert.Contains("rg searches notes and text files there, not PDFs.", Line("Checkpoints: "));

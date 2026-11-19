@@ -234,7 +234,7 @@ public class HelpTests
     {
         var help = (await Run("help archive")).Output;
         var topic = help[help.IndexOf("\n\nthe archive\n", StringComparison.Ordinal)..];
-        Assert.Contains("\n    graph      leaves its notes out; --archive takes them in\n", topic);
+        Assert.Contains("\n    graph      leaves its notes and attachments out; --archive takes them in\n", topic);
         Assert.Contains("\n    calendar   leaves archived notes out\n", topic);
         var text = System.Text.RegularExpressions.Regex.Replace(topic, @"\s+", " ");
         Assert.Contains("calendar has no --archive; a note in the archive has no place in the calendar.", text);
@@ -247,6 +247,13 @@ public class HelpTests
     public async Task Archive_help_names_graph_and_calendar()
     {
         var help = (await Run("archive --help")).Output;
+        Assert.Contains("""
+
+              ls, rg, semsearch, tags, backlinks and graph leave the archive out unless given --archive
+              or a path inside the archive, and calendar always does (it has no --archive); hiding the
+              archive is about attention, not access: whoever may read the vault may read it.
+
+            """.ReplaceLineEndings("\n"), help);
         var text = System.Text.RegularExpressions.Regex.Replace(help, @"\s+", " ");
         Assert.Contains("ls, rg, semsearch, tags, backlinks and graph leave the archive out unless given --archive or a path inside the archive, and calendar always does (it has no --archive);", text);
     }
@@ -256,6 +263,8 @@ public class HelpTests
     {
         var text = System.Text.RegularExpressions.Regex.Replace((await Run("help attachments")).Output, @"\s+", " ");
         Assert.Contains("'rg --files' lists notes and text files only (with --tag, notes only);", text);
+        // Wrapped to the paragraph's width, no short line left over.
+        Assert.Contains("\n  only (with --tag, notes only); neither rg nor semsearch searches images (an SVG's source neither) or\n", (await Run("help attachments")).Output);
         Assert.DoesNotContain("'rg --files' lists notes only", text);
     }
 
