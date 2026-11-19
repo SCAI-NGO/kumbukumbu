@@ -160,6 +160,23 @@ test("workspace split #4: a click on a word in the reading pane starts Write the
   await expect(source(pane(page, "right"))).toHaveCount(0);
 });
 
+test("workspace split #10: a double click selects a word in the reading pane, a triple click its paragraph, and neither starts Write @workspace", async ({ page, aliceApi, folder }) => {
+  const n = await seed(aliceApi, folder);
+  await open(page, splitUrl(n.alphaPath, n.betaPath));
+
+  const at = await pointAt(pane(page, "right"), "words", 2);
+  await page.mouse.dblclick(at.x, at.y);
+  expect((await page.evaluate(() => String(window.getSelection()))).trim()).toBe("words");
+  // Past the wait for a second click: still nothing switched.
+  await page.waitForTimeout(400);
+  await expect(source(page)).toHaveCount(0);
+
+  await page.mouse.click(at.x, at.y, { clickCount: 3 });
+  expect(await page.evaluate(() => String(window.getSelection()))).toContain("Beta has bold words");
+  await page.waitForTimeout(400);
+  await expect(source(page)).toHaveCount(0);
+});
+
 test("workspace split #5: a click in the preview swaps the roles, the caret where clicked, and a link in it opens there @workspace", async ({ page, aliceApi, folder }) => {
   const n = await seed(aliceApi, folder);
   await startSplit(page, n.alphaPath);
