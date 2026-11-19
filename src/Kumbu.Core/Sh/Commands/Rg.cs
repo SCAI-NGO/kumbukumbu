@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
@@ -488,7 +487,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             }
 
             _left -= file.Current.Size;
-            return await StoreAttachments.ReadBytesAsync(notes, file.Path, file.Current, ct) is { } bytes ? new Note(file.Path, Encoding.UTF8.GetString(bytes)) : null;
+            return await StoreAttachments.ReadBytesAsync(notes, file.Path, file.Current, ct) is { } bytes ? new Note(file.Path, StoreAttachments.Text(bytes)) : null;
         }
     }
 

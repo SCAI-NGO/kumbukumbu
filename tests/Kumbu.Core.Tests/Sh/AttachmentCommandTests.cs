@@ -304,6 +304,15 @@ public class AttachmentCommandTests
     }
 
     [Fact]
+    public async Task A_text_files_byte_order_mark_is_not_part_of_its_text()
+    {
+        await Upload("/Work/bom.csv", [0xEF, 0xBB, 0xBF, .. "id,name\n1,rose\n"u8.ToArray()]);
+
+        Assert.Equal("/Work/bom.csv:1:id,name", (await Run("rg '^id,' /Work/bom.csv")).Output);
+        Assert.Equal("id,name\n1,rose\n", (await Run("cat /Work/bom.csv")).Output);
+    }
+
+    [Fact]
     public async Task Rg_stops_reading_text_files_at_its_bound_and_says_so()
     {
         await Upload("/Work/a.csv", "rose;1\n"u8.ToArray());
