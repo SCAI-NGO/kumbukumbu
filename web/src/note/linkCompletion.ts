@@ -161,11 +161,13 @@ export function rankNotes(paths: string[], query: string): string[] {
 export const embedsAsImage = (path: string) => fileKindOf(path) === "image";
 
 /**
- * Where a wiki link's typed part ends: after the rest of the word the caret is in (up to `]]`, `|`, `#`, `[` or a
- * blank, so `[[Pl|an]]` is replaced whole), and a `]]` right after it, as the toolbar's button leaves it.
+ * Where a wiki link's typed part ends: where the caret is inside a link, after the rest of its word (up to `]]`, `|`
+ * or `#`, so `[[Pl|an]]` is replaced whole), else at the caret (`[[|tomorrow` keeps "tomorrow"); and a `]]` right
+ * after it, as the toolbar's button leaves it.
  */
 function wikiEnd(value: string, caret: number) {
-  const end = caret + /^[^\]|#[\s]*/.exec(value.slice(caret))![0].length;
+  const word = caret + /^[^\]|#[\s]*/.exec(value.slice(caret))![0].length;
+  const end = /^(\]\]|\||#)/.test(value.slice(word)) ? word : caret;
   return value.startsWith("]]", end) ? end + 2 : end;
 }
 
@@ -217,12 +219,12 @@ export const markdownPath = (path: string) => `/${path.split("/").slice(2).map(e
 export const markdownFragment = (text: string) => `#${encodeSegment(headingLink(text))}`;
 
 /**
- * The edit that completes a Markdown link's destination (and the rest of it after the caret, up to a `)` or a blank,
- * and that `)`): `[x](/plan.md)`.
+ * The edit that completes a Markdown link's destination: `[x](/plan.md)`. Where a `)` closes the link after the rest
+ * of the caret's word, that rest and the `)` are replaced; else the text after the caret is kept (`[x](|see below`).
  */
 export function completeMarkdown(value: string, caret: number, at: LinkQuery, destination: string) {
   const rest = caret + /^[^)\s]*/.exec(value.slice(caret))![0].length;
-  const end = value[rest] === ")" ? rest + 1 : rest;
+  const end = value[rest] === ")" ? rest + 1 : caret;
   const text = `${destination})`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }

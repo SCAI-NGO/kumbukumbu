@@ -217,16 +217,24 @@ describe("completing with the caret inside a link", () => {
     return value.slice(0, e.start) + e.text + value.slice(e.end);
   };
 
-  it("replaces the rest of the name or heading after the caret, up to ]], |, #, [ or a blank", () => {
+  it("replaces the rest of the name or heading after the caret when ]], | or # follows it", () => {
     expect(edit("[[Pl|an]] x", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "Pl" }, "plan"))).toBe("[[plan]] x");
     expect(edit("[[Pl|an|alias]]", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "Pl" }, "plan"))).toBe("[[plan]]|alias]]");
     expect(edit("[[Note#Go|als]]", (v, c) => completeSubpath(v, c, { kind: "heading", start: 0, note: "Note", query: "Go" }, "Goals"))).toBe("[[Note#Goals]]");
-    expect(edit("[[Note#Ne|xt steps]]", (v, c) => completeSubpath(v, c, { kind: "heading", start: 0, note: "Note", query: "Ne" }, "Next steps"))).toBe("[[Note#Next steps]] steps]]");
+    expect(edit("[[|]]", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "" }, "plan"))).toBe("[[plan]]");
   });
 
-  it("replaces the rest of a Markdown link's destination, up to ) or a blank", () => {
+  it("keeps the text after the caret where no link closes after it, as before", () => {
+    expect(edit("read [[|tomorrow's plan", (v, c) => completeLink(v, c, { kind: "note", start: 5, query: "" }, "Plan"))).toBe("read [[Plan]]tomorrow's plan");
+    expect(edit("[[Pl|an", (v, c) => completeLink(v, c, { kind: "note", start: 0, query: "Pl" }, "plan"))).toBe("[[plan]]an");
+    expect(edit("[[Note#Ne|xt steps]]", (v, c) => completeSubpath(v, c, { kind: "heading", start: 0, note: "Note", query: "Ne" }, "Next steps"))).toBe("[[Note#Next steps]]xt steps]]");
+  });
+
+  it("replaces the rest of a Markdown link's destination when ) follows it, else keeps the text", () => {
     expect(edit("[x](/pl|an.md) y", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "/pl" }, "/plan.md"))).toBe("[x](/plan.md) y");
-    expect(edit("[x](pl|an more", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "pl" }, "/plan.md"))).toBe("[x](/plan.md) more");
+    expect(edit("[x](|) y", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "" }, "/plan.md"))).toBe("[x](/plan.md) y");
+    expect(edit("[x](pl|an more", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "pl" }, "/plan.md"))).toBe("[x](/plan.md)an more");
+    expect(edit("[x](|see below", (v, c) => completeMarkdown(v, c, { kind: "markdown", start: 4, query: "" }, "/plan.md"))).toBe("[x](/plan.md)see below");
   });
 });
 
