@@ -11,6 +11,9 @@
 //  2. a file and a folder never share a name, refused with a sentence
 //     naming the other (upload, write, mkdir, mv); folders with dots,
 //     files without an extension, rm of one                             → "a file and a folder can't share a name …"
+//     restore onto a name taken by the other kind: left out, it needs
+//     a file and a folder to swap places in the trash (outside the
+//     run's scope for @files, spec §2)
 //  3. UTF-8 without NUL is text: cat prints it, rg searches it; any
 //     other file is bytes: cat describes it in one line; text over
 //     15 MB is bytes too; a rename doesn't change the media type        → "a CSV, a text file and a script …",
@@ -151,13 +154,14 @@ test("files: a .zip and a file without an extension are bytes: cat describes the
   expect(sha256(await download(aliceApi, zip))).toBe(sha256(bytes));
 });
 
-test("files: a .png that holds no PNG is refused; any other name takes any bytes @files", async ({ put, track, folder, aliceApi }) => {
+test("files: a .png that holds no PNG is refused; any other name takes any bytes @files", async ({ put, track, folder, aliceApi, mcp }) => {
   const fake = track(`/Work/${folder}/fake.png`);
   const refused = await upload(aliceApi, fake, Buffer.from("not a picture\n"));
   expect(refused.status()).toBe(400);
   expect(await refused.json()).toEqual({ error: "fake.png isn't a PNG image (its content doesn't match its name)." });
   // The same bytes under a name of no known format are a file.
   await put(`/Work/${folder}/fake.png.txt`, "not a picture\n");
+  expect(await mcp.sh(`cat '/Work/${folder}/fake.png.txt'`)).toEqual({ text: "not a picture\n", isError: false });
 });
 
 test("files: a file and a folder can't share a name, either way round, with dots and without an extension @files", async ({ mcp, put, track, folder, aliceApi }) => {
