@@ -470,3 +470,83 @@ describe("a note opened from a window into the writing pane", () => {
     expect(useEditor.getState().panes).toMatchObject({ left: { path: "/Work/a.md", mode: "read" }, right: { path: "/Work/b.md", mode: "write" } });
   });
 });
+
+describe("deleting the left pane's note while the right pane writes", () => {
+  it("saves the right pane's text first, as Done does, before the right pane takes the left's place", async () => {
+    const deleted: string[] = [];
+    const { router, u, puts } = await split(undefined, {
+      "DELETE /api/notes/Work/a.md": () => {
+        deleted.push("/Work/a.md");
+        return new Response(null, { status: 204 });
+      },
+    });
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    await u.type(await within(pane("right")).findByRole("textbox", { name: "Markdown source" }), " d");
+    await u.click(within(pane("left")).getByRole("button", { name: "Delete note" }));
+    await u.click(within(await screen.findByRole("dialog", { name: "Delete a?" })).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
+    expect(puts).toEqual([{ path: "/Work/b.md", content: "# Note b\n\nSee [[next b]].\n d" }]);
+    expect(deleted).toEqual(["/Work/a.md"]);
+    expect(useEditor.getState().panes).toEqual({ left: { path: "/Work/b.md", mode: "read" }, right: null });
+    expect(await screen.findByRole("heading", { name: "Note b" }, { timeout: 5000 })).toBeInTheDocument();
+  });
+
+  it("deletes nothing when that save fails: the right pane keeps writing, its text and its editor", async () => {
+    const deleted: string[] = [];
+    const { router, u } = await split(undefined, {
+      "PUT /api/notes/*": () => json(500, { title: "boom" }),
+      "DELETE /api/notes/Work/a.md": () => {
+        deleted.push("/Work/a.md");
+        return new Response(null, { status: 204 });
+      },
+    });
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const right = await within(pane("right")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(right, " d");
+    await u.click(within(pane("left")).getByRole("button", { name: "Delete note" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete a?" });
+    await u.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The other pane's text couldn't be saved, so a wasn't deleted.");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(deleted).toEqual([]);
+    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md");
+    expect(useEditor.getState().panes).toEqual({ left: { path: "/Work/a.md", mode: "read" }, right: { path: "/Work/b.md", mode: "write" } });
+    expect(within(pane("right")).getByRole("textbox", { name: "Markdown source" })).toBe(right);
+    expect(right).toHaveValue("# Note b\n\nSee [[next b]].\n d");
+  });
+});
+
+describe("a pane closed under the writing one", () => {
+  it("is held by the editor's guard until its text is saved, then closes as the URL says", async () => {
+    const { router, u, puts } = await split();
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    await u.type(await within(pane("right")).findByRole("textbox", { name: "Markdown source" }), " g");
+    // The left pane's note deleted elsewhere (another device), the URL following.
+    await act(async () => {
+      useEditor.getState().forgetNote("/Work/a.md");
+      await router.navigate("/notes/Work/b.md", { replace: true });
+    });
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
+    expect(puts).toEqual([{ path: "/Work/b.md", content: "# Note b\n\nSee [[next b]].\n g" }]);
+    expect(useEditor.getState().panes.right).toBeNull();
+  });
+
+  it("leaves the other pane's note in Read mode while that save fails, the text kept in its editor", async () => {
+    const { router, u } = await split(undefined, { "PUT /api/notes/*": () => json(500, { title: "boom" }) });
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const right = await within(pane("right")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(right, " g");
+    await act(async () => {
+      useEditor.getState().forgetNote("/Work/a.md");
+      await router.navigate("/notes/Work/b.md", { replace: true });
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(at(router)).toBe("/notes/Work/a.md?beside=Work/b.md");
+    expect(screen.getAllByRole("textbox", { name: "Markdown source" })).toEqual([right]);
+    expect(right).toHaveValue("# Note b\n\nSee [[next b]].\n g");
+  });
+});

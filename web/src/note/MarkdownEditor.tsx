@@ -303,6 +303,8 @@ export default function MarkdownEditor({
       }
       const pane = useEditor.getState().panes[side];
       held.current = pane?.path ? { path: pane.path, mode: pane.mode } : null;
+      // Also where the pane is gone from the store (the left one's note deleted elsewhere): without it this editor would
+      // be unmounted while the navigation waits, and the navigation never go on. Once saved, the URL closes the pane.
       useEditor.getState().setPane(side, { path, mode: "write" });
       return true;
     },

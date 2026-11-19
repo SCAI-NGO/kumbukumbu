@@ -15,7 +15,7 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useErrorTextFor, useUnnamedVault } from "../discreet/errorText";
-import { useEditor } from "../state/editor";
+import { useEditor, writingSide } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
@@ -127,8 +127,9 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
   const note = useNote(path);
   const side = useContext(PaneSide) ?? "left";
   const focusedHere = useEditor((s) => s.focused === side);
-  // The focused pane's mode is the store's `mode`, whatever pane holds what yet; the other's only for the note it has.
-  const mode = useEditor((s) => (s.focused === side ? s.mode : s.panes[side]?.path === path ? s.panes[side]!.mode : "read"));
+  // The focused pane's mode is the store's `mode`, the other's its pane's; either only for the note this pane has: a pane
+  // changing hands (one closed, the other in its place) would show the other note's mode for a moment.
+  const mode = useEditor((s) => (s.focused === side ? (s.currentPath === path ? s.mode : "read") : s.panes[side]?.path === path ? s.panes[side]!.mode : "read"));
   const errorFor = useErrorTextFor(path);
   const noteError = errorFor(note.error);
   // Every save is a new version; the links are only asked for once they are shown again.
@@ -744,7 +745,17 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
   // The vault's list, which holds no link: this question needs none.
   const published = !!usePublications(vaultOf(path), own).data?.publications.some((p) => p.path === path);
 
-  const confirm = () =>
+  const [unsaved, setUnsaved] = useState(false);
+
+  const confirm = async () => {
+    // The left pane's note going while the right pane writes: the right one takes its place, and its editor goes with
+    // its place, so its text is saved first as Done saves it (`closePane`); if that fails, nothing is deleted.
+    const s = useEditor.getState();
+    if (s.panes.right && s.panes.left.path === path && writingSide(s) === "right") {
+      setUnsaved(false);
+      await s.endWrite();
+      if (writingSide(useEditor.getState()) !== null) return setUnsaved(true);
+    }
     remove.mutate(path, {
       onSuccess: (next) => {
         const split = !!useEditor.getState().panes.right;
@@ -756,6 +767,7 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
         navigate(split && left.path ? noteUrl(left.path) : next ? noteUrl(next) : "/", { replace: true });
       },
     });
+  };
 
   return (
     <div className="absolute inset-0 z-30 flex items-end justify-center bg-black/55 p-3 sm:items-center">
@@ -784,6 +796,11 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
             </ul>
           </div>
         )}
+        {unsaved && (
+          <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+            The other pane's text couldn't be saved, so {titleOf(path)} wasn't deleted.
+          </p>
+        )}
         {remove.isError && (
           <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
             {errorText(remove.error)}
@@ -796,7 +813,7 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
           <button
             type="button"
             disabled={remove.isPending}
-            onClick={confirm}
+            onClick={() => void confirm()}
             className="min-h-11 flex-1 rounded-[10px] bg-accent px-4 font-medium text-on-accent disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             Delete
