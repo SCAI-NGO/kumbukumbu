@@ -32,8 +32,9 @@
 //  single use (a second PUT 401), expiry, a revoked key or connection, the
 //  per-credential cap, the stored file as the agent's write, the answer's
 //  markdown and link, 400/409/413/507: the PUT never gets past the HTTPS
-//  refusal here, and that refusal comes before the ticket is looked up, so a
-//  second PUT proves nothing about spending. Covered by UploadTicketsTests,
+//  refusal here, and that refusal spends the ticket and answers the same
+//  whether or not the token exists, so a second PUT proves nothing about
+//  spending. Covered by UploadTicketsTests,
 //  AgentUploadApiTests and the hand test from a claude.ai sandbox (spec §6).
 //  Behind the HTTPS refusal as well, so not observable on this stack: the PUT
 //  reads no cookie and no bearer header (AgentUploadApiTests.cs:226-247,
