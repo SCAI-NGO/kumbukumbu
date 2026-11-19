@@ -18,9 +18,10 @@
 //    → "graph: the REST filter takes at most 50 paths and 50 tags".
 // 6. `links`, `backlinks` and the graph read one index: after `mv` they all name the new path at once (§3 decisions 4,
 //    anti-goals "two truths" and "a stale graph") → "graph: after mv, links, backlinks and the graph …".
-// 7. The creation time: set on creation, kept through a write, `mv`, `rm` and `restore`; shown as the node's `created`
-//    (§5; `sh` shows it nowhere, so `/api/graph/node`) → "graph: a note's creation time …"; kept through `archive`
-//    → "graph: archive keeps a note's creation time" (finding M-03).
+// 7. The creation time: set on creation, kept through a write, `mv`, `rm`, `restore` from the trash and the restore of
+//    a version; shown as the node's `created` (§5; `sh` shows it nowhere, so `/api/graph/node`) → "graph: a note's
+//    creation time …"; kept through `mv` and `archive` of a note not written since its creation → "graph: mv and
+//    archive keep the creation time of a note not written since" (finding M-03).
 // 8. The filter on a local graph: `--no-days`, `--no-attachments`, `--no-ghosts`, `--archive` (archived notes hidden
 //    by default), `--tag`; the start note always shown; day notes a kind of their own (§6's filter, §4.3)
 //    → "graph: the filter flags on a local graph …".
@@ -35,7 +36,9 @@
 // its version between two calls; the budget with a hub of 400 backlinks (§10): `GraphCommandTests.Hub_at_depth_three_stays_in_budget`
 // (tests/Kumbu.Core.Tests/Sh/GraphCommandTests.cs:106); the time-lapse and
 // the "at the latest" fill for notes from before (§5): no such notes on a fresh stack; the bundle query (§6.7): not
-// exposed, Publish covers it.
+// exposed, Publish covers it; the creation time through a checkpoint restore (§5): checkpoints take a key with
+// maintain, and Work holds at most 10 of them, a limit every test running meanwhile would share.
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Mcp } from "../support/api";
@@ -334,24 +337,41 @@ test("graph: a note's creation time is set when it is made and kept through a wr
   }
   const restored = await node(n.path("Moved"));
   expect({ created: restored.created, createdAtLeast: restored.createdAtLeast }, "restore from the trash keeps it").toEqual({ created: made.created, createdAtLeast: false });
+
+  // The restore of a version: the first one, as its write named it.
+  const back = await mcp.sh(`restore "${n.path("Moved")}" ${version}`);
+  expect(back.isError, back.text).toBe(false);
+  expect((await node(n.path("Moved"))).firstParagraph, "the first version is back").toBe("The first paragraph.");
+  const again = await node(n.path("Moved"));
+  expect({ created: again.created, createdAtLeast: again.createdAtLeast }, "the restore of a version keeps it").toEqual({ created: made.created, createdAtLeast: false });
 });
 
-test("graph: archive keeps a note's creation time @graph", async ({ mcp, folder, aliceApi }) => {
-  test.fail(true, "M-03 (Medium, bug): archive keeps the creation time's value but marks it 'at the latest'");
+test("graph: mv and archive keep the creation time of a note not written since @graph", async ({ mcp, folder, aliceApi }) => {
+  test.fail(true, "M-03 (Medium, bug): mv or archive of a note not written since its creation marks its creation time 'at the latest'");
   const n = names(folder);
+  // Soft: both cases are seen, whichever fails first.
+  await write(mcp, n.path("Fresh"), "# Fresh\n");
+  const fresh = await nodeOf(aliceApi, n.path("Fresh"));
+  expect(fresh.createdAtLeast).toBe(false);
+  const moved = await mcp.sh(`mv "${n.path("Fresh")}" "${n.path("Moved")}"`);
+  expect(moved.isError, moved.text).toBe(false);
+  written = written.map((w) => (w === n.path("Fresh") ? n.path("Moved") : w));
+  const there = await nodeOf(aliceApi, n.path("Moved"));
+  expect(there.created, "mv keeps the creation time").toBe(fresh.created);
+  expect.soft(there.createdAtLeast, "M-03: mv keeps the creation time as recorded, not as 'at the latest' (§5)").toBe(false);
+
   await write(mcp, n.path("Life"), "# Life\n");
   const made = await nodeOf(aliceApi, n.path("Life"));
   expect(made.createdAtLeast).toBe(false);
-
   const archived = await mcp.sh(`archive "${n.path("Life")}"`);
   expect(archived.isError, archived.text).toBe(false);
   const to = /^moved .+ to (\/Work\/_archive\/.+\.md); no links needed rewriting$/m.exec(archived.text)?.[1];
   expect(to, archived.text).toBeDefined();
-  written = [to!];
-  const there = await nodeOf(aliceApi, to!);
-  expect(there.node.archived).toBe(true);
-  expect(there.created, "archive keeps the creation time").toBe(made.created);
-  expect(there.createdAtLeast, "M-03: archive keeps the creation time as recorded, not as 'at the latest' (§5)").toBe(false);
+  written = written.map((w) => (w === n.path("Life") ? to! : w));
+  const kept = await nodeOf(aliceApi, to!);
+  expect(kept.node.archived).toBe(true);
+  expect(kept.created, "archive keeps the creation time").toBe(made.created);
+  expect.soft(kept.createdAtLeast, "M-03: archive keeps the creation time as recorded, not as 'at the latest' (§5)").toBe(false);
 });
 
 test("graph: the filter flags on a local graph, the start note always shown, day notes their own kind @graph", async ({ mcp, folder, aliceApi }) => {
@@ -468,6 +488,10 @@ test("graph: a key without the vault is answered as if it weren't there @graph",
   expect(await mcp.sh(`graph "${note}"`)).toEqual({ text: `graph: ${note}: No such file or directory`, isError: true });
   expect(await mcp.sh("graph --orphans /Welcome")).toEqual({ text: "graph: /Welcome: No such file or directory", isError: true });
   expect(await mcp.sh(`graph --path "${note}" "/Welcome/Skills.md"`)).toEqual({ text: `graph: ${note}: No such file or directory`, isError: true });
+  // The same words as for a vault that doesn't exist at all: nothing tells the two apart.
+  const nope = `/Nope-${randomBytes(3).toString("hex")}`;
+  expect(await mcp.sh(`graph "${nope}/x.md"`)).toEqual({ text: `graph: ${nope}/x.md: No such file or directory`, isError: true });
+  expect(await mcp.sh(`graph --orphans ${nope}`)).toEqual({ text: `graph: ${nope}: No such file or directory`, isError: true });
 });
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
