@@ -49,17 +49,54 @@ public class HelpTests
     }
 
     [Theory]
-    [InlineData("ls", "ls [-l] [-a|--archive] [path]", "ls [-l] [-a|--archive] [path]")]
-    [InlineData("tags", "tags [--archive] [path]", "tags [--archive] [tag] [path]")]
-    [InlineData("backlinks", "backlinks [--archive] [--unlinked] <path>", "backlinks [--archive] <path>")]
-    public async Task The_readers_that_hide_the_archive_take_archive(string command, string help, string usage)
+    [InlineData("ls", "ls [-l] [-a|--archive] [path]", "ls [-l] [-a|--archive] [path]", "ls [-l] [-a|--archive] [path]")]
+    [InlineData("tags", "tags [--archive] [path]", "tags [--archive] [tag] [path]", "tags [--archive] [tag] [path]")]
+    [InlineData("backlinks", "backlinks [--archive] [--unlinked] <path>", "backlinks [--archive] [--unlinked] <path>", "backlinks [--archive] <path>")]
+    public async Task The_readers_that_hide_the_archive_take_archive(string command, string help, string listUsage, string manualUsage)
     {
         var details = (await Run($"help {command}")).Output;
         Assert.StartsWith(help, details);
         // ls has a short form too, written as its -l is: "-a, --archive".
         Assert.Matches(@"\n  (-a, )?--archive ", details);
-        Assert.Contains($"\n  {usage} ", Manual.ToolDescription);
-        Assert.Contains($"\n  {usage} ", (await Run("help")).Output);
+        // The tool description keeps its lines short; the help list shows every option.
+        Assert.Contains($"\n  {manualUsage} ", Manual.ToolDescription);
+        Assert.Contains($"\n  {listUsage} ", (await Run("help")).Output);
+    }
+
+    /// <summary>A fragment of the synopsis is in a synopsis line of <c>help command</c> and in the command's line of
+    /// the help list; one of the option list (a long form the Usage leaves out, an output's mark) in the help only.</summary>
+    [Theory]
+    [InlineData("head", "[--version V]", true)]
+    [InlineData("sort", "[--version V]", true)]
+    [InlineData("tail", "[--version V]", true)]
+    [InlineData("wc", "[--version V]", true)]
+    [InlineData("outline", "[--version V]", true)]
+    [InlineData("links", "[--version V]", true)]
+    [InlineData("semsearch", "-n, --max N", false)]
+    [InlineData("restore", "--checkpoint <name> [--plan <token>] <path>", true)]
+    [InlineData("df", "-h, --human-readable", false)]
+    [InlineData("du", "-h, --human-readable", false)]
+    [InlineData("backlinks", "[--unlinked]", true)]
+    [InlineData("diff", "diff [--word] --checkpoint <name> <path>", true)]
+    [InlineData("tail", "[-n N|-n +N]", true)]
+    [InlineData("sort", "[-r] [-u] [-n] [-f]", true)]
+    [InlineData("wc", "[-l] [-w] [-m] [-c]", true)]
+    [InlineData("links", "'attachment (not a note)' for other files", false)]
+    public async Task Usage_and_help_name_the_options_the_command_takes(string command, string fragment, bool synopsis)
+    {
+        var help = (await Run($"help {command}")).Output;
+        var flat = System.Text.RegularExpressions.Regex.Replace(help, @"\s+", " ");
+        var row = (await Run("help")).Output.Split('\n').Single(l => l.StartsWith($"  {command} ", StringComparison.Ordinal));
+
+        if (synopsis)
+        {
+            Assert.Contains(help.Split('\n'), l => l.StartsWith($"{command} ", StringComparison.Ordinal) && l.Contains(fragment, StringComparison.Ordinal));
+            Assert.Contains(fragment, row);
+        }
+        else
+        {
+            Assert.Contains(fragment, flat);
+        }
     }
 
     [Fact]

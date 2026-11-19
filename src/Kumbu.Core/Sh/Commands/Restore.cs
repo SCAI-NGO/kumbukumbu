@@ -10,7 +10,7 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints, Attachme
 
     public string Name => "restore";
 
-    public string Usage => "restore <path> [version] | restore --checkpoint <name> <path>";
+    public string Usage => "restore <path> [version] | restore --checkpoint <name> [--plan <token>] <path>";
 
     public string Summary => "bring a note, attachment or folder back from the trash, or to an earlier version";
 
@@ -22,7 +22,7 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints, Attachme
           can be undone the same way. An image or a PDF comes back the same way, and so does an empty
           folder removed with 'rm' (restore /Demo/Drafts/).
 
-        restore --checkpoint <name> <path>
+        restore --checkpoint <name> [--plan <token>] <path>
           Go back to a named checkpoint ('lscp'). A note is restored at once. A folder or vault first
           gets a preview of what would change, come back, or go to the trash (notes made since), with
           a plan token; 'restore --checkpoint <name> --plan <token> <path>' then makes the folder match

@@ -16,11 +16,11 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     public string Summary => "the links of a note (wikilinks and Markdown links) and where they lead; of a directory: the broken ones";
 
     public string Help => """
-        links <path>[#section]
+        links [--version V] <path>[#section]
           List the [[wikilinks]], ![[embeds]], Markdown links [text](target) and images ![alt](target)
           of a note (or of one section), one per line: line, the link as written, and where it leads: a note's or an
-          attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment' for other
-          files, or 'this note' for [[#Heading]]. A link to a block ([[plan#^id]]) leads to the note and
+          attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment (not a note)' for
+          other files, or 'this note' for [[#Heading]]. A link to a block ([[plan#^id]]) leads to the note and
           its block: 'not found: no block ^id in …' when the note has no such block.
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.

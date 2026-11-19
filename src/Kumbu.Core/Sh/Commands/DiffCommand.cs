@@ -15,7 +15,7 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWrit
 
     public string Name => "diff";
 
-    public string Usage => "diff [--word] <path> [from [to]] | diff --checkpoint <name> <path>";
+    public string Usage => "diff [--word] <path> [from [to]] | diff [--word] --checkpoint <name> <path>";
 
     public string Summary => "what changed between versions of a note, or between two notes";
 
