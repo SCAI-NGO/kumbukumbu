@@ -233,6 +233,10 @@ public class HtmlTests
     [InlineData(":is(h2, h3) ~ h2")]
     [InlineData("html body h1")]
     [InlineData("body * a")]
+    [InlineData("tr:has(> td:not(.x))")]
+    [InlineData("tbody:has(> tr > :is(td, th))")]
+    [InlineData("p:has(> a[href^=\"http\"])")]
+    [InlineData("body:has(:is(#none, h1))")]
     public async Task A_selector_picks_what_AngleSharp_picks(string selector)
     {
         var expected = new AngleSharp.Html.Parser.HtmlParser().ParseDocument(Page).QuerySelectorAll(selector).Select(e => e.OuterHtml);
@@ -262,12 +266,38 @@ public class HtmlTests
     [InlineData("a:not(p div)", "inside :not(), :is() and :where() only > and +")]
     [InlineData("a:is(p ~ b)", "inside :not(), :is() and :where() only > and +")]
     [InlineData("svg|rect", "the combinator |")]
+    [InlineData("form:has(> :valid)", "inside :has(), :valid isn't matched: only type, class, id and attribute selectors are")]
+    [InlineData("form:has(> :invalid)", "inside :has(), :invalid isn't matched")]
+    [InlineData("p:has(> a:lang(en))", "inside :has(), :lang() isn't matched")]
+    [InlineData("p:has(> :is(a:checked))", "inside :has(), :checked isn't matched")]
+    [InlineData("p:has(> a::before)", "inside :has(), ::before isn't matched")]
+    [InlineData("p:has(> a, > b)", "inside :has(), a list (a, b) isn't matched")]
+    [InlineData("li:nth-child(2n of p b)", "inside :nth-child() only > and +")]
+    [InlineData("> a", "a selector can't start with >")]
+    [InlineData(" + a", "a selector can't start with +")]
+    [InlineData("~ a", "a selector can't start with ~")]
     public async Task Selectors_that_could_take_hours_are_refused(string selector, string why)
     {
         var result = await Run($"html /Work/page.html '{selector}'");
 
         Assert.True(result.IsError);
         Assert.StartsWith($"html: '{selector}': {why}", result.Output);
+    }
+
+    [Fact]
+    public async Task A_selector_is_at_most_1000_characters_with_at_most_100_alternatives()
+    {
+        var hundred = string.Join(", ", Enumerable.Repeat("h1", 100));
+        Assert.False((await Run($"html --count /Work/page.html '{hundred}'")).IsError);
+        Assert.False((await Run($"html --count /Work/page.html '{new string(' ', 998)}h1'")).IsError);
+
+        Assert.Equal(
+            ShellResult.Error($"html: '{hundred}, h1': a selector has at most 100 alternatives; name fewer"),
+            await Run($"html /Work/page.html '{hundred}, h1'"));
+        var nested = $"p:not({string.Join(", ", Enumerable.Repeat("b", 60))}):is({string.Join(", ", Enumerable.Repeat("a", 41))})";
+        Assert.EndsWith("a selector has at most 100 alternatives; name fewer", (await Run($"html /Work/page.html '{nested}'")).Output);
+        var tooLong = $"{new string(' ', 999)}h1";
+        Assert.Equal(ShellResult.Error($"html: '{tooLong}': a selector is at most 1,000 characters long"), await Run($"html /Work/page.html '{tooLong}'"));
     }
 
     [Fact]

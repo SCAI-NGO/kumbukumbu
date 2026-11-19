@@ -39,8 +39,11 @@ public sealed class Html(INoteReader notes) : ICommand
           --attr <name>  the value of one attribute; elements without it are left out
           --count        how many elements the selector picks
           Nothing a page refers to is fetched and no script runs: html reads the file as it is.
-          A call stops after 10 seconds. Inside :has() only > combines selectors, inside :not() and :is()
-          only > and +, as a space or ~ there would try every ancestor or sibling of every element.
+          A call stops after 10 seconds. Matching is linear for combinators; a few pseudo-classes
+          (:nth-child()) cost more and are stopped by the 10-second budget. Inside :not() and :is() only >
+          and + combine selectors, as a space or ~ there would try every ancestor or sibling of every element;
+          inside :has() only type, class, id and attribute selectors, combined by > or in :not() and :is().
+          A selector is at most 1,000 characters long, with at most 100 alternatives.
 
           html /Work/page.html
           html /Work/page.html 'table.costs'
@@ -69,7 +72,7 @@ public sealed class Html(INoteReader notes) : ICommand
         {
             parsed = new CssSelectorParser().ParseSelector(selector);
             if (parsed is null) return ShellResult.Error($"html: not a CSS selector: '{selector}'");
-            if (CssSelection.Refusal(parsed) is { } refusal) return ShellResult.Error($"html: '{selector}': {refusal}");
+            if (CssSelection.Refusal(selector, parsed) is { } refusal) return ShellResult.Error($"html: '{selector}': {refusal}");
         }
 
         var path = Shown(options.Operands[0]);
