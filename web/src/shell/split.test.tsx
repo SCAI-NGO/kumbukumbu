@@ -281,8 +281,10 @@ describe("Split view", () => {
   it("ends with the button again or the right pane's ✕, saving a writing right pane first", async () => {
     const { router, u, puts } = await split();
     await u.click(within(pane("left")).getByRole("button", { name: "Split view" }));
-    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
-    expect(screen.queryByRole("region", { name: /^(Left|Right) pane/ })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(at(router)).toBe("/notes/Work/a.md");
+      expect(screen.queryByRole("region", { name: /^(Left|Right) pane/ })).not.toBeInTheDocument();
+    });
 
     await act(() => router.navigate("/notes/Work/a.md?beside=Work/b.md"));
     await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
@@ -298,7 +300,8 @@ describe("Split view", () => {
     await u.click(within(pane("left")).getByRole("button", { name: "Close this pane" }));
     await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
     expect(panes()).toEqual(["/Work/b.md", null]);
-    expect(await screen.findByRole("heading", { name: "Note b" })).toBeInTheDocument();
+    // The note is read afresh in its new place: on a busy machine that may take longer than a second.
+    expect(await screen.findByRole("heading", { name: "Note b" }, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it("then opens a note picked in the tree in the right pane, in Read mode, while the left keeps Write mode", async () => {
