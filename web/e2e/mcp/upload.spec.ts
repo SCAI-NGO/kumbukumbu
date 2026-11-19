@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Binary upload for agents through MCP (spec 2026-11-17-binary-upload-for-agents-design.md, PR #230; spec of this run
-// §3 and the brief's open point 2). The stack runs as Production on plain HTTP, and there the upload URL is spent and
-// refused with 403 before its ticket is looked up (src/Kumbu.Server/Auth/CallerMiddleware.cs:321-329): so the suite
-// tests the tool's answer, its refusals and that 403, never with a loosened rule (no Development, no trusted proxy, no
+// §3 and the brief's open point 2). The stack runs as Production on plain HTTP, and there a PUT to the upload URL takes
+// its ticket out and spends it, refused with 403 before the wrong-key limit, with the same answer whether or not the
+// token exists (src/Kumbu.Server/Auth/CallerMiddleware.cs:321-329): so the suite tests the tool's answer, its refusals and that 403, never with a loosened rule (no Development, no trusted proxy, no
 // forged X-Forwarded-Proto, no TLS added). The URL and the curl line are secrets: they go through `redact` before any
 // `expect` that would print them, and the URL is asserted by its parts.
 //
 // Promises in scope (spec → test):
+//  the tool's own description (tools/list): for files, not notes; the two
+//  steps; a shell that reaches the server; a new URL when the PUT fails      → "upload: the tool's description …"
 //  the tool's answer: the URL <origin>/api/agent-upload/<token>, the origin
-//  KUMBU_PUBLIC_URL's; when it expires (UTC, 10 minutes) and that it works
+//  KUMBU_PUBLIC_URL's (also when the call came to another host name, here
+//  127.0.0.1); when it expires (UTC, 10 minutes) and that it works
 //  once; the curl line; the limits and that the format is checked from the
-//  bytes                                                                    → "upload: the answer names the URL …"
+//  bytes                                                                    → "upload: the answer names the URL …",
+//                                                                              "upload: the URL's origin is KUMBU_PUBLIC_URL's …"
 //  a token of 32 random bytes, URL-safe (Base64url: 43 characters), a new
 //  one per call                                                             → the same test
-//  refusals before a ticket exists: a note's path, an existing file without
-//  a version, a wrong version, a version for a free path                    → "upload: refuses a note's path …"
+//  refusals before a ticket exists: an invalid path (relative, a vault
+//  alone, an unknown vault), a note's path, an existing file without a
+//  version, a wrong version, a version for a free path                      → "upload: refuses a note's path …"
+//  ("a format Kumbu² doesn't keep" is superseded by the files spec of
+//  2026-11-18: every file type is kept; "the server keeps attachments" can't
+//  be tested here, the stack always keeps them)
 //  a read-only key refused at the tool, not later                           → "upload: refuses a read-only key …"
 //  HTTPS only outside Development: over plain HTTP 403 "Uploads need HTTPS;
 //  this URL was sent in the clear and is spent.", with the sentence to ask
@@ -27,6 +35,14 @@
 //  refusal here, and that refusal comes before the ticket is looked up, so a
 //  second PUT proves nothing about spending. Covered by UploadTicketsTests,
 //  AgentUploadApiTests and the hand test from a claude.ai sandbox (spec §6).
+//  Behind the HTTPS refusal as well, so not observable on this stack: the PUT
+//  reads no cookie and no bearer header (AgentUploadApiTests.cs:226-247,
+//  Ignores_cookie_and_bearer); an unknown token counts against the wrong-key
+//  limit (AgentUploadApiTests.cs:457-469, Unknown_token_counts_as_a_wrong_key);
+//  every refusal of the URL says to ask again (AssertAskAgainAsync,
+//  AgentUploadApiTests.cs:85-90, in each refusal's test; here only the HTTPS
+//  refusal's sentence is asserted); no CORS and the 503 while the vault is
+//  busy: no unit test found for either, and plain HTTP stops the PUT first.
 //  The size limit: the spec says 15 MB; the files spec (2026-11-18, decision
 //  11) raised the bound per file to the admin's setting, 1 GiB by default,
 //  and the answer names that bound: asserted as 1 GiB, the stack's default.
@@ -110,7 +126,7 @@ test("upload: the answer names the URL, its expiry, the curl line and the limits
     // The URL by its parts: KUMBU_PUBLIC_URL's origin (env.sh), the route, a token of 32 bytes in Base64url.
     const parsed = new URL(url);
     expect(parsed.origin).toBe(baseURL);
-    expect(parsed.search + parsed.hash).toBe("");
+    expect(parsed.search === "" && parsed.hash === "", "the URL has no query and no fragment").toBe(true);
     const token = parsed.pathname.replace(/^\/api\/agent-upload\//, "");
     expect(parsed.pathname.startsWith("/api/agent-upload/"), "the URL's path").toBe(true);
     expect(token.length, "the token's length").toBe(43);
@@ -134,6 +150,9 @@ test("upload: refuses a note's path, an existing file without its version, a wro
   await put(`${dir}/Plan.md`, "# Plan\n");
   await put(`${dir}/data.txt`, "hello");
   const refusals: [Record<string, string>, string][] = [
+    [{ path: "diagram.png" }, "upload: 'diagram.png' is no file path; give an absolute path like /Work/images/diagram.png"],
+    [{ path: "/Work" }, "upload: '/Work' is no file path; give an absolute path like /Work/images/diagram.png"],
+    [{ path: `/${folder}/diagram.png` }, `upload: There is no vault '${folder}'.`],
     [{ path: `${dir}/Plan.md` }, `upload: ${dir}/Plan.md is a note; create or replace it with the write tool`],
     [{ path: `${dir}/data.txt` }, `upload: ${dir}/data.txt exists already; to replace it, pass its version (sh: cat shows it)`],
     // data.txt's version is the start of its bytes' SHA-256, 2cf24dba5fb0 for "hello".
@@ -171,11 +190,65 @@ test("upload: a PUT over plain HTTP is refused with 403 and stores nothing @uplo
   const { url } = parse(answer.text);
   expect(new URL(url).protocol, "the stack's URL is plain HTTP").toBe("http:");
 
-  // CallerMiddleware.cs:323-329: spent and refused before the ticket is looked up; the sentence to ask again follows.
+  // CallerMiddleware.cs:323-326: the ticket is taken out and spent, and refused before the wrong-key limit, with the same
+  // answer whether or not the token exists; the sentence to ask again follows.
   expect(await putTo(url, png)).toEqual({ status: 403, body: { error: refusalOverHttp } });
   expect(await mcp.sh(`ls ${path}`)).toEqual({ text: `ls: cannot access '${path}': No such file or directory`, isError: true });
 
   // A token that was never handed out gets the same answer: a guess over HTTP learns nothing.
   const guess = `${baseURL}/api/agent-upload/${randomBytes(32).toString("base64url")}`;
   expect(await putTo(guess, png)).toEqual({ status: 403, body: { error: refusalOverHttp } });
+});
+
+test("upload: the tool's description says what it is for, the two steps and what to do when the PUT fails @upload", async ({ mcp }) => {
+  const { status, message } = await mcp.raw("tools/list", {});
+  expect(status).toBe(200);
+  const tools = (message?.result as { tools: { name: string; description: string }[] }).tools;
+  // Manual.UploadDescription (src/Kumbu.Core/Sh/Manual.cs:136-153), whole: enough for an agent that never reads the skill.
+  expect(tools.find((t) => t.name === "upload")?.description).toBe(
+    [
+      "Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a",
+      "PDF, a spreadsheet, a CSV. The write tool writes notes, SVGs and a skill's text files; everything else is",
+      "uploaded here. Two steps:",
+      "",
+      "1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you",
+      "   need write access). It answers a one-time URL and a curl line.",
+      "2. Run that curl line in a shell, with <local file> the file's path on that machine:",
+      "   curl -sS -X PUT --data-binary @<local file> '<url>'",
+      "   This needs a shell that can reach this server over the network. Without one, you can't upload; tell the user.",
+      "",
+      "To replace a file that exists, pass its version (sh: cat shows it); without version a path that exists is",
+      "refused. Up to the server's bound per file (1 GiB unless its admin set another; the answer names it); a",
+      "file larger than 15 MB is kept, but not read (pdf, img and their kin say so). A name ending in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf must hold that format:",
+      "Kumbu² checks it from the bytes, and a file that isn't what its name says is refused; any other file is kept",
+      "as it is. The URL works once and expires after 10 minutes. If the PUT fails, call upload again for a new URL.",
+      "The PUT's answer says where the file went and its version; reach it from a note with ![](/Folder/file.png)",
+      "(a PDF or any other file as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.",
+    ].join("\n"),
+  );
+});
+
+test("upload: the URL's origin is KUMBU_PUBLIC_URL's, whatever host the call came to @upload", async ({ aliceApi, folder }) => {
+  // A key of Alice's, its MCP calls sent to 127.0.0.1 rather than localhost (the stack listens on both, env.sh sets
+  // KUMBU_PUBLIC_URL to http://localhost:8080). The key lives in memory and is revoked at the end.
+  const body = { name: `e2e upload origin ${randomBytes(3).toString("hex")}`, vaults: { Work: "write" }, expiresInDays: 30 };
+  let response = await aliceApi.send("POST", "/api/keys", { data: body });
+  if (response.status() === 401) {
+    await aliceApi.confirmPassword();
+    response = await aliceApi.send("POST", "/api/keys", { data: body });
+  }
+  expect(response.status(), "POST /api/keys").toBe(201);
+  const created = (await response.json()) as { key: string; apiKey: { id: string } };
+  const other = new Mcp(await request.newContext({ baseURL: "http://127.0.0.1:8080" }), created.key);
+  try {
+    const answer = await other.call("upload", { path: `/Work/${folder}/diagram.png` });
+    expect(answer.isError, redact(answer.text)).toBe(false);
+    const { url } = parse(answer.text);
+    expect(new URL(url).origin).toBe(baseURL);
+    // Spent, so no ticket stays open.
+    expect((await putTo(url, png)).status).toBe(403);
+  } finally {
+    await other.dispose();
+    await aliceApi.json("DELETE", `/api/keys/${encodeURIComponent(created.apiKey.id)}`);
+  }
 });

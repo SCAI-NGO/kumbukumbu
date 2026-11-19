@@ -8,18 +8,21 @@
 //       its summary, a folder the newest change below it; columns aligned          → "ls -l: sizes, summaries and times …"
 //       (all writes of a test fall within a minute or two, and the time has minutes only, so "the newest below it" is
 //       checked as the folder's time equal to the newest time `ls -l` shows inside it, not with two stamps that differ)
+//  #233 the sh tool's description names ls's new options (tools/list)          → "ls: the sh tool's description …"
 //  #233 ls -a / --archive lists the vault's _archive/ too; -la and -al combine     → "ls -a and --archive: the vault's archive …"
 //  #243 calendar <vault> --from D --to D: those days as weeks, each week cut to the range, only the days with entries,
 //       both ends included                                                         → "calendar --from/--to: the days of a range …"
 //       both options needed, at most 366 days, not with --week or --month          → "calendar --from/--to: refuses …"
 //       --tag narrows it: every calendar call here carries a random tag of the test's own, as calendar takes the whole
-//       vault and other tests write into Work at the same time
+//       vault and other tests write into Work at the same time; an untagged entry in the range is left out with the tag
+//       and shown without it                                                       → "calendar --from/--to: the days of a range …"
 //  #245 rg --regions: crop= around the piece of text, :match= with the match's own box where it is narrower, crop= alone
 //       where they are the same; not with -l and the like                          → "rg --regions: match= …"
 // Left out:
 //  #233 the console's l, la, lsa and peek: the web console, @console (browser).
 //  #245 a PDF crop within a photo at the photo's resolution, and img's scaling factor: they need a PDF with an embedded
 //       photo and a picture large enough to be reduced, and the plan scopes @shell's #245 to rg --regions.
+//  #245 upright and right-to-left pieces keep the piece's box: they need a PDF with such text.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -135,6 +138,8 @@ test("calendar --from/--to: the days of a range as their weeks, only days with e
   await put(`${dir}/last.md`, entry("2030-02-13T14:00"));
   await put(`${dir}/after.md`, entry("2030-02-14"));
   await put(`${dir}/later.md`, entry("2030-12-31"));
+  // In the range, without the tag: the tag must leave it out.
+  await put(`${dir}/untagged.md`, "---\nwhen: 2030-02-08\n---\n# Entry\n");
 
   // Wednesday 6 to Wednesday 13 February 2030: weeks 6 and 7, each cut to the range; the days in between have none.
   expect(await mcp.sh(`calendar /Work --from 2030-02-06 --to 2030-02-13 --tag ${tag}`)).toEqual({
@@ -149,6 +154,12 @@ test("calendar --from/--to: the days of a range as their weeks, only days with e
     ].join("\n"),
     isError: false,
   });
+
+  // Without --tag the same range shows the untagged entry, on its day (other tests' entries may be there too).
+  const all = (await mcp.sh(`calendar /Work --from 2030-02-06 --to 2030-02-13`)).text.split("\n");
+  const untagged = all.indexOf(`    untagged  ${dir}/untagged.md`);
+  expect(untagged, "the untagged entry is shown without --tag").toBeGreaterThan(0);
+  expect(all.slice(0, untagged).findLast((l) => /^ {2}\S/.test(l)), "under its day").toBe("  Fri 8 Feb");
 
   // 366 days, the most a range may have: a whole year and one day, each of its weeks, the entries in theirs.
   const year = await mcp.sh(`calendar /Work --from 2030-01-01 --to 2031-01-01 --tag ${tag}`);
@@ -206,4 +217,14 @@ test("rg --regions: match= frames the match where it is narrower than its piece 
     text: "rg: --regions says where matches lie in PDFs; it doesn't go with -l, -c, -v, --files, --tag or --version, nor right of a pipe",
     isError: true,
   });
+});
+
+test("ls: the sh tool's description names -l and -a @shell", async ({ mcp }) => {
+  const { status, message } = await mcp.raw("tools/list", {});
+  expect(status).toBe(200);
+  const sh = (message?.result as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "sh");
+  // Manual.ToolDescription's line for ls (src/Kumbu.Core/Sh/Manual.cs:10), exactly.
+  expect(sh?.description.split("\n")).toContain(
+    "  ls [-l] [-a|--archive] [path]   list a directory (directories end with '/'); -l adds sizes and times; no path lists the vaults",
+  );
 });
