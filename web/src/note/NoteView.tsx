@@ -15,7 +15,7 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useErrorTextFor, useUnnamedVault } from "../discreet/errorText";
-import { previewSide, useEditor, writingSide } from "../state/editor";
+import { previewSide, useEditor, writingSide, type Live, type Side } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
@@ -77,6 +77,9 @@ const OWN_CLICK = "a, button, input, label, select, summary, textarea, [role=but
 
 /** How long the typing pauses before the live preview shows what was typed. */
 const PREVIEW_PAUSE_MS = 250;
+
+/** The editor's live text where the pane on `side` is its live preview, on `path`. */
+const liveFor = (s: ReturnType<typeof useEditor.getState>, side: Side, path: string) => (previewSide(s) === side && s.live?.path === path ? s.live : null);
 
 /** Find in the note, as the pane that isn't focused has it: nothing looked for. */
 const idleFind = { query: "", index: 0, count: 0 };
@@ -160,17 +163,35 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
   const location = useLocation();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
-  // The live preview renders the editor's text, unsaved included: once the typing pauses, and then when React has
-  // time, so typing never waits for it (a long note's render takes longer than the time between two keys).
-  const liveNow = useEditor((s) => (previewSide(s) === side && s.live?.path === path ? s.live : null));
-  const [settled, setSettled] = useState(liveNow);
+  // The live preview renders the editor's text, unsaved included, once the typing pauses: a long note's render takes
+  // longer than the time between two keys, and the next key would wait for it. Taken from the store outside of
+  // rendering, so a key renders nothing here; and in one go, not deferred (`useDeferredValue`): each key's render of the
+  // editor would break off a deferred render under way and start it again, and each new start hold up the next key.
+  const [settled, setSettled] = useState<Live | null>(() => liveFor(useEditor.getState(), side, path));
   useEffect(() => {
-    // Starting and ending at once: only the text as it is typed waits.
-    if (!liveNow || !settled) return setSettled(liveNow);
-    const timer = setTimeout(() => setSettled(liveNow), PREVIEW_PAUSE_MS);
-    return () => clearTimeout(timer);
-  }, [liveNow]);
-  const live = useDeferredValue(settled);
+    let shown = liveFor(useEditor.getState(), side, path);
+    let next = shown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setSettled(shown);
+    const unsubscribe = useEditor.subscribe((s) => {
+      const now = liveFor(s, side, path);
+      if (now === next) return;
+      next = now;
+      clearTimeout(timer);
+      const show = () => {
+        shown = now;
+        setSettled(now);
+      };
+      // Starting and ending at once: only the text as it is typed waits.
+      if (!now || !shown) show();
+      else timer = setTimeout(show, PREVIEW_PAUSE_MS);
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [side, path]);
+  const live = settled;
   const content = live?.text ?? note.data?.content ?? "";
   const parts = useMemo(() => splitFrontmatter(content), [content]);
   const props = useMemo(() => (parts.frontmatter === null ? null : parseProperties(parts.frontmatter)), [parts.frontmatter]);

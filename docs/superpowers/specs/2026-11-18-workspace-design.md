@@ -100,13 +100,13 @@ The proportional fallback in detail (decided by the builder): every place in the
 
 The maintainer's rule: **the pane that isn't writing, on the same note as the writing one, shows that note's live preview.** No separate mode.
 
-- It renders the editor's text, unsaved included, with `MarkdownView` (the editor publishes its text to the store as it changes; the preview takes it through `useDeferredValue`, so typing never waits for the render).
+- It renders the editor's text, unsaved included, with `MarkdownView` (the editor publishes its text to the store as it changes; the preview takes it once the typing pauses, so typing never waits for the render; see below).
 - **It is marked:** lucide `Glasses` (reading glasses) in its note bar, labelled "Live preview of <note>". Why not the eye: `Eye` already stands for discreet vaults, publishing and the password field.
 - **It follows the caret:** the block at or above the caret's line is kept in view (by `data-line`); scrolling the preview by hand stops the following until the next keystroke.
 - **Symmetric by the rule:** a click into the preview's text starts Write mode there (caret where clicked), and the other pane becomes the preview.
 - **A link clicked in the preview** opens in the preview's pane (where a link opens): you write, follow a link, and see that note beside you. The preview ends there.
 - Its task boxes don't tick, and it has no Add property (decided by the builder): a tick or a property written from the preview would land under the editor's unsaved text as a change elsewhere; they are ticked and added in the editor beside it. Links in text not yet saved show as text until the save they come with is read (the API resolves the links of what is saved).
-- It shows the text once the typing pauses for a quarter of a second, and then through `useDeferredValue` (decided by the builder): a long note's render (2,000 lines take some 150 ms) can't be broken off midway, and a key pressed meanwhile waited for it; measured in `web/e2e/workspace/split.spec.ts`.
+- It shows the text once the typing pauses for a quarter of a second, rendered then in one go (decided by the builder; not through `useDeferredValue`, as first planned): a long note's render (2,000 lines take some 100–150 ms) can't be broken off midway, and a deferred one is started again by every key the editor renders, each new start holding up the next key. Read from the store outside of rendering, so a key renders nothing in the preview. At most the key right after a pause can wait for that one render; measured in `web/e2e/workspace/split.spec.ts`.
 - It follows the caret only where the caret's block is out of view, and only as the text or the caret moves (decided by the builder): a scroll by hand stays as it is, without a timer, until the next keystroke.
 - In Read mode in both panes on the same note: both show the note; nothing is special.
 

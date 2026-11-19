@@ -201,16 +201,21 @@ test("workspace split #6: the preview follows the caret, until scrolled by hand,
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 300))));
 
   // Each key's wait between the browser taking it and the page handling it: what a busy main thread would show.
+  // The typed keys only: Control+End before them scrolls the preview to the caret's block, which is no typing.
+  await page.keyboard.press("Control+End");
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 300))));
   await page.evaluate(() => {
     const waits: number[] = [];
     (window as unknown as { waits: number[] }).waits = waits;
     document.addEventListener("keydown", (e) => waits.push(performance.now() - e.timeStamp), true);
   });
-  await page.keyboard.press("Control+End");
-  await page.keyboard.type("\n\nAt the very end", { delay: 40 });
+  // A pause in the middle: the preview renders then, once, and at most the key right after it waits for that.
+  await page.keyboard.type("\n\nAt the", { delay: 40 });
+  await page.waitForTimeout(400);
+  await page.keyboard.type(" very end", { delay: 40 });
   await expect(area).toHaveValue(/At the very end$/);
   const waits = await page.evaluate(() => (window as unknown as { waits: number[] }).waits);
-  expect(Math.max(...waits), `each key handled at once (${waits.map(Math.round).join(", ")} ms)`).toBeLessThan(100);
+  expect(waits.filter((w) => w > 100).length, `each key handled at once (${waits.map(Math.round).join(", ")} ms)`).toBeLessThanOrEqual(1);
 
   // The caret's block in view in the preview.
   await expect(preview.locator("article").getByText("At the very end")).toBeInViewport();
