@@ -11,10 +11,12 @@
 // - a click beside a light window (Recent, What's on) closes it; beside Settings or the console nothing .. windows #3
 // - an unsaved draft in Write mode survives a window ................................................ windows #4
 // - old addresses lead to the right place (`/settings`, `#discreet-vaults`, `/access`, `/access/keys`,
-//   `/keys`, `/skills`, `/skills/:tab`); a deep link shows the window over the shell and closes to it .... windows #5
+//   `/keys`, `/skills`, `/skills/:tab`, `/settings#install`), with replace: Back skips the old address; a
+//   deep link shows the window over the shell and closes to `/` (the note kept, or the vault list) .... windows #5
 // - the navigation marks the current entry (aria-current="page"); the desktop title is "Settings" .... windows #2, #5
 // - on the phone a sheet from a strip at the top to the bottom edge, the navigation behind a tab,
-//   the title naming the entry ("Settings · Security"), choosing folds the navigation .................. windows #6 (@phone)
+//   the title naming the entry ("Settings · Security"), choosing folds the navigation, and so do a tap on
+//   the dimmed content, the arrow and Esc, without going anywhere ...................................... windows #6 (@phone)
 // Left out: a secret on show locking the navigation (needs a key or recovery key revealed on screen, which this run
 // never screenshots or asserts; Vitest covers the lock); the exact sizes and frames (look, not behaviour; the
 // fixed size is asserted once in #3); the console's schemes (task 12's @console); reduced motion.
@@ -196,10 +198,11 @@ test("windows #4: an unsaved draft in Write mode survives a window @windows", as
   await expect.poll(async () => (await aliceApi.getNote(path)).content).toContain("The keeper winds the clockwork.");
 });
 
-test("windows #5: old addresses lead to the window's new ones, and a deep link closes to the shell @windows", async ({ page }) => {
+test("windows #5: old addresses lead to the window's new ones, and a deep link closes to the shell @windows", async ({ page, aliceApi, folder }) => {
   const moved: [string, RegExp, string][] = [
     ["/settings", /\/settings\/appearance$/, "Appearance"],
     ["/settings#discreet-vaults", /\/settings\/security#discreet-vaults$/, "Security"],
+    ["/settings#install", /\/settings\/appearance#install$/, "Appearance"],
     ["/access", /\/settings\/access\/keys$/, "Access"],
     ["/access/keys", /\/settings\/access\/keys$/, "Access"],
     ["/keys", /\/settings\/access\/keys$/, "Access"],
@@ -212,11 +215,21 @@ test("windows #5: old addresses lead to the window's new ones, and a deep link c
     await expect(win(page, "Settings")).toBeVisible();
     await expect(win(page, "Settings").getByRole("navigation", { name: "Settings" }).getByRole("link", { name: entry, exact: true })).toHaveAttribute("aria-current", "page");
   }
-  // A deep link has nothing behind it in the app's history: ✕ shows the shell (the vault list, or the note kept).
+  // A deep link has nothing behind it in the app's history: ✕ goes to `/`, which shows the note kept or the vault list.
   await win(page, "Settings").getByRole("button", { name: "Close" }).click();
-  await expect(win(page, "Settings")).toHaveCount(0);
-  await expect(page).not.toHaveURL(/\/settings|\/skills/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => new URL(page.url()).pathname, "closed to / or the note it opens on").toMatch(/^\/$|^\/notes\//);
   await expect(page.getByRole("button", { name: "Favourites and commands (Ctrl+P)" })).toBeVisible();
+
+  // With replace: Back from where an old address led goes to the page before it, not to the old address.
+  const path = `/Work/${folder}/Harbour.md`;
+  await aliceApi.putNote(path, "# Harbour\n");
+  await openNote(page, path);
+  await page.goto("/keys");
+  await expect(page).toHaveURL(/\/settings\/access\/keys$/);
+  await page.goBack();
+  await expect(page).toHaveURL(at(path));
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("windows #6: on the phone a window is a sheet with its navigation behind a tab, and its title names the entry @windows @phone", async ({ page, aliceApi, folder }, testInfo) => {
@@ -248,6 +261,18 @@ test("windows #6: on the phone a window is a sheet with its navigation behind a 
   await expect(tab).toHaveAttribute("aria-expanded", "true");
   await expect(nav.getByRole("link", { name: "Appearance" })).toHaveAttribute("aria-current", "page");
   await shot(page, testInfo, "windows");
+  // Folded without going anywhere: by a tap on the dimmed content, by the arrow, by Esc (the window stays).
+  for (const fold of ["tap", "arrow", "Esc"] as const) {
+    if (fold === "tap") await page.mouse.click(355, 200);
+    else if (fold === "arrow") await tab.click();
+    else await page.keyboard.press("Escape");
+    await expect(nav, `folded by ${fold}`).toHaveCount(0);
+    await expect(tab).toHaveAttribute("aria-expanded", "false");
+    await expect(page).toHaveURL(/\/settings\/appearance$/);
+    await expect(sheet).toBeVisible();
+    await tab.click();
+    await expect(nav).toBeVisible();
+  }
   await nav.getByRole("link", { name: "Security" }).click();
   await expect(page).toHaveURL(/\/settings\/security$/);
   await expect(nav).toHaveCount(0);

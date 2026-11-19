@@ -5,16 +5,21 @@
 //
 // Promises in scope, and the test that covers each:
 // - Ctrl+P opens the palette and closes it again, in Write mode too, focus back where it was ...... palette #1
-// - the star in the top bar ("Favourites and commands (Ctrl+P)") opens it; Esc and, on the phone, ✕ close it .. palette #1
+// - the star in the top bar ("Favourites and commands (Ctrl+P)") opens it; Esc, a click outside and, on the
+//   phone, ✕ close it; on the phone a sheet from below with the field under the list ............... palette #1
+// - Ctrl+P doesn't open over a dialog; the arrow keys move the highlight ............................ palette #2
 // - commands, vaults with Board/Calendar/Gallery, notes by name; words in any order, case ignored ... palette #2
 // - the last row "Search notes for ‘…’" hands the text to search ................................. palette #2
-// - the empty palette: favourites, then Recent (the notes opened lately); the hint without favourites .. palette #3, #4
+// - the empty palette: favourites, then Recent (the notes opened lately, newest first); the hint
+//   without favourites ............................................................................. palette #3, #4
+//   (whether a starred note also stands in Recent is the builder's choice: not asserted)
 // - a row's star and Ctrl+D make a favourite that stays on top while typing, also after a reload .. palette #3 (@serial)
 // - a note's "Add to favourites" / "Remove from favourites" in its menu ........................... palette #4 (@serial)
 // - the group Note: the menu's items, shown once something is typed, filtered by group and name
 //   ("no pub" finds Publish…), no star, Ctrl+D does nothing; the row runs what the menu runs ...... palette #5
 // - Duplicate: "Copy of …" beside it without the calendar's keys, then "… 2"; the original stays open,
 //   the notice's Open goes to the copy ............................................................ palette #6
+// - Duplicate in Write mode saves the unsaved text first, and the copy holds it ................... palette #11
 // - Shift+F10 opens the note's menu with the items that fit the mode, in Write mode at the caret ..... palette #7
 // - the keyboard menu: Esc closes it, the focus and caret back where they were ..................... palette #8 (F-12)
 // - the menu flips above where there is no room below (PointMenu), on screen whatever the point ..... palette #9 (F-13)
@@ -22,7 +27,9 @@
 // Left out: Cmd+P on a Mac (the projects are Linux Chromium; Vitest covers it); the 50-note cap and the ranking
 // within a group (Vitest, and other tests' notes in Work would make counts fragile); stale favourites and the
 // 409 retry (need a second device's write timed against the tree; xUnit and Vitest cover them); the context-menu key
-// (Chromium in Playwright doesn't deliver a ContextMenu keydown the same way on every platform; Shift+F10 is the same handler).
+// (Chromium in Playwright doesn't deliver a ContextMenu keydown the same way on every platform; Shift+F10 is the same handler);
+// Duplicate's "not for _archive/ notes, not without write" and a card keeping `column` and losing `rank` and `moved`
+// (Vitest, duplicate.test.ts and useNoteActions; an archived note and a read-only vault need a set-up of their own).
 import type { Locator, Page } from "@playwright/test";
 import { encodePath, type Api } from "../support/api";
 import { secrets } from "../support/env";
@@ -68,7 +75,7 @@ async function removeFavourites(api: Api, keys: string[]) {
 }
 
 // Every note a test here makes, by name in its folder.
-const made = ["Harbour", "Harbour light", "Other", "Beacon", "Copy of Harbour", "Copy of Harbour 2"];
+const made = ["Harbour", "Harbour light", "Other", "Beacon", "Lantern", "Copy of Harbour", "Copy of Harbour 2"];
 
 test.afterEach(async ({ aliceApi, folder }) => {
   for (const name of made) await aliceApi.deleteNote(`/Work/${folder}/${name}.md`).catch(() => undefined);
@@ -88,14 +95,20 @@ test("palette #1: Ctrl+P and the star open the palette, Ctrl+P, Esc and ✕ clos
   await expect(field(page)).toBeFocused();
   await shot(page, testInfo, "palette");
   if (onPhone(testInfo)) {
-    // A sheet from below, the field near the thumb: below the list.
-    // Once it has slid up.
+    // A sheet from below, once it has slid up, with the field near the thumb: below the list.
     await expect.poll(async () => Math.round(await palette(page).evaluate((d) => d.getBoundingClientRect().bottom)), "flush with the bottom").toBe(page.viewportSize()!.height);
     await expect(palette(page).getByRole("heading", { name: "Favourites and commands" })).toBeVisible();
+    const list = (await palette(page).getByRole("listbox", { name: "Favourites and commands" }).boundingBox())!;
+    expect((await field(page).boundingBox())!.y, "the field below the list").toBeGreaterThanOrEqual(list.y + list.height);
     await palette(page).getByRole("button", { name: "Close" }).click();
   } else await page.keyboard.press("Escape");
   await expect(palette(page)).toHaveCount(0);
   await expect(starButton(page), "the focus back on the star").toBeFocused();
+
+  // A click outside it closes it too: beside the panel on the desktop, on the strip above the sheet on the phone.
+  await openPalette(page);
+  await page.mouse.click(10, 10);
+  await expect(palette(page)).toHaveCount(0);
 
   // Write mode: Ctrl+P is the palette's there too, not the editor's or Print; Esc gives the editor the focus back.
   await page.getByRole("button", { name: "Write" }).click();
@@ -114,10 +127,29 @@ test("palette #2: commands, vaults and notes are found by words in any order, an
   await aliceApi.putNote(path, "# Harbour light\n");
   await openNote(page, path);
 
+  // Not over a dialog: Rename or move's question keeps Ctrl+P.
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename or move" }).click();
+  const rename = page.getByRole("dialog", { name: /^Rename or move/ });
+  await expect(rename).toBeVisible();
+  await page.keyboard.press("Control+p");
+  await expect(rename).toBeVisible();
+  await expect(palette(page)).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(rename).toHaveCount(0);
+
   // A command by two words' starts, case ignored.
   await openPalette(page);
   await field(page).fill("SET vau");
   await expect(group(page, "Commands").getByRole("option").first()).toHaveAccessibleName("Vaults, Settings");
+  // The arrows move the highlight, and back.
+  const rows = palette(page).getByRole("option");
+  await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowDown");
+  await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+  await expect(rows.first()).toHaveAttribute("aria-selected", "false");
+  await page.keyboard.press("ArrowUp");
+  await expect(rows.first()).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/settings\/vaults$/);
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
@@ -210,28 +242,32 @@ test("palette #3: the star and Ctrl+D make favourites that stay on top, also aft
 test("palette #4: a note's menu adds it to the favourites and removes it, and the empty palette lists it above Recent @palette @serial", async ({ page, aliceApi, folder }) => {
   const harbour = `/Work/${folder}/Harbour.md`;
   const beacon = `/Work/${folder}/Beacon.md`;
+  const lantern = `/Work/${folder}/Lantern.md`;
   const mine = [`note:Work/${folder}/Harbour.md`];
   await aliceApi.putNote(harbour, "# Harbour\n");
   await aliceApi.putNote(beacon, "# Beacon\n");
+  await aliceApi.putNote(lantern, "# Lantern\n");
   expect((await favourites(aliceApi)).favourites, "no favourite left by another test").toEqual([]);
   try {
-    // Recent is this tab's: Beacon by its address, then Harbour from the palette, in the app.
+    // Recent is this tab's: Beacon by its address, then Lantern and Harbour from the palette, in the app.
     await openNote(page, beacon);
-    await openPalette(page);
-    await field(page).fill(`${folder} harbour`);
-    await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Harbour\\.md$`));
-    await expect(page.locator("article").getByRole("heading", { name: "Harbour", level: 1 })).toBeVisible();
+    for (const name of ["Lantern", "Harbour"]) {
+      await openPalette(page);
+      await field(page).fill(`${folder} ${name}`);
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/${name}\\.md$`));
+      await expect(page.locator("article").getByRole("heading", { name, level: 1 })).toBeVisible();
+    }
     await page.getByRole("button", { name: "Note actions" }).click();
     await page.getByRole("menuitem", { name: "Add to favourites" }).click();
     await expect.poll(async () => (await favourites(aliceApi)).favourites.map(keyOf)).toEqual(mine);
 
-    // Empty: the favourite, then Recent with the notes opened lately, newest first, the favourite not twice.
+    // Empty: the favourite, then Recent with the notes opened lately, newest first. Whether the starred Harbour
+    // also stands in Recent is the builder's choice; the others' order is the spec's.
     await openPalette(page);
     await expect.poll(() => labels(group(page, "Favourites").getByRole("option"))).toEqual([`Harbour, Work / ${folder}`]);
-    const recent = group(page, "Recent").getByRole("option");
-    await expect(recent.first()).toHaveAccessibleName(`Beacon, Work / ${folder}`);
-    await expect(group(page, "Recent").getByRole("option", { name: `Harbour, Work / ${folder}`, exact: true })).toHaveCount(0);
+    const recent = async () => (await labels(group(page, "Recent").getByRole("option"))).filter((l) => l?.endsWith(`Work / ${folder}`) && !l.startsWith("Harbour,"));
+    await expect.poll(recent).toEqual([`Lantern, Work / ${folder}`, `Beacon, Work / ${folder}`]);
     // No Note group in the empty palette.
     await expect(group(page, "Note")).toHaveCount(0);
     await page.keyboard.press("Escape");
@@ -271,7 +307,11 @@ test("palette #5: with a note open the group Note offers its menu's items: no st
     await expect(note.getByRole("option").first()).toHaveAccessibleName("Publish…, Harbour");
     await expect(note.getByRole("button")).toHaveCount(0);
     await page.keyboard.press("Control+d");
+    // Nothing starred: the open note's own item still offers to add it, and the server holds nothing of this folder.
+    await field(page).fill("note fav");
+    await expect(group(page, "Note").getByRole("option", { name: "Add to favourites, Harbour", exact: true })).toBeVisible();
     await expect(group(page, "Favourites")).toHaveCount(0);
+    expect((await favourites(aliceApi)).favourites.filter((f) => (f.path ?? "").startsWith(`${folder}/`)), "no favourite of this folder").toEqual([]);
     await field(page).fill("harbour");
     await expect(group(page, "Note")).toHaveCount(0);
 
@@ -329,6 +369,12 @@ test("palette #6: Duplicate makes Copy of … beside the note without its date, 
   await expect(notice).toHaveCount(0);
 });
 
+/** The menu's box as the page lays it out. */
+const boxOf = (menu: Locator) => menu.evaluate((m) => {
+  const r = m.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+});
+
 test("palette #7: Shift+F10 opens the note's menu, with Read mode's items in Read mode and at the caret with Write mode's in Write mode @palette", async ({ page, aliceApi, folder }) => {
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
@@ -346,17 +392,28 @@ test("palette #7: Shift+F10 opens the note's menu, with Read mode's items in Rea
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await expect(source).toBeVisible();
   await source.focus();
-  await source.evaluate((area: HTMLTextAreaElement) => area.setSelectionRange(5, 5));
-  await page.keyboard.press("Shift+F10");
-  await expect(menu).toBeVisible();
+  const openAt = async (offset: number) => {
+    await source.evaluate((area: HTMLTextAreaElement, at: number) => area.setSelectionRange(at, at), offset);
+    await page.keyboard.press("Shift+F10");
+    await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
+    const top = (await boxOf(menu)).top;
+    await page.mouse.click(640, 40);
+    await expect(menu).toHaveCount(0);
+    return top;
+  };
+  // On the first line, and on the third ("The lighthouse."): the menu follows the caret down two lines.
+  const first = await openAt(5);
+  const third = await openAt("# Harbour\n\nThe".length);
+  const line = await source.evaluate((a) => parseFloat(getComputedStyle(a).lineHeight));
+  const area = (await source.boundingBox())!;
+  expect(first, "below the editor's top").toBeGreaterThanOrEqual(area.y);
+  expect(third - first, "two lines further down").toBeGreaterThanOrEqual(2 * line - 4);
+  expect(third - first).toBeLessThanOrEqual(2 * line + 4);
+
   // Write mode leaves out what acts on the saved text.
+  await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
   for (const name of ["Find in note", "History", "Publish…", "Add property…"]) await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveCount(0);
-  // At the caret: its top just below the first line of the editor.
-  const area = (await source.boundingBox())!;
-  const box = (await menu.boundingBox())!;
-  expect(box.y, "below the editor's top").toBeGreaterThanOrEqual(area.y);
-  expect(box.y, "at the first line's caret").toBeLessThan(area.y + 80);
   await page.mouse.click(640, 40);
   await expect(menu).toHaveCount(0);
 });
@@ -383,22 +440,27 @@ test("palette #8: the keyboard menu takes the focus, and Esc closes it with the 
   expect(await source.evaluate((a: HTMLTextAreaElement) => [a.selectionStart, a.selectionEnd]), "the caret where it was").toEqual([5, 5]);
 });
 
-/** The menu's box as the page lays it out. */
-const boxOf = (menu: Locator) => menu.evaluate((m) => {
-  const r = m.getBoundingClientRect();
-  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
-});
-
 test("palette #9: Shift+F10 straight after the note opens gives a menu that fits the window @palette", async ({ page, aliceApi, folder }) => {
   test.fail(true, "F-13 (Medium, bug): the keyboard menu is placed for the items known when it opens and isn't placed again when the rest arrive, so its lower items run off the window");
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
+  // The favourites and the vault's publications held until the menu is open, as on a slow line: the menu opens with
+  // the items known then, and the rest arrive after it.
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  for (const url of ["**/api/account/favourites", "**/api/vaults/Work/publications"])
+    await page.route(url, async (route) => {
+      if (route.request().method() === "GET") await held;
+      await route.continue();
+    });
   await openNote(page, path);
 
   const menu = page.getByRole("menu", { name: "Note actions" });
   await page.keyboard.press("Shift+F10");
   await expect(menu).toBeVisible();
-  // Every item there: the favourites and the publishing marks answer after the note is shown.
+  await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true }), "held: not yet in the menu").toHaveCount(0);
+  release();
+  // Every item there now.
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeAttached();
   await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeAttached();
   const box = await boxOf(menu);
@@ -422,4 +484,27 @@ test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ op
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
   const byKey = await boxOf(menu);
   expect({ left: Math.round(byKey.left), right: Math.round(byKey.right) }, "F-14: the same place as the dock's own menu").toEqual({ left: Math.round(byMouse.left), right: Math.round(byMouse.right) });
+});
+
+test("palette #11: Duplicate in Write mode saves the unsaved text first, and the copy holds it @palette", async ({ page, aliceApi, folder }) => {
+  const path = `/Work/${folder}/Harbour.md`;
+  await aliceApi.putNote(path, "# Harbour\n");
+  await openNote(page, path);
+  await page.getByRole("button", { name: "Write" }).click();
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  await expect(source).toBeVisible();
+  await source.focus();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("\nThe keeper winds the clockwork.");
+
+  // From the keyboard menu, chosen with the mouse (its keys are F-12's).
+  await page.keyboard.press("Shift+F10");
+  const menu = page.getByRole("menu", { name: "Note actions" });
+  await menu.getByRole("menuitem", { name: "Duplicate", exact: true }).click();
+  await expect(page.getByRole("status", { name: "Copy created" })).toHaveText(/^Copy of Harbour\.md created/);
+  expect((await aliceApi.getNote(`/Work/${folder}/Copy of Harbour.md`)).content, "the copy holds the typed line").toContain("The keeper winds the clockwork.");
+  expect((await aliceApi.getNote(path)).content, "the original saved first").toContain("The keeper winds the clockwork.");
+  // Still writing the original.
+  await expect(page).toHaveURL(new RegExp(`/notes/Work/${folder}/Harbour\\.md$`));
+  await expect(page.getByRole("button", { name: "Done" })).toBeVisible();
 });
