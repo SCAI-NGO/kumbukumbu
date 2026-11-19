@@ -37,7 +37,8 @@ function signedIn({ level = "owner" as "owner" | "read", extra = {} as Parameter
       const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
       const body = (await r.json()) as { content: string };
       puts.push({ path, content: body.content });
-      return json(200, { path, version: "v2", lastWriteAt: "2026-10-25T09:01:00Z" });
+      // As the server answers: the note as stored.
+      return json(200, { path, content: body.content, version: "v2", lastWriter: "ada", lastWriteAt: "2026-10-25T09:01:00Z", current: true });
     },
     "GET /api/version/*": (r) => json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/version".length)), version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
     "GET /api/links/*": (r) => {
@@ -769,8 +770,9 @@ describe("the live preview", () => {
       },
       "PUT /api/notes/*": async (r) => {
         const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
-        saved.set(path, ((await r.json()) as { content: string }).content);
-        return json(200, { path, version: "v2", lastWriteAt: "2026-10-25T09:01:00Z" });
+        const content = ((await r.json()) as { content: string }).content;
+        saved.set(path, content);
+        return json(200, { path, content, version: "v2", lastWriter: "ada", lastWriteAt: "2026-10-25T09:01:00Z", current: true });
       },
     });
     await u.click(screen.getByRole("button", { name: "Split view" }));
