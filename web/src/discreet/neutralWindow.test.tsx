@@ -82,7 +82,7 @@ describe("the neutral window", () => {
 
   it("knows each kind of route that names a vault", () => {
     shown("Tagebuch");
-    for (const url of ["/notes/Tagebuch/a.md", "/board/Tagebuch", "/gallery/Tagebuch", "/view/Tagebuch/b.png", "/checkpoints/Tagebuch/c1/a.md", "/notes/Tagebuch"])
+    for (const url of ["/notes/Tagebuch/a.md", "/board/Tagebuch", "/gallery/Tagebuch", "/view/Tagebuch/b.png", "/checkpoints/Tagebuch/c1/a.md", "/blame/Tagebuch/a.md", "/notes/Tagebuch"])
       expect(discreetUrl(url), url).toBe(true);
     for (const url of ["/notes/Work/a.md", "/", "/settings", "/discreet", "/notes/Tagebuchx/a.md"]) expect(discreetUrl(url), url).toBe(false);
   });

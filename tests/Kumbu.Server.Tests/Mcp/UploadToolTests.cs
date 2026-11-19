@@ -101,7 +101,23 @@ public sealed class UploadToolTests(KumbuAppFactory app)
     }
 
     [Theory]
-    [InlineData("x.docx")]
+    [InlineData("report.xlsx")]
+    [InlineData("Makefile")]
+    public async Task Answers_a_url_for_any_file(string name)
+    {
+        var (vault, _, key, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/{name}");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Contains("/api/agent-upload/", Text(result), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("_skills/x/tool.bin")]
+    [InlineData("_skills/x/run.py")]
+    [InlineData("a/.vaultkeep")]
     [InlineData("x.md")]
     [InlineData("../x.png")]
     public async Task Refuses_a_path_it_cannot_take(string name)
@@ -114,6 +130,17 @@ public sealed class UploadToolTests(KumbuAppFactory app)
 
         Assert.True(result.IsError);
         Assert.Equal(before, Tickets);
+    }
+
+    [Fact]
+    public async Task Names_a_file_a_skills_folder_refuses_once()
+    {
+        var (vault, _, key, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/_skills/x/tool.bin");
+
+        Assert.Equal($"upload: /{vault}/_skills/x/tool.bin: {Kumbu.Core.Attachments.AttachmentFormat.SkillFolderMessage}", Text(result));
     }
 
     [Fact]

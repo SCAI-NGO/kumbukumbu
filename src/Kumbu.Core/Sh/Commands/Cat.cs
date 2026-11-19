@@ -185,7 +185,7 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
         {
             if (await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is not { } bytes) return ShellResult.Error($"cat: {path.Value}: the file's content is missing");
             // The current version only: an earlier version's writer is history's to show.
-            return ShellResult.Ok(Encoding.UTF8.GetString(bytes)) with { Notice = version is null && marks is not null ? await marks.NoticeAsync([path], ct) : null };
+            return ShellResult.Ok(StoreAttachments.Text(bytes)) with { Notice = version is null && marks is not null ? await marks.NoticeAsync([path], ct) : null };
         }
 
         // An SVG's source after its line, for an agent to read and write again whole: the current one with the
@@ -213,7 +213,7 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
         var (pathText, fragment) = SectionAddress.Split(arg);
         if (fragment is not null || !VaultPath.TryParse(pathText, out var path)) return result;
         // A script's '#' comments are not headings; the output limit cuts a long text file as it does any output, an SVG too.
-        if (AttachmentFormat.ForPath(path) is { } kept && (kept.Kind == AttachmentKind.Text || kept == AttachmentFormat.Svg)) return result;
+        if (!path.IsNote) return result;
 
         var tokens = (result.Output.Length + OutputLimit.CharsPerToken - 1) / OutputLimit.CharsPerToken;
         var quoted = SectionLookup.Quote(path);

@@ -8,20 +8,25 @@ import {
   A4,
   CORNER_COLOURS,
   CORNER_SIDE,
+  CAPTION_AT,
   CROPPED_BOX,
   CROP_BOX,
   KB,
   LARGE,
   MEDIUM,
+  PHOTO,
   ROTATED_BOX,
   SMALL,
+  captionedScanPage,
   chartPage,
   cornersPage,
   cropBoxPage,
   noiseCanvas,
   photoPage,
   rotatedPage,
+  scanPage,
   threePages,
+  twoImagesPage,
 } from "./fixtures.js";
 
 const within = (r: { width: number; height: number }, t: Target) => {
@@ -119,6 +124,40 @@ describe("renderPage", () => {
     const r = await renderPage(await chartPage(), 1, LARGE, { x: 70, y: 400, w: 20, h: 10 });
     expect(r.width).toBe(Math.floor((20 * 600) / 72));
     expect(r.height).toBe(Math.floor((10 * 600) / 72));
+  });
+
+  // twoImagesPage's photo: 400 × 300 px over 300 × 225 pt, displayed from y 842 − 72 − 225 = 545.
+  const inPhoto = { x: PHOTO.x + 20, y: A4.height - PHOTO.y - PHOTO.height + 20, w: 100, h: 50 };
+  const photoScale = PHOTO.pixels[0] / PHOTO.width;
+  // The pixels of a point of a picture: the root of its pixels over its area in points.
+  const scanScale = Math.sqrt((119 * 168) / (A4.width * A4.height));
+
+  it("renders a region within an image at the image's own resolution, not finer", async () => {
+    const r = await renderPage(await twoImagesPage(), 1, LARGE, inPhoto);
+    expect([r.width, r.height]).toEqual([Math.floor(100 * photoScale), Math.floor(50 * photoScale)]);
+  });
+
+  it("keeps the cap on a turned page", async () => {
+    // Turned by 90°, the region x, y, w, h of the page lies at H − y − h, x, h, w.
+    const turnedCrop = { x: A4.height - inPhoto.y - inPhoto.h, y: inPhoto.x, w: inPhoto.h, h: inPhoto.w };
+    const r = await renderPage(await twoImagesPage(), 1, LARGE, turnedCrop, 90);
+    expect([r.width, r.height]).toEqual([Math.floor(50 * photoScale), Math.floor(100 * photoScale)]);
+  });
+
+  it("caps a scan with an invisible text layer at the scan's resolution", async () => {
+    const r = await renderPage(await scanPage(true), 1, LARGE, { x: 40, y: 30, w: 200, h: 100 });
+    expect(r.width).toBe(Math.floor(200 * scanScale));
+  });
+
+  it("renders a region that reaches beyond the image, or holds visible text, as finely as a vector page", async () => {
+    const beyond = await renderPage(await twoImagesPage(), 1, LARGE, { ...inPhoto, x: PHOTO.x - 20 });
+    expect(beyond.width).toBe(Math.floor((100 * 600) / 72));
+    const caption = { x: CAPTION_AT.x - 5, y: A4.height - CAPTION_AT.y - 20, w: 100, h: 30 };
+    const captioned = await renderPage(await captionedScanPage(), 1, LARGE, caption);
+    expect(captioned.width).toBe(Math.floor((100 * 600) / 72));
+    // Away from the caption, the same page's picture is capped.
+    const below = await renderPage(await captionedScanPage(), 1, LARGE, { x: 50, y: 400, w: 200, h: 100 });
+    expect(below.width).toBe(Math.floor(200 * scanScale));
   });
 
   it("refuses a region beyond the page", async () => {

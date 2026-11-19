@@ -727,6 +727,64 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         Assert.Equal(5, Assert.Single(await StoredEmbeddingsAsync(s)).Chunks.Count);
     }
 
+    private static readonly byte[] KeyOfU1 = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+    private static readonly byte[] KeyOfU2 = Enumerable.Range(2, 32).Select(i => (byte)i).ToArray();
+
+    /// <summary>Writes "<paramref name="word"/> 0", "<paramref name="word"/> 1", … into the user's vault while the
+    /// index isn't running, so all of it waits in the queue in the order written.</summary>
+    private static async Task WriteAsync(VaultCatalog catalog, SearchIndex index, string user, byte[] userKey, string vault, string word, int count)
+    {
+        var store = new EncryptedNoteStore(catalog, new UserCredential(user, userKey), index);
+        for (var i = 0; i < count; i++) await store.TryCreateAsync(New($"/{vault}/{word}-{i}.md", $"{word} {i}\n"), Ct);
+    }
+
+    /// <summary>Which word each note embedded carried, in the order embedded.</summary>
+    private static List<string> Order(FakeEmbedder embedder)
+    {
+        lock (embedder.Seen) return [.. embedder.Seen.Where(s => !s.Query).Select(s => s.Text.Split('-')[0])];
+    }
+
+    [Fact]
+    public async Task One_owners_backlog_does_not_hold_up_another_owners_note()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var catalog = world.Catalog();
+        var embedder = new FakeEmbedder();
+        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, []), NullLogger<SearchIndex>.Instance);
+        await catalog.CreateForUserAsync("Anna", "u1", KeyOfU1, Ct);
+        await catalog.CreateForUserAsync("Bert", "u2", KeyOfU2, Ct);
+        await WriteAsync(catalog, index, "u1", KeyOfU1, "Anna", "anna", 20);
+        await WriteAsync(catalog, index, "u2", KeyOfU2, "Bert", "bert", 1);
+
+        await index.StartAsync(Ct);
+        await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var order = Order(embedder);
+        Assert.Equal(21, order.Count);
+        Assert.Contains("bert", order.Take(2));
+    }
+
+    [Fact]
+    public async Task An_owner_with_two_vaults_gets_one_turn_not_two()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var catalog = world.Catalog();
+        var embedder = new FakeEmbedder();
+        var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder, []), NullLogger<SearchIndex>.Instance);
+        await catalog.CreateForUserAsync("Anna", "u1", KeyOfU1, Ct);
+        await catalog.CreateForUserAsync("Archive", "u1", KeyOfU1, Ct);
+        await catalog.CreateForUserAsync("Bert", "u2", KeyOfU2, Ct);
+        await WriteAsync(catalog, index, "u1", KeyOfU1, "Anna", "anna", 3);
+        await WriteAsync(catalog, index, "u1", KeyOfU1, "Archive", "archive", 3);
+        await WriteAsync(catalog, index, "u2", KeyOfU2, "Bert", "bert", 3);
+
+        await index.StartAsync(Ct);
+        await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        // u1's notes in the order written, taking turns with u2's: per vault, Bert would wait for Anna and Archive.
+        Assert.Equal(["anna", "bert", "anna", "bert", "anna", "bert", "archive", "archive", "archive"], Order(embedder));
+    }
+
     /// <summary>The real model, where it has been downloaded (KUMBU_MODEL_DIR): meaning across languages.</summary>
     [Fact]
     public async Task The_real_model_ranks_by_meaning()

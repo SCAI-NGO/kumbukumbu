@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,12 +53,15 @@ const garden = item("/Home/Garden.md", { writer: "liz", writerKind: "agent", wri
 
 const vault = (name: string) => ({ name, notes: 4, embeddings: "internal", canWrite: true, level: "owner" });
 
-/** Recent changes answers `answer` for each request, which `asked` records as its query. */
-function api(answer: (query: URLSearchParams) => RecentView, vaults = ["Home", "Skills", "Work"]) {
+/**
+ * Recent changes answers `answer` for each request, which `asked` records as its query. `shown` names the discreet
+ * vaults the session shows at the time of each read; while there are some, the session says shown.
+ */
+function api(answer: (query: URLSearchParams) => RecentView, vaults = ["Home", "Skills", "Work"], shown: () => string[] = () => []) {
   const asked: URLSearchParams[] = [];
   const fetch = fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
-    "GET /api/vaults": () => json(200, vaults.map(vault)),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: shown().length > 0, until: null } }),
+    "GET /api/vaults": () => json(200, vaults.map((name) => ({ ...vault(name), discreet: shown().includes(name) }))),
     "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
     "GET /api/recent": (r) => {
       const query = new URL(r.url).searchParams;
@@ -263,11 +267,12 @@ describe("Recent changes", () => {
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
   });
 
-  it("hiding or showing the discreet vaults clears the filters, which may name one", async () => {
-    for (const change of [() => useDiscreet.setState({ revealed: true }), () => useDiscreet.setState({ names: new Set(["Home"]) })]) {
-      const { last } = api(() => view([certificate, sketch, garden]));
+  it("hiding the discreet vaults clears the filters, which may name one", async () => {
+    for (const change of [() => useDiscreet.setState({ revealed: false }), () => useDiscreet.setState({ names: new Set() })]) {
+      const { last } = api(() => view([certificate, sketch, garden]), ["Home", "Skills", "Work"], () => ["Home"]);
       renderApp("/recent");
       await page();
+      await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: true, names: new Set(["Home"]) }));
       await waitFor(() => expect(rows()).toHaveLength(3));
       await userEvent.click(chip("Home"));
       await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Home");
@@ -283,13 +288,38 @@ describe("Recent changes", () => {
     }
   });
 
+  it("the discreet vaults' names coming after the words were typed leave the filters be", async () => {
+    // After a reload the session and the vault list may answer after something was typed: what they bring hides nothing.
+    let shown: string[] = [];
+    const { last } = api(() => view([certificate, sketch, garden]), ["Home", "Skills", "Work"], () => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/recent", queryClient);
+    await page();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    await userEvent.click(chip("Skills"));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "Pump");
+    await waitFor(() => expect([last().get("words"), last().getAll("skip")]).toEqual(["Pump", ["Skills"]]));
+
+    shown = ["Home"];
+    await act(() => queryClient.invalidateQueries({ queryKey: ["session"] }));
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: true, names: new Set(["Home"]) }));
+    expect(screen.getByRole("searchbox", { name: "Find by name" })).toHaveValue("Pump");
+    expect(chip("Skills")).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => expect([last().get("words"), last().getAll("skip")]).toEqual(["Pump", ["Skills"]]));
+  });
+
   it("hiding the discreet vaults shows nothing kept from before, not for a moment, under any filter", async () => {
     let hidden = false;
     const diary = item("/Tagebuch/Brief.md");
-    api(() => (hidden ? view([certificate], { vaults: ["Work"] }) : view([diary, certificate], { vaults: ["Tagebuch", "Work"] })), ["Tagebuch", "Work"]);
-    act(() => useDiscreet.setState({ revealed: true, names: new Set(["Tagebuch"]) }));
+    api(
+      () => (hidden ? view([certificate], { vaults: ["Work"] }) : view([diary, certificate], { vaults: ["Tagebuch", "Work"] })),
+      ["Tagebuch", "Work"],
+      () => (hidden ? [] : ["Tagebuch"]),
+    );
     renderApp("/recent");
     await page();
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: true, names: new Set(["Tagebuch"]) }));
     await waitFor(() => expect(rows()).toHaveLength(2));
     await userEvent.click(chip("Work"));
     await waitFor(() => expect(chip("Work")).toHaveAttribute("aria-pressed", "false"));

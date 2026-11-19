@@ -15,6 +15,7 @@ const tree = {
     folders: [],
     notes: [
       entry("/Work/a shot.png", "image", "image/png"),
+      entry("/Work/data.xlsx", "file", "application/octet-stream"),
       entry("/Work/plan.md"),
       entry("/Work/report.pdf", "pdf", "application/pdf"),
       entry("/Work/z photo.jpg", "image", "image/jpeg"),
@@ -62,7 +63,7 @@ describe("attachments in the tree", () => {
   it("shows each entry with its kind's icon and an attachment's name with its extension", async () => {
     await openDrawer();
     const kinds = [...drawer().querySelectorAll("[data-file-kind]")].map((e) => `${e.getAttribute("data-file-kind")} ${e.textContent}`);
-    expect(kinds).toEqual(["image a shot.png", "note plan", "pdf report.pdf", "image z photo.jpg"]);
+    expect(kinds).toEqual(["image a shot.png", "file data.xlsx", "note plan", "pdf report.pdf", "image z photo.jpg"]);
     expect(within(drawer()).getByRole("button", { name: "Actions for report.pdf" })).toBeInTheDocument();
     expect(within(drawer()).getByRole("button", { name: "Actions for plan" })).toBeInTheDocument();
   });
@@ -71,7 +72,13 @@ describe("attachments in the tree", () => {
     const router = await openDrawer();
     await userEvent.click(within(drawer()).getByRole("button", { name: "report.pdf" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/view/Work/report.pdf"));
-    expect(router.state.location.state).toEqual({ paths: ["/Work/a shot.png", "/Work/report.pdf", "/Work/z photo.jpg"] });
+    expect(router.state.location.state).toEqual({ paths: ["/Work/a shot.png", "/Work/data.xlsx", "/Work/report.pdf", "/Work/z photo.jpg"] });
+  });
+
+  it("opens a file in the lightbox, not as a note", async () => {
+    const router = await openDrawer();
+    await userEvent.click(within(drawer()).getByRole("button", { name: "data.xlsx" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/view/Work/data.xlsx"));
   });
 
   it("the vault's menu opens its gallery, beside the board", async () => {

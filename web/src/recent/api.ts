@@ -15,7 +15,7 @@ export type RecentItem = {
   vault: string;
   title: string;
   folder: string;
-  kind: "note" | "image" | "pdf" | "text";
+  kind: "note" | "image" | "pdf" | "text" | "file";
   flag: string | null;
   writer: string;
   writerKind: string | null;

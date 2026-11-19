@@ -85,6 +85,9 @@ public sealed class UnlockedVault
 
     public string Name { get; }
 
+    /// <summary>The id of the account that owns the vault; null for a vault without one, the dev token's.</summary>
+    public string? Owner { get; init; }
+
     /// <summary>The name its owner renamed the vault to (rename spec §1.2), or null; <see cref="Name"/>, in every stored
     /// path, never changes. Set under <see cref="Gate"/>; after a rename, on the object current then, under the catalog's
     /// loading lock instead, under which a load publishes its object.</summary>
@@ -685,7 +688,12 @@ public sealed class UnlockedVault
         JsonSerializer.Deserialize<T>(VaultCrypto.Open(_contentKey, blob, context))
         ?? throw new InvalidDataException($"Empty payload in {context}");
 
-    private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length));
+    private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length)) + Size(n.Authorship);
+
+    /// <summary>A run's two ints, each write's label and a rough allowance for its reference and time.</summary>
+    private static long Size(Authorship? a) => a is null ? 0 : 8L * a.Runs.Count + a.Writes.Sum(w => 2L * w.Label.Length + WriteBytes);
+
+    private const long WriteBytes = 96;
 
     /// <summary>A record's strings and a rough allowance per state for the rest.</summary>
     private static long Size(StoredAttachment a) => 2L * (a.Path.Value.Length + a.LastWriter.Length) + StateBytes * (1 + a.History.Count);
@@ -764,14 +772,51 @@ internal sealed record NotePayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Restored = null,
     [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonPropertyName("created"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? CreatedAt = null,
-    [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null)
+    [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null,
+    [property: JsonPropertyName("by"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AuthorshipPayload? By = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new HistoryEntry(
             h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref), h.Message))],
         SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true, Message,
-        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true);
+        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true, By?.ToAuthorship());
+}
+
+/// <summary>
+/// Who wrote which line (<see cref="Authorship"/>, blame spec §5.3), compact: each write as <c>[label, ref, at]</c>, the
+/// runs as one flat array <c>[lines, write, lines, write, …]</c>. The reference is a <see cref="WriterRefPayload"/>,
+/// <c>"legacy"</c> for a write from before references (backfilled from such a history entry), or null for one sealed
+/// without a reference, so that each reads back as it was.
+/// </summary>
+internal sealed record AuthorshipPayload(
+    [property: JsonPropertyName("h")] string Hash,
+    [property: JsonPropertyName("w")] List<JsonElement[]> Writes,
+    [property: JsonPropertyName("r")] List<int> Runs,
+    [property: JsonPropertyName("e"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? Earlier = null,
+    [property: JsonPropertyName("d"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Dropped = null)
+{
+    private const string Legacy = "legacy";
+
+    public static AuthorshipPayload? From(Authorship? a) => a is null ? null : new(
+        a.Hash,
+        [.. a.Writes.Select(w => new[]
+        {
+            JsonSerializer.SerializeToElement(w.Label),
+            w.Ref is { IsLegacy: true } ? JsonSerializer.SerializeToElement(Legacy) : JsonSerializer.SerializeToElement(WriterRefPayload.From(w.Ref)),
+            JsonSerializer.SerializeToElement(w.At),
+        })],
+        [.. a.Runs.SelectMany(r => new[] { r.Lines, r.Write })],
+        a.Earlier, a.Dropped ? true : null);
+
+    public Authorship ToAuthorship() => new(
+        Hash, Earlier is { } earlier ? DateTime.SpecifyKind(earlier, DateTimeKind.Utc) : null, Dropped == true,
+        [.. Writes.Select(w => new Authorship.Write(
+            w[0].GetString() ?? "",
+            w[1].ValueKind == JsonValueKind.String && w[1].GetString() == Legacy ? WriterRef.Legacy
+            : WriterRefPayload.Read(WriterRefPayload.Version, w[1].Deserialize<WriterRefPayload>()),
+            DateTime.SpecifyKind(w[2].GetDateTime(), DateTimeKind.Utc)))],
+        [.. Runs.Chunk(2).Select(r => new Authorship.Run(r[0], r[1]))]);
 }
 
 /// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
@@ -938,7 +983,7 @@ internal static class Payload
         [.. n.History.Select(h => new HistoryPayload(
             h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref), h.Message))],
         n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null, n.Message,
-        n.CreatedAt, n.CreatedAtLeast ? true : null);
+        n.CreatedAt, n.CreatedAtLeast ? true : null, AuthorshipPayload.From(n.Authorship));
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");

@@ -123,18 +123,13 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         var replaced = Replaced(replacing);
-        if (!replaced.Contains(target) && await ExistsAsync(target, ct)) return ShellResult.Error($"{command}: {target.Value}: Not a directory");
+        if (!replaced.Contains(target) && await ExistsAsync(target, ct)) return ShellResult.Error(FileOrFolder.NotFolder(command, target));
 
         var map = notes.Concat(attachments).ToDictionary(p => p, p => Rebase(p, source, target));
         // Each path on its own: a folder can carry a Board.md into the place of the board's.
         foreach (var path in map.Keys.Concat(map.Values))
         {
             if (caller.Refuse(command, path) is { } refusedPath) return refusedPath;
-        }
-
-        if (TextFilesOutsideSkills(map, source, await store.SkillsVaultAsync(ct)) is { } outside)
-        {
-            return ShellResult.Error($"{command}: {source.Value}/ can't move to {target.Value}/: text files are kept only inside a skill's folder: {outside} (move them into a skill's folder first, or remove them)");
         }
 
         foreach (var (from, to) in map)
@@ -146,18 +141,6 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count(a => !FolderMarker.Is(a)), "attachment") }.Where(c => c is not null));
         var result = await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", card: false, replacing, command, ct);
         return map.Count == 1 && FolderMarker.Is(map.Keys.First()) ? result with { Version = null } : result;
-    }
-
-    /// <summary>The text files among <paramref name="moves"/> that would land outside a skill's folder, named relative to
-    /// <paramref name="source"/>, at most five and then "and N more"; null if there are none. <see cref="TreeWriter"/> copies by the same rule.</summary>
-    internal static string? TextFilesOutsideSkills(IEnumerable<KeyValuePair<VaultPath, VaultPath>> moves, VaultPath source, string? skillsVault)
-    {
-        var names = moves
-            .Where(m => AttachmentFormat.ForPath(m.Key)?.Kind == AttachmentKind.Text && !SkillPaths.IsInSkillFolder(m.Value, skillsVault))
-            .Select(m => string.Join('/', m.Key.Segments.Skip(source.Segments.Count)))
-            .Order(StringComparer.Ordinal).ToList();
-        if (names.Count == 0) return null;
-        return names.Count <= 5 ? string.Join(", ", names) : $"{string.Join(", ", names.Take(5))} and {names.Count - 5} more";
     }
 
     /// <summary>The paths <paramref name="replacing"/> trashes: in its batch they don't count as existing.</summary>
@@ -201,9 +184,13 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             return ShellResult.Error($"{command}: notes can't move between vaults ({source.Vault} → {target.Vault}); a vault is its own space");
         }
 
-        if (AttachmentFormat.ForPath(source) is not null)
+        if (await StoreAttachments.GetAsync(store, source, ct) is { } file)
         {
-            if (AttachmentFormat.RenameProblem(source, target) is { } renameProblem) return ShellResult.Error($"{command}: {target.Value}: {renameProblem}");
+            if (AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+            {
+                return ShellResult.Error($"{command}: {target.Value}: {renameProblem}");
+            }
+
             if (FolderMarker.Is(target) && target.Segments.Count == 2)
             {
                 return ShellResult.Error($"{command}: {FolderMarker.Shown(target)}: {FolderMarker.InVaultRoot}");
@@ -220,10 +207,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         // A folder on the way may not be a note or an attachment.
-        for (var dir = VaultPath.Root.Child(target.Segments[0]); dir.Segments.Count < target.Segments.Count - 1;)
+        foreach (var dir in FileOrFolder.FoldersAbove(target))
         {
-            dir = dir.Child(target.Segments[dir.Segments.Count]);
-            if (!leaving.Contains(dir) && await ExistsAsync(dir, ct)) return ShellResult.Error($"{command}: {dir.Value}: Not a directory");
+            if (!leaving.Contains(dir) && await ExistsAsync(dir, ct)) return ShellResult.Error(FileOrFolder.NotFolder(command, dir));
         }
 
         return null;

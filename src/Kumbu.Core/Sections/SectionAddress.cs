@@ -77,23 +77,69 @@ public static partial class SectionAddress
 
     /// <summary>
     /// The headings an address matches: those whose chain ends with the address's segments. Exact text
-    /// first; if nothing matches exactly, ignoring case.
+    /// first; if nothing matches exactly, ignoring case; then as a link holds a heading (<see cref="Linked"/>),
+    /// ignoring case: its text as written, as Obsidian links it, or as shown, as the web app does.
     /// </summary>
     public static IReadOnlyList<Heading> Resolve(IReadOnlyList<Heading> headings, IReadOnlyList<AddressSegment> segments)
     {
-        foreach (var comparison in new[] { StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase })
+        foreach (var same in new Func<string, string, bool>[]
         {
-            var matches = headings.Where(h => Matches(h, segments, comparison)).ToList();
+            (a, h) => a == h,
+            (a, h) => string.Equals(a, h, StringComparison.OrdinalIgnoreCase),
+            (a, h) => Linked(a) is { Length: > 0 } link
+                && (string.Equals(link, Linked(h), StringComparison.OrdinalIgnoreCase) || string.Equals(link, Linked(Shown(h)), StringComparison.OrdinalIgnoreCase)),
+        })
+        {
+            var matches = headings.Where(h => Matches(h, segments, same)).ToList();
             if (matches.Count > 0) return matches;
         }
 
         return [];
     }
 
+    /// <summary>A heading's text as a link holds it: without '# | ^ [ ]' and "%%", runs of whitespace as one space
+    /// ("C# notes | x" is "C notes x"), as Obsidian and the web app's link completion (headingLink) write it.</summary>
+    private static string Linked(string text) => WhitespaceRegex().Replace(LinkUnsafeRegex().Replace(text, ""), " ").Trim();
+
+    /// <summary>A heading's text as it reads, as the web app's headingText takes it: comments gone (outside code
+    /// spans), wiki links by their label, Markdown links by their text, highlight, emphasis and code marks gone.</summary>
+    private static string Shown(string text)
+    {
+        // "%%" inside a code span is text: the comments' marks are found with the spans blanked.
+        var masked = CodeSpanRegex().Replace(text, m => new string(' ', m.Length));
+        var outside = new StringBuilder();
+        var from = 0;
+        var open = false;
+        for (var p = masked.IndexOf("%%", StringComparison.Ordinal); p >= 0; p = masked.IndexOf("%%", p + 2, StringComparison.Ordinal))
+        {
+            if (!open) outside.Append(text, from, p - from);
+            open = !open;
+            from = p + 2;
+        }
+
+        if (!open) outside.Append(text, from, text.Length - from);
+        var shown = WikiLinkRegex().Replace(outside.ToString(), m => WikiLabel(m.Groups[1].Value));
+        shown = MarkdownLinkRegex().Replace(shown, "$1");
+        shown = HighlightRegex().Replace(shown, "$1");
+        return EmphasisRegex().Replace(shown, "$2").Trim();
+    }
+
+    /// <summary>A wiki link's label as the web app shows it (linkLabel): its alias, else "target › heading", else
+    /// its target or heading.</summary>
+    private static string WikiLabel(string inner)
+    {
+        var bar = inner.IndexOf('|');
+        if (bar >= 0) return inner[(bar + 1)..];
+        var hash = inner.IndexOf('#');
+        if (hash < 0) return inner;
+        var (target, heading) = (inner[..hash], inner[(hash + 1)..]);
+        return heading.Length == 0 ? target : target.Length == 0 ? heading : $"{target} › {heading}";
+    }
+
     /// <summary>A note path with a section address, as it would be typed in sh.</summary>
     public static string Display(VaultPath path, Heading heading) => path.Value + heading.Address;
 
-    private static bool Matches(Heading heading, IReadOnlyList<AddressSegment> segments, StringComparison comparison)
+    private static bool Matches(Heading heading, IReadOnlyList<AddressSegment> segments, Func<string, string, bool> same)
     {
         var chain = heading.Chain().ToList();
         if (chain.Count < segments.Count) return false;
@@ -101,7 +147,7 @@ public static partial class SectionAddress
         {
             var segment = segments[segments.Count - 1 - i];
             var h = chain[i];
-            if (!string.Equals(segment.Text, h.Text, comparison)) return false;
+            if (!same(segment.Text, h.Text)) return false;
             if (segment.Index is { } index && index != Math.Max(h.Index, 1)) return false;
         }
 
@@ -110,4 +156,27 @@ public static partial class SectionAddress
 
     [GeneratedRegex(@"\[(\d+)\]$")]
     private static partial Regex IndexRegex();
+
+    [GeneratedRegex(@"%%|[#|^\[\]]")]
+    private static partial Regex LinkUnsafeRegex();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRegex();
+
+    // The web app's patterns (outline.ts): a code span, its backticks paired by count; a wiki link; a Markdown link
+    // or image; a highlight; emphasis, strike-through and code marks.
+    [GeneratedRegex(@"(`+)[\s\S]*?(?<!`)\1(?!`)")]
+    private static partial Regex CodeSpanRegex();
+
+    [GeneratedRegex(@"!?\[\[([^\[\]\n]+?)\]\]")]
+    private static partial Regex WikiLinkRegex();
+
+    [GeneratedRegex(@"!?\[([^\]]*)\]\([^)]*\)")]
+    private static partial Regex MarkdownLinkRegex();
+
+    [GeneratedRegex(@"==(?=[^\s=])(.+?)(?<=[^\s=])==")]
+    private static partial Regex HighlightRegex();
+
+    [GeneratedRegex(@"(\*\*|__|\*|_|~~|`)(.+?)\1")]
+    private static partial Regex EmphasisRegex();
 }

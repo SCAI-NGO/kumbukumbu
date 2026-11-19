@@ -34,8 +34,8 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
                             top left. -90, -180 and -270 turn the other way: -90 is 270, -270 is 90.
           --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img
                             says how many there are.
-          An image reduced to under 75 % of its width says so: small text and digits may be misread then,
-          so look at them in a crop before quoting them.
+          An image reduced to under 75 % of its width says so, and by how much (1 px here is 2.5 px of the
+          original): small text and digits may be misread then, so look at them in a crop before quoting them.
           A GIF is shown as a still, its first frame unless --frame says otherwise.
           Transparent areas are shown on white.
           One call delivers one image, and img stands alone, not in a pipeline.

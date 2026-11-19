@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 
@@ -31,4 +32,9 @@ public static class StoreAttachments
             return copy.ToArray();
         }
     }
+
+    /// <summary>The text of a text file's bytes (<see cref="AttachmentFormat.TextMediaType"/>), without the byte order mark
+    /// a Windows editor puts first, so that <c>^</c> matches its first line.</summary>
+    public static string Text(byte[] bytes) =>
+        Encoding.UTF8.GetString(bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble) ? bytes.AsSpan(Encoding.UTF8.Preamble.Length) : bytes);
 }

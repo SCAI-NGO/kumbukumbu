@@ -137,11 +137,81 @@ public class AttachmentWriterTests
         var writer = Writer();
 
         var pdf = await writer.WriteAsync("/Work/x.pdf", Png(1), null, null, Ct);
-        var docx = await writer.WriteAsync("/Work/x.docx", Png(1), null, null, Ct);
 
         Assert.Equal("upload: x.pdf isn't a PDF document (its content doesn't match its name)", pdf.Result.Output);
-        Assert.Equal($"upload: x.docx: {AttachmentFormat.UnsupportedMessage}", docx.Result.Output);
         Assert.Empty(await _store.ListAttachmentsUnderAsync(VaultPath.Root, Ct));
+    }
+
+    [Fact]
+    public async Task Any_other_name_is_a_file_kept_with_the_media_type_of_its_content()
+    {
+        var writer = Writer();
+
+        await Write(writer, "/Work/x.docx", Png(1), null);
+        await Write(writer, "/Work/data.csv", "a;b\n1;2\n"u8.ToArray(), null);
+        await Write(writer, "/Work/Makefile", "all:\n\tmake\n"u8.ToArray(), null);
+        await Write(writer, "/Work/zero.txt", [(byte)'a', 0, (byte)'b'], null);
+
+        Assert.Equal(new AttachmentState("application/octet-stream", Png(1).Length, null, null, VersionToken.Of(Png(1)), (await Get("/Work/x.docx")).Current.BlobId),
+            (await Get("/Work/x.docx")).Current);
+        Assert.Equal(AttachmentFormat.TextMediaType, (await Get("/Work/data.csv")).Current.MediaType);
+        Assert.Equal(AttachmentFormat.TextMediaType, (await Get("/Work/Makefile")).Current.MediaType);
+        Assert.Equal("application/octet-stream", (await Get("/Work/zero.txt")).Current.MediaType);
+
+        // At each write: text that becomes bytes is kept as bytes.
+        await Write(writer, "/Work/data.csv", Png(2), (await Get("/Work/data.csv")).Version);
+        Assert.Equal("application/octet-stream", (await Get("/Work/data.csv")).Current.MediaType);
+    }
+
+    [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name()
+    {
+        var writer = Writer();
+        var notes = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        await Write(writer, "/Work/Makefile", "all:\n"u8.ToArray(), null);
+        await notes.WriteAsync("/Work/v1.2/notes.md", "notes\n", null, Ct);
+
+        Assert.Equal("upload: /Work/v1.2 is a folder; a file and a folder can't share a name",
+            (await writer.WriteAsync("/Work/v1.2", "x"u8.ToArray(), null, null, Ct)).Result.Output);
+        Assert.Equal("upload: /Work/Makefile is a file, not a folder; nothing can be kept below it",
+            (await writer.WriteAsync("/Work/Makefile/x.csv", "x"u8.ToArray(), null, null, Ct)).Result.Output);
+        Assert.Equal("write: /Work/Makefile is a file, not a folder; nothing can be kept below it",
+            (await notes.WriteAsync("/Work/Makefile/x.md", "x\n", null, Ct)).Output);
+        Assert.Equal("mkdir: /Work/Makefile is a file, not a folder; nothing can be kept below it",
+            (await writer.MakeFolderAsync(P("/Work/Makefile/sub"), Ct)).Output);
+
+        // Side by side, each is what it is.
+        await Write(writer, "/Work/v1.2.csv", "x"u8.ToArray(), null);
+        Assert.Equal("notes\n", await _store.ReadAsync(P("/Work/v1.2/notes.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_file_comes_back_from_the_trash_only_where_no_folder_took_its_name()
+    {
+        var writer = Writer();
+        var notes = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        await Write(writer, "/Work/v1.2", "x"u8.ToArray(), null);
+        await writer.RemoveAsync("/Work/v1.2", Ct);
+        await notes.WriteAsync("/Work/v1.2/notes.md", "notes\n", null, Ct);
+
+        var result = await writer.RestoreAsync("/Work/v1.2", null, Ct);
+
+        Assert.Equal("restore: /Work/v1.2 is a folder; a file and a folder can't share a name", result.Output);
+        Assert.Null(await _store.GetAttachmentAsync(P("/Work/v1.2"), Ct));
+    }
+
+    [Fact]
+    public async Task A_note_comes_back_from_the_trash_only_where_no_file_took_its_folders_name()
+    {
+        var notes = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        await notes.WriteAsync("/Work/Makefile/x.md", "x\n", null, Ct);
+        await notes.RemoveAsync(P("/Work/Makefile/x.md"), Ct);
+        await Write(Writer(), "/Work/Makefile", "all:\n"u8.ToArray(), null);
+
+        var result = await notes.RestoreAsync(P("/Work/Makefile/x.md"), null, Ct);
+
+        Assert.Equal("restore: /Work/Makefile is a file, not a folder; nothing can be kept below it", result.Output);
+        Assert.Null(await _store.ReadAsync(P("/Work/Makefile/x.md"), Ct));
     }
 
     [Fact]
@@ -162,8 +232,8 @@ public class AttachmentWriterTests
         var writer = Writer();
 
         Assert.Contains("there is no vault 'Nope'", (await writer.WriteAsync("/Nope/x.png", Png(1), null, null, Ct)).Result.Output);
-        Assert.Equal("upload: /Work/a/x.md: Not a directory", (await writer.WriteAsync("/Work/a/x.md/y.png", Png(1), null, null, Ct)).Result.Output);
-        Assert.Equal("upload: /Work/d.png: Is a directory", (await writer.WriteAsync("/Work/d.png", Png(1), null, null, Ct)).Result.Output);
+        Assert.Equal("upload: /Work/a/x.md is a note, not a folder; nothing can be kept below it", (await writer.WriteAsync("/Work/a/x.md/y.png", Png(1), null, null, Ct)).Result.Output);
+        Assert.Equal("upload: /Work/d.png is a folder; a file and a folder can't share a name", (await writer.WriteAsync("/Work/d.png", Png(1), null, null, Ct)).Result.Output);
     }
 
     [Fact]
@@ -345,7 +415,7 @@ public class AttachmentWriterTests
         var result = await Writer().WriteAsync("/Work/plan.md/.vaultkeep", Array.Empty<byte>(), null, null, Ct);
 
         Assert.Equal(ShellErrorKind.Conflict, result.Result.Kind);
-        Assert.Equal("mkdir: /Work/plan.md: Not a directory", result.Result.Output);
+        Assert.Equal("mkdir: /Work/plan.md is a note, not a folder; nothing can be kept below it", result.Result.Output);
     }
 
     [Fact]

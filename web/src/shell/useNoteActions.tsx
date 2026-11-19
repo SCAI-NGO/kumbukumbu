@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
+import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { mayChange, useDuplicateNote, useLevel, useNoteText, useTree, useVaults } from "../api/notes";
-import { inVault, noteUrl, publishableAsNote, vaultOf } from "../api/paths";
+import { blameUrl, inVault, noteUrl, publishableAsNote, vaultOf } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { useFavourites } from "../api/favourites";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -121,6 +121,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           ? [
               { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
               { label: "History", icon: History, onSelect: () => setHistory(path) },
+              // Read mode only, as History: the window shows the server's state, which could lag behind the editor's.
+              { label: "Who wrote what", icon: Users, onSelect: () => navigate(blameUrl(path)) },
             ]
           : []),
         ...copyItems(path, noteNamesInVault, true, copied.copy),

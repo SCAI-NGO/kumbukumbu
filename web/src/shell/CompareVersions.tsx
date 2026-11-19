@@ -5,7 +5,8 @@ import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useNoteVersion } from "../api/notes";
 import { useNoteNow } from "../api/activity";
-import { isAttachment, titleOf, vaultOf } from "../api/paths";
+import { fileKindOf, isAttachment, titleOf, vaultOf, type FileKind } from "../api/paths";
+import { noPreviewText } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { lineDiff, type DiffLine } from "../note/lineDiff";
 
@@ -24,6 +25,8 @@ type Props = {
   initial?: CompareMode;
   /** What the version is called above its column: "After this change" in the activity, "This version" from search. */
   versionLabel?: string;
+  /** What the server says it is, where the caller has it; else the path tells. */
+  kind?: FileKind;
 };
 
 const tabClass = (on: boolean) =>
@@ -48,7 +51,7 @@ function ModeSwitch({ mode, onMode }: { mode: CompareMode; onMode(mode: CompareM
  * Two versions of an image or PDF are shown as they are (a PDF's first page), without a computed difference.
  */
 export default function CompareVersions(props: Props) {
-  return isAttachment(props.path) ? <CompareFileVersions {...props} /> : <CompareNoteVersions {...props} />;
+  return (props.kind ? props.kind !== "note" : isAttachment(props.path)) ? <CompareFileVersions {...props} /> : <CompareNoteVersions {...props} />;
 }
 
 function CompareNoteVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
@@ -125,7 +128,7 @@ function Column({ label, message, lines }: { label: string; message: string | nu
   );
 }
 
-function CompareFileVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
+function CompareFileVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change", kind }: Props) {
   const [mode, setMode] = useState<CompareMode>(initial);
   const notKept = "This version is no longer kept";
   const sides: FileSide[] =
@@ -142,7 +145,7 @@ function CompareFileVersions({ path, version, before, trashed, beforeLost, initi
     <>
       <ModeSwitch mode={mode} onMode={setMode} />
       {mode === "before" && before !== null && before === version && <p className="text-sm text-text-body">The file didn't change in this change.</p>}
-      <CompareFiles path={path} sides={sides} />
+      <CompareFiles path={path} sides={sides} kind={kind} />
     </>
   );
 }
@@ -150,8 +153,12 @@ function CompareFileVersions({ path, version, before, trashed, beforeLost, initi
 /** One side of a comparison of files: its version (null: the file as it is now), or why there is none to show. */
 export type FileSide = { label: string; version: string | null; message?: string | null };
 
-/** Versions of an image or PDF side by side (stacked on a phone), each whole in its box; a PDF shows its first page. */
-export function CompareFiles({ path, sides }: { path: string; sides: FileSide[] }) {
+/**
+ * Versions of an image or PDF side by side (stacked on a phone), each whole in its box; a PDF shows its first page. A
+ * file of kind `file` has no picture to compare, so one line says so, as the lightbox does.
+ */
+export function CompareFiles({ path, sides, kind = fileKindOf(path) }: { path: string; sides: FileSide[]; kind?: FileKind }) {
+  if (kind === "file") return <p className="rounded-[10px] border border-dashed border-line px-3 py-2 text-sm text-muted">{noPreviewText}</p>;
   return (
     <div className={`grid grid-cols-1 gap-2 ${sides.length > 1 ? "sm:grid-cols-2" : ""}`}>
       {sides.map((side) => (
@@ -161,7 +168,7 @@ export function CompareFiles({ path, sides }: { path: string; sides: FileSide[] 
             <p className="rounded-[10px] border border-dashed border-line px-3 py-2 text-sm text-muted">{side.message}</p>
           ) : (
             <div className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-line bg-bg">
-              <Thumbnail vault={vaultOf(path)} path={path} at={side.version === null ? {} : { version: side.version }} fit="contain" alt={`${titleOf(path)}, ${side.label}`} />
+              <Thumbnail vault={vaultOf(path)} path={path} kind={kind} at={side.version === null ? {} : { version: side.version }} fit="contain" alt={`${titleOf(path)}, ${side.label}`} />
             </div>
           )}
         </section>

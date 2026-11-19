@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Channels;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -36,8 +35,8 @@ public sealed class SearchIndex : BackgroundService
     private readonly PdfAnalyses? _analyses;
     private readonly ChunkTokenizer? _tokenizer;
     // A queue per route (EmbeddingProviders.RouteOf): per provider, and per key for BYOK. The configured providers' are
-    // made with the index, a key's when its first vault is queued; each runs from ExecuteAsync on.
-    private readonly ConcurrentDictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues = new(StringComparer.Ordinal);
+    // made with the index, a key's when its first vault is queued; each runs from ExecuteAsync on, serving owners in turn.
+    private readonly ConcurrentDictionary<string, OwnerQueue> _queues = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string Route, string Vault, VaultPath Path), byte> _queued = new();
     private readonly ConcurrentDictionary<string, EmbeddingProvider> _routes = new(StringComparer.Ordinal);
     private readonly List<Task> _runs = [];
@@ -79,20 +78,20 @@ public sealed class SearchIndex : BackgroundService
         var queue = Queue(provider);
         foreach (var path in paths)
         {
-            if (_queued.TryAdd((provider.Name, vault.Id, path), 0)) queue.Writer.TryWrite((vault, path));
+            if (_queued.TryAdd((provider.Name, vault.Id, path), 0)) queue.Add(vault, path);
         }
     }
 
     /// <summary>The queue of <paramref name="provider"/>'s route, made and, once the index runs, started on first use.</summary>
-    private Channel<(UnlockedVault Vault, VaultPath Path)> Queue(EmbeddingProvider provider)
+    private OwnerQueue Queue(EmbeddingProvider provider)
     {
         if (_queues.TryGetValue(provider.Name, out var queue)) return queue;
         lock (_runs)
         {
             if (_queues.TryGetValue(provider.Name, out queue)) return queue;
-            queue = Channel.CreateUnbounded<(UnlockedVault, VaultPath)>();
+            queue = new OwnerQueue();
             _queues[provider.Name] = queue;
-            if (_running is { } token) _runs.Add(RunAsync(provider, queue.Reader, token));
+            if (_running is { } token) _runs.Add(RunAsync(provider, queue, token));
             _routes[provider.Name] = provider;
             return queue;
         }
@@ -236,7 +235,7 @@ public sealed class SearchIndex : BackgroundService
         lock (_runs)
         {
             _running = stoppingToken;
-            _runs.AddRange(_routes.Values.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+            _runs.AddRange(_routes.Values.Select(p => RunAsync(p, _queues[p.Name], stoppingToken)));
             runs = [.. _runs];
         }
 
@@ -245,11 +244,12 @@ public sealed class SearchIndex : BackgroundService
         await Task.WhenAll(runs);
     }
 
-    private async Task RunAsync(EmbeddingProvider provider, ChannelReader<(UnlockedVault Vault, VaultPath Path)> queue, CancellationToken stoppingToken)
+    private async Task RunAsync(EmbeddingProvider provider, OwnerQueue queue, CancellationToken stoppingToken)
     {
         await provider.Driver.WhenReadyAsync(stoppingToken);
-        await foreach (var (vault, path) in queue.ReadAllAsync(stoppingToken))
+        while (true)
         {
+            var (vault, path) = await queue.TakeAsync(stoppingToken);
             // Off the queue before indexing: a write meanwhile queues the note again, so it isn't missed.
             Interlocked.Increment(ref _busy);
             _queued.TryRemove((provider.Name, vault.Id, path), out _);
@@ -447,6 +447,50 @@ public sealed class SearchIndex : BackgroundService
     internal static int Oversized(ChunkBound bound, IEnumerable<string> texts) => texts.Count(t => !bound.Fits(t));
 
     private static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
+
+    /// <summary>
+    /// A route's queue: the notes of each owner in the order queued, the owners with notes waiting served in turn, one
+    /// note each, so one owner's backlog holds up her own notes only. The owner is the account, not the vault: all her
+    /// vaults share her turn. Served by the note, not by its chunks: a long note still holds the route for its length.
+    /// </summary>
+    private sealed class OwnerQueue
+    {
+        private readonly Dictionary<string, Queue<(UnlockedVault Vault, VaultPath Path)>> _byOwner = new(StringComparer.Ordinal);
+        private readonly Queue<string> _turns = new();
+        private readonly SemaphoreSlim _waiting = new(0);
+
+        public void Add(UnlockedVault vault, VaultPath path)
+        {
+            // A vault without an owner, the dev token's, takes turns on its own.
+            var owner = vault.Owner is { } id ? "user:" + id : "vault:" + vault.Id;
+            lock (_byOwner)
+            {
+                if (!_byOwner.TryGetValue(owner, out var notes))
+                {
+                    _byOwner[owner] = notes = new();
+                    _turns.Enqueue(owner);
+                }
+
+                notes.Enqueue((vault, path));
+            }
+
+            _waiting.Release();
+        }
+
+        public async Task<(UnlockedVault Vault, VaultPath Path)> TakeAsync(CancellationToken ct)
+        {
+            await _waiting.WaitAsync(ct);
+            lock (_byOwner)
+            {
+                var owner = _turns.Dequeue();
+                var notes = _byOwner[owner];
+                var next = notes.Dequeue();
+                if (notes.Count == 0) _byOwner.Remove(owner);
+                else _turns.Enqueue(owner);
+                return next;
+            }
+        }
+    }
 
     public override void Dispose()
     {

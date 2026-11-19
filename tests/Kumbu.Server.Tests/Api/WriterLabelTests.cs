@@ -84,6 +84,23 @@ public sealed class WriterLabelTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_device_keys_sync_write_records_its_lines_as_the_devices()
+    {
+        var user = await NewAsync(Api);
+        var version = await user.CreateAsync("plan.md", "one\ntwo\n");
+        var device = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+
+        using var put = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "one\nfrom Obsidian\n", version }, bearer: device);
+        Assert.True(put.IsSuccessStatusCode, put.StatusCode.ToString());
+
+        var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
+        var record = (await store.GetAsync(VaultPath.Root.Child(user.Vault).Child("plan.md"), Ct))!.Authorship!;
+        var lines = record.ByLine();
+        Assert.Equal(WriterRef.Session, lines[0]!.Ref!.Kind);
+        Assert.Equal(("Arbeit – Obsidian Laptop", WriterRef.Device), (lines[1]!.Label, lines[1]!.Ref!.Kind));
+    }
+
+    [Fact]
     public async Task An_agent_key_and_a_connection_are_agents()
     {
         var user = await NewAsync(Api);

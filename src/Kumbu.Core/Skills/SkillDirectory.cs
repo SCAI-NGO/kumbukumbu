@@ -69,12 +69,13 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         : SystemSkills.Find(skill.Name)?.Files.FirstOrDefault(f => f.Path == SkillPaths.Manifest).Content;
 
     /// <summary>
-    /// Who wrote the skill: the label of the last writer of any of its files, and whether another user (in a shared vault,
-    /// by the writer reference, as <see cref="WriterMarks"/> decides it) last wrote one of them. A skill is all its files:
-    /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote.
+    /// Who wrote the skill: the label of the last writer of any of its files, and whether another user (by the writer
+    /// reference, as <see cref="WriterMarks"/> decides it) last wrote one of them. A skill is all its files:
+    /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote. Asked in her own vaults
+    /// too, shared or not: a member's write stays another user's after the vault stops being shared with them.
     /// </summary>
     private async Task<(string? Editor, bool ByOther)> WritersAsync(
-        string vault, VaultInfo? info, VaultPath folder, IReadOnlyList<VaultPath> notePaths, IReadOnlyList<StoredAttachment> attachments, CancellationToken ct)
+        string vault, VaultPath folder, IReadOnlyList<VaultPath> notePaths, IReadOnlyList<StoredAttachment> attachments, CancellationToken ct)
     {
         var prefix = folder.Value + "/";
         var writes = new List<(string Label, WriterRef? Ref, DateTime At)>();
@@ -87,7 +88,6 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         if (writes.Count == 0) return (null, false);
         var last = writes.MaxBy(w => w.At);
         var editor = (await labels.RenderAsync(vault, last.Label, last.Ref, ct)).Display;
-        if (info?.Shared != true) return (editor, false);
         foreach (var write in writes)
         {
             if (!await labels.IsOwnAsync(vault, write.Ref, ct)) return (editor, true);
@@ -121,7 +121,7 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
             var folder = location.Child(name);
             var note = await notes.GetAsync(folder.Child(SkillPaths.Manifest), ct);
             var manifest = SkillManifest.Read(name, note?.Content);
-            var (editor, byOther) = await WritersAsync(vault, info, folder, notePaths, attachments, ct);
+            var (editor, byOther) = await WritersAsync(vault, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
             // The start-up mark counts only in her own vault and only while no other user changed the skill: a writer of a
