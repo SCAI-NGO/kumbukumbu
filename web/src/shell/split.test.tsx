@@ -680,11 +680,13 @@ describe("write follows the click", () => {
     vi.stubGlobal("document", Object.assign(document, { caretPositionFromPoint: () => ({ offsetNode: p.firstChild!, offset: 2 }) }));
     return p;
   };
-  /** A click on `target`, the pointer moved by `moved` px between down and up. */
-  const click = (target: Element, moved = 0) => {
-    fireEvent.mouseDown(target, { clientX: 40, clientY: 200 });
-    fireEvent.click(target, { clientX: 40 + moved, clientY: 200 });
+  /** A click on `target`, the pointer moved by `moved` px between down and up; `detail` counts it in a double click. */
+  const click = (target: Element, moved = 0, detail = 1) => {
+    fireEvent.mouseDown(target, { clientX: 40, clientY: 200, detail });
+    fireEvent.click(target, { clientX: 40 + moved, clientY: 200, detail });
   };
+  /** Longer than a double click waits for its second click. */
+  const pause = () => act(() => new Promise((r) => setTimeout(r, 400)));
   // `# Note x\n\n` is ten characters: the caret two into "See".
   const SEE = 12;
 
@@ -718,7 +720,7 @@ describe("write follows the click", () => {
     const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
     await u.type(left, " kept");
     click(see("right"));
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    await pause();
     expect(source("left")).toBe(left);
     expect(left).toHaveValue("# Note a\n\nSee [[next a]].\n kept");
     expect(source("right")).toBeNull();
@@ -735,15 +737,47 @@ describe("write follows the click", () => {
   it("switches nothing for a drag, nor with text selected", async () => {
     await split();
     click(see("right"), 30);
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    await pause();
     expect(source("right")).toBeNull();
     const p = see("right");
     window.getSelection()!.setBaseAndExtent(p.firstChild!, 0, p.firstChild!, 3);
     click(p);
     window.getSelection()!.removeAllRanges();
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    await pause();
     expect(source("right")).toBeNull();
     expect(useEditor.getState().panes).toMatchObject({ left: { mode: "read" }, right: { mode: "read" } });
+  });
+
+  it("waits out a double click's time first: a single click starts Write mode after it, the caret where it was", async () => {
+    await split();
+    click(see("right"));
+    await act(() => new Promise((r) => setTimeout(r, 100)));
+    expect(source("right")).toBeNull();
+    await waitFor(() => expect(source("right")).toBeInTheDocument());
+    expect(source("right")!.selectionStart).toBe(SEE);
+  });
+
+  // Double click to select a word, triple for the paragraph: the most common way to copy, which the split view serves.
+  for (const [what, clicks] of [["a double click", 2], ["a triple click", 3]] as const) {
+    it(`switches nothing for ${what}, which selects`, async () => {
+      await split();
+      const p = see("right");
+      for (let n = 1; n <= clicks; n++) click(p, 0, n);
+      fireEvent.dblClick(p, { clientX: 40, clientY: 200, detail: 2 });
+      await pause();
+      expect(source("right")).toBeNull();
+      expect(useEditor.getState()).toMatchObject({ focused: "left", panes: { left: { mode: "read" }, right: { mode: "read" } }, writeAt: null });
+    });
+  }
+
+  it("switches nothing where text is selected while it waits", async () => {
+    await split();
+    const p = see("right");
+    click(p);
+    window.getSelection()!.setBaseAndExtent(p.firstChild!, 0, p.firstChild!, 3);
+    await pause();
+    window.getSelection()!.removeAllRanges();
+    expect(source("right")).toBeNull();
   });
 
   it("leaves a link its own click", async () => {
@@ -759,7 +793,7 @@ describe("write follows the click", () => {
   it("starts nothing in a single pane, nor below 1280 px", async () => {
     await split("/notes/Work/a.md");
     click(see(null));
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    await pause();
     expect(screen.queryByRole("textbox", { name: "Markdown source" })).toBeNull();
     cleanup();
     useEditor.getState().reset();
@@ -767,7 +801,7 @@ describe("write follows the click", () => {
     await split();
     await resize("desktop");
     click(see(null));
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    await pause();
     expect(screen.queryByRole("textbox", { name: "Markdown source" })).toBeNull();
   });
 });

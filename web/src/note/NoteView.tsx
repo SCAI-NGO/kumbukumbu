@@ -75,6 +75,9 @@ function EditorLoadFailed() {
 /** Links, task boxes, buttons, the properties box and what else answers a click of its own: no Write mode from these. */
 const OWN_CLICK = "a, button, input, label, select, summary, textarea, [role=button], [role=checkbox], [aria-label=Properties]";
 
+/** How long a plain click waits for a second one before it starts Write mode: a double click selects a word. */
+const DOUBLE_CLICK_MS = 250;
+
 /** How long the typing pauses before the live preview shows what was typed. */
 const PREVIEW_PAUSE_MS = 250;
 
@@ -447,19 +450,32 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
   }, [live]);
 
   // Write follows the click: a plain one (no move between down and up, nothing selected) on the note's text, not on
-  // what has a click of its own; a drag selects, as in Read mode, and starts nothing.
+  // what has a click of its own; a drag selects, as in Read mode, and starts nothing. Nor does a double or triple click,
+  // which selects a word or a paragraph to copy: the click waits for a second one, and a press or a selection
+  // meanwhile calls it off.
   const down = useRef<{ x: number; y: number } | null>(null);
+  const waiting = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(waiting.current), []);
   const editorDirect = useRef<boolean | null>(null);
+  const pressed = (e: MouseEvent) => {
+    clearTimeout(waiting.current);
+    down.current = { x: e.clientX, y: e.clientY };
+  };
   const writeHere = (e: MouseEvent) => {
     const from = down.current;
     down.current = null;
-    if (!clickToWrite || !writeOn || !note.data || !article.current || !from || e.button !== 0 || e.defaultPrevented) return;
+    if (!clickToWrite || !writeOn || !note.data || !article.current || !from || e.button !== 0 || e.detail > 1 || e.defaultPrevented) return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return;
     if (window.getSelection()?.isCollapsed === false || (e.target instanceof Element && e.target.closest(OWN_CLICK))) return;
+    // Mapped now, on the text clicked: the preview may show newer text by the time the wait is over.
     const offset = clickToSource(content, article.current, e.clientX, e.clientY);
     if (offset === null) return;
-    useEditor.getState().focus(side);
-    void useEditor.getState().writeHere({ path, offset, y: e.clientY });
+    const y = e.clientY;
+    waiting.current = setTimeout(() => {
+      if (window.getSelection()?.isCollapsed === false) return;
+      useEditor.getState().focus(side);
+      void useEditor.getState().writeHere({ path, offset, y });
+    }, DOUBLE_CLICK_MS);
   };
 
   const jump = (line: number) => {
@@ -682,7 +698,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
         ref={scroller}
         {...dropTarget}
         onScroll={panel ? readAt : undefined}
-        onMouseDown={clickToWrite ? (e) => void (down.current = { x: e.clientX, y: e.clientY }) : undefined}
+        onMouseDown={clickToWrite ? pressed : undefined}
         onClick={clickToWrite ? writeHere : undefined}
         className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
