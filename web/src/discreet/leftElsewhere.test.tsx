@@ -200,8 +200,10 @@ describe("a vault marked discreet in another session", () => {
     await waitFor(() => expect(useEditor.getState().panes.right?.path).toBe("/Tagebuch/geheim.md"));
     act(() => {
       useEditor.setState({ panes: { left: { path: "/Work/inbox.md", mode: "read" }, right: { path: "/Tagebuch/geheim.md", mode: "write" } } });
-      useEditor.getState().setBeforeRead(async () => false, () => ({ text: "Not saved yet.", version: "v1" }));
     });
+    // The right pane, hidden below 1280 px, is mounted still: once its editor is there, its guard stands in for it.
+    await screen.findByRole("textbox", { name: "Markdown source", hidden: true });
+    act(() => useEditor.getState().setBeforeRead(async () => false, () => ({ text: "Not saved yet.", version: "v1" })));
 
     await markedElsewhere(queryClient, at, ["Work"]);
 
