@@ -135,6 +135,8 @@ export const routes: RouteObject[] = [
               // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
               { path: "/recent", handle: { window: true }, lazy: lazyPage(() => import("./recent/RecentPage")) },
               { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
+              // A vault's route: a discreet note's address stays `/discreet` (neutralWindow.ts).
+              { path: "/blame/:vault/*", handle: { window: true }, lazy: lazyPage(() => import("./blame/BlamePage")) },
               {
                 lazy: lazyPage(() => import("./routes/settings/SettingsWindow")),
                 handle: { window: true },

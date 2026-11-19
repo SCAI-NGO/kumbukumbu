@@ -21,12 +21,13 @@ public static class Manual
           graph <note> [--depth N]        how notes link: a note's neighbourhood (--out, --in, --cap); graph --path a b: how two notes connect; --orphans, --hubs, --unresolved [path]
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
-          calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
+          calendar <vault>                the vault's notes with a time, this week (--month, --from/--to); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
           history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
+          blame [--lines] <path>          who wrote what: the last writer of each run of lines of a note (#section works); on a folder: lines per writer per note
           diff <path> [from [to]]         what changed between versions (default: last change); --word
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history

@@ -91,9 +91,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
                                      repeat for notes with all of them
           --regions                  for matches in PDFs, also where they lie on the page, ready for pdf's --crop:
-                                     /Work/paper.pdf:p7:crop=72,298,214,17: text. In points of the page as displayed,
-                                     around the piece of text that holds the match. It shows where the text box lies,
-                                     not that anyone can see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
+                                     /Work/paper.pdf:p7:crop=72,298,214,17:match=131,298,58,17: text. In points of
+                                     the page as displayed: crop= around the piece of text that holds the match,
+                                     match= around the match itself where it is narrower, guessed from its share of
+                                     the piece's characters. They show where the text lies, not that anyone can
+                                     see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
                                      Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
@@ -684,32 +686,68 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// <summary>
     /// The regions of the matches in one line that starts at <paramref name="offset"/> of the page's text: for each match
     /// the box around the items it touches, grown by max(2, 0.3 × its short side), as a text box leaves out descenders,
-    /// and whole by <see cref="Crop.Enclosing"/>. Equal ones once, at most three and how many more; null for none.
+    /// and whole by <see cref="Crop.Enclosing"/>. Beside it the box of the match itself, grown alike: a run of text has
+    /// no box per character, so its part is guessed by its share of the run's characters, and only in a run that reads
+    /// left to right. "crop=…" alone where the two are the same; in each, equal ones once, at most three and how many
+    /// more; null for none.
     /// </summary>
     private static string? Region(Search search, PageTextBoxes page, int offset, string line)
     {
-        var crops = new List<Crop>();
+        var (crops, exact) = (new List<Crop>(), new List<Crop>());
         foreach (var (start, length) in search.Spans(line))
         {
             var (from, to) = (offset + start, offset + start + length);
-            var (left, top, right, bottom) = (double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
+            var (run, part) = (new Bounds(), new Bounds());
             for (var i = FirstEndingAfter(page.Items, from); i < page.Items.Count; i++)
             {
                 var item = page.Items[i];
                 if (item.At >= to) break;
-                (left, top) = (Math.Min(left, item.X), Math.Min(top, item.Y));
-                (right, bottom) = (Math.Max(right, item.X + item.Width), Math.Max(bottom, item.Y + item.Height));
+                run.Add(item.X, item.Y, item.X + item.Width, item.Y + item.Height);
+                var (first, last) = (Math.Max(from, item.At), Math.Min(to, item.End));
+                if (item.Width < item.Height || page.Text.AsSpan(item.At, item.End - item.At).ContainsAnyInRange('֐', 'ࣿ'))
+                {
+                    part.Add(item.X, item.Y, item.X + item.Width, item.Y + item.Height);
+                }
+                else
+                {
+                    var share = item.Width / (item.End - item.At);
+                    part.Add(item.X + share * (first - item.At), item.Y, item.X + share * (last - item.At), item.Y + item.Height);
+                }
             }
 
-            if (right < left) continue;
-            var (width, height) = (right - left, bottom - top);
-            var grow = Math.Max(2, 0.3 * Math.Min(width, height));
-            if (Crop.Enclosing(left - grow, top - grow, width + 2 * grow, height + 2 * grow, page.Width, page.Height) is { } crop && !crops.Contains(crop)) crops.Add(crop);
+            if (run.Right < run.Left) continue;
+            var grow = Math.Max(2, 0.3 * Math.Min(run.Right - run.Left, run.Bottom - run.Top));
+            if (run.Grown(grow, page) is not { } crop) continue;
+            if (!crops.Contains(crop)) crops.Add(crop);
+            if (part.Grown(grow, page) is { } match && !exact.Contains(match)) exact.Add(match);
         }
 
         if (crops.Count == 0) return null;
-        var shown = string.Join(';', crops.Take(MaxRegionsPerLine));
-        return crops.Count > MaxRegionsPerLine ? $"{shown};+{crops.Count - MaxRegionsPerLine} more" : shown;
+        return exact.SequenceEqual(crops) ? Shown(crops) : $"{Shown(crops)}:match={Shown(exact)}";
+
+        static string Shown(List<Crop> boxes)
+        {
+            var shown = string.Join(';', boxes.Take(MaxRegionsPerLine));
+            return boxes.Count > MaxRegionsPerLine ? $"{shown};+{boxes.Count - MaxRegionsPerLine} more" : shown;
+        }
+    }
+
+    /// <summary>The box around what was added to it, in points of the page; empty while <see cref="Right"/> is below <see cref="Left"/>.</summary>
+    private sealed class Bounds
+    {
+        public double Left { get; private set; } = double.MaxValue;
+
+        public double Top { get; private set; } = double.MaxValue;
+
+        public double Right { get; private set; } = double.MinValue;
+
+        public double Bottom { get; private set; } = double.MinValue;
+
+        public void Add(double left, double top, double right, double bottom) =>
+            (Left, Top, Right, Bottom) = (Math.Min(Left, left), Math.Min(Top, top), Math.Max(Right, right), Math.Max(Bottom, bottom));
+
+        public Crop? Grown(double by, PageTextBoxes page) =>
+            Crop.Enclosing(Left - by, Top - by, Right - Left + 2 * by, Bottom - Top + 2 * by, page.Width, page.Height);
     }
 
     /// <summary>The index of the first item that ends after <paramref name="from"/>; the items ascend, so their ends do too.</summary>

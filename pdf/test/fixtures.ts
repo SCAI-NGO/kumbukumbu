@@ -83,6 +83,14 @@ export const scanPage = (withInvisibleText: boolean) =>
     }
   });
 
+// scanPage()'s picture (119 × 168 px over the whole page) under a caption of visible text.
+export const CAPTION_AT = { x: 50, y: 700 };
+export const captionedScanPage = () =>
+  single(async (doc, page) => {
+    page.drawImage(await doc.embedPng(png(119, 168, "#d0d0d0")), { x: 0, y: 0, width: A4.width, height: A4.height });
+    page.drawText("A caption over the picture", { ...CAPTION_AT, size: 14, font: await doc.embedFont(StandardFonts.Helvetica) });
+  });
+
 export const rotatedPage = () =>
   single((_, page) => {
     page.setRotation(degrees(90));

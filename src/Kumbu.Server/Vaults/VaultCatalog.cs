@@ -448,7 +448,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             throw;
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider, Kind = kind };
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { Owner = userId, EmbeddingProvider = DefaultEmbeddingProvider, Kind = kind };
         RecordKey(vault);
         _open[id] = vault;
         KumbuMetrics.VaultUnlocked();
@@ -1301,12 +1301,17 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The id of the key of the vault's owner (<see cref="Accounts.UserDocument.EmbeddingsKeyId"/>), read
     /// without her user key; null if she has none. Asked only for a meta that holds a copy.</summary>
-    private async Task<string?> OwnerKeyIdAsync(string vaultId, VaultMeta meta, CancellationToken ct)
+    private async Task<string?> OwnerKeyIdAsync(string vaultId, VaultMeta meta, CancellationToken ct) =>
+        meta.EmbeddingsKey is null ? null : await KeyIdOfAsync(await OwnerOfAsync(vaultId, ct), ct);
+
+    private async Task<string?> KeyIdOfAsync(string? owner, CancellationToken ct) =>
+        owner is null ? null : await Users.Find(u => u.Id == owner).Project(u => u.EmbeddingsKeyId).FirstOrDefaultAsync(ct);
+
+    /// <summary>The id of the vault's owner, from her slot; null for a vault without one, the dev token's.</summary>
+    private async Task<string?> OwnerOfAsync(string vaultId, CancellationToken ct)
     {
-        if (meta.EmbeddingsKey is null) return null;
         var f = Builders<SlotDocument>.Filter;
-        var owner = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Vault, vaultId) & f.Exists(s => s.Owner)).Project(s => s.Owner).FirstOrDefaultAsync(ct);
-        return owner is null ? null : await Users.Find(u => u.Id == owner).Project(u => u.EmbeddingsKeyId).FirstOrDefaultAsync(ct);
+        return await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Vault, vaultId) & f.Exists(s => s.Owner)).Project(s => s.Owner).FirstOrDefaultAsync(ct);
     }
 
     /// <summary>
@@ -1701,14 +1706,16 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             // Never chosen: the instance's default, so the vault follows it when the admin changes it.
-            var (provider, key, keyId) = Provider(meta, await OwnerKeyIdAsync(id, meta, ct));
+            // The owner too: the search index serves owners in turn.
+            var owner = await OwnerOfAsync(id, ct);
+            var (provider, key, keyId) = Provider(meta, meta.EmbeddingsKey is null ? null : await KeyIdOfAsync(owner, ct));
 
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.
             // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
-            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, Owner = owner, EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Owner = owner, EmbeddingProvider = provider, EmbeddingKey = key, EmbeddingKeyId = keyId, DisplayName = meta.DisplayName, Kind = doc.Kind };
             // A dead copy (of a key the owner replaced or removed meanwhile) goes now; should another writer come
             // between, the next unlock tries again. It counts for nothing either way.
             if (meta.EmbeddingsKey is not null && keyId is null)

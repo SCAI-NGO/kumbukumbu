@@ -460,6 +460,22 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Put_over_a_note_records_the_lines_it_changes_as_the_shares()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "one\ntwo\n");
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("one\nfrom the share\n"));
+
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        var store = new Kumbu.Server.Vaults.EncryptedNoteStore(
+            Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>(), new Kumbu.Server.Vaults.UserCredential(dav.Owner.User.Id, dav.Owner.UserKey));
+        var lines = (await store.GetAsync(VaultPath.Root.Child(dav.Owner.Vault).Child("plan.md"), Ct))!.Authorship!.ByLine();
+        Assert.NotEqual("Work PC (dav)", lines[0]!.Label);
+        Assert.Equal("Work PC (dav)", lines[1]!.Label);
+    }
+
+    [Fact]
     public async Task Put_of_a_png_stores_an_attachment_and_history_names_the_share()
     {
         var dav = await DavClient.NewAsync(Api);

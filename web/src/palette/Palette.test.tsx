@@ -275,6 +275,24 @@ describe("rows", () => {
     expect(reads()).toBe(before);
   });
 
+  it("reads a vault's tree only once a name is typed", async () => {
+    const { fetch } = signedInApi({ homeTree: () => tree("Home", ["garden.md"]) });
+    const reads = (vault: string) => fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === `/api/vaults/${vault}/tree`).length;
+    await openPalette();
+    await within(palette()).findByText("Star anything here to keep it on top.");
+    await act(async () => {});
+    expect(reads("Home")).toBe(0);
+    await userEvent.type(field(), "garden");
+    await waitFor(() => expect(options()).toContain("garden, Home"));
+    expect(reads("Home")).toBe(1);
+  });
+
+  it("a note favourite's vault has its tree read when the palette opens", async () => {
+    signedInApi({ favourites: [{ kind: "note", vault: "Home", path: "garden.md" }], homeTree: () => tree("Home", ["garden.md"]) });
+    await openPalette();
+    await waitFor(() => expect(options()).toEqual(["garden, Home", "inbox, Work"]));
+  });
+
   it("arrow keys move the highlight", async () => {
     signedInApi();
     await openPalette();
@@ -473,7 +491,7 @@ describe("the note's actions", () => {
     await userEvent.type(field(), "note");
     await waitFor(() => expect(noteGroup()).toBeInTheDocument());
     // Placed with the note's title.
-    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Rename or move, inbox"]));
+    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Who wrote what, inbox", "Rename or move, inbox"]));
   });
 
   it("no_star_and_ctrl_d_does_nothing", async () => {

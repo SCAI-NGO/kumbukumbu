@@ -71,6 +71,7 @@ public sealed class HiddenVaultTests(KumbuAppFactory app)
         ("GET", "/api/backlinks/{v}/geheim.md"),
         ("GET", "/api/mentions/{v}/geheim.md"),
         ("GET", "/api/history/{v}/geheim.md"),
+        ("GET", "/api/blame/{v}/geheim.md"),
         ("GET", "/api/version/{v}/geheim.md"),
         ("GET", "/api/vaults/{v}/trash"),
         ("GET", "/api/vaults/{v}/checkpoints"),
