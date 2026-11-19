@@ -29,6 +29,9 @@ describe("parseProperties", () => {
     expect(parseProperties("just text")).toBeNull();
     expect(parseProperties("ref: *anchor")).toBeNull();
     expect(parseProperties('tags: ["a, b", c]')).toBeNull();
+    // The quote before the comma is escaped: the comma is still inside them.
+    expect(parseProperties('tags: ["a\\", b"]')).toBeNull();
+    expect(parseProperties("tags: ['it''s, x']")).toBeNull();
     expect(parseProperties("status: draft # for now")).toBeNull();
     expect(parseProperties("tags:\n  - a # first")).toBeNull();
   });
@@ -52,6 +55,29 @@ describe("parseProperties", () => {
       { key: "path", value: "C:\\temp" },
       { key: "raw", value: 'a\\"b' },
       { key: "bare", value: 'a\\"b' },
+    ]);
+  });
+  it("gives up on a flow list holding nested lists or maps, as on a flow map", () => {
+    expect(parseProperties("tags: [{a: b, c: d}, x]")).toBeNull();
+    expect(parseProperties("tags: [[a, b], x]")).toBeNull();
+    expect(parseProperties("tags: [x, [a]]")).toBeNull();
+    expect(parseProperties("tags: [{a: b}]")).toBeNull();
+  });
+
+  it("drops one trailing comma in a flow list, as YAML does, and gives up on any other empty item", () => {
+    expect(parseProperties("tags: [a,]")).toEqual([{ key: "tags", value: ["a"] }]);
+    expect(parseProperties("tags: [a, b , ]")).toEqual([{ key: "tags", value: ["a", "b"] }]);
+    expect(parseProperties("tags: [a,,b]")).toBeNull();
+    expect(parseProperties("tags: [a,,]")).toBeNull();
+    expect(parseProperties("tags: [,]")).toBeNull();
+    expect(parseProperties("tags: [, a]")).toBeNull();
+  });
+
+  it("reads two single quotes inside single quotes as one, as YAML does", () => {
+    expect(parseProperties("title: 'it''s'\ntags: ['Bob''s', x]\nitems:\n  - 'a''''b'")).toEqual([
+      { key: "title", value: "it's" },
+      { key: "tags", value: ["Bob's", "x"] },
+      { key: "items", value: ["a''b"] },
     ]);
   });
 });

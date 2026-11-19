@@ -12,13 +12,13 @@ import { useMarketplaces } from "../api/skills";
 import type { MenuItem } from "../components/Menu";
 import { useDesktop } from "../hooks/useDesktop";
 import { useDialog } from "../hooks/useDialog";
-import { useEditor } from "../state/editor";
+import { editedPath, useEditor, writingSide } from "../state/editor";
 import { useSession } from "../state/session";
 import { applyScheme } from "../theme/apply";
 import { useCloseWindow } from "../windows/context";
 import { useWindows } from "../windows/store";
 import { filterRows } from "./filter";
-import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows, type ReadTree, type Row } from "./rows";
+import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows, writeRows, type ReadTree, type Row } from "./rows";
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
@@ -57,6 +57,8 @@ function useRows(note: PaletteNote | null, typed: boolean, favourites: Favourite
   const shared = usePublishEnabled() === true;
   const marketplaces = useMarketplaces().data?.enabled === true;
   const vaults = useVaults().data;
+  // The note the editor writes, while one is in Write mode.
+  const writing = useEditor((s) => (writingSide(s) ? editedPath(s) : null));
   // Each vault's tree as the drawer has it, from the cache where it was read before.
   const trees = useQueries({
     queries: (vaults ?? []).map((v) => ({
@@ -78,7 +80,10 @@ function useRows(note: PaletteNote | null, typed: boolean, favourites: Favourite
     [admin, shared, marketplaces, vaults, trees],
   );
   // Apart from the rest: the shell hands over new items on each of its renders, and the trees needn't be walked again for them.
-  return { rows: [...(note ? noteActionRows(titleOf(note.path), note.items) : []), ...all.rows], trees: all.trees };
+  return {
+    rows: [...(note ? noteActionRows(titleOf(note.path), note.items) : []), ...(writing ? writeRows(titleOf(writing)) : []), ...all.rows],
+    trees: all.trees,
+  };
 }
 
 /** A note opened lately, as its row; one not in its tree (yet) still has one. */
@@ -146,9 +151,9 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
   }, [id, at]);
 
   const run = (entry: Row | null) => {
-    // Search and the note's actions are the shell's: under a window they would be out of reach, so the window closes
-    // first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
-    const overWindow = (entry === null || entry.group === "Note") && useWindows.getState().open;
+    // Search and the actions (the note's, Insert template) are the shell's: under a window they would be out of reach,
+    // so the window closes first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
+    const overWindow = (entry === null || "action" in entry.run) && useWindows.getState().open;
     if (overWindow) closeWindow();
     if (entry === null) {
       close();

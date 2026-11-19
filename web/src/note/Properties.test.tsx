@@ -157,6 +157,16 @@ describe("the properties box", () => {
     expect(localStorage.getItem("kumbu.propertiesOpen")).toBeNull();
   });
 
+  it.each([["tags: [{a: b, c: d}, x]"], ["tags: [[a, b], x]"], ["tags: [a,,b]"]])("shows %s as written, not split at its commas", (yaml) => {
+    render(
+      <MemoryRouter>
+        <Properties yaml={yaml} changed={null} />
+      </MemoryRouter>,
+    );
+    expect(document.querySelector("pre[aria-label=Properties]")).toHaveTextContent(yaml);
+    expect(box()).toBeNull();
+  });
+
   it("the checkpoint view shows the box as it was", () => {
     render(
       <MemoryRouter>
