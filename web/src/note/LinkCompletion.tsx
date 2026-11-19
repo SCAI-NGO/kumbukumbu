@@ -1,49 +1,118 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useMemo, useState, type KeyboardEvent, type RefObject, type SyntheticEvent } from "react";
-import { useTree } from "../api/notes";
+import { useNote, useTree } from "../api/notes";
 import { crumbOf, titleOf, vaultOf } from "../api/paths";
-import { completeLink, embedsAsImage, linkQuery, linkTarget, notePaths, rankNotes, type LinkQuery } from "./linkCompletion";
+import {
+  blocksFor,
+  completeLink,
+  completeMarkdown,
+  completeSubpath,
+  embedsAsImage,
+  headingsFor,
+  linkedNote,
+  linkQuery,
+  linkTarget,
+  markdownFragment,
+  markdownPath,
+  notePaths,
+  rankNotes,
+  type LinkQuery,
+} from "./linkCompletion";
+import { headingLink } from "./outline";
 import { apply } from "./textEdit";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
+/** A row of the list: what it shows, and what picking it inserts (a note's path, a heading's link text or `#fragment`, `^id`). */
+type Option = { key: string; label: string; detail: string; value: string };
+
+/** A Markdown link's path as written (`/My%20Plan.md`), decoded where it is well-formed, as the server reads it. */
+function decoded(path: string) {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+const listNames: Record<LinkQuery["kind"], string> = {
+  note: "Notes to link",
+  markdown: "Notes to link",
+  heading: "Headings to link",
+  markdownHeading: "Headings to link",
+  block: "Blocks to link",
+};
+
 /**
- * `[[` completion for the editor: follows the caret, and answers the list to show (between the textarea and the
- * toolbar, so above the on-screen keyboard) and the keys the textarea hands it first.
+ * Link completion for the editor (a note's name, its headings and blocks, a Markdown link's path): follows the caret,
+ * and answers the list to show (between the textarea and the toolbar, so above the on-screen keyboard) and the keys
+ * the textarea hands it first.
  */
 export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextAreaElement | null>, onChange: (value: string) => void) {
   const [at, setAt] = useState<LinkQuery | null>(null);
   // Asked for (or taken from the cache) only once a `[[` is typed.
   const tree = useTree(at ? vaultOf(path) : null);
   const all = useMemo(() => (tree.data ? notePaths(tree.data.root) : []), [tree.data]);
+  // The open note's text as it is written, for its own headings and blocks (`[[#`): taken as the caret moves.
+  const [own, setOwn] = useState("");
   const [active, setActive] = useState(0);
   // Escape closes the list for this `[[`; a new one opens it again.
   const [dismissed, setDismissed] = useState<number | null>(null);
 
-  const options = useMemo(() => (at ? rankNotes(all.filter((p) => p !== path), at.query) : []), [all, at, path]);
+  // The note whose headings or blocks are asked for: the open one for `[[#`, else the one the name leads to.
+  const target = useMemo(() => {
+    if (!at || at.kind === "note" || at.kind === "markdown") return null;
+    return at.note === "" ? path : linkedNote(at.kind === "markdownHeading" ? decoded(at.note) : at.note, all, path);
+  }, [all, at, path]);
+  // Another note is read as the note view reads it, so it comes from the cache when it was open before; and only
+  // then, as reading it again would replace the text a view of it (the split view's other pane) shows.
+  const other = useNote(target !== path ? target : null, { cached: true });
+  const content = target === path ? own : other.data?.content;
+  const loading = target !== null && target !== path && other.isPending;
+
+  const options = useMemo((): Option[] => {
+    if (at?.kind === "note" || at?.kind === "markdown") {
+      return rankNotes(all.filter((p) => p !== path), at.query).map((p) => ({ key: p, label: titleOf(p), detail: crumbOf(p), value: p }));
+    }
+    if (!at || content === undefined) return [];
+    if (at.kind === "block") return blocksFor(content, at.query).map((b) => ({ key: b.id, label: b.text, detail: `^${b.id}`, value: `^${b.id}` }));
+    return headingsFor(content, at.query)
+      .filter((h) => headingLink(h.text) !== "")
+      // Inserted as shown, not as written: Markdown marks inside a link's brackets keep it from rendering.
+      .map((h) => ({ key: String(h.line), label: h.text, detail: `H${h.level}`, value: at.kind === "markdownHeading" ? markdownFragment(h.text) : headingLink(h.text) }));
+  }, [all, at, content, path]);
   const open = !!at && at.start !== dismissed && options.length > 0;
+  const waiting = !!at && at.start !== dismissed && loading;
 
   /** Called on every change of text or caret. */
   const follow = useCallback(() => {
     const area = textarea.current;
     if (!area) return;
     const next = area.selectionStart === area.selectionEnd ? linkQuery(area.value, area.selectionStart) : null;
-    setAt((prev) => (prev?.start === next?.start && prev?.query === next?.query ? prev : next));
+    setAt((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    if (next && "note" in next) setOwn(area.value);
     setActive(0);
   }, [textarea]);
 
-  const pick = (option: string) => {
+  const pick = (option: Option) => {
     const area = textarea.current;
     if (!area || !at) return;
-    apply(area, completeLink(area.value, area.selectionStart, at, linkTarget(option, all), embedsAsImage(option)), onChange);
+    const caret = area.selectionStart;
+    if (at.kind === "note") apply(area, completeLink(area.value, caret, at, linkTarget(option.value, all), embedsAsImage(option.value)), onChange);
+    else if (at.kind === "heading" || at.kind === "block") apply(area, completeSubpath(area.value, caret, at, option.value), onChange);
+    else if (at.kind === "markdown") apply(area, completeMarkdown(area.value, caret, at, markdownPath(option.value)), onChange);
+    else apply(area, completeMarkdown(area.value, caret, at, `${at.note}${option.value}`), onChange);
     setAt(null);
   };
 
   /** True when the key was the list's. */
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // While an IME composes (Japanese, Chinese, many phone keyboards), Enter and the arrows are the IME's.
-    if (!open || e.nativeEvent.isComposing || e.keyCode === 229) return false;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return false;
+    // While the note loads, Escape takes "Loading…" away; the other keys stay the textarea's.
+    if (waiting && e.key === "Escape") setDismissed(at.start);
+    else if (!open) return false;
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
     else if (e.key === "Enter" || e.key === "Tab") pick(options[active]);
     else if (e.key === "Escape") setDismissed(at.start);
     else return false;
@@ -51,30 +120,36 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
     return true;
   };
 
-  const list = open ? (
-    <ul
-      id="link-completion"
-      role="listbox"
-      aria-label="Notes to link"
-      className="mx-2 mb-1.5 max-h-[40vh] flex-none overflow-y-auto rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg"
-    >
-      {options.map((option, i) => (
-        <li
-          key={option}
-          id={`link-option-${i}`}
-          role="option"
-          aria-selected={i === active}
-          onPointerDown={keepFocus}
-          onMouseDown={keepFocus}
-          onClick={() => pick(option)}
-          className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === active ? "bg-accent/15" : ""}`}
-        >
-          <span className="truncate text-[15px] text-text">{titleOf(option)}</span>
-          <span className="truncate font-mono text-[11px] text-dim">{crumbOf(option)}</span>
-        </li>
-      ))}
-    </ul>
-  ) : null;
+  const box = "mx-2 mb-1.5 max-h-[40vh] flex-none overflow-y-auto rounded-[12px] border border-line bg-surface-2 p-1 shadow-lg";
+  const list = (
+    <>
+      {open && (
+        <ul id="link-completion" role="listbox" aria-label={listNames[at.kind]} className={box}>
+          {options.map((option, i) => (
+            <li
+              key={option.key}
+              id={`link-option-${i}`}
+              role="option"
+              aria-selected={i === active}
+              onPointerDown={keepFocus}
+              onMouseDown={keepFocus}
+              onClick={() => pick(option)}
+              className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === active ? "bg-accent/15" : ""}`}
+            >
+              <span className="truncate text-[15px] text-text">{option.label}</span>
+              <span className="truncate font-mono text-[11px] text-dim">{option.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {/* There while a link is typed, before its text, so a screen reader announces "Loading…" when it comes. */}
+      {at && (
+        <p id="link-completion-status" role="status" className={waiting ? `${box} px-3 py-2 text-[15px] text-muted` : undefined}>
+          {waiting ? "Loading…" : ""}
+        </p>
+      )}
+    </>
+  );
 
   const textareaProps = {
     "aria-autocomplete": "list" as const,
