@@ -33,6 +33,11 @@
           "xunit.v3.mtp-v2": "[4.0.2]"
         }
       },
+      "AngleSharp": {
+        "type": "Transitive",
+        "resolved": "1.10.5",
+        "contentHash": "+XcQgYnOCjizDLpBImAscxgyje0ypUdWXvP+TDEVowygb50J6frELXN3YD2SjOR/BuJInWUr6tFUwl9WN1l31w=="
+      },
       "Microsoft.ApplicationInsights": {
         "type": "Transitive",
         "resolved": "2.23.0",
@@ -177,6 +182,7 @@
       "kumbu.core": {
         "type": "Project",
         "dependencies": {
+          "AngleSharp": "[1.10.5, )",
           "YamlDotNet": "[18.1.0, )"
         }
       }

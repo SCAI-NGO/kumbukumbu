@@ -16,6 +16,8 @@ public static class Manual
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
+          html <path> [selector]          read an HTML file: title and headings, or what a CSS selector picks (--attr, --html, --count)
+          xml <path> [xpath]              read an XML file: its root and elements, or what an XPath picks (--ns, --xml, --count)
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead; [[note#^id]] to a block
           backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
           graph <note> [--depth N]        how notes link: a note's neighbourhood (--out, --in, --cap); graph --path a b: how two notes connect; --orphans, --hubs, --unresolved [path]

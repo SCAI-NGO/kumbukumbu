@@ -72,6 +72,11 @@
         "resolved": "10.0.14",
         "contentHash": "88DUO9lZZ/PfBwO51YKTd5TdVb+Cl31kd6imLKHUZxNXjnPU2V4mHIVT4f8rVK3T+sXXfDbHInzclnOHrK4azw=="
       },
+      "AngleSharp": {
+        "type": "Transitive",
+        "resolved": "1.10.5",
+        "contentHash": "+XcQgYnOCjizDLpBImAscxgyje0ypUdWXvP+TDEVowygb50J6frELXN3YD2SjOR/BuJInWUr6tFUwl9WN1l31w=="
+      },
       "DnsClient": {
         "type": "Transitive",
         "resolved": "1.6.1",
@@ -144,6 +149,7 @@
       "kumbu.core": {
         "type": "Project",
         "dependencies": {
+          "AngleSharp": "[1.10.5, )",
           "YamlDotNet": "[18.1.0, )"
         }
       }
