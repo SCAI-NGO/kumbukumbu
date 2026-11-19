@@ -121,9 +121,11 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <paramref name="target"/>; otherwise why not. Renaming doesn't change the bytes, so the new extension must name
     /// their format (.jpg and .jpeg are one); a file may take any name that names no format (spec 2026-11-18, decision 7).
     /// A skill's text file and a file are one kind of thing in two places: text leaves a skill's folder as a file, and a
-    /// file enters one under a text name only if it is text. <paramref name="skillsVault"/> as for <see cref="ForPath"/>.
+    /// file enters one under a text name only if it is text. An image or PDF of <paramref name="size"/> bytes over 15 MB
+    /// doesn't enter one, as it isn't uploaded there (<see cref="TooLargeToCheck"/>): copying the skill would read it
+    /// whole. <paramref name="skillsVault"/> as for <see cref="ForPath"/>.
     /// </summary>
-    public static string? RenameProblem(VaultPath source, string mediaType, VaultPath target, string? skillsVault = SkillPaths.SkillsVault)
+    public static string? RenameProblem(VaultPath source, string mediaType, long size, VaultPath target, string? skillsVault = SkillPaths.SkillsVault)
     {
         if (ForPath(source, skillsVault) is not { } format) return null;
         var kept = ForPath(target, skillsVault);
@@ -141,7 +143,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         }
 
         if (format == Marker) return kept == Marker ? null : $"{FolderMarker.Name} keeps its name";
-        if (kept?.MediaType == format.MediaType) return null;
+        if (kept?.MediaType == format.MediaType) return IsLarge(size) ? TooLargeToCheck(target, skillsVault) : null;
         if (format == Svg && kept == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";

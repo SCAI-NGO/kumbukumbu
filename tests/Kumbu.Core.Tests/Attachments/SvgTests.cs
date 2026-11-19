@@ -133,8 +133,8 @@ public sealed class SvgTests
     [Fact]
     public void An_svg_image_isnt_renamed_into_a_skills_folder_where_svg_is_text()
     {
-        Assert.Null(AttachmentFormat.RenameProblem(P("/Work/a.svg"), "image/svg+xml", P("/Work/Icons/b.SVG")));
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Work/a.svg"), "image/svg+xml", 10, P("/Work/Icons/b.SVG")));
         Assert.Equal("a.svg is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead",
-            AttachmentFormat.RenameProblem(P("/Work/a.svg"), "image/svg+xml", P("/Work/_skills/x/a.svg")));
+            AttachmentFormat.RenameProblem(P("/Work/a.svg"), "image/svg+xml", 10, P("/Work/_skills/x/a.svg")));
     }
 }

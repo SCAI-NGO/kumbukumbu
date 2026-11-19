@@ -186,7 +186,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
         if (await StoreAttachments.GetAsync(store, source, ct) is { } file)
         {
-            if (AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+            if (AttachmentFormat.RenameProblem(source, file.Current.MediaType, file.Current.Size, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
             {
                 return ShellResult.Error($"{command}: {target.Value}: {renameProblem}");
             }
