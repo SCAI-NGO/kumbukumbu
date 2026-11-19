@@ -70,6 +70,19 @@ public class HelpTests
     }
 
     [Fact]
+    public async Task Help_blame_names_the_folder_limit_and_the_section_forms()
+    {
+        var output = (await Run("help blame")).Output;
+        var help = System.Text.RegularExpressions.Regex.Replace(output, @"\s+", " ");
+        Assert.StartsWith("blame [--lines] <path>[#section]\n", output);
+        Assert.Contains("note.md#Heading", help);
+        Assert.Contains("note.md#^block", help);
+        Assert.Contains($"At most {Kumbu.Core.Sh.Commands.Blame.MaxNotes} notes", help);
+        Assert.Contains("… and N more notes; blame a folder below it", help);
+        Assert.Contains("--lines takes a note, not a folder", help);
+    }
+
+    [Fact]
     public async Task Help_mkdir_says_an_empty_folder_stays()
     {
         var result = await Run("help mkdir");
