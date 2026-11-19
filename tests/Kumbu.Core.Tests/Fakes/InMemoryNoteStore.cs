@@ -298,8 +298,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<StoredAttachment>>([.. _attachments.Values.Where(a => IsBelow(a.Path, folder))]);
 
-    public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct) =>
-        Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    /// <summary>How often a blob was opened: what a test asserts to see that bytes were not read.</summary>
+    public int BlobOpens { get; private set; }
+
+    public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
+    {
+        BlobOpens++;
+        return Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    }
 
     /// <summary>The exception storing these bytes throws (a full vault's <see cref="QuotaExceededException"/>, say), or null to store them.</summary>
     public Func<ReadOnlyMemory<byte>, Exception?>? BlobFails { get; set; }

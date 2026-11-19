@@ -302,6 +302,37 @@ public class AttachmentCommandTests
     }
 
     [Fact]
+    public async Task Rg_stops_reading_text_files_at_its_bound_and_says_so()
+    {
+        await Upload("/Work/a.csv", "rose;1\n"u8.ToArray());
+        await Upload("/Work/b.csv", "rose;2\n"u8.ToArray());
+        await Upload("/Work/c.csv", "rose;3\n"u8.ToArray());
+        var rg = new Kumbu.Core.Sh.Commands.Rg(_store) { TextBytesBudget = 15 };
+
+        var result = await rg.RunAsync(["rose", "/Work"], null, Ct);
+
+        Assert.Equal("/Work/a.csv:1:rose;1\n/Work/b.csv:1:rose;2", result.Output);
+        Assert.Equal("rg: stopped reading text files after 15 B; narrow the path", result.Notice);
+        Assert.Equal(64 * 1024 * 1024, Kumbu.Core.Sh.Commands.Rg.MaxTextBytes);
+    }
+
+    [Fact]
+    public async Task Rg_reads_no_text_file_a_filter_leaves_out()
+    {
+        await Upload("/Work/a.csv", "rose;1\n"u8.ToArray());
+        await Upload("/Work/skip.csv", "rose;2\n"u8.ToArray());
+        await Upload("/Work/_archive/old.csv", "rose;3\n"u8.ToArray());
+        await Note("/Work/tagged.md", "#flower rose\n");
+        var opened = _store.BlobOpens;
+
+        Assert.Equal("/Work/a.csv:1:rose;1\n/Work/tagged.md:1:#flower rose", (await Run("rg rose /Work -g '!skip.csv'")).Output);
+        Assert.Equal(opened + 1, _store.BlobOpens);
+        Assert.Equal("/Work/tagged.md:1:#flower rose", (await Run("rg --tag flower rose /Work")).Output);
+        Assert.Equal(opened + 1, _store.BlobOpens);
+        Assert.Equal("no match outside the archive; 1 archived file matches (rg --archive 'rose;3' /Work searches it)", (await Run("rg 'rose;3' /Work")).Output);
+    }
+
+    [Fact]
     public async Task Mv_rm_and_restore_work_on_a_file()
     {
         await Upload("/Work/Makefile", "all:\n"u8.ToArray());
