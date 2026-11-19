@@ -163,7 +163,7 @@ public class HelpTests
         var text = System.Text.RegularExpressions.Regex.Replace(help[topic..], @"\s+", " ");
         Assert.Contains("Each vault has its own archive: the folder _archive/ directly in its root (/Work/_archive/).", text);
         Assert.Contains("A folder of that name anywhere else (/Work/Inbox/_archive/) is an ordinary folder.", text);
-        Assert.Contains("rg searches neither its notes nor its PDFs; --files and --tag leave its notes out", text);
+        Assert.Contains("rg searches none of its notes, text files or PDFs, and --files lists none of them", text);
         Assert.Contains("semsearch ranks neither its notes nor its PDF pages", text);
         Assert.Contains("tags counts no tag of its notes", text);
         Assert.Contains("backlinks lists no note in it that links to the path", text);
@@ -227,5 +227,45 @@ public class HelpTests
     {
         var text = System.Text.RegularExpressions.Regex.Replace(Manual.WriteDescription, @"\s+", " ");
         Assert.Contains("kept with this version in the note's history; an SVG's or a skill file's history keeps none", text);
+    }
+
+    [Fact]
+    public async Task Archive_topic_names_graph_and_calendar()
+    {
+        var help = (await Run("help archive")).Output;
+        var topic = help[help.IndexOf("\n\nthe archive\n", StringComparison.Ordinal)..];
+        Assert.Contains("\n    graph      leaves its notes out; --archive takes them in\n", topic);
+        Assert.Contains("\n    calendar   leaves archived notes out\n", topic);
+        var text = System.Text.RegularExpressions.Regex.Replace(topic, @"\s+", " ");
+        Assert.Contains("calendar has no --archive; a note in the archive has no place in the calendar.", text);
+        var notHidden = text[text.IndexOf("Not hidden:", StringComparison.Ordinal)..text.IndexOf("Links prefer", StringComparison.Ordinal)];
+        Assert.DoesNotContain("graph", notHidden);
+        Assert.DoesNotContain("calendar", notHidden);
+    }
+
+    [Fact]
+    public async Task Archive_help_names_graph_and_calendar()
+    {
+        var help = (await Run("archive --help")).Output;
+        var text = System.Text.RegularExpressions.Regex.Replace(help, @"\s+", " ");
+        Assert.Contains("ls, rg, semsearch, tags, backlinks and graph leave the archive out unless given --archive or a path inside the archive, and calendar always does (it has no --archive);", text);
+    }
+
+    [Fact]
+    public async Task Attachments_topic_says_rg_files_lists_text_files_too()
+    {
+        var text = System.Text.RegularExpressions.Regex.Replace((await Run("help attachments")).Output, @"\s+", " ");
+        Assert.Contains("'rg --files' lists notes and text files only (with --tag, notes only);", text);
+        Assert.DoesNotContain("'rg --files' lists notes only", text);
+    }
+
+    [Fact]
+    public async Task Attachments_topic_says_what_write_takes()
+    {
+        var text = System.Text.RegularExpressions.Regex.Replace((await Run("help attachments")).Output, @"\s+", " ");
+        Assert.Contains("People upload them (the web app, Obsidian, the upload tool, which takes an SVG too).", text);
+        Assert.Contains("The write tool takes notes, SVGs and a skill's text files, and everything else is uploaded; the edit and replace tools change notes only.", text);
+        Assert.Contains("An SVG and a skill's text file are written whole, as a note is (no version creates one, the version replaces it);", text);
+        Assert.DoesNotContain("since they only write text", text);
     }
 }

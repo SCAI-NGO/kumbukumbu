@@ -155,7 +155,7 @@ public class RgTests
     [InlineData("rg -C -1 TODO", "rg: invalid number for --context: '-1'")]
     [InlineData("ls / | rg x /Demo", "rg: reads from the pipe, so it takes no path (got '/Demo')")]
     [InlineData("ls / | rg -l x", "rg: -l lists notes, so it needs paths, not piped input")]
-    [InlineData("ls / | rg --files", "rg: --files lists notes; it does not read from a pipe")]
+    [InlineData("ls / | rg --files", "rg: --files lists notes and text files; it does not read from a pipe")]
     [InlineData("rg --nope x", "rg: unrecognized option '--nope'")]
     public async Task Errors(string line, string expected) => Assert.Equal(expected, await Err(line));
 

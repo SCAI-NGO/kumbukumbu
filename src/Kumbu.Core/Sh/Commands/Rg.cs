@@ -784,7 +784,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, IReadOnlyList<Glob> globs, bool archive, string? input, CancellationToken ct)
     {
-        if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
+        if (input is not null) return ShellResult.Error("rg: --files lists notes and text files; it does not read from a pipe");
         if (tags.Count > 0)
         {
             if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");

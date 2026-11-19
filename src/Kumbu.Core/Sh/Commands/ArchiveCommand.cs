@@ -32,9 +32,9 @@ public sealed class ArchiveCommand(INoteReader notes, NoteMover mover, TimeProvi
           Refused for what is already in the archive, for a vault, and for skills: anything in the
           vault Skills or in a /<vault>/_skills/ folder. To remove something, use rm.
           To restore, mv it back (mv never overwrites).
-          ls, rg, semsearch, tags and backlinks leave the archive out unless given --archive or a path
-          inside the archive; hiding the archive is about attention, not access: whoever may read the
-          vault may read it.
+          ls, rg, semsearch, tags, backlinks and graph leave the archive out unless given --archive or a path
+          inside the archive, and calendar always does (it has no --archive);
+          hiding the archive is about attention, not access: whoever may read the vault may read it.
 
           archive /Work/Inbox/report.pdf
           archive "/Work/Meeting Notes.md"
