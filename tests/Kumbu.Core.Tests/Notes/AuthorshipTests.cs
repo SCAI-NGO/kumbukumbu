@@ -200,6 +200,20 @@ public class AuthorshipTests
         Assert.Equal(["Brita@1", "Brita@1"], Lines(Authorship.Of(note)));
     }
 
+    [Theory]
+    [InlineData(1, 0)] // fewer lines than the content's
+    [InlineData(3, 0)] // more
+    [InlineData(2, 1)] // a write it doesn't hold
+    [InlineData(2, -2)]
+    public void A_record_whose_runs_do_not_fit_its_content_reads_as_missing(int lines, int write)
+    {
+        var broken = new Authorship(VersionToken.Hash("a\nb"), null, false, [new("Mallory", VeyaltRef, T(9))], [new(lines, write)]);
+        var note = new StoredNote(P, "a\nb", 1, "Brita", T1, [], Ref: BritaRef, Authorship: broken);
+
+        Assert.Equal(["Brita@1", "Brita@1"], Lines(Authorship.Of(note)));
+        Assert.Equal(["Brita@1", "Brita@1", "Veyalt@2"], Lines(Write(note, "a\nb\nc", "Veyalt", T(2)).Authorship));
+    }
+
     [Fact]
     public void The_first_write_after_the_record_stores_what_the_backfill_reads()
     {

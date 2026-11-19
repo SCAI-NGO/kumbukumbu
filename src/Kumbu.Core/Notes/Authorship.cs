@@ -52,7 +52,7 @@ public sealed record Authorship(string Hash, DateTime? Earlier, bool Dropped, IR
     /// </summary>
     public static Authorship Of(StoredNote note)
     {
-        if (note.Authorship is { } recorded && recorded.Hash == VersionToken.Hash(note.Content)) return recorded;
+        if (note.Authorship is { } recorded && recorded.Fits(note.Content)) return recorded;
         var current = new Write(note.LastWriter, note.Ref, note.LastWriteAt);
         if (note.Revision == 1) return New(note.Content, current);
 
@@ -62,6 +62,13 @@ public sealed record Authorship(string Hash, DateTime? Earlier, bool Dropped, IR
         for (var i = 1; i < states.Count; i++) record = record.Then(states[i - 1].Content, states[i].Content, states[i].Write);
         return record;
     }
+
+    /// <summary>Whether the record describes <paramref name="content"/>: its hash, and runs that cover exactly its lines
+    /// and name only writes it holds. Anything else, sealed by a bug or another version, would credit the wrong writer.</summary>
+    private bool Fits(string content) =>
+        Hash == VersionToken.Hash(content)
+        && Runs.All(r => r.Lines > 0 && r.Write >= -1 && r.Write < Writes.Count)
+        && Runs.Sum(r => (long)r.Lines) == Lines.Split(content).Count;
 
     /// <summary>Each line's writer, null for one not recorded.</summary>
     public IReadOnlyList<Write?> ByLine() =>
@@ -77,6 +84,7 @@ public sealed record Authorship(string Hash, DateTime? Earlier, bool Dropped, IR
         var a = Lines.Split(before);
         var b = Lines.Split(after);
         var old = new int[a.Count];
+        Array.Fill(old, -1);
         var at = 0;
         foreach (var run in Runs)
         {

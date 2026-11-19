@@ -405,6 +405,24 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Who_wrote_which_line_survives_the_rekey()
+    {
+        var a = await FilledAsync();
+        var store = Store(a);
+        var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan by Ann\n\nalpha beta gamma, take 3\n", "ann", WriterRef.ForMember("w-1"), Now.AddHours(2)), Ct));
+        var before = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!;
+
+        await Catalog().RekeyAsync(a.Id("Arbeit"), a.User.Id, a.Key, Ct);
+
+        var after = (await Store(a, NewCatalog()).GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!;
+        Assert.Equal(before.Hash, after.Hash);
+        Assert.Equal(before.Writes, after.Writes);
+        Assert.Equal(before.Runs, after.Runs);
+        Assert.Equal(["ann", "lea", "lea"], after.ByLine().Select(w => w!.Label));
+    }
+
+    [Fact]
     public async Task Nothing_is_sealed_under_the_old_key_any_more()
     {
         var a = await FilledAsync();

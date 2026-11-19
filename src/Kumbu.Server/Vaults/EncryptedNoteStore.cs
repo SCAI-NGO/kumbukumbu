@@ -228,7 +228,8 @@ public sealed class EncryptedNoteStore(
             foreach (var (current, given) in batch.Replaces)
             {
                 WriterRef.RequireStorable(given.Ref, kept: WriterRef.Keeps(current, given));
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                // At another revision than the working set's, the record would be computed from a state it doesn't replace.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
                 var next = given with { Authorship = Authorship.After(entry.Note, given) };
                 if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
                 {
@@ -288,7 +289,8 @@ public sealed class EncryptedNoteStore(
 
             foreach (var (current, _) in batch.Moves)
             {
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                // As for replaces: the target's record is computed from this entry.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
                 var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));

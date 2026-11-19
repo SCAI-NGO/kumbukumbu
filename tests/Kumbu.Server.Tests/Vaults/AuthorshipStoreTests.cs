@@ -141,6 +141,50 @@ public sealed class AuthorshipStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_state_newer_than_the_working_set_is_refused_so_the_record_is_of_the_state_replaced()
+    {
+        var w = await WorldAsync();
+        await CreatedAsync(w, "/Work/a.md", "one\ntwo\n");
+        var second = Later(w);
+        var seen = (await second.GetAsync(P("/Work/a.md"), Ct))!;
+        var newer = await WrittenAsync(second, seen, "ONE\ntwo\n", "Veyalt", VeyaltRef, T0.AddHours(1));
+        var newerMove = await WrittenAsync(second, newer, "ONE\ntwo\nthree\n", "Veyalt", VeyaltRef, T0.AddHours(2));
+
+        // The first process's working set is still at revision 1; the caller's state, read elsewhere, is at 3.
+        Assert.False(await w.Store.TryReplaceAsync(newerMove, NoteWriter.Next(newerMove, "ONE\n2\nthree\n", "Brita", BritaRef, T0.AddHours(3)), Ct));
+        // The refusal refreshed it; another write elsewhere puts it behind again, and a move is refused the same way.
+        var newest = await WrittenAsync(second, (await second.GetAsync(P("/Work/a.md"), Ct))!, "ONE\ntwo\nthree\nfour\n", "Veyalt", VeyaltRef, T0.AddHours(3));
+        Assert.NotEmpty(await w.Store.TryCommitAsync(
+            new NoteBatch { Moves = { (newest, newest with { Path = P("/Work/b.md"), Revision = newest.Revision + 1 }) } }, "Brita", BritaRef, T0.AddHours(4), Ct));
+
+        var current = (await w.Store.GetAsync(P("/Work/a.md"), Ct))!;
+        await WrittenAsync(w.Store, current, "ONE\n2\nthree\nfour\n", "Brita", BritaRef, T0.AddHours(5));
+        Assert.Equal(["Veyalt@1", "Brita@5", "Veyalt@2", "Veyalt@3"], await LinesAsync(Later(w), "/Work/a.md"));
+    }
+
+    [Fact]
+    public async Task A_record_a_caller_puts_on_a_state_is_ignored()
+    {
+        var w = await WorldAsync();
+        var note = await CreatedAsync(w, "/Work/a.md", "one\ntwo\n");
+        var forged = new Authorship(VersionToken.Hash("one\ntwo\nthree\n"), null, false, [new("Mallory", BritaRef, T0)], [new(3, 0)]);
+
+        Assert.True(await w.Store.TryReplaceAsync(note, NoteWriter.Next(note, "one\ntwo\nthree\n", "Veyalt", VeyaltRef, T0.AddHours(1)) with { Authorship = forged }, Ct));
+        Assert.True(await w.Store.TryCreateAsync(new StoredNote(P("/Work/b.md"), "x\n", 1, "Veyalt", T0, [], Ref: VeyaltRef, Authorship: forged), Ct));
+        var stored = (await w.Store.GetAsync(P("/Work/a.md"), Ct))!;
+        Assert.Empty(await w.Store.TryCommitAsync(new NoteBatch
+        {
+            Creates = { new StoredNote(P("/Work/c.md"), "y\n", 1, "Veyalt", T0, [], Ref: VeyaltRef, Authorship: forged) },
+            Moves = { (stored, stored with { Path = P("/Work/d.md"), Revision = stored.Revision + 1, Authorship = forged }) },
+        }, "Veyalt", VeyaltRef, T0.AddHours(2), Ct));
+
+        var later = Later(w);
+        Assert.Equal(["Brita@0", "Brita@0", "Veyalt@1"], await LinesAsync(later, "/Work/d.md"));
+        Assert.Equal(["Veyalt@0"], await LinesAsync(later, "/Work/b.md"));
+        Assert.Equal(["Veyalt@0"], await LinesAsync(later, "/Work/c.md"));
+    }
+
+    [Fact]
     public async Task Two_writers_racing_leave_a_record_of_the_stored_content()
     {
         var w = await WorldAsync();
