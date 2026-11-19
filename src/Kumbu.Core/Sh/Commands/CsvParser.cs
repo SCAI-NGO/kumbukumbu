@@ -37,6 +37,8 @@ internal static class CsvParser
             while (true)
             {
                 string field;
+                // Whether the field ends outside quotes, where a CR before the line's end belongs to the line break.
+                bool endsUnquoted;
                 if (i < text.Length && text[i] == '"')
                 {
                     quoted = true;
@@ -63,18 +65,20 @@ internal static class CsvParser
 
                     // Anything after the closing quote, up to the separator, is kept as it stands rather than guessed at.
                     var rest = UnquotedEnd(text, i, separator);
-                    field = rest > i ? quotedField.Append(text, i, rest - i).ToString() : quotedField.ToString();
+                    endsUnquoted = rest > i;
+                    field = endsUnquoted ? quotedField.Append(text, i, rest - i).ToString() : quotedField.ToString();
                     i = rest;
                 }
                 else
                 {
                     var end = UnquotedEnd(text, i, separator);
                     field = text[i..end];
+                    endsUnquoted = true;
                     i = end;
                 }
 
                 // CRLF ends the line, and so does a CR that ends the text.
-                if (field.EndsWith('\r') && (i == text.Length || text[i] == '\n')) field = field[..^1];
+                if (endsUnquoted && field.EndsWith('\r') && (i == text.Length || text[i] == '\n')) field = field[..^1];
                 fields.Add(field);
                 if (i < text.Length && text[i] == separator)
                 {

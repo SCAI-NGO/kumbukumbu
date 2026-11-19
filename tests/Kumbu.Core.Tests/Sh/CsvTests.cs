@@ -209,6 +209,22 @@ public class CsvTests
         Assert.Equal("Name\tAmount\nTea\t3", await Ok("csv /Work/cr.csv --tsv"));
     }
 
+    [Theory]
+    [InlineData("Name,Note\n\"Tea\",\"ends in CR\r\"\n")]
+    [InlineData("Name,Note\r\n\"Tea\",\"ends in CR\r\"\r\n")]
+    [InlineData("Name,Note\n\"Tea\",\"ends in CR\r\"")]
+    public void A_carriage_return_inside_quotes_is_kept(string text) =>
+        Assert.Equal(["Tea", "ends in CR\r"], Kumbu.Core.Sh.Commands.CsvParser.Parse(text, ',').Rows[1]);
+
+    [Fact]
+    public async Task A_byte_order_mark_is_dropped_from_a_file_and_from_piped_input()
+    {
+        _store.AddTextFile("/Work/bom.csv", "﻿Name,Amount\nTea,3\n");
+
+        Assert.Equal("Name\tAmount\nTea\t3", await Ok("csv /Work/bom.csv --tsv"));
+        Assert.Equal("Name\tAmount\nTea\t3", await Ok("cat /Work/bom.csv | csv --tsv"));
+    }
+
     [Fact]
     public async Task Excel_semicolon_csv_with_decimal_commas_and_a_byte_order_mark()
     {
