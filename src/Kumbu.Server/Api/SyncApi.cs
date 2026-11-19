@@ -16,8 +16,9 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace Kumbu.Server.Api;
 
 /// <summary>A note's path from the root of the vault tree and its version, as <c>GET /api/notes</c> gives it; an
-/// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c>, <c>pdf</c>, or <c>folder</c> for a
-/// <c>.vaultkeep</c> that keeps its folder, version <c>e3b0c44298fc</c>) only with <c>attachments=1</c>.</summary>
+/// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c>, <c>pdf</c>, <c>file</c>, <c>text</c>
+/// with <c>text=1</c>, or <c>folder</c> for a <c>.vaultkeep</c> that keeps its folder, version <c>e3b0c44298fc</c>) only
+/// with <c>attachments=1</c>.</summary>
 public sealed record VersionEntry(
     string Path, string Version, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
 
@@ -144,7 +145,7 @@ public static class SyncApi
         var cursor = now.ToString("O", CultureInfo.InvariantCulture);
         var changedAt = unlocked.ChangedAt;
         var notes = unlocked.Notes;
-        var files = withFiles ? unlocked.Attachments.Where(a => withText || a.Value.Attachment.Current.MediaType != AttachmentFormat.TextMediaType).ToDictionary() : [];
+        var files = withFiles ? unlocked.Attachments.Where(a => withText || !IsText(a.Key)).ToDictionary() : [];
         // Damaged attachment records count only for a client that knows attachments: the plain answer stays today's.
         var damaged = withFiles ? unlocked.DamagedPathIds.Count : unlocked.DamagedNotes;
         // The working set holds the vault's own paths; the answer is in the caller's view (a member's alias).

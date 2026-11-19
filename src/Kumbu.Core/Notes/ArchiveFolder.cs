@@ -24,16 +24,32 @@ public static partial class ArchiveFolder
     public static bool Shown(VaultPath scope, bool asked) => asked || Contains(scope);
 
     /// <summary>
+    /// The end of a note's or file's name the stamp goes before: a note's <c>.md</c>, a format's extension as the name
+    /// spells it, a file's last extension (<c>.xlsx</c>; none for <c>Makefile</c>, and none with a space in it, so
+    /// <c>v1.2 2026-11-08 213005</c> is a folder's stamped name).
+    /// </summary>
+    public static string ExtensionOf(string name)
+    {
+        if (name.EndsWith(".md", StringComparison.Ordinal)) return ".md";
+        var format = AttachmentFormat.ForName(name);
+        if (format == AttachmentFormat.File)
+        {
+            var dot = name.LastIndexOf('.');
+            return dot > 0 && dot < name.Length - 1 && !name.AsSpan(dot).Contains(' ') ? name[dot..] : "";
+        }
+
+        return format is { Kind: not AttachmentKind.Folder } ? name[^format.Extension.Length..] : "";
+    }
+
+    /// <summary>
     /// Whether <paramref name="name"/> carries the stamp <c>archive</c> gives: <c>NAME YYYY-MM-DD HHmmss[-N]</c> before a
-    /// note's <c>.md</c> or an attachment format's extension, at the end of a folder's name. <paramref name="original"/>
+    /// note's or file's extension (<see cref="ExtensionOf"/>), at the end of a folder's name. <paramref name="original"/>
     /// is the name without it, <paramref name="local"/> the time it states, in the server's local time zone.
     /// </summary>
     public static bool TryParseStamp(string name, out string original, out DateTime local)
     {
         (original, local) = ("", default);
-        var extension = name.EndsWith(".md", StringComparison.Ordinal) ? ".md"
-            : AttachmentFormat.ForName(name) is { Kind: not AttachmentKind.Folder } format ? name[^format.Extension.Length..]
-            : "";
+        var extension = ExtensionOf(name);
         var match = Stamped().Match(name[..^extension.Length]);
         if (!match.Success
             || !DateTime.TryParseExact(match.Groups["at"].Value, "yyyy-MM-dd HHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out local))

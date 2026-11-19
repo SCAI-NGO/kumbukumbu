@@ -92,10 +92,12 @@ export const commandTable: Record<string, CommandEntry> = {
     },
   },
   history: { values: ["--since"], find: (o) => ({ paths: first(o), missing: "cwd" }) },
+  // Blame.cs: --lines takes no value; without a path, the working directory is the folder.
+  blame: { values: [], find: (o) => ({ paths: first(o), missing: "cwd" }) },
   board: { values: ["--column", "--tag"], find: (o) => ({ paths: first(o), missing: "vault" }) },
-  // The console runs only the reading forms: a vault's week or month, or what's on (with an optional vault).
+  // The console runs only the reading forms: a vault's week, month or days, or what's on (with an optional vault).
   calendar: {
-    values: ["--week", "--month", "--tag"],
+    values: ["--week", "--month", "--from", "--to", "--tag"],
     find: (o) => (o[0] === "notifications" ? { paths: o.length > 1 ? [1] : [] } : { paths: first(o), missing: "vault" }),
   },
   pdf: {

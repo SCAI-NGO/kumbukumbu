@@ -12,9 +12,10 @@ namespace Kumbu.Server.Vaults;
 /// <see cref="NoteWriter.TrashRetention"/>: attachment trash has no TTL index, so that the blobs only a trash entry held
 /// can go with it. A blob younger than <see cref="Grace"/> always stays: its upload may still be on the way to the commit
 /// of its record (<see cref="EncryptedNoteStore.PutBlobAsync"/> puts the bytes first, and makes a blob it finds young
-/// again). The analyses and jobs of PDFs go with their blobs. Runs from <see cref="VaultCatalog.Sweep"/> for the
-/// unlocked vaults, under the vault's gate, which every write and every put of a blob takes; a vault that is busy,
-/// deleted or being re-keyed is left for the next round.
+/// again). The analyses and jobs of PDFs go with their blobs, a large file's chunks with its head; chunks no head names
+/// go once the newest of them is older than <see cref="Grace"/> (an upload that stopped half way). Runs from
+/// <see cref="VaultCatalog.Sweep"/> for the unlocked vaults, under the vault's gate, which every write and every put of
+/// a blob takes; a vault that is busy, deleted or being re-keyed is left for the next round.
 /// </summary>
 public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
 {
@@ -29,7 +30,9 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
     /// <summary>The candidates' query, covered by <see cref="CandidateIndex"/>.</summary>
     internal static readonly MongoDB.Bson.BsonDocument CandidateProjection = new() { { "bid", 1 }, { "_id", 0 } };
 
-    /// <summary>Returns how many blobs were released.</summary>
+    private static FilterDefinitionBuilder<BlobChunkDocument> C => Builders<BlobChunkDocument>.Filter;
+
+    /// <summary>Returns how many blobs, and uploads that stopped half way, were released.</summary>
     public async Task<int> RunAsync(UnlockedVault vault, DateTime now, CancellationToken ct)
     {
         if (!catalog.MayIndex(vault) || !await vault.Gate.WaitAsync(0, ct)) return 0;
@@ -37,6 +40,7 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
         {
             if (!catalog.MayIndex(vault)) return 0;
             var released = await ReleaseAsync(vault, now, ct);
+            released += await ReleaseHeadlessChunksAsync(vault, now, ct);
             await ReleaseAnalysesAsync(vault, now, ct);
             return released;
         }
@@ -62,9 +66,63 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
         candidates.ExceptWith(stored);
         if (candidates.Count == 0) return 0;
 
-        var released = await catalog.Blobs.DeleteManyAsync(old & F.In(d => d.BlobId, candidates.Select(Convert.FromBase64String)), ct);
+        var release = old & F.In(d => d.BlobId, candidates.Select(Convert.FromBase64String));
+        var heads = await catalog.Blobs.Find(release & F.Exists(d => d.Chunks)).Project(d => d.Id).ToListAsync(ct);
+        var released = await catalog.Blobs.DeleteManyAsync(release, ct);
+        if (heads.Count > 0)
+        {
+            // The chunks of the heads that went (another process may have made one young again meanwhile).
+            var kept = await catalog.Blobs.Find(F.Eq(d => d.Vault, vault.Id) & F.In(d => d.Id, heads)).Project(d => d.Id).ToListAsync(ct);
+            await catalog.BlobChunks.DeleteManyAsync(C.Eq(d => d.Vault, vault.Id) & C.In(d => d.Head, heads.Except(kept)), ct);
+        }
+
         log.LogInformation("Released {Count} unreferenced blobs of vault {VaultId}", released.DeletedCount, vault.Id);
         return (int)released.DeletedCount;
+    }
+
+    /// <summary>
+    /// The chunks of uploads that stopped half way: no head names them, and the newest is older than <see cref="Grace"/>,
+    /// so a slow upload still under way keeps its chunks (an upload's head counts them before it goes in, and is refused
+    /// if some went). No head is put while the sweep holds the gate in this process; one another process put meanwhile
+    /// is looked for once more right before the deletion. Read from the indexes, the heads' ids alone. Returns for how
+    /// many uploads chunks went.
+    /// </summary>
+    private async Task<int> ReleaseHeadlessChunksAsync(UnlockedVault vault, DateTime now, CancellationToken ct)
+    {
+        var ofVault = C.Eq(d => d.Vault, vault.Id);
+        var heads = await (await catalog.BlobChunks.DistinctAsync(d => d.Head, ofVault, cancellationToken: ct)).ToListAsync(ct);
+        if (heads.Count == 0) return 0;
+        var headless = heads.Except(await HeldAsync(vault, heads, ct)).ToList();
+        if (headless.Count == 0) return 0;
+        var young = await (await catalog.BlobChunks.DistinctAsync(d => d.Head, ofVault & C.In(d => d.Head, headless) & C.Gte(d => d.At, now - Grace), cancellationToken: ct)).ToListAsync(ct);
+        var stale = headless.Except(young).ToList();
+        if (stale.Count == 0) return 0;
+        stale = [.. stale.Except(await HeldAsync(vault, stale, ct))];
+        if (stale.Count == 0) return 0;
+
+        var deleted = await catalog.BlobChunks.DeleteManyAsync(ofVault & C.In(d => d.Head, stale), ct);
+        log.LogInformation("Deleted {Chunks} chunks of {Uploads} unfinished uploads of vault {VaultId}", deleted.DeletedCount, stale.Count, vault.Id);
+        return stale.Count;
+    }
+
+    private async Task<List<MongoDB.Bson.ObjectId>> HeldAsync(UnlockedVault vault, IEnumerable<MongoDB.Bson.ObjectId> heads, CancellationToken ct) =>
+        await catalog.Blobs.Find(F.Eq(d => d.Vault, vault.Id) & F.In(d => d.Id, heads)).Project(d => d.Id).ToListAsync(ct);
+
+    /// <summary>
+    /// The chunks of vaults that no longer exist: an upload that was under way when its vault was deleted, in another
+    /// process or past the deletion's own sweep, may write some after it. None can be written for a vault before it
+    /// exists, so every chunk of a vault without its document goes. Over every vault, not only the unlocked ones;
+    /// read from the indexes.
+    /// </summary>
+    internal async Task ReleaseChunksOfDeletedVaultsAsync(CancellationToken ct)
+    {
+        var vaults = await (await catalog.BlobChunks.DistinctAsync(d => d.Vault, C.Empty, cancellationToken: ct)).ToListAsync(ct);
+        if (vaults.Count == 0) return;
+        var existing = await catalog.Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, vaults)).Project(v => v.Id).ToListAsync(ct);
+        var gone = vaults.Except(existing, StringComparer.Ordinal).ToList();
+        if (gone.Count == 0) return;
+        var deleted = await catalog.BlobChunks.DeleteManyAsync(C.In(d => d.Vault, gone), ct);
+        log.LogInformation("Deleted {Chunks} chunks of {Vaults} deleted vaults", deleted.DeletedCount, gone.Count);
     }
 
     /// <summary>

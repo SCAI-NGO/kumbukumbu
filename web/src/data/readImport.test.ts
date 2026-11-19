@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { strToU8, zipSync, type Zippable } from "fflate";
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, TOO_LARGE, TOO_LARGE_FILE } from "../upload/planUpload";
+import { MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, TOO_LARGE } from "../upload/planUpload";
 import { ImportTooLarge, readImport, versionOf, versionOfBytes } from "./readImport";
 
 /** A ZIP of these entries; a name ending in "/" is a folder entry. */
@@ -104,7 +104,7 @@ describe("readImport", () => {
         skipped: [
           { path: "../x.md", reason: "empty, '.' and '..' segments aren't allowed" },
           { path: "a\\b.md", reason: "folders are separated by '/', not '\\'" },
-          { path: ".DS_Store", reason: NOT_SUPPORTED },
+          { path: ".DS_Store", reason: "'.DS_Store' starts with '.', which hides it in Obsidian" },
           { path: ".obsidian/app.json", reason: "Obsidian's settings or trash, not a note" },
           { path: ".trash/t.md", reason: "Obsidian's settings or trash, not a note" },
           { path: ".hidden.md", reason: "'.hidden.md' starts with '.', which hides it in Obsidian" },
@@ -115,15 +115,15 @@ describe("readImport", () => {
 
   it("entries that aren't kept are never inflated", async () => {
     // A deflate stream that doesn't decode: inflating it would throw.
-    const archive = zip({ "Work/a.md": "A", "Work/big.bin": new Uint8Array(4000).fill(7) });
-    const broken = corrupt(archive, "Work/big.bin");
+    const archive = zip({ "Work/a.md": "A", "Work/.big.bin": new Uint8Array(4000).fill(7) });
+    const broken = corrupt(archive, "Work/.big.bin");
     const vaults = await readImport(broken, "export.zip");
-    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md"], skipped: [{ path: "big.bin", reason: NOT_SUPPORTED }] }]);
+    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md"], skipped: [{ path: ".big.bin", reason: "'.big.bin' starts with '.', which hides it in Obsidian" }] }]);
     // The same damage on a note does throw, so the test above proves the entry was left alone.
     await expect(readImport(corrupt(zip({ "Work/big.md": "x".repeat(4000) }), "Work/big.md"), "export.zip")).rejects.toThrow();
   });
 
-  it("import keeps attachments from a ZIP", async () => {
+  it("import keeps attachments and every other file from a ZIP", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
     const pdf = strToU8("%PDF-1.7\r\nbody\r\n");
     const vaults = await readImport(
@@ -144,12 +144,12 @@ describe("readImport", () => {
     expect(work.files.map((f) => [f.path, f.size, f.version])).toEqual([
       ["img/Bespr\u00e9chung.png", png.length, await versionOfBytes(png)],
       ["scan.PDF", pdf.length, await versionOfBytes(pdf)],
+      ["report.docx", 1, await versionOfBytes(strToU8("x"))],
     ]);
     expect(await versionOfBytes(pdf)).not.toBe(await versionOf("%PDF-1.7\r\nbody\r\n"));
-    expect(await Promise.all(work.files.map(async (f) => Array.from(await f.read())))).toEqual([Array.from(png), Array.from(pdf)]);
+    expect(await Promise.all(work.files.map(async (f) => Array.from(await f.read())))).toEqual([Array.from(png), Array.from(pdf), Array.from(strToU8("x"))]);
     expect(work.skipped).toEqual([
-      { path: "report.docx", reason: NOT_SUPPORTED },
-      { path: "huge.jpg", reason: TOO_LARGE_FILE },
+      { path: "huge.jpg", reason: "larger than 15 MB, the limit for a file in an import; upload it on its own" },
       { path: ".obsidian/icon.png", reason: "Obsidian's settings or trash, not a note" },
     ]);
   });
@@ -304,7 +304,7 @@ describe("readImport", () => {
     expect(vaults[0].skipped.map((s) => s.path)).toEqual([".gitkeep", ".git/x/.vaultkeep"]);
   });
 
-  it("imports a skill's text files into Skills and skips them elsewhere", async () => {
+  it("imports a skill's text files into Skills, and as files elsewhere", async () => {
     const vaults = await readImport(
       zip({ "Skills/pdf/SKILL.md": "S", "Skills/pdf/scripts/run.py": "print(1)\n", "Skills/run.py": "print(2)\n", "Work/run.py": "print(3)\n", "Work/_skills/x/LICENSE": "MIT" }),
       "export.zip",
@@ -312,10 +312,10 @@ describe("readImport", () => {
     const skills = vaults.find((v) => v.name === "Skills")!;
     const work = vaults.find((v) => v.name === "Work")!;
     expect(skills.notes.map((n) => n.path)).toEqual(["pdf/SKILL.md"]);
-    expect(skills.files.map((f) => f.path)).toEqual(["pdf/scripts/run.py"]);
-    expect(skills.skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]);
-    expect(work.files.map((f) => f.path)).toEqual(["_skills/x/LICENSE"]);
-    expect(work.skipped).toEqual([{ path: "run.py", reason: NOT_SUPPORTED }]);
+    expect(skills.files.map((f) => f.path)).toEqual(["pdf/scripts/run.py", "run.py"]);
+    expect(skills.skipped).toEqual([]);
+    expect(work.files.map((f) => f.path)).toEqual(["run.py", "_skills/x/LICENSE"]);
+    expect(work.skipped).toEqual([]);
     expect(new TextDecoder().decode(await skills.files[0].read())).toBe("print(1)\n");
   });
 });

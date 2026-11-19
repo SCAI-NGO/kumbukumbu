@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { errorText } from "../api/error-text";
 import { consoleCall, type ConsoleRequest, type ConsoleView } from "./api";
+import { forgetEntries } from "./entries";
 import { helpBlock, localHelp } from "./help";
 import { resolveLine, resolvePath } from "./paths";
 import { useConsole, type Output, type Running } from "./store";
@@ -59,7 +60,11 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
   const [name, ...args] = stages?.length !== 1 ? [] : stages[0].length === 1 && stages[0][0] === ".." ? ["cd", ".."] : stages[0];
   if (local.has(name) && args.length > (name === "cd" || name === "p" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
   if (name === "pwd") return done([text(cwd)]);
-  if (name === "clear") return useConsole.setState({ entries: [] });
+  if (name === "clear") {
+    // Every other command ends in the store's add, which forgets the listings; this one only empties the scrollback.
+    forgetEntries();
+    return useConsole.setState({ entries: [] });
+  }
   if (name === "exit") {
     done([]);
     return leave();
@@ -95,6 +100,12 @@ export async function run(line: string, signal: AbortSignal, leave: () => void) 
   return ask({ call: "sh", command: sent }, { ...entry, sent }, generation, signal, (view) =>
     useConsole.getState().add({ ...entry, sent, output: [...intro, ...shown(view, sent)] }),
   );
+}
+
+/** Tab's list of matches, as zsh prints it: under the line as typed, which is neither run nor remembered. */
+export function listMatches(line: string, matches: string[]) {
+  const { cwd, add } = useConsole.getState();
+  add({ id: nextId++, cwd, typed: line, output: [text(matches.join("  "))] }, false);
 }
 
 async function ask(request: ConsoleRequest, running: Running, generation: number, signal: AbortSignal, answered: (view: ConsoleView) => void) {

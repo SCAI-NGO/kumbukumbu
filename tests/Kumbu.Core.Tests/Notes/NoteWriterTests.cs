@@ -125,10 +125,10 @@ public class NoteWriterTests
 
     [Theory]
     [InlineData("/Nope/x.md", "write: there is no vault 'Nope' (ls lists the vaults; writing does not create new ones)")]
-    [InlineData("/Work/sub", "write: /Work/sub: note names end in .md")]
-    [InlineData("/Work/notes.txt", "write: /Work/notes.txt: note names end in .md")]
+    [InlineData("/Work/sub", "write: /Work/sub: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)")]
+    [InlineData("/Work/notes.txt", "write: /Work/notes.txt: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)")]
     [InlineData("/Work.md", "write: /Work.md: notes live inside a vault, e.g. /Work/plan.md")]
-    [InlineData("/Work/plan.md/x.md", "write: /Work/plan.md: Not a directory")]
+    [InlineData("/Work/plan.md/x.md", "write: /Work/plan.md is a note, not a folder; nothing can be kept below it")]
     [InlineData("/Work/a:b.md", "write: /Work/a:b.md: 'a:b.md' contains ':', which Windows can't store")]
     [InlineData("/Work/q?.md", "write: /Work/q?.md: 'q?.md' contains '?', which Windows can't store")]
     [InlineData("/Work/dir./x.md", "write: /Work/dir./x.md: 'dir.' ends with a dot or space, which Windows can't store")]

@@ -40,7 +40,8 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, fallback?:
         close.current();
         return;
       }
-      if (e.key !== "Tab") return;
+      // A control that keeps Tab for itself (the console's completion) has prevented it already.
+      if (e.key !== "Tab" || e.defaultPrevented) return;
       const controls = controlsOf(dialog);
       if (controls.length === 0) return;
       const at = controls.indexOf(document.activeElement as HTMLElement);

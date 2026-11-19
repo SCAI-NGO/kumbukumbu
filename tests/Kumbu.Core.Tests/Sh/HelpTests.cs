@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "calendar", "head", "tail", "wc", "sort", "history", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "calendar", "head", "tail", "wc", "sort", "history", "blame", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
 
     // A shell without the pixels has none of these; the tool description names them all the same.
     private static readonly string[] AttachmentCommands = ["img", "pdf", "pdfimages"];
@@ -113,7 +113,9 @@ public class HelpTests
     {
         var topic = (await Run("help attachments")).Output;
         Assert.StartsWith("attachments", topic);
-        Assert.Contains("15 MB each", topic);
+        Assert.Contains("every file type, up to the server's bound each (1 GiB unless its", topic);
+        Assert.Contains("larger than 15 MB is kept", topic);
+        Assert.Contains("cat prints it and rg searches it", topic);
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
         Assert.Contains("semsearch  ranks the pages of PDFs (not scans) by meaning", topic);
         Assert.Contains("semsearch --words and --tag find notes only", topic);

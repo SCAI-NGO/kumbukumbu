@@ -398,14 +398,22 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task A_sealed_blob_of_the_size_limit_fits_in_one_document()
+    public async Task A_sealed_blob_of_the_size_limit_fits_in_one_document_and_one_byte_more_is_chunked()
     {
-        var (_, _, store) = await WorldAsync();
+        var (world, _, store) = await WorldAsync();
         var bytes = Png((int)AttachmentFormat.MaxBytes);
+        var over = Png((int)AttachmentFormat.MaxBytes + 1);
 
         var attachment = await CreateAsync(store, "/Work/limit.png", bytes);
+        var streamed = await store.PutBlobAsync("Work", new MemoryStream(bytes), null, Ct);
+        var chunked = await store.PutBlobAsync("Work", new MemoryStream(over), null, Ct);
 
+        Assert.Equal(attachment.Current.BlobId, streamed);
         Assert.Equal(bytes, await ReadBlobAsync(store, attachment.Current.BlobId));
+        Assert.Equal(over, await ReadBlobAsync(store, chunked));
+        var blobs = Raw(world, "blobs");
+        Assert.False((await blobs.Find(Builders<BsonDocument>.Filter.Eq("bid", Convert.FromBase64String(streamed))).FirstAsync(Ct)).Contains("chunks"));
+        Assert.Equal(4, (await blobs.Find(Builders<BsonDocument>.Filter.Eq("bid", Convert.FromBase64String(chunked))).FirstAsync(Ct))["chunks"].AsInt32);
     }
 
     [Fact]
@@ -526,6 +534,42 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal(0, stats["totalDocsExamined"].ToInt32());
         // And the sweep reads them so: both are released.
         Assert.Equal(2, await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct));
+    }
+
+    [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name_in_the_transaction()
+    {
+        // What the writers check before: here a write that raced past them, refused under the vault's gate.
+        var (_, _, store) = await WorldAsync();
+        Assert.True(await store.TryCreateAsync(new StoredNote(P("/Work/v1.2/notes.md"), "n", 1, Writers.Dev, T0, [], Ref: WriterRef.Server), Ct));
+        await CreateAsync(store, "/Work/Makefile", Png(64));
+
+        var onFolder = await AttachmentAsync(store, "/Work/v1.2", Png(64));
+        var belowFile = await AttachmentAsync(store, "/Work/Makefile/x.png", Png(64));
+
+        Assert.Equal([P("/Work/v1.2")], await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { onFolder } }, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.Equal([P("/Work/Makefile")], await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { belowFile } }, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.False(await store.TryCreateAsync(new StoredNote(P("/Work/Makefile/x.md"), "x", 1, Writers.Dev, T0, [], Ref: WriterRef.Server), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/v1.2"), Ct));
+        Assert.Null(await store.GetAsync(P("/Work/Makefile/x.md"), Ct));
+
+        // The folder emptied in the same batch makes room.
+        var note = (await store.GetAsync(P("/Work/v1.2/notes.md"), Ct))!;
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { Trashes = { note }, AttachmentCreates = { onFolder } }, Writers.Dev, WriterRef.Server, T0, Ct));
+    }
+
+    [Fact]
+    public async Task A_batch_of_many_paths_still_refuses_a_clash()
+    {
+        // Past the few paths checked one by one: the whole vault's folders are built, and the rule holds the same.
+        var (_, _, store) = await WorldAsync();
+        await CreateAsync(store, "/Work/Makefile", Png(64));
+        var batch = new NoteBatch();
+        for (var i = 0; i < 100; i++) batch.Creates.Add(new StoredNote(P($"/Work/many/n{i}.md"), "n", 1, Writers.Dev, T0, [], Ref: WriterRef.Server));
+        batch.Creates.Add(new StoredNote(P("/Work/Makefile/x.md"), "x", 1, Writers.Dev, T0, [], Ref: WriterRef.Server));
+
+        Assert.Equal([P("/Work/Makefile")], await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.Null(await store.GetAsync(P("/Work/many/n0.md"), Ct));
     }
 
     [Fact]

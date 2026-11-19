@@ -55,7 +55,7 @@ async function server({ bDiffers = true } = {}) {
   return { fetch, uploads, created };
 }
 
-const exported = { "Work/a.md": "A", "Work/b.md": "B", "Work/notes.txt": "txt", "Ideas/c.md": "C", "Ideas/d/e.md": "E" };
+const exported = { "Work/a.md": "A", "Work/b.md": "B", "Work/.DS_Store": "ds", "Ideas/c.md": "C", "Ideas/d/e.md": "E" };
 
 async function openAndPick(file: File, queryClient?: QueryClient) {
   renderApp("/settings/data", queryClient);

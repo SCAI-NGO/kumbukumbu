@@ -26,9 +26,10 @@ public sealed record DavContent(
             _ => Task.FromResult<Stream>(new MemoryStream(bytes, writable: false)));
     }
 
-    /// <summary>An attachment's current bytes, typed by its checked format as <c>GET /api/files</c> types them.</summary>
-    public static DavContent Attachment(IAttachmentStore files, StoredAttachment attachment) =>
-        new(attachment.Path.Name, attachment.Current.MediaType, false, attachment.Current.Size, attachment.Version, attachment.LastWriteAt,
+    /// <summary>An attachment's current bytes, typed by its checked format as <c>GET /api/files</c> types them; a file of
+    /// kind <c>file</c> as an attachment (<see cref="FileApi.OnlyAsDownload"/>).</summary>
+    public static DavContent Attachment(IAttachmentStore files, StoredAttachment attachment, string? skillsVault) =>
+        new(attachment.Path.Name, attachment.Current.MediaType, FileApi.OnlyAsDownload(attachment.Path, attachment.Current.MediaType, skillsVault), attachment.Current.Size, attachment.Version, attachment.LastWriteAt,
             ct => FileApi.OpenAsync(files, attachment.Path, attachment.Current, ct));
 
     /// <summary>

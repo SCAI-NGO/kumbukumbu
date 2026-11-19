@@ -14,3 +14,20 @@ it("shows a text file as an icon, fetching and drawing nothing", () => {
   expect(container.querySelector("svg[aria-label='logo']")).not.toBeNull();
   vi.unstubAllGlobals();
 });
+
+it.each(["/Work/data.xlsx", "/Work/IMG_0001.HEIC", "/Work/Makefile"])("shows the file %s as an icon, fetching and drawing nothing", async (path) => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const { container } = render(<FileThumb vault="Work" path={path} alt="the file" />);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(fetch).not.toHaveBeenCalled();
+  expect(container.querySelector("img, canvas")).toBeNull();
+  expect(container.querySelector("svg.lucide-file[aria-label='the file']")).not.toBeNull();
+  vi.unstubAllGlobals();
+});
+
+it("takes the server's kind over the one its path suggests", () => {
+  // An ordinary vault named Skills: its .csv of bytes is a file, though the path reads as a skill's text.
+  const { container } = render(<FileThumb vault="Skills" path="/Skills/x/data.csv" kind="file" alt="the file" />);
+  expect(container.querySelector("svg.lucide-file[aria-label='the file']")).not.toBeNull();
+});

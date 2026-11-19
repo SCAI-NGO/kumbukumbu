@@ -19,6 +19,9 @@ export function besideOf(search: string): string | null {
   return `/${value}`;
 }
 
+/** The app's URL of a note's Who wrote what window. */
+export const blameUrl = (path: string) => `/blame/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
+
 /** The note path of `/notes/:vault/*`, from React Router's (decoded) params. */
 export const pathFromRoute = (vault: string, rest: string) => `/${vault}/${rest}`;
 
@@ -45,9 +48,10 @@ export const galleryUrl = (vault: string) => `/gallery/${encodeURIComponent(vaul
 
 /**
  * What a path holds, as the server tells files apart (`kind`): "image", "pdf", "note", "folder" for an empty folder's
- * marker, or "text" for a script or data file inside a skill's folder.
+ * marker, "text" for a script or data file inside a skill's folder, or "file" for any other file, which is only
+ * ever downloaded.
  */
-export type FileKind = "note" | "image" | "pdf" | "folder" | "text";
+export type FileKind = "note" | "image" | "pdf" | "folder" | "text" | "file";
 
 /** The zero-byte file that keeps an empty folder; the server names it as its folder wherever it shows changes. */
 export const MARKER = ".vaultkeep";
@@ -81,18 +85,35 @@ export function isSkillTextFile(vault: string, path: string): boolean {
   return below && (textExtensions.some((e) => name.endsWith(e)) || textNames.some((n) => n.toLowerCase() === name));
 }
 
-/** `path` from the root of the tree, the vault first; `vault` defaults to its first segment. A skill folder's text file is told from a note by it. */
+const knownKind = (path: string): FileKind | undefined => {
+  const dot = path.lastIndexOf(".");
+  return dot > path.lastIndexOf("/") ? attachmentKinds[path.slice(dot).toLowerCase()] : undefined;
+};
+
+/**
+ * What a stored path holds: `path` from the root of the tree, the vault first; `vault` defaults to its first segment.
+ * A skill folder's text file is told apart by it. Whatever isn't a note (`.md`, as the server tells them) or a known
+ * format is a file, with or without an extension: so only for paths something is stored at, never for a link's
+ * target (`namesKnownFormat`).
+ */
 export function fileKindOf(path: string, vault = path.split("/")[1]): FileKind {
   if (isMarker(path)) return "folder";
   if (vault && path.startsWith(`/${vault}/`) && isSkillTextFile(vault, path.slice(vault.length + 2))) return "text";
-  const dot = path.lastIndexOf(".");
-  return (dot > path.lastIndexOf("/") && attachmentKinds[path.slice(dot).toLowerCase()]) || "note";
+  if (path.endsWith(".md")) return "note";
+  return knownKind(path) ?? "file";
 }
 
+/** Whether a stored path is an attachment: anything but a note or a folder's marker. */
 export const isAttachment = (path: string) => {
   const kind = fileKindOf(path);
-  return kind === "image" || kind === "pdf" || kind === "text";
+  return kind !== "note" && kind !== "folder";
 };
+
+/**
+ * Whether a link's target, where nothing is stored, names an image or PDF: anything else (`Project v1.2`,
+ * `report.docx`) may be a note still to create, as a `[[…]]` without `.md` means a note.
+ */
+export const namesKnownFormat = (target: string) => knownKind(target) !== undefined;
 
 /** The API's URL of an attachment's bytes (`/api/files/{vault}/{path}`), at `version` if given. */
 export const fileUrl = (vault: string, path: string, version?: string) =>

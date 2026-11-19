@@ -34,12 +34,22 @@ internal static class AttachmentText
         "image/webp" => "WebP",
         "image/svg+xml" => "SVG",
         AttachmentFormat.TextMediaType => "text",
+        AttachmentFormat.OctetStream => "file",
         _ => "PDF",
     };
 
-    /// <summary>What <c>ls</c> and <c>history</c> add to a name: "image 1440×3120 412 KB", "PDF 2.1 MB".</summary>
+    /// <summary>The kind a name is shown with: "text", "file", "PDF" or "image".</summary>
+    private static string Kind(AttachmentState state) => state.MediaType switch
+    {
+        AttachmentFormat.TextMediaType => "text",
+        AttachmentFormat.OctetStream => "file",
+        _ => IsPdf(state) ? "PDF" : "image",
+    };
+
+    /// <summary>What <c>ls</c> and <c>history</c> add to a name: "image 1440×3120 412 KB", "PDF 2.1 MB", "file 12 KB".</summary>
     public static string Summary(AttachmentState state) =>
-        state.MediaType == FolderMarker.MediaType ? "folder" : string.Join(' ', new[] { state.MediaType == AttachmentFormat.TextMediaType ? "text" : IsPdf(state) ? "PDF" : "image", Dimensions(state), Size(state.Size) }.OfType<string>());
+        // A marker holds nothing; a file of no bytes is text (AttachmentFormat.MediaTypeOf), so this is no file's state.
+        state is { MediaType: FolderMarker.MediaType, Size: 0 } ? "folder" : string.Join(' ', new[] { Kind(state), Dimensions(state), Size(state.Size) }.OfType<string>());
 
     /// <summary>
     /// <c>cat</c>'s line for a PDF: "paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB — read it with pdf (help pdf)";
@@ -83,7 +93,9 @@ internal static class AttachmentText
 
     private static string Span(int first, int last) => first == last ? $"{first}" : $"{first}-{last}";
 
-    /// <summary>The one line <c>cat</c> prints instead of bytes: "shot.png: image (PNG), 1440×3120, 412 KB".</summary>
+    /// <summary>The one line <c>cat</c> prints instead of bytes: "shot.png: image (PNG), 1440×3120, 412 KB", "report.docx: file, 2.1 MB".</summary>
     public static string Line(string name, AttachmentState state) =>
-        $"{name}: " + string.Join(", ", new[] { IsPdf(state) ? "PDF" : $"image ({FormatName(state)})", Dimensions(state), Size(state.Size) }.OfType<string>());
+        $"{name}: " + string.Join(", ", new[] { Kind(state) is "image" ? $"image ({FormatName(state)})" : Kind(state), Dimensions(state), Size(state.Size) }.OfType<string>())
+        // What would read an image or a PDF doesn't read one this large (files spec, decision 12); a file nothing reads.
+        + (AttachmentFormat.IsLarge(state.Size) && Kind(state) is "image" or "PDF" ? $" — {AttachmentFormat.NotRead}" : "");
 }

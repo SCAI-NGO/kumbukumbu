@@ -47,15 +47,17 @@ export async function isPasswordRequired(response: Response): Promise<boolean> {
   return !!body && typeof body === "object" && "type" in body && body.type === "password-required";
 }
 
+/** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}". */
+async function endOnLostSession(key: string, response: Response) {
+  if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
+  // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
+  // itself. Asking for the session is the way back in, and still leads to sign-in.
+  if (useSession.getState().signedOut && key !== "GET /api/session") return;
+  useSession.getState().end();
+}
+
 const sessionEnds: Middleware = {
-  async onResponse({ request, response, schemaPath }) {
-    const key = `${request.method} ${schemaPath}`;
-    if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
-    // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
-    // itself. Asking for the session is the way back in, and still leads to sign-in.
-    if (useSession.getState().signedOut && key !== "GET /api/session") return;
-    useSession.getState().end();
-  },
+  onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, response),
 };
 
 // Every API answer carries the server's build version: a different one means a release to reload into.
@@ -64,6 +66,12 @@ const versionWatch: Middleware = {
     useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
   },
 };
+
+/** What the middleware hears of every answer, for a request sent without openapi-fetch (an upload with progress). */
+export async function heard(key: string, response: Response) {
+  useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
+  await endOnLostSession(key, response);
+}
 
 // What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are
 // never guarded, so only the others are kept, and of those only the ones without a body or with a JSON one: every
@@ -99,7 +107,7 @@ const multiSegment = new Set(["path", "folder"]);
  * `{path}` and `{folder}` (a path in its vault) keep their slashes, each segment encoded; any other value is one
  * segment. An empty `{folder}` (the vault's root) leaves its slash out too: `/api/upload/Work`.
  */
-function pathSerializer(pathname: string, params: Record<string, unknown>) {
+export function pathSerializer(pathname: string, params: Record<string, unknown>) {
   return pathname.replace(/\/?\{(\w+)\}/g, (match, name: string) => {
     const value = String(params[name]);
     const slash = match.startsWith("/") ? "/" : "";

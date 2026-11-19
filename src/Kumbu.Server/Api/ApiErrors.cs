@@ -137,10 +137,22 @@ public static class ApiErrors
             SetRetryAfter(context.HttpContext, BusyRetryAfter);
             return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
         }
+        // Every write slot for a file larger than 15 MB was taken for as long as an upload may wait for one.
+        catch (Kumbu.Server.Vaults.TooManyUploadsException e)
+        {
+            SetRetryAfter(context.HttpContext, Kumbu.Server.Vaults.TooManyUploadsException.RetryAfter);
+            return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
+        }
         // An attachment's bytes are gone or don't open: the server's fault, not a deletion (a client reads 404 as one).
         catch (Kumbu.Server.Vaults.ContentMissingException e)
         {
             return Result(StatusCodes.Status500InternalServerError, e.Message);
+        }
+        // A file larger than 15 MB asked for whole, which Kumbu² keeps but doesn't read (files spec, decision 12): the
+        // request asked for what this server doesn't do, not a fault of it.
+        catch (Kumbu.Core.Attachments.TooLargeToReadException e)
+        {
+            return Result(StatusCodes.Status400BadRequest, e.Message);
         }
         // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
         catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
@@ -199,7 +211,9 @@ public static class ApiErrors
                 {
                     StatusCodes.Status415UnsupportedMediaType => "Send the body as JSON (Content-Type: application/json).",
                     StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase) => UploadApi.Limits,
-                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase) => FileApi.TooLarge,
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase)
+                        || context.Request.Path.StartsWithSegments("/api/agent-upload", StringComparison.OrdinalIgnoreCase) =>
+                        new Kumbu.Core.Attachments.FileTooLargeException(context.RequestServices.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>().MaxFileBytes).Message,
                     StatusCodes.Status413PayloadTooLarge => "The request body is too large.",
                     _ => "The request body is missing, not JSON, or lacks a required field.",
                 }));

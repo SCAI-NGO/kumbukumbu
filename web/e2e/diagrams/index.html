@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- The page of the diagram tests (drawing.browser.ts): mermaidRender.ts with the real Mermaid, served by Vite. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Diagram drawing</title>
+  </head>
+  <body>
+    <script type="module">
+      import { renderDiagram } from "/src/reader/mermaidRender.ts";
+      window.renderDiagram = renderDiagram;
+    </script>
+  </body>
+</html>

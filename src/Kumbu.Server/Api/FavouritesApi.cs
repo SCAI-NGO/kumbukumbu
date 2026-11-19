@@ -54,10 +54,12 @@ public static partial class FavouritesApi
         var names = await ListedAsync(caller, ct);
         var ids = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
         var visible = body.Favourites.Select(f => Stored(f, ids)).ToList();
+        // The vaults opened and left out, not the hidden ids, which name a deleted discreet vault too.
+        var hidden = (await caller.HiddenVaultsAsync(ct)).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
         try
         {
             var (entries, version) = await favourites.ReplaceVisibleAsync(
-                caller.User!.Id, caller.UserKey!, body.Version, names.Keys.ToHashSet(StringComparer.Ordinal), visible, ct);
+                caller.User!.Id, caller.UserKey!, body.Version, hidden, visible, ct);
             return TypedResults.Ok(View(entries, version, names));
         }
         catch (FavouritesFullException e)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { calendarUrl, crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, isSkillTextFile, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
+import { fileKindOfEntry } from "./notes";
+import { calendarUrl, crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, isSkillTextFile, markerOf, namesKnownFormat, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
 
 describe("note paths", () => {
   it("puts a note into the URL one encoded segment at a time", () => {
@@ -37,8 +38,25 @@ describe("attachment paths", () => {
     expect(fileKindOf("/Work/report.pdf")).toBe("pdf");
     expect(fileKindOf("/Work/plan.md")).toBe("note");
     expect(fileKindOf("/Work/x.png/plan.md")).toBe("note");
-    expect(isAttachment("/Work/memo.docx")).toBe(false);
     expect(isAttachment("/Work/x.webp")).toBe(true);
+  });
+
+  it("calls every other path that isn't a note a file, with or without an extension", () => {
+    expect(fileKindOf("/Work/report.docx")).toBe("file");
+    expect(fileKindOf("/Work/IMG_0001.HEIC")).toBe("file");
+    expect(fileKindOf("/Work/Makefile")).toBe("file");
+    expect(fileKindOf("/Work/v1.2/data.csv")).toBe("file");
+    expect(fileKindOf("/Work/v1.2/plan.md")).toBe("note");
+    expect(isAttachment("/Work/memo.docx")).toBe(true);
+    expect(isAttachment("/Work/plan.md")).toBe(false);
+  });
+
+  it("a link's target names an attachment only by a format Kumbu² knows: anything else may be a note to create", () => {
+    expect(namesKnownFormat("shot.png")).toBe(true);
+    expect(namesKnownFormat("docs/report.PDF")).toBe(true);
+    expect(namesKnownFormat("Project v1.2")).toBe(false);
+    expect(namesKnownFormat("report.docx")).toBe(false);
+    expect(namesKnownFormat("plan")).toBe(false);
   });
 
   it("calls an SVG an image, and inside a skill's folder a text file", () => {
@@ -63,8 +81,8 @@ describe("folder markers", () => {
     expect(fileKindOf("/Work/Drafts/.vaultkeep")).toBe("folder");
     expect(isMarker("/Work/Drafts/.vaultkeep")).toBe(true);
     expect(isAttachment("/Work/Drafts/.vaultkeep")).toBe(false);
-    expect(fileKindOf("/Work/Drafts/x.vaultkeep")).toBe("note");
-    expect(fileKindOf("/Work/Drafts/.VaultKeep")).toBe("note");
+    expect(fileKindOf("/Work/Drafts/x.vaultkeep")).toBe("file");
+    expect(fileKindOf("/Work/Drafts/.VaultKeep")).toBe("file");
     expect(isMarker("/Work/.vaultkeep/plan.md")).toBe(false);
   });
 
@@ -90,15 +108,26 @@ describe("text files of skill folders", () => {
     ["Work", "_skills/x/RUN.PY", true],
   ])("isSkillTextFile(%s, %s) is %s", (vault, path, expected) => expect(isSkillTextFile(vault, path)).toBe(expected));
 
-  it("fileKindOf names such a file text when it is given the vault, and a note otherwise", () => {
+  it("fileKindOf names such a file text when it is given the vault, and a file otherwise", () => {
     expect(fileKindOf("/Work/_skills/x/run.py", "Work")).toBe("text");
     expect(fileKindOf("/Skills/pdf/scripts/run.py", "Skills")).toBe("text");
     expect(fileKindOf("/Work/_skills/x/run.py")).toBe("text");
-    expect(fileKindOf("/Work/_skills/x/run.py", "Elsewhere")).toBe("note");
-    expect(fileKindOf("/Work/run.py", "Work")).toBe("note");
+    expect(fileKindOf("/Work/_skills/x/run.py", "Elsewhere")).toBe("file");
+    expect(fileKindOf("/Work/run.py", "Work")).toBe("file");
     expect(fileKindOf("/Work/_skills/x/shot.png", "Work")).toBe("image");
     expect(isAttachment("/Work/_skills/x/run.py")).toBe(true);
-    expect(isAttachment("/Work/run.py")).toBe(false);
+    expect(isAttachment("/Work/run.py")).toBe(true);
     expect(isAttachment("/Skills/pdf/scripts/run.py")).toBe(true);
   });
+});
+
+describe("tree entries", () => {
+  it.each([
+    ["note", "note"],
+    ["image", "image"],
+    ["pdf", "pdf"],
+    ["text", "text"],
+    ["file", "file"],
+    ["something new", "note"],
+  ])("a server kind %s is a %s", (kind, expected) => expect(fileKindOfEntry({ kind })).toBe(expected));
 });

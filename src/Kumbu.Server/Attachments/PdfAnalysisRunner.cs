@@ -76,8 +76,9 @@ public sealed class PdfAnalysisRunner : BackgroundService
         }
     }
 
+    /// <summary>The PDFs' blob ids; one larger than 15 MB is kept, not read (files spec, decision 12), so never analysed.</summary>
     private static List<byte[]> BlobIds(IEnumerable<AttachmentState> states) =>
-        [.. states.Where(AttachmentFormat.IsPdf)
+        [.. states.Where(s => AttachmentFormat.IsPdf(s) && !AttachmentFormat.IsLarge(s.Size))
             .Select(s => EncryptedNoteStore.TryParseBlobId(s.BlobId, out var id) ? id : null).OfType<byte[]>()
             .DistinctBy(Convert.ToBase64String)];
 
@@ -241,6 +242,12 @@ public sealed class PdfAnalysisRunner : BackgroundService
         {
             // Changed or damaged outside Kumbu²: no try will open it.
             return await FailedAsync(vault, blobId, new SidecarException("damaged", "The content doesn't open"), ct);
+        }
+        catch (TooLargeToReadException)
+        {
+            // A large file under a PDF's name, queued by its blob alone: kept, not read, and no failure of its own.
+            await _analyses.DeleteJobAsync(vault.Id, blobId, ct);
+            return Outcome.Skipped;
         }
 
         if (bytes is null)

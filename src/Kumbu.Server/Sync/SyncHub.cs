@@ -244,6 +244,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             _connections.TryRemove(connection, out _);
             connection.Complete();
             ClearPresence(connection, null);
+            // A close another caller began (the check, a hide) ends before the endpoint disposes the socket: disposed
+            // meanwhile, the socket would lose its last frame and the close.
+            if (connection.IsClosed) await connection.CloseEnded;
         }
     }
 
@@ -696,6 +699,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         private readonly ConcurrentDictionary<string, byte> _waiting = new();
         private readonly SemaphoreSlim _sending = new(1, 1);
         private readonly CancellationTokenSource _closed = new();
+        private readonly TaskCompletionSource _closeEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Cancels a send under way when the connection is closed.</summary>
         private readonly CancellationTokenSource _sends = new();
@@ -711,6 +715,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         /// <summary>Cancelled once the server sent its close: the reading stops then, whether or not the client answers.</summary>
         public CancellationToken Closed => _closed.Token;
+
+        /// <summary>Done once <see cref="CloseAsync"/> sent its close or gave up on it; bounded, as the close is.</summary>
+        public Task CloseEnded => _closeEnded.Task;
 
         public void Hint(string vaultId)
         {
@@ -925,6 +932,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             {
                 socket.Abort();
                 await _closed.CancelAsync();
+                _closeEnded.TrySetResult();
                 return;
             }
 
@@ -949,6 +957,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             {
                 _sending.Release();
                 await _closed.CancelAsync();
+                _closeEnded.TrySetResult();
             }
         }
     }

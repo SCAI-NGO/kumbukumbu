@@ -168,3 +168,37 @@ describe("SVG thumbnails", () => {
     }
   });
 });
+
+describe("Thumbnails of files larger than 15 MB", () => {
+  it("fetch nothing and show the kind's icon, a PDF's and an image's", async () => {
+    const fetch = fakeApi({ "GET /api/files/W/big.pdf": pdf, "GET /api/files/W/big.png": () => new Response(new Uint8Array([0x89])) });
+    render(
+      <div>
+        <span className="relative">
+          <Thumbnail vault="W" path="/W/big.pdf" size={15_728_641} alt="big.pdf" />
+        </span>
+        <span className="relative">
+          <Thumbnail vault="W" path="/W/big.png" size={20_000_000} alt="big.png" />
+        </span>
+      </div>,
+    );
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(document.querySelector("canvas")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelectorAll("svg[role=img]")).toHaveLength(2);
+  });
+
+  it("at exactly 15 MB still fetch and draw", async () => {
+    const asked: string[] = [];
+    fakeApi({ "GET /api/files/W/report.pdf": (r) => (asked.push(new URL(r.url).pathname), pdf()) });
+    render(
+      <span className="relative">
+        <Thumbnail vault="W" path="/W/report.pdf" size={15_728_640} />
+      </span>,
+    );
+
+    await waitFor(() => expect(asked).toEqual(["/api/files/W/report.pdf"]));
+  });
+});

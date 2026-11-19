@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2 } from "lucide-react";
+import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2, Users } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { mayChange, useDuplicateNote, useLevel, useNoteText, useTree, useVaults } from "../api/notes";
-import { inVault, publishableAsNote, vaultOf } from "../api/paths";
+import { blameUrl, inVault, publishableAsNote, vaultOf } from "../api/paths";
 import { useOpenNote } from "./openInPane";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { useFavourites } from "../api/favourites";
@@ -110,6 +111,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   // The copy is made of the text as it is shown: in Write mode what is unsaved is saved first, without ending Write
   // mode. A failed save copies nothing; the editor says why, as for any save. The original stays open.
   const openNote = useOpenNote();
+  const navigate = useNavigate();
   const duplicate = async (path: string) => {
     duplicating.reset();
     const save = useEditor.getState().beforeRead;
@@ -126,6 +128,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
               { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
               // Not in the preview: a version restored would go under the editor's text.
               ...(preview ? [] : [{ label: "History", icon: History, onSelect: () => setHistory(path) }]),
+              // Read mode only, as History: the window shows the server's state, which could lag behind the editor's.
+              { label: "Who wrote what", icon: Users, onSelect: () => navigate(blameUrl(path)) },
             ]
           : []),
         ...copyItems(path, noteNamesInVault, true, copied.copy),

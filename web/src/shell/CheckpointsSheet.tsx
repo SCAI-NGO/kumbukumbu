@@ -211,7 +211,7 @@ function changeText(c: RestorePreview["changes"][number]) {
   const lines = c.added !== null && c.removed !== null ? ` (+${c.added} −${c.removed} lines)` : "";
   switch (c.kind) {
     case "changed":
-      return c.fileKind === "image" || c.fileKind === "pdf" ? "goes back to how it was then" : `gets its text from then${lines}`;
+      return c.fileKind === "image" || c.fileKind === "pdf" || c.fileKind === "file" ? "goes back to how it was then" : `gets its text from then${lines}`;
     case "back":
       return c.fileKind === "folder" ? "comes back" : "comes back (it was removed since)";
     case "trash":

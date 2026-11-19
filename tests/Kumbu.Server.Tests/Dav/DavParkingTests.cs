@@ -52,14 +52,26 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
 
     private static Dictionary<string, string> Headers(params (string Name, string Value)[] headers) => headers.ToDictionary(h => h.Name, h => h.Value);
 
-    private async Task<Dictionary<string, long>> CountsAsync()
+    /// <summary>
+    /// Per collection, the documents that are <paramref name="dav"/>'s owner's, her vaults' or the share's: those with
+    /// one of her vaults' ids in <c>vault</c>, her id in <c>owner</c> or <c>user</c>, the share's in <c>share</c>, or any
+    /// of these ids as their own. Not every document of the database: the other tests share it and write meanwhile.
+    /// </summary>
+    private async Task<Dictionary<string, long>> CountsAsync(DavClient dav)
     {
+        var user = dav.Owner.User.Id;
+        var vaults = await (await app.Database.GetCollection<BsonDocument>("slots")
+            .DistinctAsync<string>("vault", Builders<BsonDocument>.Filter.Eq("owner", user), cancellationToken: Ct)).ToListAsync(Ct);
+        Assert.NotEmpty(vaults);
+        var f = Builders<BsonDocument>.Filter;
+        var ours = f.Or(
+            f.In("vault", vaults), f.Eq("owner", user), f.Eq("user", user), f.Eq("share", dav.Id), f.In("_id", vaults.Append(user).Append(dav.Id)));
         var counts = new Dictionary<string, long>();
         foreach (var name in await (await app.Database.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
         {
             // The profiler's own collection counts reads.
             if (name.StartsWith("system.", StringComparison.Ordinal)) continue;
-            counts[name] = await app.Database.GetCollection<BsonDocument>(name).CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct);
+            counts[name] = await app.Database.GetCollection<BsonDocument>(name).CountDocumentsAsync(ours, cancellationToken: Ct);
         }
 
         return counts;
@@ -93,7 +105,9 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         await dav.Owner.CreateAsync("plan.md", "# Plan");
         // The share's first request, and whatever it records, before the counting starts.
         using (var first = await dav.PropfindAsync("/dav/Work/", depth: "1")) Assert.Equal(HttpStatusCode.MultiStatus, first.StatusCode);
-        var before = await CountsAsync();
+        var before = await CountsAsync(dav);
+        // Her note, its vault and the share are found, so the filter does look where a parked file would land.
+        Assert.True(before["notes"] > 0 && before["vaults"] > 0 && before["dav_shares"] > 0);
 
         if (name.Contains('/'))
         {
@@ -112,7 +126,7 @@ public sealed class DavParkingTests(KumbuAppFactory app) : IAsyncDisposable
         var listing = await DavAssert.MultistatusAsync(await dav.PropfindAsync(parent, depth: "1"));
         Assert.Contains(Href(name), DavAssert.Hrefs(listing));
 
-        Assert.Equal(before, await CountsAsync());
+        Assert.Equal(before, await CountsAsync(dav));
     }
 
     /// <summary>The store never has a dot-folder (<c>NoteNames</c> refuses one), so over HTTP what is below one is

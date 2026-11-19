@@ -7,11 +7,11 @@
 import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
 import { textBoxes } from "./boxes.js";
-import { extractImage, listImages, quietly, renderRegion } from "./extract.js";
+import { extractImage, listImages, quietly } from "./extract.js";
 import { renderImage, renderSvg } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
-import { renderPage } from "./render.js";
+import { renderPage, renderRegion } from "./render.js";
 
 const post = (m: WorkerMessage, transfer: ArrayBuffer[] = []) => (parentPort ? parentPort.postMessage(m, transfer) : process.send!(m));
 

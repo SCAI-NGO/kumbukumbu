@@ -56,17 +56,18 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
     }
 
     /// <summary>
-    /// Puts <paramref name="visible"/> in place of what a session that lists <paramref name="listedVaultIds"/> sees: her
-    /// commands and the entries of those vaults. The entries of every other vault (a hidden discreet vault's, or one that is
-    /// gone) stay as they were: nothing is dropped as stale. An entry she already had keeps its <c>Added</c>; a new one is
-    /// added now. At most <see cref="Cap"/> in all, else <see cref="FavouritesFullException"/>. Only over the list
-    /// <paramref name="version"/> names, and conditional on it still being there when written, else
-    /// <see cref="FavouritesConflictException"/>: a list read before another device's write would put back what that write
-    /// changed. And only under the <paramref name="userKey"/> in force (<see cref="CredentialsChangedException"/> if not).
+    /// Puts <paramref name="visible"/> in place of everything but the entries of <paramref name="hiddenVaultIds"/>, the
+    /// vaults she has and the session hides: those stay as they were, and where they were. So the entries of a vault that
+    /// is gone, or no longer hers, are dropped here and stop counting towards the cap; nothing else is dropped as stale,
+    /// as only her own session can open the list (a vault's deletion can't reach its members' lists). An entry she already
+    /// had keeps its <c>Added</c>; a new one is added now. At most <see cref="Cap"/> in all, else
+    /// <see cref="FavouritesFullException"/>. Only over the list <paramref name="version"/> names, and conditional on it
+    /// still being there when written, else <see cref="FavouritesConflictException"/>: a list read before another device's
+    /// write would put back what that write changed. And only under the <paramref name="userKey"/> in force (<see cref="CredentialsChangedException"/> if not).
     /// Answers all of them as written, in the order added, with their new version.
     /// </summary>
     public async Task<(IReadOnlyList<StoredFavourite> Entries, string Version)> ReplaceVisibleAsync(
-        string userId, byte[] userKey, string version, IReadOnlySet<string> listedVaultIds, IReadOnlyList<StoredFavourite> visible, CancellationToken ct)
+        string userId, byte[] userKey, string version, IReadOnlySet<string> hiddenVaultIds, IReadOnlyList<StoredFavourite> visible, CancellationToken ct)
     {
         var keyId = UserCatalog.KeyId(userKey, userId);
         var f = Builders<UserDocument>.Filter;
@@ -74,7 +75,7 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
         if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
         if (VersionOf(userId, userKey, user.Favourites, user.FavouritesSealed) != version) throw new FavouritesConflictException();
         var before = OpenCommands(userId, user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
-        var kept = before.Where(b => b.VaultId is { } id && !listedVaultIds.Contains(id));
+        var kept = before.Where(b => b.VaultId is { } id && hiddenVaultIds.Contains(id));
         var now = time.GetUtcNow();
         var given = new List<StoredFavourite>();
         foreach (var v in visible)

@@ -21,12 +21,13 @@ public static class Manual
           graph <note> [--depth N]        how notes link: a note's neighbourhood (--out, --in, --cap); graph --path a b: how two notes connect; --orphans, --hubs, --unresolved [path]
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
-          calendar <vault>                the vault's notes with a time, this week (--month); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
+          calendar <vault>                the vault's notes with a time, this week (--month, --from/--to); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
           history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
+          blame [--lines] <path>          who wrote what: the last writer of each run of lines of a note (#section works); on a folder: lines per writer per note
           diff <path> [from [to]]         what changed between versions (default: last change); --word
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
@@ -45,7 +46,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images (an SVG among them, which you can draw: help attachments) and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments). To put a file from your own machine into a vault, use the upload tool.
+        Attachments: vaults also hold every file type: images (an SVG among them, which you can draw: help attachments), PDFs and any other file; ls lists them, cat describes one and prints a text file (UTF-8, a CSV or a script), img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg searches text files and finds text in PDFs, not in scans, and semsearch PDFs by meaning only (help attachments). To put a file from your own machine into a vault, use the upload tool.
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day or a week (2026-11-12.md, 2026-W46.md); until ends it (an entry over days, or a time with an end), task: open makes it a to-do, upcoming: 7d shows it that early; calendar notifications is what's on in every vault, in the user's time zone; calendar set, move, close, reopen and unset change only those keys and leave a version (calendar set <note> --until 2026-11-22 gives an entry its end). On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
@@ -130,22 +131,23 @@ public static class Manual
         """;
 
     public const string UploadDescription = """
-        Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): an image (PNG, JPEG,
-        GIF, WebP, SVG) or a PDF, whatever you can't send as text. Notes are not files: create and change those with
-        the write tool. Two steps:
+        Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a
+        PDF, a spreadsheet, a CSV. The write tool writes notes, SVGs and a skill's text files; everything else is
+        uploaded here. Two steps:
 
         1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you
-           need write access; the name's extension says the format). It answers a one-time URL and a curl line.
+           need write access). It answers a one-time URL and a curl line.
         2. Run that curl line in a shell, with <local file> the file's path on that machine:
            curl -sS -X PUT --data-binary @<local file> '<url>'
            This needs a shell that can reach this server over the network. Without one, you can't upload; tell the user.
 
         To replace a file that exists, pass its version (sh: cat shows it); without version a path that exists is
-        refused. At most 15 MB; Kumbu² keeps PNG, JPEG, GIF, WebP, SVG and PDF only, and checks the format from the
-        bytes, not from the name: a file that isn't what its name says is refused. The URL works once and expires
-        after 10 minutes. If the PUT fails, call upload again for a new URL.
+        refused. Up to the server's bound per file (1 GiB unless its admin set another; the answer names it); a
+        file larger than 15 MB is kept, but not read (pdf, img and their kin say so). A name ending in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf must hold that format:
+        Kumbu² checks it from the bytes, and a file that isn't what its name says is refused; any other file is kept
+        as it is. The URL works once and expires after 10 minutes. If the PUT fails, call upload again for a new URL.
         The PUT's answer says where the file went and its version; reach it from a note with ![](/Folder/file.png)
-        (a PDF as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.
+        (a PDF or any other file as [text](/Folder/file.pdf)), the path inside the vault without the vault's name.
         """;
 
     public const string ReplaceDescription = """

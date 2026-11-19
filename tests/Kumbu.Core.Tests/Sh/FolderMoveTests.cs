@@ -119,7 +119,7 @@ public class FolderMoveTests
     [InlineData("mv /Demo/projects/ /Ideas/projects/", "mv: notes can't move between vaults (Demo → Ideas); a vault is its own space")]
     [InlineData("mv /Demo/nope/ /Demo/x/", "mv: /Demo/nope/: No such file or directory")]
     [InlineData("mv /Demo/welcome.md/ /Demo/x/", "mv: /Demo/welcome.md/: Not a directory (to move the note, leave out the '/')")]
-    [InlineData("mv /Demo/projects/ /Demo/welcome.md", "mv: /Demo/welcome.md: Not a directory")]
+    [InlineData("mv /Demo/projects/ /Demo/welcome.md", "mv: /Demo/welcome.md is a note, not a folder; nothing can be kept below it")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
 
     [Fact]

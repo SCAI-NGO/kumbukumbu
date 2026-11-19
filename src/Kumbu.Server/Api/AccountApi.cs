@@ -25,13 +25,14 @@ public sealed record UserView(string Id, string Username, string Display, string
 /// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).
 /// <c>publishEnabled</c>: whether this server publishes notes (<c>Kumbu:Publish:Enabled</c>); off, the web app hides it.
 /// <c>storageLimited</c>: whether a storage limit applies to the user, read from her limit without counting her storage;
-/// the shell's notice asks for the storage only then. <c>discreet</c>: whether the session shows the discreet vaults now,
+/// the shell's notice asks for the storage only then. <c>maxFileBytes</c>: the bound per file (<c>Kumbu:Vaults:MaxFileBytes</c>),
+/// so the web app refuses a larger upload before sending it. <c>discreet</c>: whether the session shows the discreet vaults now,
 /// and until when (null: until it ends or hides them); never revealed in the sign-in's answer. <c>skillsNotice</c>: the
 /// vault or alias renamed to make room for the vault Skills, until she dismisses it (<c>DELETE
 /// /api/account/skills-notice</c>); null when there is none.</summary>
 public sealed record SessionView(
-    UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, DiscreetView Discreet,
-    SkillsNoticeView? SkillsNotice = null);
+    UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen, bool PublishEnabled, bool StorageLimited, long MaxFileBytes,
+    DiscreetView Discreet, SkillsNoticeView? SkillsNotice = null);
 
 /// <summary><c>renamed</c>: the name the vault (or, with <c>alias</c>, the vault shared with her) has now.</summary>
 public sealed record SkillsNoticeView(string Renamed, bool Alias)
@@ -281,7 +282,7 @@ public static class AccountApi
 
         return TypedResults.Ok(new SessionView(
             UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true, options.Value.Publish.Enabled, await quota.LimitedAsync(user.Id, ct),
-            DiscreetView.Hidden, notice));
+            options.Value.Vaults.MaxFileBytes, DiscreetView.Hidden, notice));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
@@ -349,7 +350,8 @@ public static class AccountApi
         await skills.EnsureAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, CancellationToken.None);
         return TypedResults.Ok(new SessionView(
             UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen, options.Value.Publish.Enabled,
-            await quota.LimitedAsync(caller.User.Id, ct), DiscreetView.Of(caller.Discreet), await SkillsNoticeAsync(caller, skills, ct)));
+            await quota.LimitedAsync(caller.User.Id, ct), options.Value.Vaults.MaxFileBytes, DiscreetView.Of(caller.Discreet),
+            await SkillsNoticeAsync(caller, skills, ct)));
     }
 
     /// <summary>The notice of the vault Skills as the session may show it (<see cref="ShownAsync"/>).</summary>

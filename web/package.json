@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && tsc --noEmit -p e2e && vite build",
     "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
     "preview": "vite preview",
+    "test:diagrams": "playwright test -c e2e/diagrams/playwright.config.ts",
     "e2e": "e2e/stack/run.sh",
     "e2e:0.5.0": "e2e/stack/run.sh --grep \"@smoke|@calendar|@flags|@explorer|@recent|@mermaid|@embeds|@aliases|@ailink|@blockrefs|@mentions|@photo|@properties\"",
     "gen:api": "openapi-typescript ${KUMBU_OPENAPI_URL:-http://localhost:8083/api/openapi.json} -o src/api/schema.d.ts",

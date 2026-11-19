@@ -108,4 +108,17 @@ public class VaultPathTests
         Assert.True(VaultPath.TryParse("/Work/Drafts/.vaultkeep", out var marker));
         Assert.True(marker.IsAttachment);
     }
+
+    [Theory]
+    [InlineData("/Work/report.docx", true)]
+    [InlineData("/Work/Makefile", true)]
+    [InlineData("/Work/v1.2", true)]
+    [InlineData("/Work", true)]
+    [InlineData("/Work/a.md", false)]
+    [InlineData("/", false)]
+    public void Every_path_but_the_root_and_notes_may_keep_a_file(string value, bool expected)
+    {
+        Assert.True(VaultPath.TryParse(value, out var path));
+        Assert.Equal(expected, path.IsAttachment);
+    }
 }
