@@ -209,6 +209,23 @@ public sealed class LargeFileTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
     }
 
+    [Fact]
+    public async Task The_session_names_the_bound_per_file()
+    {
+        await using var bounded = LargeFiles.Bounded(app);
+
+        async Task<long> BoundAsync(WebApplicationFactory<Program> api)
+        {
+            var user = await RestClient.NewAsync(api);
+            using var session = await user.GetAsync("/api/session");
+            Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+            return (await RestClient.JsonAsync(session))["maxFileBytes"]!.GetValue<long>();
+        }
+
+        Assert.Equal(1L << 30, await BoundAsync(Api));
+        Assert.Equal(LargeFiles.Bound, await BoundAsync(bounded));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
