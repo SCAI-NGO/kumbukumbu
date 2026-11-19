@@ -30,7 +30,9 @@ public sealed class UnlockedVault
     private readonly byte[] _largeBlobKey;
     private readonly IReadOnlyDictionary<string, byte[]> _membershipKeys;
     private long _lastUsed;
-    private readonly Lock _graphLock = new();
+
+    /// <summary>Taken by a graph's build; internal for the tests.</summary>
+    internal SemaphoreSlim GraphGate { get; } = new(1, 1);
 
     /// <summary>Drawn when the vault is loaded, so a graph version never repeats across restarts or evictions (graph
     /// backend spec §4.4).</summary>
@@ -122,7 +124,7 @@ public sealed class UnlockedVault
 
     /// <summary>Each note's links, tags and dates as last parsed or read from the stored extracts, with the content they
     /// were made from: a note made again at its path starts at revision 1 again, so the revision alone can't tell. Set
-    /// by the load before the vault is published, then by a build under the graph's lock or by <see cref="ExtractOf"/>.</summary>
+    /// by the load before the vault is published, then by a build under the graph's gate or by <see cref="ExtractOf"/>.</summary>
     internal ImmutableDictionary<VaultPath, (string Content, LinkExtract Extract)> Extracts
     {
         get => Volatile.Read(ref _extracts);
@@ -143,35 +145,46 @@ public sealed class UnlockedVault
     /// from (every change replaces them), else built again, parsing only the notes whose content changed. Its version
     /// rises only when the graph differs from the one before.
     /// </summary>
-    public LinkGraph Graph()
+    public async Task<LinkGraph> GraphAsync(CancellationToken ct)
     {
-        // Readers call this outside the gate and at once: one builds, the others wait for its graph.
-        lock (_graphLock)
+        // Readers call this outside the gate and at once: one builds, the others wait for its graph, each with its own
+        // token. A build given up keeps no graph; the next reader builds again.
+        await GraphGate.WaitAsync(ct);
+        try
         {
             var (notes, attachments) = (Notes, Attachments);
             if (_graph is { } cached && ReferenceEquals(cached.Notes, notes) && ReferenceEquals(cached.Attachments, attachments)) return cached.Graph;
 
             var extracts = ImmutableDictionary.CreateBuilder<VaultPath, (string Content, LinkExtract Extract)>();
-            foreach (var (path, (_, note)) in notes) extracts[path] = Extract(path, note.Content);
+            var n = 0;
+            foreach (var (path, (_, note)) in notes)
+            {
+                if (++n % 256 == 0) ct.ThrowIfCancellationRequested();
+                extracts[path] = Extract(path, note.Content);
+            }
 
             // Built from what this build holds: a writer's ExtractOf may replace the field meanwhile.
             var held = extracts.ToImmutable();
             Extracts = held;
-            var graph = LinkGraph.Build(Name, held.ToImmutableDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys]);
+            var graph = LinkGraph.Build(Name, held.ToImmutableDictionary(e => e.Key, e => e.Value.Extract), [.. attachments.Keys], ct);
             if (_graph is not { } previous || !graph.SameAs(previous.Graph)) _graphCounter++;
             graph = graph.WithVersion($"{_graphEpoch}.{_graphCounter}");
             _graph = (graph, notes, attachments);
             return graph;
         }
+        finally
+        {
+            GraphGate.Release();
+        }
     }
 
     /// <summary>
-    /// <see cref="Graph()"/> under <paramref name="name"/>, the name the caller has for the vault (it is renamed for her):
+    /// <see cref="GraphAsync(CancellationToken)"/> under <paramref name="name"/>, the name the caller has for the vault (it is renamed for her):
     /// rebased once per graph and name, not on every read, as every command that reads links asks for the graph.
     /// </summary>
-    public LinkGraph Graph(string name)
+    public async Task<LinkGraph> GraphAsync(string name, CancellationToken ct)
     {
-        var graph = Graph();
+        var graph = await GraphAsync(ct);
         if (string.Equals(name, Name, StringComparison.Ordinal)) return graph;
         lock (_rebasedLock)
         {
@@ -181,9 +194,9 @@ public sealed class UnlockedVault
         }
     }
 
-    /// <summary>The extract of a note with <paramref name="content"/>, held for <see cref="Graph()"/>: the one held if made from
+    /// <summary>The extract of a note with <paramref name="content"/>, held for <see cref="GraphAsync(CancellationToken)"/>: the one held if made from
     /// that content, else parsed. A writer calls this under the vault's gate, so it never waits for a reader's build: it
-    /// reads the held extracts without the graph's lock, and a build that replaces them meanwhile only costs a parse.</summary>
+    /// reads the held extracts without the graph's gate, and a build that replaces them meanwhile only costs a parse.</summary>
     internal LinkExtract ExtractOf(VaultPath path, string content)
     {
         if (Known(Extracts, path, content) is { } known) return known;
@@ -192,7 +205,7 @@ public sealed class UnlockedVault
         return extract;
     }
 
-    /// <summary>Under <see cref="_graphLock"/>.</summary>
+    /// <summary>Under <see cref="GraphGate"/>.</summary>
     private (string Content, LinkExtract Extract) Extract(VaultPath path, string content) =>
         Known(Extracts, path, content) is { } known ? (content, known) : (content, Parse(path, content));
 

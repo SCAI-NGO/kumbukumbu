@@ -10,7 +10,7 @@ public class GraphPathsTests
     private static VaultPath P(string path) => VaultPath.TryParse(path, out var parsed) ? parsed : throw new ArgumentException(path);
 
     private static LinkGraph Build(params (string Path, string Content)[] notes) =>
-        LinkGraph.Build("W", notes.ToDictionary(n => P(n.Path), n => LinkExtract.Of(P(n.Path), n.Content)), [P("/W/pic.png")]);
+        LinkGraph.Build("W", notes.ToDictionary(n => P(n.Path), n => LinkExtract.Of(P(n.Path), n.Content)), [P("/W/pic.png")], TestContext.Current.CancellationToken);
 
     private static string Walk(LinkGraph g, string from, IEnumerable<int> path)
     {

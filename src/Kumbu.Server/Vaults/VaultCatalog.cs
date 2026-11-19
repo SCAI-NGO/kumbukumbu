@@ -1846,7 +1846,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // Parsed by the graph's build, outside the gate: a reader's first build waits for this one or this for it, so
             // a stale note is parsed once, and the batches below find every extract held. ExtractOf alone takes no lock,
             // so it would parse the same notes beside a build running at once.
-            vault.Graph();
+            await vault.GraphAsync(CancellationToken.None);
             foreach (var batch in paths.Chunk(ExtractBatch))
             {
                 await vault.Gate.WaitAsync();

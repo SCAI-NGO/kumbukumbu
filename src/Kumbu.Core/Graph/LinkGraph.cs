@@ -19,7 +19,8 @@ public enum EdgeFlags { None = 0, Embed = 1, Alias = 2, Ambiguous = 4 }
 public sealed record GraphNode(string Key, VaultPath? Path, string Title, NodeKind Kind,
     IReadOnlyList<string> Tags, CalendarTime? When, CalendarTime? Until, bool Archived);
 
-/// <summary>Every link from one note to one node; <paramref name="Lines"/> 0-based, distinct and ascending.</summary>
+/// <summary>Every link from one note to one node; <paramref name="Lines"/> 0-based, distinct and ascending, and
+/// possibly the same list as another edge's of the note.</summary>
 public sealed record GraphEdge(int From, int To, EdgeFlags Flags, IReadOnlyList<int> Lines);
 
 /// <summary>
@@ -102,7 +103,11 @@ public sealed class LinkGraph
     /// them; empty for a path that is no note of the graph.</summary>
     public IReadOnlyList<ResolvedLink> LinksOf(VaultPath note) => _links.GetValueOrDefault(note) ?? [];
 
-    public static LinkGraph Build(string vault, IReadOnlyDictionary<VaultPath, LinkExtract> notes, IReadOnlyCollection<VaultPath> attachments)
+    /// <summary>The graph of <paramref name="notes"/>: each distinct link of a note (its target text and kind) is resolved
+    /// once, and its lines go to every note it reaches together.</summary>
+    public static LinkGraph Build(
+        string vault, IReadOnlyDictionary<VaultPath, LinkExtract> notes, IReadOnlyCollection<VaultPath> attachments,
+        CancellationToken ct = default)
     {
         // One order for everything that follows: the resolver's tie-breaks, the ghosts' titles, the nodes and edges.
         var sources = notes.Keys.OrderBy(p => p.Value, TextOrder.Default).ToList();
@@ -114,8 +119,20 @@ public sealed class LinkGraph
         var ghosts = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var source in sources)
         {
-            var resolved = notes[source].Links.Select(l => new ResolvedLink(l, resolver.Resolve(source, l))).ToList();
+            ct.ThrowIfCancellationRequested();
+            // Resolve reads only the target and whether the link is a wikilink, so equal ones share one resolution.
+            var resolutions = new Dictionary<(string Target, bool Wiki), LinkResolution>();
+            var resolved = notes[source].Links.Select(l =>
+            {
+                if (!resolutions.TryGetValue((l.Target, l is WikiLink), out var resolution))
+                {
+                    resolutions[(l.Target, l is WikiLink)] = resolution = resolver.Resolve(source, l);
+                }
+
+                return new ResolvedLink(l, resolution);
+            }).ToList();
             links[source] = resolved;
+            var counted = new HashSet<LinkResolution>(ReferenceEqualityComparer.Instance);
             foreach (var (link, resolution) in Edged(resolved))
             {
                 if (Ghost(resolution))
@@ -124,6 +141,7 @@ public sealed class LinkGraph
                     continue;
                 }
 
+                if (!counted.Add(resolution)) continue;
                 foreach (var target in Targets(resolution))
                 {
                     if (!notes.ContainsKey(target)) linked.Add(target);
@@ -143,25 +161,43 @@ public sealed class LinkGraph
         var edges = new List<GraphEdge>();
         foreach (var source in sources)
         {
+            ct.ThrowIfCancellationRequested();
             var from = index[source.Value];
-            var byTarget = new SortedDictionary<int, (EdgeFlags Flags, SortedSet<int> Lines)>();
+            // The links that share a resolution reach the same notes: their lines are gathered once, and an ambiguous
+            // link's candidates share that one list.
+            var groups = new Dictionary<LinkResolution, (EdgeFlags Flags, List<int> Lines, string? Ghost)>(ReferenceEqualityComparer.Instance);
             foreach (var (link, resolution) in Edged(links[source]))
             {
                 var flags = (link is WikiLink { Embed: true } or MarkdownLink { Embed: true } ? EdgeFlags.Embed : 0)
                     | (resolution.ViaAlias ? EdgeFlags.Alias : 0)
                     | (resolution.Kind == LinkKind.Ambiguous ? EdgeFlags.Ambiguous : 0);
-                IEnumerable<int> targets = Ghost(resolution)
-                    ? [index["?" + GhostKeyOf(source, link.Target)]]
-                    : Targets(resolution).Select(t => index[t.Value]);
+                if (!groups.TryGetValue(resolution, out var group))
+                {
+                    group = (EdgeFlags.None, [], Ghost(resolution) ? "?" + GhostKeyOf(source, link.Target) : null);
+                }
+
+                group.Lines.Add(link.Line);
+                groups[resolution] = (group.Flags | flags, group.Lines, group.Ghost);
+            }
+
+            var byTarget = new Dictionary<int, (EdgeFlags Flags, List<int[]> Lines)>();
+            foreach (var (resolution, group) in groups)
+            {
+                int[] lines = [.. group.Lines.Order().Distinct()];
+                IEnumerable<int> targets = group.Ghost is { } ghost ? [index[ghost]] : Targets(resolution).Select(t => index[t.Value]);
                 foreach (var to in targets)
                 {
-                    if (!byTarget.TryGetValue(to, out var edge)) byTarget[to] = edge = (EdgeFlags.None, []);
-                    edge.Lines.Add(link.Line);
-                    byTarget[to] = (edge.Flags | flags, edge.Lines);
+                    if (!byTarget.TryGetValue(to, out var edge)) edge = (EdgeFlags.None, []);
+                    edge.Lines.Add(lines);
+                    byTarget[to] = (edge.Flags | group.Flags, edge.Lines);
                 }
             }
 
-            edges.AddRange(byTarget.Select(e => new GraphEdge(from, e.Key, e.Value.Flags, [.. e.Value.Lines])));
+            foreach (var to in byTarget.Keys.Order())
+            {
+                var (flags, lines) = byTarget[to];
+                edges.Add(new GraphEdge(from, to, flags, lines.Count == 1 ? lines[0] : [.. lines.SelectMany(l => l).Order().Distinct()]));
+            }
         }
 
         return new LinkGraph(vault, nodes, [.. edges], links, notes, attachments);
@@ -203,7 +239,8 @@ public sealed class LinkGraph
         && Nodes.Count == other.Nodes.Count
         && Nodes.Zip(other.Nodes).All(p => p.First with { Tags = p.Second.Tags } == p.Second && p.First.Tags.SequenceEqual(p.Second.Tags))
         && Edges.Count == other.Edges.Count
-        && Edges.Zip(other.Edges).All(p => p.First with { Lines = p.Second.Lines } == p.Second && p.First.Lines.SequenceEqual(p.Second.Lines));
+        && Edges.Zip(other.Edges).All(p => p.First with { Lines = p.Second.Lines } == p.Second
+            && (ReferenceEquals(p.First.Lines, p.Second.Lines) || p.First.Lines.SequenceEqual(p.Second.Lines)));
 
     /// <summary>The same graph under another version; it shares everything else.</summary>
     public LinkGraph WithVersion(string? version) => new(this, version);

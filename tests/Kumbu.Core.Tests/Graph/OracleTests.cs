@@ -19,7 +19,7 @@ public class OracleTests
     {
         var vault = VaultGenerator.Vault(seed, 60);
 
-        Matches(vault, LinkGraph.Build(VaultGenerator.VaultName, Extracts(vault.Notes), vault.Attachments), $"seed {seed}");
+        Matches(vault, LinkGraph.Build(VaultGenerator.VaultName, Extracts(vault.Notes), vault.Attachments, TestContext.Current.CancellationToken), $"seed {seed}");
     }
 
     [Theory]
@@ -44,8 +44,8 @@ public class OracleTests
             }
 
             var context = $"seed {seed}, after {string.Join("; ", steps)}";
-            var fresh = LinkGraph.Build(VaultGenerator.VaultName, Extracts(vault.Notes), vault.Attachments);
-            var kept = LinkGraph.Build(VaultGenerator.VaultName, carried, [.. vault.Attachments]);
+            var fresh = LinkGraph.Build(VaultGenerator.VaultName, Extracts(vault.Notes), vault.Attachments, TestContext.Current.CancellationToken);
+            var kept = LinkGraph.Build(VaultGenerator.VaultName, carried, [.. vault.Attachments], TestContext.Current.CancellationToken);
             Assert.True(kept.SameAs(fresh), $"{context}: the graph from carried extracts differs from a fresh one");
             Matches(vault, fresh, context);
         }

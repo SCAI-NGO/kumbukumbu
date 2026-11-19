@@ -47,6 +47,9 @@ public sealed class LinkResolver
     private readonly Dictionary<string, List<VaultPath>>? _attachmentsByName;
     private readonly Dictionary<string, List<VaultPath>> _byAlias = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Each note's and attachment's path inside the vault, made once rather than once per link.</summary>
+    private readonly Dictionary<VaultPath, string> _inVault = [];
+
     /// <param name="notes">Every note of one vault.</param>
     /// <param name="attachments">Every attachment of the vault; null if unknown, so a link to a file is then
     /// <see cref="LinkKind.Attachment"/> without a target, whether the file exists or not.</param>
@@ -82,8 +85,9 @@ public sealed class LinkResolver
         }
     }
 
-    private static void Add(Dictionary<string, List<VaultPath>> byName, string name, VaultPath path)
+    private void Add(Dictionary<string, List<VaultPath>> byName, string name, VaultPath path)
     {
+        _inVault[path] = "/" + string.Join('/', path.Segments.Skip(1));
         if (!byName.TryGetValue(name, out var list)) byName[name] = list = [];
         list.Add(path);
     }
@@ -154,19 +158,19 @@ public sealed class LinkResolver
 
     /// <summary>The note or attachment (by <paramref name="kind"/>) that <paramref name="path"/> names, as the rules
     /// above say; null if none matches.</summary>
-    private static LinkResolution? Find(
+    private LinkResolution? Find(
         Dictionary<string, List<VaultPath>> byName, LinkKind kind, VaultPath source, string path, string name, string suffix, bool exact)
     {
         var named = byName.GetValueOrDefault(name) ?? [];
-        var candidates = named.Where(n => Matches(InVault(n), suffix, exact)).ToList();
+        var candidates = named.Where(n => Matches(_inVault[n], suffix, exact)).ToList();
 
         // A path with a folder ("Work/plan") is, as in Obsidian, first a path below the source's folder,
         // then a path from the vault's root, and only then a path suffix.
         if (!exact && path.Contains('/') && candidates.Count > 1)
         {
             var folder = string.Join("", source.Segments.Skip(1).SkipLast(1).Select(s => "/" + s));
-            var preferred = named.FirstOrDefault(n => Matches(InVault(n), folder + suffix, true))
-                ?? named.FirstOrDefault(n => Matches(InVault(n), suffix, true));
+            var preferred = named.FirstOrDefault(n => Matches(_inVault[n], folder + suffix, true))
+                ?? named.FirstOrDefault(n => Matches(_inVault[n], suffix, true));
             if (preferred is not null) return new LinkResolution(kind, preferred, candidates);
         }
 
@@ -192,8 +196,6 @@ public sealed class LinkResolver
             ? new LinkResolution(kind, sameFolder[0], candidates)
             : new LinkResolution(LinkKind.Ambiguous, null, candidates);
     }
-
-    private static string InVault(VaultPath note) => "/" + string.Join('/', note.Segments.Skip(1));
 
     private static bool Matches(string notePath, string suffix, bool exact) =>
         exact ? notePath.Equals(suffix, StringComparison.OrdinalIgnoreCase) : notePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
