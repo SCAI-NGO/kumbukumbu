@@ -98,9 +98,9 @@ function BundleList({
           <h3 id={`${id}-left`} className="text-sm font-semibold text-text">
             Stays behind
           </h3>
-          <ul aria-labelledby={`${id}-left`} className="text-sm text-text-body">
+          <ul aria-labelledby={`${id}-left`} className="flex flex-col gap-1.5 text-sm text-text-body">
             {behind.map((l, i) => (
-              <li key={l.path} className="flex flex-wrap items-center gap-x-2 break-words">
+              <li key={l.path} className="flex flex-wrap items-center gap-x-2 gap-y-1 break-words">
                 <span id={`${id}-behind-${i}`} className="min-w-0">
                   <span className="font-mono text-[12px]">{l.path}</span>: {reasons[l.reason] ?? l.reason}
                 </span>
