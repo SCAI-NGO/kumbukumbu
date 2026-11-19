@@ -511,6 +511,21 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Text_files_are_told_apart_by_the_mark_not_the_name()
+    {
+        var user = await RestClient.MarkedUnderAnotherNameAsync(Api);
+        await user.CreateFileAsync("x/run.py", "print(1)\n"u8.ToArray());
+        using (var put = await user.SendContentAsync(HttpMethod.Put, "/api/files/Skills/x/run.py", new ByteArrayContent("print(1)\n"u8.ToArray()))) Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+
+        Assert.Empty(Paths(await JsonAsync(await user.GetAsync(AttachmentsUrl(user)))));
+        var unmarked = await JsonAsync(await user.GetAsync("/api/vaults/Skills/versions?attachments=1"));
+        Assert.Equal(["/Skills/x/run.py"], Paths(unmarked));
+        Assert.Equal("file", unmarked["notes"]![0]!["kind"]!.GetValue<string>());
+        var marked = await JsonAsync(await user.GetAsync(AttachmentsUrl(user) + "&text=1"));
+        Assert.Equal("text", marked["notes"]![0]!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_client_asking_for_text_files_gets_them()
     {
         var user = await NewAsync(Api);

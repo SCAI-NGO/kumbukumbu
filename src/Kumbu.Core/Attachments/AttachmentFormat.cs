@@ -149,8 +149,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
 
-    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", "folder", "text" (only for a full path inside a skill's folder), "file", or "note" for a note's name.</summary>
-    public static string KindOf(string path) => (VaultPath.TryParse(path, out var parsed) && ForPath(parsed) is { } kept ? kept : ForName(path))?.Kind switch
+    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", "folder", "text" (only for a full path inside a skill's folder), "file", or "note" for a note's name.
+    /// <paramref name="skillsVault"/> as for <see cref="ForPath"/>.</summary>
+    public static string KindOf(string path, string? skillsVault = SkillPaths.SkillsVault) => (VaultPath.TryParse(path, out var parsed) && ForPath(parsed, skillsVault) is { } kept ? kept : ForName(path))?.Kind switch
     {
         AttachmentKind.Image => "image",
         AttachmentKind.Pdf => "pdf",
