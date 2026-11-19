@@ -52,6 +52,15 @@ describe("Published notes", () => {
     expect(items[1]).not.toHaveTextContent("by you");
   });
 
+  it("opens a note in the split view's focused pane, the other kept", async () => {
+    api([{ path: "/Work/plan.md", snapshotAt: at("2026-11-04T09:05:00"), older: false, changedAt: null, publishedBy: user.username }]);
+    useEditor.setState({ currentPath: "/Work/b.md", focused: "right", panes: { left: { path: "/Work/a.md", mode: "read" }, right: { path: "/Work/b.md", mode: "read" } } });
+    renderApp("/settings/vaults");
+    const section = await screen.findByRole("region", { name: "Published notes" });
+    const link = await within(section).findByRole("link", { name: "/Work/plan.md" });
+    expect(decodeURIComponent(link.getAttribute("href")!)).toBe("/notes/Work/a.md?beside=Work/plan.md");
+  });
+
   it("says when there are none", async () => {
     api([]);
     renderApp("/settings/vaults");

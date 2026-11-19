@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Link } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { noteUrl } from "../api/paths";
 import { useAllPublications } from "../api/publications";
 import { FormError } from "../components/form";
+import { useNoteHref } from "../shell/openInPane";
 import { useSession } from "../state/session";
 import { useInWindow } from "../windows/context";
 
@@ -19,6 +19,8 @@ export default function PublicationsSection() {
   const username = useSession((s) => s.user?.username);
   // From the Settings window, the note takes the window's place in the history.
   const inWindow = useInWindow();
+  // In the focused pane, the split view's other pane kept.
+  const noteHref = useNoteHref();
   return (
     <>
       <p className="text-text-body">The notes of your vaults that anyone with their link can read, as their copy was made.</p>
@@ -28,7 +30,7 @@ export default function PublicationsSection() {
         <ul className="flex flex-col gap-2">
           {publications.data.map((p) => (
             <li key={p.path} className="flex flex-col">
-              <Link to={noteUrl(p.path)} replace={inWindow} className="break-words text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
+              <Link to={noteHref(p.path)} replace={inWindow} className="break-words text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
                 {p.path}
               </Link>
               <span className="text-sm text-muted">
