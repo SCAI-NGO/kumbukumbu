@@ -4,7 +4,7 @@ import { Search, Star, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type KeyboardEvent, type SyntheticEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { favouriteKey, useFavourites, type FavouriteInput } from "../api/favourites";
+import { favouriteKey, useFavourites, type Favourite, type FavouriteInput } from "../api/favourites";
 import { treeQuery, useVaults, type TreeView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { usePublishEnabled } from "../api/publications";
@@ -48,9 +48,10 @@ const FRESH = 60_000;
 
 /**
  * Every row the person may open: the open note's actions, the commands she has, and the vaults and notes of the vaults
- * the session lists; and the loaded trees by vault, which say which note favourites are gone.
+ * the session lists; and the loaded trees by vault, which say which note favourites are gone. Until something is typed
+ * only the trees of vaults with a note favourite are read: the empty palette shows no other note of a tree.
  */
-function useRows(note: PaletteNote | null): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
+function useRows(note: PaletteNote | null, typed: boolean, favourites: Favourite[]): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -59,7 +60,14 @@ function useRows(note: PaletteNote | null): { rows: Row[]; trees: ReadonlyMap<st
   // The note the editor writes, while one is in Write mode.
   const writing = useEditor((s) => (writingSide(s) ? editedPath(s) : null));
   // Each vault's tree as the drawer has it, from the cache where it was read before.
-  const trees = useQueries({ queries: (vaults ?? []).map((v) => ({ ...treeQuery(v.name), staleTime: FRESH })), combine: treesOf });
+  const trees = useQueries({
+    queries: (vaults ?? []).map((v) => ({
+      ...treeQuery(v.name),
+      staleTime: FRESH,
+      enabled: typed || favourites.some((f) => f.kind === "note" && f.vault === v.name),
+    })),
+    combine: treesOf,
+  });
   const all = useMemo(
     () => ({
       rows: [
@@ -106,8 +114,8 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
   const [query, setQuery] = useState("");
   // By its key, not its place: a star moves a row to the favourites, or off them.
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const { rows, trees } = useRows(note);
   const favourites = useFavourites();
+  const { rows, trees } = useRows(note, query.trim() !== "", favourites.list);
   // Each change lets go of the note favourites whose note is gone, in the same write.
   const toggle = (f: FavouriteInput) => favourites.toggle(f, staleNotes(favourites.list, trees));
   const typed = query.trim();

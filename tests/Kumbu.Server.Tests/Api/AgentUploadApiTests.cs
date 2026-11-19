@@ -261,15 +261,16 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Too_large_chunked_body_is_413()
+    public async Task Chunked_body_over_the_bound_is_413_naming_it()
     {
-        var user = await RestClient.NewAsync(Api);
+        await using var bounded = LargeFiles.Bounded(app);
+        var user = await RestClient.NewAsync(bounded);
         var url = await UrlAsync(user, await user.KeyAsync("Claude", KeyRight.Write), "/Arbeit/big.pdf");
 
-        using var put = await PutAsync(url, new ChunkedPdf(AttachmentFormat.MaxBytes + 1));
+        using var put = await PutAsync(url, new ChunkedPdf(LargeFiles.Bound + 1), bounded);
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, put.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(put), StringComparison.Ordinal);
+        Assert.Equal("A file can have at most 20 MiB.", await RestClient.ErrorAsync(put));
         await AssertNoFileAsync(user, "big.pdf");
     }
 
@@ -366,6 +367,10 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
         Assert.Equal("![rose (1).png](/My%20Shots/rose%20%281%29.png)", shot["markdown"]!.GetValue<string>());
         Assert.Equal($"{KumbuAppFactory.PublicUrl}/n/{vaultId}/My%20Shots/rose%20%281%29.png", shot["link"]!.GetValue<string>());
         Assert.Equal("[manual.pdf](/Docs/manual.pdf)", (await CreatedAsync(pdf))["markdown"]!.GetValue<string>());
+        using var sheet = await PutAsync(await UrlAsync(user, key, "/V/Docs/budget.xlsx"), Bytes([0x50, 0x4B, 0x03, 0x04, 0x00]));
+        var budget = await CreatedAsync(sheet);
+        Assert.Equal("[budget.xlsx](/Docs/budget.xlsx)", budget["markdown"]!.GetValue<string>());
+        Assert.Equal("application/octet-stream", budget["file"]!["mediaType"]!.GetValue<string>());
         // What the answer says to write leads to the file.
         var written = await user.ToolAsync("write", new() { ["path"] = "/V/Garden.md", ["content"] = $"# Garden\n\n{shot["markdown"]}\n" }, key);
         Assert.NotEqual(true, written.IsError);

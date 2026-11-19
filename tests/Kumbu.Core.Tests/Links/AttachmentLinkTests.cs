@@ -60,10 +60,10 @@ public class AttachmentLinkTests
     [InlineData("/W/inbox.md", "shot", "note /W/shot.md")]
     [InlineData("/W/inbox.md", "dup.png", "ambiguous: /W/a/dup.png, /W/b/dup.png")]
     [InlineData("/W/a/x.md", "dup.png", "attachment /W/a/dup.png")]
-    // A file of a kind the vault keeps that isn't there leads nowhere; another kind of file is still just a file.
+    // A file that isn't there leads nowhere, whatever its kind.
     [InlineData("/W/inbox.md", "missing.png", "NotFound")]
     [InlineData("/W/inbox.md", "elsewhere.png", "NotFound")]
-    [InlineData("/W/inbox.md", "report.docx", "attachment")]
+    [InlineData("/W/inbox.md", "report.docx", "NotFound")]
     public void A_wiki_embed_of_a_png_resolves_to_the_attachment(string source, string target, string expected) =>
         Assert.Equal(expected, Resolve(Resolver, source, target));
 
@@ -82,6 +82,44 @@ public class AttachmentLinkTests
         ]);
 
         Assert.Equal(expected, Resolve(resolver, source, target));
+    }
+
+    [Theory]
+    [InlineData("data.csv", "note /W/data.csv.md")]
+    [InlineData("Makefile", "attachment /W/src/Makefile")]
+    [InlineData("src/Makefile", "attachment /W/src/Makefile")]
+    // A name that looks like a file's is a note's where no file is stored at it, and where a note carries it.
+    [InlineData("Project v1.2", "note /W/Project v1.2.md")]
+    [InlineData("README", "note /W/README.md")]
+    [InlineData("v1.2", "NotFound")]
+    [InlineData("nowhere", "NotFound")]
+    public void A_link_names_a_file_only_where_one_is_stored(string target, string expected)
+    {
+        var resolver = new LinkResolver("W",
+            [P("/W/inbox.md"), P("/W/data.csv.md"), P("/W/Project v1.2.md"), P("/W/README.md"), P("/W/v1.2/notes.md")],
+            [P("/W/data.csv"), P("/W/src/Makefile"), P("/W/v1.2/shot.png")]);
+
+        Assert.Equal(expected, Resolve(resolver, "/W/inbox.md", target));
+    }
+
+    [Theory]
+    // A note comes first: a file stored under a note's name (anyone in a shared vault may upload one) takes no link over.
+    [InlineData("Ideas", "note /W/Ideas.md")]
+    [InlineData("README", "note /W/README.md")]
+    [InlineData("Old name", "note /W/Ideas.md")]
+    // Only where no note matches does a stored file of that name answer; a format's extension names the format first.
+    [InlineData("data.csv", "attachment /W/data.csv")]
+    [InlineData("Makefile", "attachment /W/Makefile")]
+    [InlineData("shot.png", "attachment /W/shot.png")]
+    [InlineData("report.docx", "NotFound")]
+    public void A_note_wins_over_a_file_of_its_name(string target, string expected)
+    {
+        var resolver = new LinkResolver("W",
+            [P("/W/inbox.md"), P("/W/Ideas.md"), P("/W/README.md"), P("/W/shot.png.md")],
+            [P("/W/old/Ideas"), P("/W/a/README"), P("/W/b/README"), P("/W/Old name"), P("/W/data.csv"), P("/W/Makefile"), P("/W/shot.png")],
+            new Dictionary<VaultPath, IReadOnlyList<string>> { [P("/W/Ideas.md")] = ["Old name"] });
+
+        Assert.Equal(expected, Resolve(resolver, "/W/inbox.md", target));
     }
 
     [Fact]

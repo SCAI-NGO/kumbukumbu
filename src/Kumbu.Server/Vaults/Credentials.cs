@@ -224,6 +224,18 @@ public sealed class VaultBusyException : VaultUnavailableException
     public static VaultBusyException Just() => new(JustReencrypted);
 }
 
+/// <summary>
+/// A file larger than 15 MB found no write slot within <see cref="VaultCatalog.FileWriteWait"/>: the server, or the
+/// caller's own account, streams as many as it may (<see cref="VaultCatalog.FileWrites"/>,
+/// <see cref="VaultCatalog.LargeWritesPerAccount"/>). Nothing was stored; answered with 503 and <see cref="RetryAfter"/>.
+/// </summary>
+public sealed class TooManyUploadsException() : Exception(Sentence)
+{
+    public const string Sentence = "Too many large uploads at once; try again in a minute.";
+
+    public static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(1);
+}
+
 /// <summary>A re-keying run was asked for a vault that has no user slot opening with the key it was given (and
 /// so isn't, or is no longer, that user's to re-key with it), or whose two-key period's slot doesn't open with it.</summary>
 public sealed class VaultNotRekeyableException() : VaultUnavailableException("This vault can't be re-encrypted with this key.");

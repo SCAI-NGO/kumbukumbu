@@ -73,7 +73,8 @@ public static partial class TagReader
             }
         }
 
-        if (key < 0) return [];
+        // Frontmatter longer than aliases are read from has no tags either.
+        if (key < 0 || lines.Take(end).Sum(l => l.Length + 1) > NoteAliases.MaxFrontmatterLength) return [];
         var read = Frontmatter.Read(content);
         if (read.Problem is not null) return [];
         var values = read.Values.GetValueOrDefault("tags") switch

@@ -37,6 +37,32 @@ public class TextDiffTests
     }
 
     [Fact]
+    public void ABudgetChangesNothingUnderIt()
+    {
+        var random = new Random(7);
+        for (var run = 0; run < 300; run++)
+        {
+            var a = Enumerable.Range(0, random.Next(0, 30)).Select(_ => random.Next(0, 4)).ToArray();
+            var b = Enumerable.Range(0, random.Next(0, 30)).Select(_ => random.Next(0, 4)).ToArray();
+            Assert.Equal(Myers.Diff(a, b), Myers.Diff(a, b, null, maxCells: 1_000_000));
+        }
+    }
+
+    [Fact]
+    public void OverItsBudgetTheDiffGivesUp()
+    {
+        // The middle after the common start and end: 4 and 4 items, so each step d holds 2·8+2 = 18 cells.
+        int[] a = [9, 1, 2, 3, 4, 9], b = [9, 5, 2, 3, 6, 9];
+
+        Assert.Null(Myers.Diff(a, b, null, maxCells: 17));
+        // Two substitutions are 4 steps: d = 0..4, 5 · 18 = 90 cells.
+        Assert.Null(Myers.Diff(a, b, null, maxCells: 89));
+        Assert.Equal(Myers.Diff(a, b), Myers.Diff(a, b, null, maxCells: 90));
+        // The common start and end cost no cells.
+        Assert.NotNull(Myers.Diff([1, 2, 3], [1, 2, 3], null, maxCells: 0));
+    }
+
+    [Fact]
     public void UnifiedHunksWithThreeLinesOfContext()
     {
         var before = string.Join('\n', Enumerable.Range(1, 20).Select(i => $"line {i}")) + "\n";

@@ -168,40 +168,43 @@ public class ArchiveHiddenTests
         Assert.Equal(ShellResult.Ok("no match outside the archive; more than 5 archived notes match (rg --archive pump /V searches them)"), await Run("rg pump /V", Archived(6)));
     }
 
+    private static Task<Kumbu.Core.Notes.Note?> NoText(Kumbu.Core.Attachments.StoredAttachment file, CancellationToken ct) =>
+        throw new InvalidOperationException("no text files here");
+
     [Fact]
-    public void The_archived_hint_stops_counting_past_what_it_names()
+    public async Task The_archived_hint_stops_counting_past_what_it_names()
     {
         var notes = Enumerable.Range(1, 9).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
         var read = 0;
 
-        var hint = Kumbu.Core.Sh.Commands.Rg.ArchivedHint(notes, _ => { read++; return true; }, "rg --archive pump", CancellationToken.None);
+        var hint = await Kumbu.Core.Sh.Commands.Rg.ArchivedHintAsync(notes, [], NoText, _ => { read++; return true; }, "rg --archive pump", CancellationToken.None);
 
         Assert.Equal("no match outside the archive; more than 5 archived notes match (rg --archive pump searches them)", hint);
         Assert.Equal(6, read);
     }
 
     [Fact]
-    public void The_archived_hint_gives_up_on_a_search_that_takes_too_long()
+    public async Task The_archived_hint_gives_up_on_a_search_that_takes_too_long()
     {
         var notes = Enumerable.Range(1, 3).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
         var read = 0;
 
-        var hint = Kumbu.Core.Sh.Commands.Rg.ArchivedHint(
-            notes, _ => ++read == 1 ? true : throw new System.Text.RegularExpressions.RegexMatchTimeoutException("pump", "pump", TimeSpan.FromSeconds(2)), "rg --archive pump", CancellationToken.None);
+        var hint = await Kumbu.Core.Sh.Commands.Rg.ArchivedHintAsync(
+            notes, [], NoText, _ => ++read == 1 ? true : throw new System.Text.RegularExpressions.RegexMatchTimeoutException("pump", "pump", TimeSpan.FromSeconds(2)), "rg --archive pump", CancellationToken.None);
 
         Assert.Null(hint);
         Assert.Equal(2, read);
     }
 
     [Fact]
-    public void The_archived_hint_stops_when_cancelled()
+    public async Task The_archived_hint_stops_when_cancelled()
     {
         var notes = Enumerable.Range(1, 3).Select(i => new Kumbu.Core.Notes.Note(Path($"/V/_archive/n{i}.md"), "pump")).ToList();
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         var read = 0;
 
-        Assert.Throws<OperationCanceledException>(() => Kumbu.Core.Sh.Commands.Rg.ArchivedHint(notes, _ => { read++; return true; }, "rg --archive pump", cancelled.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Kumbu.Core.Sh.Commands.Rg.ArchivedHintAsync(notes, [], NoText, _ => { read++; return true; }, "rg --archive pump", cancelled.Token));
         Assert.Equal(0, read);
     }
 

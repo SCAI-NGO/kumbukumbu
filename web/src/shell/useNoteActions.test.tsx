@@ -74,6 +74,7 @@ function server({
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
     "GET /api/member-notices": () => json(200, []),
+    "GET /api/blame/*": () => json(200, { path: "/Work/inbox.md", version: state.version, content: state.content, earlier: null, dropped: false, writers: [], sections: [] }),
   });
   return state;
 }
@@ -122,6 +123,7 @@ describe("the note's actions", () => {
     expect(labels()).toEqual([
       "Find in note",
       "History",
+      "Who wrote what",
       "Copy file path",
       "Copy link",
       "Copy markdown link",
@@ -145,7 +147,17 @@ describe("the note's actions", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Write" }));
     await waitFor(() => expect(useEditor.getState().mode).toBe("write"));
     expect(offered()).toContain("Duplicate");
-    for (const label of ["Find in note", "History", "Publish…", "Add property…"]) expect(offered()).not.toContain(label);
+    for (const label of ["Find in note", "History", "Who wrote what", "Publish…", "Add property…"]) expect(offered()).not.toContain(label);
+  });
+
+  it("who_wrote_what_opens_its_window_over_the_note", async () => {
+    server();
+    const router = renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await openMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Who wrote what" }));
+    expect(await screen.findByRole("dialog", { name: "Who wrote what" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/blame/Work/inbox.md");
   });
 
   it("no_duplicate_under_archive_or_without_write", async () => {

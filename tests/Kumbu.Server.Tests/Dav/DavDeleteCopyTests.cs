@@ -426,7 +426,7 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Copy_of_a_parked_file_onto_an_unsupported_name_is_415_and_onto_an_image_name_checks_the_bytes()
+    public async Task Copy_of_a_parked_file_onto_any_name_is_kept_and_onto_an_image_name_checks_the_bytes()
     {
         var dav = await DavClient.NewAsync(Api);
         using (var parked = await dav.SendAsync(HttpMethod.Put, "/dav/Work/.x.tmp", Text("not a picture"))) Assert.Equal(HttpStatusCode.Created, parked.StatusCode);
@@ -436,7 +436,8 @@ public sealed class DavDeleteCopyTests(KumbuAppFactory app)
         using var picture = await dav.SendAsync(DavClient.Copy, "/dav/Work/.x.tmp", headers: To("shot.png"));
         using var real = await dav.SendAsync(DavClient.Copy, "/dav/Work/.y.tmp", headers: To("shot.png"));
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, sheet.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, sheet.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, await FileStatusAsync(dav.Owner, "budget.xlsx"));
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, picture.StatusCode);
         Assert.Equal(HttpStatusCode.Created, real.StatusCode);
         Assert.Equal(HttpStatusCode.OK, await FileStatusAsync(dav.Owner, "shot.png"));

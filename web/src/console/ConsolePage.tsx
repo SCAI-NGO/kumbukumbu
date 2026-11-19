@@ -12,8 +12,10 @@ import { section } from "../note/outline";
 import { splitFrontmatter } from "../note/properties";
 import WindowFrame from "../windows/WindowFrame";
 import { useCloseWindow } from "../windows/context";
+import { complete, type Completion } from "./complete";
 import { consoleSchemes, keepConsoleScheme, phosphor, storedConsoleScheme, type ConsoleScheme } from "./crt";
-import { run } from "./run";
+import { listFolder } from "./entries";
+import { listMatches, run } from "./run";
 import { useConsole, type Entry, type Output, type Running } from "./store";
 
 const welcome = "Kumbu² console, not a bash, and read-only. Type help for the commands, help <command> for details.";
@@ -28,6 +30,7 @@ export default function ConsolePage() {
   const entries = useConsole((s) => s.entries);
   const history = useConsole((s) => s.history);
   const running = useConsole((s) => s.running);
+  const generation = useConsole((s) => s.generation);
   const [value, setValue] = useState("");
   // Walking the history: where, and the line being typed before, to come back to.
   const [walk, setWalk] = useState<{ index: number; draft: string } | null>(null);
@@ -36,6 +39,7 @@ export default function ConsolePage() {
   const controller = useRef<AbortController | null>(null);
   const following = useRef(true);
   const close = useCloseWindow();
+  const desktop = useDesktop();
   const [scheme, setScheme] = useState(storedConsoleScheme);
   const crt = scheme !== "plain";
   // The caret's column, how far a long line scrolled the input, and whether it has the focus, for the drawn cursor.
@@ -46,9 +50,27 @@ export default function ConsolePage() {
     setScheme(next);
     keepConsoleScheme(next);
   };
+  // Completion: where the caret goes after an insert, the line a Tab found nothing new on (the next one lists), the
+  // no-match flash, and the phone's suggestions for the line and caret they were made for.
+  const caretTo = useRef<number | null>(null);
+  const lastTab = useRef<{ line: string; cursor: number } | null>(null);
+  const [bell, setBell] = useState(false);
+  const bellTimer = useRef<number | undefined>(undefined);
+  // Made in the console's generation they belong to: a reset (a discreet vault hidden) takes its names with it.
+  const [suggested, setSuggested] = useState<{ line: string; cursor: number; generation: number; matches: string[] } | null>(null);
+  const chips =
+    !desktop && running === null && value !== "" && suggested?.line === value && suggested.cursor === caret.column && suggested.generation === generation
+      ? suggested.matches
+      : [];
 
   // Leaving the page stops the running command; the store keeps the rest for coming back.
-  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(
+    () => () => {
+      controller.current?.abort();
+      window.clearTimeout(bellTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     if (!running) input.current?.focus();
   }, [running]);
@@ -56,9 +78,76 @@ export default function ConsolePage() {
   const follow = () => {
     if (following.current && log.current) log.current.scrollTop = log.current.scrollHeight;
   };
-  useLayoutEffect(follow, [entries, running]);
-  // Typing, history and clearing move the caret too.
-  useLayoutEffect(markCaret, [value]);
+  useLayoutEffect(follow, [entries, running, chips.length > 0]);
+  // Typing, history, clearing and completing move the caret too; completing puts it after what it put in.
+  useLayoutEffect(() => {
+    if (caretTo.current !== null) input.current?.setSelectionRange(caretTo.current, caretTo.current);
+    caretTo.current = null;
+    markCaret();
+  }, [value]);
+
+  // The phone's chips: for the word under the caret, and for an empty one after a command the working folder's
+  // entries, to save typing on the phone; an empty first word gets none (complete offers no commands for it).
+  useEffect(() => {
+    if (desktop || running || value === "") return;
+    const cursor = caret.column;
+    let current = true;
+    void complete(value, cursor, cwd, listFolder).then((result) => {
+      if (current) setSuggested({ line: value, cursor, generation, matches: result.matches });
+    });
+    return () => {
+      current = false;
+    };
+  }, [desktop, running, value, caret.column, cwd, generation]);
+
+  /** Whether the line and caret are still the ones a completion was made for, and nothing runs. */
+  const still = (line: string, cursor: number) =>
+    !useConsole.getState().running && input.current?.value === line && input.current.selectionStart === cursor;
+
+  /** Puts a completion in; gives the new line and caret. */
+  const put = (line: string, { replaceFrom, replaceTo, insert }: Completion) => {
+    const next = { line: line.slice(0, replaceFrom) + insert + line.slice(replaceTo), cursor: replaceFrom + insert!.length };
+    caretTo.current = next.cursor;
+    setValue(next.line);
+    return next;
+  };
+
+  const ring = () => {
+    setBell(true);
+    window.clearTimeout(bellTimer.current);
+    bellTimer.current = window.setTimeout(() => setBell(false), 200);
+  };
+
+  const tab = async () => {
+    const line = input.current?.value ?? "";
+    const cursor = input.current?.selectionStart ?? line.length;
+    if (useConsole.getState().running) return;
+    const result = await complete(line, cursor, useConsole.getState().cwd, listFolder);
+    if (!still(line, cursor)) return;
+    // Only a word that matches nothing flashes; an empty line or stage, an option or an unlisted folder stay quiet.
+    if (result.matches.length === 0) {
+      lastTab.current = null;
+      if (result.replaceFrom < cursor) ring();
+      return;
+    }
+    if (result.insert !== null && line.slice(result.replaceFrom, result.replaceTo) !== result.insert) {
+      const next = put(line, result);
+      // Only a common prefix went in: the next Tab lists, as bash does.
+      lastTab.current = result.matches.length > 1 ? next : null;
+      return;
+    }
+    // Nothing new twice on the same line: the matches, as zsh lists them.
+    if (lastTab.current?.line === line && lastTab.current.cursor === cursor) listMatches(line, result.matches);
+    lastTab.current = { line, cursor };
+  };
+
+  const take = async (name: string) => {
+    if (!suggested) return;
+    const { line, cursor } = suggested;
+    const result = await complete(line, cursor, cwd, listFolder, name);
+    if (result.insert !== null && still(line, cursor)) put(line, result);
+    input.current?.focus();
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -72,6 +161,12 @@ export default function ConsolePage() {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // Tab is the console's while the input has the focus; Shift+Tab still moves it on.
+    if (event.key === "Tab" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      void tab();
+      return;
+    }
     if ((event.key !== "ArrowUp" && event.key !== "ArrowDown") || history.length === 0) return;
     event.preventDefault();
     if (event.key === "ArrowUp") {
@@ -108,7 +203,8 @@ export default function ConsolePage() {
             }}
             // A click in the output goes on typing, unless it selected something to copy.
             onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"}`}
+            // The chips sit over the output's foot: it grows by their height and a scrollbar's, so they never cover its last line.
+            className={`h-full overflow-y-auto font-mono text-sm ${crt ? "" : "text-text"} ${chips.length > 0 ? "pb-16" : ""}`}
           >
             <p className={`mb-4 ${crt ? "" : "text-text-body"} ${wrap}`}>{welcome}</p>
             {entries.map((entry, i) => (
@@ -124,8 +220,24 @@ export default function ConsolePage() {
               style={{ backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 2px, var(--crt-fg) 2px 3px)" }}
             />
           )}
+          {chips.length > 0 && (
+            <div role="group" aria-label="Suggestions" className={`absolute inset-x-0 bottom-0 z-20 flex gap-2 overflow-x-auto ${crt ? "bg-(--crt-bg)" : "bg-surface"}`}>
+              {chips.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  // The input keeps the focus, so the keyboard stays up.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void take(name)}
+                  className={`min-h-12 shrink-0 rounded-[10px] border px-3 font-mono text-sm whitespace-pre ${crt ? "border-(--crt-fg) bg-(--crt-bg)" : "border-line bg-surface-2 text-text"}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
+        <form aria-label="Command line" onSubmit={submit} className={`rounded-md font-mono text-sm ${bell ? "k-bell" : ""}`}>
           <PathLine cwd={cwd} crt={crt} />
           <div className="flex items-center gap-2">
             <span aria-hidden className={crt ? "text-(--crt-dim)" : "text-muted"}>
@@ -137,7 +249,10 @@ export default function ConsolePage() {
                 aria-label="Command"
                 data-autofocus
                 value={value}
-                onChange={(event) => setValue(event.target.value)}
+                onChange={(event) => {
+                  lastTab.current = null;
+                  setValue(event.target.value);
+                }}
                 onKeyDown={onKeyDown}
                 onKeyUp={markCaret}
                 onSelect={markCaret}

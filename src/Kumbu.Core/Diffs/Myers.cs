@@ -12,7 +12,12 @@ public readonly record struct Edit<T>(EditKind Kind, T Item);
 /// </summary>
 public static class Myers
 {
-    public static IReadOnlyList<Edit<T>> Diff<T>(IReadOnlyList<T> a, IReadOnlyList<T> b, IEqualityComparer<T>? comparer = null)
+    public static IReadOnlyList<Edit<T>> Diff<T>(IReadOnlyList<T> a, IReadOnlyList<T> b, IEqualityComparer<T>? comparer = null) =>
+        Diff(a, b, comparer, long.MaxValue)!;
+
+    /// <summary>The same, or null when the search after the common start and end would need more than
+    /// <paramref name="maxCells"/> cells: its trace holds one array of 2·(n+m)+2 ints per step d.</summary>
+    public static IReadOnlyList<Edit<T>>? Diff<T>(IReadOnlyList<T> a, IReadOnlyList<T> b, IEqualityComparer<T>? comparer, long maxCells)
     {
         comparer ??= EqualityComparer<T>.Default;
 
@@ -23,15 +28,16 @@ public static class Myers
         while (suffix < a.Count - prefix && suffix < b.Count - prefix
                && comparer.Equals(a[a.Count - 1 - suffix], b[b.Count - 1 - suffix])) suffix++;
 
+        if (Middle(a, b, prefix, a.Count - suffix, prefix, b.Count - suffix, comparer, maxCells) is not { } middle) return null;
         var result = new List<Edit<T>>(a.Count + b.Count);
         for (var i = 0; i < prefix; i++) result.Add(new(EditKind.Same, a[i]));
-        result.AddRange(Middle(a, b, prefix, a.Count - suffix, prefix, b.Count - suffix, comparer));
+        result.AddRange(middle);
         for (var i = a.Count - suffix; i < a.Count; i++) result.Add(new(EditKind.Same, a[i]));
         return result;
     }
 
-    private static List<Edit<T>> Middle<T>(
-        IReadOnlyList<T> a, IReadOnlyList<T> b, int aStart, int aEnd, int bStart, int bEnd, IEqualityComparer<T> comparer)
+    private static List<Edit<T>>? Middle<T>(
+        IReadOnlyList<T> a, IReadOnlyList<T> b, int aStart, int aEnd, int bStart, int bEnd, IEqualityComparer<T> comparer, long maxCells)
     {
         int n = aEnd - aStart, m = bEnd - bStart, max = n + m;
         var edits = new List<Edit<T>>(max);
@@ -43,6 +49,7 @@ public static class Myers
         var found = false;
         for (var d = 0; d <= max && !found; d++)
         {
+            if ((d + 1L) * v.Length > maxCells) return null;
             trace.Add((int[])v.Clone());
             for (var k = -d; k <= d; k += 2)
             {

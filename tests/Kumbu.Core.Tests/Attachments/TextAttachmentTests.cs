@@ -34,14 +34,12 @@ public sealed class TextAttachmentTests
     }
 
     [Fact]
-    public async Task An_unmarked_vault_named_Skills_keeps_no_text()
+    public async Task An_unmarked_vault_named_Skills_keeps_files()
     {
         var (store, _, files, _) = Make(skillsVault: null);
-        var result = await files.WriteAsync("/Skills/pdf/run.py", "print(1)\n"u8.ToArray(), null, null, Ct);
-        Assert.True(result.Result.IsError);
-        Assert.Equal(ShellErrorKind.Invalid, result.Result.Kind);
-        Assert.Contains("text files are kept only inside a skill's folder", result.Result.Output);
-        Assert.Null(await store.GetAttachmentAsync(P("/Skills/pdf/run.py"), Ct));
+        Assert.False((await files.WriteAsync("/Skills/pdf/run.py", "print(1)\n"u8.ToArray(), null, null, Ct)).Result.IsError);
+        Assert.False((await files.WriteAsync("/Skills/pdf/tool.bin", "a\0b"u8.ToArray(), null, null, Ct)).Result.IsError);
+        Assert.Equal(AttachmentFormat.TextMediaType, (await store.GetAttachmentAsync(P("/Skills/pdf/run.py"), Ct))!.Current.MediaType);
     }
 
     [Fact]
@@ -67,7 +65,7 @@ public sealed class TextAttachmentTests
     public async Task Write_outside_a_skill_folder_answers_as_before()
     {
         var (_, writer, _, _) = Make();
-        Assert.Equal("write: /Work/run.py: note names end in .md", (await writer.WriteAsync("/Work/run.py", "x", null, Ct)).Output);
+        Assert.Equal("write: /Work/run.py: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", (await writer.WriteAsync("/Work/run.py", "x", null, Ct)).Output);
     }
 
     [Fact]

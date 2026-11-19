@@ -134,10 +134,10 @@ public class NoteMoverTests
     [Theory]
     [InlineData("/W/Screens/shot.png", "/W/Screens/shot.jpg", "mv: /W/Screens/shot.jpg: shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)")]
     [InlineData("/W/Screens/shot.png", "/W/Screens/shot.md", "mv: /W/Screens/shot.md: shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)")]
-    [InlineData("/W/Screens/shot.png", "/W/Docs/My report.pdf/x.png", "mv: /W/Docs/My report.pdf: Not a directory")]
+    [InlineData("/W/Screens/shot.png", "/W/Docs/My report.pdf/x.png", "mv: /W/Docs/My report.pdf is a file, not a folder; nothing can be kept below it")]
     [InlineData("/W/Screens/shot.png", "/W/Trip/img/beach.png", "mv: /W/Trip/img/beach.png already exists; rm it first, or choose another name")]
     [InlineData("/W/Screens/shot.png", "/W/.hidden.png", "mv: /W/.hidden.png: '.hidden.png' starts with '.', which hides it in Obsidian")]
-    [InlineData("/W/inbox.md", "/W/Screens/shot.png/inbox.md", "mv: /W/Screens/shot.png: Not a directory")]
+    [InlineData("/W/inbox.md", "/W/Screens/shot.png/inbox.md", "mv: /W/Screens/shot.png is a file, not a folder; nothing can be kept below it")]
     [InlineData("/W/inbox.md", "/W/Screens/shot.png", "mv: /W/Screens/shot.png: note names end in .md")]
     [InlineData("/W/gone.png", "/W/x.png", "mv: /W/gone.png: No such file or directory")]
     public async Task Refuses_a_move_that_would_break_the_vault(string from, string to, string error)
@@ -178,7 +178,7 @@ public class NoteMoverTests
         var below = await writer.WriteAsync("/W/Screens/shot.png/n.md", "text", null, Ct);
         var onFolder = await writer.WriteAsync("/W/Trip/img.md", "text", null, Ct);
 
-        Assert.Equal("write: /W/Screens/shot.png: Not a directory", below.Output);
+        Assert.Equal("write: /W/Screens/shot.png is a file, not a folder; nothing can be kept below it", below.Output);
         Assert.False(onFolder.IsError, onFolder.Output);
         Assert.Null(await Content("/W/Screens/shot.png/n.md"));
     }
@@ -191,7 +191,7 @@ public class NoteMoverTests
 
         var result = await new NoteWriter(store, _time, new FixedCaller(Writers.Dev)).WriteAsync("/W/pics.md", "text", null, Ct);
 
-        Assert.Equal("write: /W/pics.md: Is a directory", result.Output);
+        Assert.Equal("write: /W/pics.md is a folder; a file and a folder can't share a name", result.Output);
     }
 
     [Fact]

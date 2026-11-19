@@ -220,6 +220,43 @@ public sealed class BlobDocument
 
     [BsonElement("at")]
     public DateTime At { get; set; }
+
+    /// <summary>
+    /// Set on the head of a file larger than 15 MB (files spec, decisions 9–10): <see cref="Blob"/> then seals the file's
+    /// data key, size and hash (<see cref="UnlockedVault.SealLargeBlobHead"/>), and this many chunks in
+    /// <c>blob_chunks</c> hold the bytes. In the clear for the sweep, which releases a head with its chunks; a reader
+    /// checks it against the count inside the seal. Absent on a blob that is the bytes themselves.
+    /// </summary>
+    [BsonElement("chunks"), BsonIgnoreIfNull]
+    public int? Chunks { get; set; }
+}
+
+/// <summary>
+/// A chunk of a file larger than 15 MB (collection <c>blob_chunks</c>): 4 MiB of its bytes (the last one less), sealed
+/// under the file's own data key and bound to the vault, the head's document id, its number and whether it is the last
+/// (<see cref="UnlockedVault.SealChunk"/>). In the clear: the vault id, the head's document id, the number and when it
+/// was written, so that the sweep can tell the chunks of an upload that stopped half way (no head) once they are old.
+/// </summary>
+[BsonIgnoreExtraElements]
+public sealed class BlobChunkDocument
+{
+    [BsonId]
+    public ObjectId Id { get; set; }
+
+    [BsonElement("vault")]
+    public string Vault { get; set; } = "";
+
+    [BsonElement("head")]
+    public ObjectId Head { get; set; }
+
+    [BsonElement("n")]
+    public int N { get; set; }
+
+    [BsonElement("blob")]
+    public byte[] Blob { get; set; } = [];
+
+    [BsonElement("at")]
+    public DateTime At { get; set; }
 }
 
 /// <summary>

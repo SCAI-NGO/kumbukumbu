@@ -173,8 +173,9 @@ export const treeQuery = (vault: string | null) => ({
 
 export const useTree = (vault: string | null) => useQuery(treeQuery(vault));
 
-/** What a tree entry is: an image, PDF or text file the vault keeps, or a note. */
-export const fileKindOfEntry = (entry: Pick<TreeFolder["notes"][number], "kind">): FileKind => (entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" ? entry.kind : "note");
+/** What a tree entry is: an image, PDF, text file or any other file the vault keeps, or a note. */
+export const fileKindOfEntry = (entry: Pick<TreeFolder["notes"][number], "kind">): FileKind =>
+  entry.kind === "image" || entry.kind === "pdf" || entry.kind === "text" || entry.kind === "file" ? entry.kind : "note";
 
 /** The folder at `path` (`/Work/projects`) in a vault's tree, if it is there. */
 export function findFolder(root: TreeFolder, path: string): TreeFolder | undefined {

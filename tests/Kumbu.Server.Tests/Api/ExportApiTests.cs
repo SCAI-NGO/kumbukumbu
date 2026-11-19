@@ -685,7 +685,8 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Equal("application/json", missing.Content.Headers.ContentType?.MediaType);
         Assert.Equal(HttpStatusCode.BadRequest, note.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, escape.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, unsupported.StatusCode);
+        // Any name is a file's now; none is there.
+        Assert.Equal(HttpStatusCode.NotFound, unsupported.StatusCode);
     }
 
     [Fact]
@@ -714,14 +715,14 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
         using var read = await user.GetAsync(user.Url("zip/x.png", "files"));
         using var zipped = await user.GetAsync(ZipUrl(user, "zip/x.png"));
-        // No file can be named "zip": it has no extension, so a write to it is refused as any such name is.
+        // No file can be named "zip" while a folder is: a file and a folder never share a name.
         using var put = await user.PutFileAsync("zip", png);
 
         Assert.Equal(HttpStatusCode.OK, read.StatusCode);
         Assert.Equal(png, await read.Content.ReadAsByteArrayAsync(Ct));
         using var zip = await ZipAsync(zipped);
         Assert.Equal(png, Bytes(zip.GetEntry("zip/x.png")!));
-        Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, put.StatusCode);
     }
 
     [Fact]

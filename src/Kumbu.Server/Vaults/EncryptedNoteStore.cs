@@ -37,12 +37,18 @@ public sealed class EncryptedNoteStore(
 
     internal EncryptedNoteStore(
         VaultCatalog catalog, ICredential credential, Search.SearchIndex? index, Accounts.ApiKeys? keys, Attachments.PdfAnalysisRunner? pdf,
-        Publishing.Publications? publications, Accounts.StorageQuota? quota = null)
+        Publishing.Publications? publications, Accounts.StorageQuota? quota = null, string? account = null)
         : this(catalog, credential, index, keys, pdf)
     {
         _publications = publications;
         _quota = quota;
+        _account = account ?? "";
     }
+
+    /// <summary>The account the request's credential belongs to (its user's id; "" for the dev token and the stores of
+    /// the seeder and the welcome vault): whose share of the large uploads' slots a put takes
+    /// (<see cref="VaultCatalog.TakeFileWriteAsync"/>).</summary>
+    private readonly string _account = "";
 
     /// <summary>What a record (an attachment's, a checkpoint's) takes beside the content it names, roughly: the quota's
     /// estimate, which the recount corrects.</summary>
@@ -177,10 +183,12 @@ public sealed class EncryptedNoteStore(
         if (await VaultAsync(note.Path, ct) is not { } a) return false;
         var vault = a.Vault;
         note = Stored(a, note);
+        note = note with { Authorship = Authorship.After(null, note) };
         return await WriteAsync(vault, [note.Path], async session =>
         {
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(note.Ref);
+            if (Clash(vault, [], [note.Path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, note, ct)) return null;
             return () => vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
         }, ct, adding: Bytes(note.Content));
@@ -190,6 +198,8 @@ public sealed class EncryptedNoteStore(
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, next.LastWriter, next.Ref ?? WriterRef.Unknown, next.LastWriteAt, ct)).Count == 0;
 
     /// <summary>
+    /// Who wrote which line is recorded here for every note the batch writes (blame spec §5.4), from the working set's
+    /// state the compare-and-swap replaces, never from the caller's: whatever record a caller's state carries is ignored.
     /// One transaction: replaces (compare-and-swap on the revision), notes and attachments to the trash, restored
     /// attachments out of it, then the sources of all moves (notes' and attachments') are deleted (same check) before
     /// created notes and attachments, restored attachments and move targets are inserted, so a note may move to where
@@ -207,13 +217,13 @@ public sealed class EncryptedNoteStore(
         batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
 
-        // The last check of the one rule text files stand under: only strictly inside a skill's folder.
+        // The last check of the rule a skill's folder stands under: it keeps text, PDFs and images, never other bytes.
         var skillsVault = vault.Kind == VaultKinds.Skills ? access.Vault.Name : null;
-        var texts = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+        var files = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
             .Concat(batch.AttachmentMoves.Select(m => m.Target)).Concat(batch.AttachmentRestores.Select(r => r.Restored));
-        if (texts.Any(a => a.Current.MediaType == AttachmentFormat.TextMediaType && !SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
+        if (files.Any(a => a.Current.MediaType == AttachmentFormat.OctetStream && !FolderMarker.Is(a.Path) && SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
         {
-            throw new InvalidOperationException("A text file outside a skill's folder; nothing was written.");
+            throw new InvalidOperationException("A binary file inside a skill's folder; nothing was written.");
         }
 
         VaultPath? conflict = null;
@@ -222,11 +232,13 @@ public sealed class EncryptedNoteStore(
         {
             withdrawn = [];
             var apply = new List<Action>();
-            foreach (var (current, next) in batch.Replaces)
+            foreach (var (current, given) in batch.Replaces)
             {
-                WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)
-                    || !await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
+                WriterRef.RequireStorable(given.Ref, kept: WriterRef.Keeps(current, given));
+                // At another revision than the working set's, the record would be computed from a state it doesn't replace.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
+                var next = given with { Authorship = Authorship.After(entry.Note, given) };
+                if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
                 {
                     return Refuse(current.Path);
                 }
@@ -284,7 +296,8 @@ public sealed class EncryptedNoteStore(
 
             foreach (var (current, _) in batch.Moves)
             {
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                // As for replaces: the target's record is computed from this entry.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
                 var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
@@ -298,8 +311,9 @@ public sealed class EncryptedNoteStore(
                 apply.Add(() => vault.Attachments = vault.Attachments.Remove(current.Path));
             }
 
-            foreach (var created in batch.Creates)
+            foreach (var given in batch.Creates)
             {
+                var created = given with { Authorship = Authorship.After(null, given) };
                 var id = ObjectId.GenerateNewId();
                 WriterRef.RequireStorable(created.Ref);
                 if (!await InsertNoteAsync(session, vault, id, created, ct)) return Refuse(created.Path);
@@ -314,8 +328,10 @@ public sealed class EncryptedNoteStore(
                 apply.Add(() => vault.Attachments = vault.Attachments.SetItem(created.Path, (id, created)));
             }
 
-            foreach (var (current, target) in batch.Moves)
+            foreach (var (current, given) in batch.Moves)
             {
+                // The source is still in the working set: it leaves it only once the transaction stands.
+                var target = given with { Authorship = Authorship.After(vault.Notes[current.Path].Note, given) };
                 var id = ObjectId.GenerateNewId();
                 WriterRef.RequireStorable(target.Ref, kept: WriterRef.Keeps(current, target));
                 if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
@@ -339,6 +355,13 @@ public sealed class EncryptedNoteStore(
                     vault.Moves = vault.Moves.Add(move);
                 });
             }
+
+            var placed = batch.Creates.Select(c => c.Path).Concat(batch.AttachmentCreates.Select(c => c.Path))
+                .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path))
+                .Concat(batch.Moves.Select(m => m.Target.Path)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path)).ToList();
+            var leaving = batch.Trashes.Select(t => t.Path).Concat(batch.AttachmentTrashes.Select(t => t.Path))
+                .Concat(batch.Moves.Select(m => m.Current.Path)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path));
+            if (Clash(vault, leaving, placed) is { } clash) return Refuse(clash);
 
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
             withdrawn = await FollowAsync(session, access, batch, by, byRef, at, ct);
@@ -375,6 +398,31 @@ public sealed class EncryptedNoteStore(
                 cancellationToken: ct);
             return move;
         }
+    }
+
+    /// <summary>Up to this many placed paths, <see cref="Clash"/> scans the vault's paths once per placed path instead of
+    /// building their folders: a few scans of some thousand keys cost less than a set of them all.</summary>
+    private const int FewPlaced = 64;
+
+    /// <summary>
+    /// The file and folder rule (<see cref="FileOrFolder"/>) once more, under the vault's gate in the write's transaction,
+    /// so two writes racing can't break it: the path in the way when <paramref name="placed"/> are stored and
+    /// <paramref name="leaving"/> are gone, or null. The writers checked it before, with their sentences.
+    /// </summary>
+    private static VaultPath? Clash(UnlockedVault vault, IEnumerable<VaultPath> leaving, IReadOnlyCollection<VaultPath> placed)
+    {
+        if (placed.Count == 0) return null;
+        // Most writes place a path or a few: look those up, rather than build a set of the whole vault under its gate.
+        if (placed.Count <= FewPlaced)
+        {
+            return FileOrFolder.Clash(
+                placed, leaving.ToHashSet(), p => vault.Notes.ContainsKey(p) || vault.Attachments.ContainsKey(p), vault.Notes.Keys.Concat(vault.Attachments.Keys));
+        }
+
+        var stored = vault.Notes.Keys.Concat(vault.Attachments.Keys).ToHashSet();
+        stored.ExceptWith(leaving);
+        stored.UnionWith(placed);
+        return FileOrFolder.Clash(placed, stored);
     }
 
     /// <summary>
@@ -471,14 +519,15 @@ public sealed class EncryptedNoteStore(
     }
 
     /// <summary>
-    /// The blob read from MongoDB and opened (<see cref="VaultCatalog.ReadBlobAsync"/>): the read and the decryption,
+    /// The blob read from MongoDB and opened (<see cref="VaultCatalog.OpenBlobAsync"/>): the read and the decryption,
     /// when a file costs about twice its size, take one of the server's <see cref="VaultCatalog.FileReads"/> slots, so a
-    /// slow download holds only its own bytes, never a slot.
+    /// slow download holds only its own bytes, never a slot. A file larger than 15 MB is read a chunk at a time, a slot
+    /// for each.
     /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v } || !TryParseBlobId(blobId, out var id)) return null;
-        return await catalog.ReadBlobAsync(v, id, ct) is { } bytes ? new MemoryStream(bytes, writable: false) : null;
+        return await catalog.OpenBlobAsync(v, id, ct);
     }
 
     /// <summary>The unlocked vault of a path, as every read finds it; null if the credential has no such vault.</summary>
@@ -535,6 +584,228 @@ public sealed class EncryptedNoteStore(
         }
 
         return Convert.ToBase64String(id);
+    }
+
+    /// <summary>
+    /// Stores a file from <paramref name="content"/>, read once to its end, up to the server's bound
+    /// (<see cref="VaultCatalog.MaxFileBytes"/>; <see cref="FileTooLargeException"/> beyond it, before a byte is read if
+    /// <paramref name="declaredLength"/> says so, which is also checked against the quota first). Up to 15 MB it is one
+    /// document, exactly as the bytes' overload stores it, and gets the same id; above, chunks and a head
+    /// (<see cref="PutLargeBlobAsync"/>). What tells the two apart is reading past 15 MB, so up to that much is held
+    /// while it is read, unless the declared length is larger.
+    /// </summary>
+    public Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct) =>
+        PutBlobAsync(vault, ReadOnlyMemory<byte>.Empty, content, declaredLength, ct);
+
+    /// <summary>
+    /// As the stream's overload, for a body whose start, <paramref name="head"/>, the caller read already. A body known to
+    /// be larger than 15 MB (a head longer than that, or a declared length above it) takes its write slots
+    /// (<see cref="VaultCatalog.TakeFileWriteAsync"/>; <see cref="TooManyUploadsException"/> if they don't come in time)
+    /// holding only that head, and is streamed on from it as it is: copied, a head
+    /// of 15 MB and a byte, read to tell the body from a small one, would be held twice while it waits for a slot. Any
+    /// other is read on after the head, as the stream's overload reads it.
+    /// </summary>
+    public async Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(declaredLength ?? 0, nameof(declaredLength));
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v }) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
+        var bound = catalog.MaxFileBytes;
+        if (declaredLength > bound) throw new FileTooLargeException(bound);
+        catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+        // A check only: each chunk holds its own space as it is written.
+        if (declaredLength is { } declared) _quota?.Release(RequireSpace(v, declared));
+
+        if (head.Length <= AttachmentFormat.MaxBytes && declaredLength is not > AttachmentFormat.MaxBytes)
+        {
+            var start = new MemoryStream();
+            start.Write(head.Span);
+            var buffer = new byte[81920];
+            int read;
+            while (start.Length <= AttachmentFormat.MaxBytes && (read = await rest.ReadAsync(buffer, ct)) > 0) start.Write(buffer, 0, read);
+            if (start.Length <= AttachmentFormat.MaxBytes)
+            {
+                CheckLength(start.Length, declaredLength);
+                return await PutBlobAsync(vault, start.GetBuffer().AsMemory(0, (int)start.Length), ct);
+            }
+
+            head = start.GetBuffer().AsMemory(0, (int)start.Length);
+        }
+
+        // Slots for the whole upload: each holds two chunks' bytes while it streams, whatever its link's speed.
+        using (await catalog.TakeFileWriteAsync(_account, ct))
+        {
+            return await PutLargeBlobAsync(v, head, rest, bound, declaredLength, ct);
+        }
+    }
+
+    /// <summary>A body whose length was declared must have had exactly that many bytes: a shorter one, cut off on its
+    /// way, would be stored as a whole file, and one declared larger than 15 MB as a large one.</summary>
+    private static void CheckLength(long size, long? declaredLength)
+    {
+        if (declaredLength is { } declared && size != declared)
+        {
+            throw new InvalidDataException($"The body held {(size > declared ? "more" : "fewer")} than the {declared} bytes it declared: nothing was stored.");
+        }
+    }
+
+    /// <summary>
+    /// A file larger than 15 MB (files spec, decisions 9–11): its chunks are sealed and written as they arrive, under a
+    /// random data key of the file's own, then its head, so it exists only once the head does. Each chunk passes the
+    /// quota before it is written and holds its space until the head commits it, or the put gives up and gives it back.
+    /// The chunks are written outside the vault's gate: a gigabyte arriving over a slow link must not hold up every other
+    /// write to the vault, and chunks no head names are harmless. Only the head's insert takes the gate, as the bytes'
+    /// overload does. A put that fails or is refused half way deletes the chunks it wrote (as far as it can: the sweep
+    /// takes what it leaves once it is older than <see cref="BlobSweep.Grace"/>); one whose head finds the same bytes
+    /// stored makes that blob young again and deletes its own chunks.
+    /// </summary>
+    private async Task<string> PutLargeBlobAsync(UnlockedVault v, ReadOnlyMemory<byte> head, Stream content, long bound, long? declaredLength, CancellationToken ct)
+    {
+        var headId = ObjectId.GenerateNewId();
+        var key = Kumbu.Core.Crypto.VaultCrypto.NewKey();
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var reservations = new List<Accounts.QuotaReservation>();
+        var c = Builders<BlobChunkDocument>.Filter;
+        var ours = c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, headId);
+        try
+        {
+            var chunk = new byte[LargeBlobHead.ChunkBytes];
+            var next = new byte[LargeBlobHead.ChunkBytes];
+            int length;
+            (length, head) = await FillAsync(head, content, chunk, ct);
+            var (size, n) = (0L, 0);
+            while (true)
+            {
+                // The next chunk is read before this one is sealed: only then is it known whether this is the last.
+                var nextLength = 0;
+                if (length == chunk.Length) (nextLength, head) = await FillAsync(head, content, next, ct);
+                size += length;
+                if (size > bound) throw new FileTooLargeException(bound);
+                if (size > declaredLength || nextLength == 0) CheckLength(size, declaredLength);
+                // Stopped here once the vault is deleted or being re-keyed, rather than at the head.
+                catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+                if (RequireSpace(v, length) is { } reservation) reservations.Add(reservation);
+                hash.AppendData(chunk, 0, length);
+                await catalog.BlobChunks.InsertOneAsync(
+                    new BlobChunkDocument
+                    {
+                        Id = ObjectId.GenerateNewId(), Vault = v.Id, Head = headId, N = n, Blob = v.SealChunk(key, headId, n, nextLength == 0, chunk.AsSpan(0, length)),
+                        At = catalog.Now,
+                    },
+                    cancellationToken: ct);
+                if (nextLength == 0) break;
+                (chunk, next, length, n) = (next, chunk, nextLength, n + 1);
+            }
+
+            var sha = hash.GetHashAndReset();
+            var id = v.LargeBlobId(sha);
+            if (await PutHeadAsync(v, headId, id, new LargeBlobHead(LargeBlobHead.Marker, key, size, n + 1, LargeBlobHead.ChunkBytes, sha), ct))
+            {
+                foreach (var reservation in reservations) _quota!.Commit(reservation);
+            }
+            else
+            {
+                await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+            }
+
+            return Convert.ToBase64String(id);
+        }
+        catch
+        {
+            try
+            {
+                // A head whose insert reached the server while the call failed (cancelled after it was sent, a
+                // connection reset) keeps its chunks: it is whole, and another upload of its bytes may have found it
+                // meanwhile; unreferenced, the sweep releases it with them.
+                if (await catalog.Blobs.CountDocumentsAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, headId), cancellationToken: CancellationToken.None) == 0)
+                {
+                    await catalog.BlobChunks.DeleteManyAsync(ours, CancellationToken.None);
+                }
+            }
+            catch (MongoException)
+            {
+                // The sweep's to take, past its grace; the put's own failure is what the caller learns.
+            }
+
+            throw;
+        }
+        finally
+        {
+            foreach (var reservation in reservations) _quota?.Release(reservation);
+        }
+    }
+
+    /// <summary>
+    /// The head of a large file, under the vault's gate: true if it was inserted, false if the vault holds the same bytes
+    /// already, whose blob is made young again. The sweep, under the same gate, takes chunks without a head once the
+    /// newest of them is older than its grace: an upload that waited longer than that between two chunks may have lost
+    /// some. It counts its chunks before the head goes in, so a file the sweep cut short is refused, never stored. A head
+    /// of the same bytes found without all its chunks (one whose upload failed as its insert reached the server, and
+    /// whose chunks went) is replaced by this one, chunks and all, rather than found: otherwise every later upload of
+    /// those bytes would find it, and none would ever open.
+    /// </summary>
+    private async Task<bool> PutHeadAsync(UnlockedVault v, ObjectId headId, byte[] id, LargeBlobHead head, CancellationToken ct)
+    {
+        var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
+        var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
+        var c = Builders<BlobChunkDocument>.Filter;
+        await v.Gate.WaitAsync(ct);
+        try
+        {
+            catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
+            if (await catalog.Blobs.Find(filter).FirstOrDefaultAsync(ct) is { } held)
+            {
+                var of = c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, held.Id);
+                if (held.Chunks is not { } count || await catalog.BlobChunks.CountDocumentsAsync(of, cancellationToken: ct) == count)
+                {
+                    await catalog.Blobs.UpdateOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, held.Id), touch, cancellationToken: ct);
+                    return false;
+                }
+
+                await catalog.Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, held.Id), ct);
+                await catalog.BlobChunks.DeleteManyAsync(of, ct);
+            }
+
+            if (await catalog.BlobChunks.CountDocumentsAsync(c.Eq(d => d.Vault, v.Id) & c.Eq(d => d.Head, headId), cancellationToken: ct) != head.Chunks)
+            {
+                throw new ContentMissingException("The upload was too slow: part of the file was removed meanwhile, so nothing was stored. Try again.");
+            }
+
+            try
+            {
+                await catalog.Blobs.InsertOneAsync(
+                    new BlobDocument { Id = headId, Vault = v.Id, BlobId = id, Blob = v.SealLargeBlobHead(id, head), At = catalog.Now, Chunks = head.Chunks },
+                    cancellationToken: ct);
+                return true;
+            }
+            catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Another process put the same bytes meanwhile.
+                await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct);
+                return false;
+            }
+        }
+        finally
+        {
+            v.Gate.Release();
+        }
+    }
+
+    /// <summary>Fills <paramref name="buffer"/> from what was read already, <paramref name="head"/>, then from
+    /// <paramref name="content"/>; less only at the end. Returns how much it filled, and what is left of the head.</summary>
+    private static async Task<(int Filled, ReadOnlyMemory<byte> Head)> FillAsync(ReadOnlyMemory<byte> head, Stream content, byte[] buffer, CancellationToken ct)
+    {
+        var filled = Math.Min(head.Length, buffer.Length);
+        head[..filled].CopyTo(buffer);
+        // Used up, let go of: of a start the store read itself, nothing else holds it.
+        head = filled == head.Length ? ReadOnlyMemory<byte>.Empty : head[filled..];
+        while (filled < buffer.Length)
+        {
+            var read = await content.ReadAsync(buffer.AsMemory(filled), ct);
+            if (read == 0) break;
+            filled += read;
+        }
+
+        return (filled, head);
     }
 
     internal static bool TryParseBlobId(string blobId, out byte[] id)
@@ -885,7 +1156,8 @@ public sealed class EncryptedNoteStore(
         var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
         if (deleted.DeletedCount == 0) return null;
 
-        var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset, deletedByRef);
+        // The record the trash keeps is the stored one, not one the caller's state carries.
+        var trashed = new TrashedNote(current with { Authorship = entry.Note.Authorship }, deletedBy, deletedAt, changeset, deletedByRef);
         WriterRef.RequireStorable(trashed.Ref);
         var trashId = ObjectId.GenerateNewId();
         await catalog.Trash.InsertOneAsync(
@@ -928,8 +1200,10 @@ public sealed class EncryptedNoteStore(
 
             var note = latest.Trashed.Note;
             restored = NoteWriter.Restored(note, writer, reference, at, changeset);
+            restored = restored with { Authorship = Authorship.After(note, restored) };
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(restored.Ref);
+            if (Clash(vault, [], [path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
             var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id) & F.Eq(d => d.PathId, vault.PathId(path)), cancellationToken: ct);
             if (removed.DeletedCount == 0) return null;

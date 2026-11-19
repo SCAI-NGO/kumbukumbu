@@ -180,7 +180,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_16_MB_file_is_a_413_saying_15_MB()
+    public async Task A_16_MB_file_is_kept_as_a_large_one()
     {
         var user = await UserAsync();
         var bytes = new byte[16 * 1024 * 1024];
@@ -188,9 +188,9 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         using var response = await user.PutFileAsync("big.pdf", bytes);
 
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(response), StringComparison.Ordinal);
-        Assert.Equal(0, await BlobCountAsync(user));
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(bytes.Length, (await JsonAsync(response))["size"]!.GetValue<long>());
+        Assert.Equal(1, await BlobCountAsync(user));
     }
 
     /// <summary><paramref name="size"/> bytes of a PDF, sent in 64 KiB pieces, with or without a Content-Length.</summary>
@@ -219,7 +219,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_file_of_exactly_15_MB_is_stored_and_one_byte_more_is_a_413(bool declare)
+    public async Task A_file_of_exactly_15_MB_is_read_whole_and_one_byte_more_is_streamed(bool declare)
     {
         var user = await UserAsync();
 
@@ -228,25 +228,51 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         Assert.True(limit.StatusCode == HttpStatusCode.Created, await limit.Content.ReadAsStringAsync(Ct));
         Assert.Equal(AttachmentFormat.MaxBytes, (await JsonAsync(limit))["size"]!.GetValue<long>());
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, over.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(over), StringComparison.Ordinal);
+        Assert.True(over.StatusCode == HttpStatusCode.Created, await over.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(AttachmentFormat.MaxBytes + 1, (await JsonAsync(over))["size"]!.GetValue<long>());
         using var get = await user.GetAsync(user.Url("over.pdf", "files"));
-        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
-        Assert.Equal(1, await BlobCountAsync(user));
+        Assert.Equal(AttachmentFormat.MaxBytes + 1, (await get.Content.ReadAsByteArrayAsync(Ct)).Length);
+        Assert.Equal(2, await BlobCountAsync(user));
+        // The one is a document, the other a head and its chunks.
+        Assert.Equal(4, await app.Database.GetCollection<BsonDocument>("blob_chunks").CountDocumentsAsync(
+            Builders<BsonDocument>.Filter.Eq("vault", (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault.Id),
+            cancellationToken: Ct));
     }
 
     [Fact]
-    public async Task A_docx_is_a_400_naming_the_formats()
+    public async Task Any_file_is_kept_with_the_media_type_of_its_content()
     {
         var user = await UserAsync();
 
-        using var docx = await user.PutFileAsync("letter.docx", "PK\u0003\u0004"u8.ToArray());
+        using var docx = await user.PutFileAsync("letter.docx", [0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]);
+        using var csv = await user.PutFileAsync("data.csv", "a;b\n1;2\n"u8.ToArray());
         using var note = await user.PutFileAsync("plan.md", "# Plan\n"u8.ToArray());
 
-        Assert.Equal(HttpStatusCode.BadRequest, docx.StatusCode);
-        Assert.Contains("PDFs and images (PNG, JPEG, GIF, WebP, SVG)", await RestClient.ErrorAsync(docx), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Created, docx.StatusCode);
+        Assert.Equal("application/octet-stream", (await JsonAsync(docx))["mediaType"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, csv.StatusCode);
+        Assert.Equal("text/plain; charset=utf-8", (await JsonAsync(csv))["mediaType"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.BadRequest, note.StatusCode);
         Assert.Contains("/api/notes", await RestClient.ErrorAsync(note), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("Makefile", "all:\n"u8.ToArray());
+        await user.CreateAsync("v1.2/notes.md", "notes\n");
+
+        using var onFolder = await user.PutFileAsync("v1.2", "x"u8.ToArray());
+        using var belowFile = await user.PutFileAsync("Makefile/x.csv", "x"u8.ToArray());
+        using var noteBelowFile = await user.SendAsync(HttpMethod.Put, user.Url("Makefile/x.md"), new { content = "x\n" });
+
+        Assert.Equal(HttpStatusCode.Conflict, onFolder.StatusCode);
+        Assert.Contains($"/{user.Vault}/v1.2 is a folder; a file and a folder can't share a name", await RestClient.ErrorAsync(onFolder), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Conflict, belowFile.StatusCode);
+        Assert.Contains($"/{user.Vault}/Makefile is a file, not a folder", await RestClient.ErrorAsync(belowFile), StringComparison.Ordinal);
+        Assert.False(noteBelowFile.IsSuccessStatusCode);
+        Assert.Contains($"/{user.Vault}/Makefile is a file, not a folder", await RestClient.ErrorAsync(noteBelowFile), StringComparison.Ordinal);
     }
 
     [Fact]

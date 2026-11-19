@@ -421,15 +421,16 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
     [Fact]
     public async Task The_413_messages_say_the_limits()
     {
-        var dav = await DavClient.NewAsync(Api);
+        await using var bounded = LargeFiles.Bounded(app);
+        var dav = (await DavClient.NewAsync(Api)).On(bounded);
 
         using var note = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.md", Bytes(new byte[NoteWriter.MaxBytes + 1]));
-        using var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", Bytes(new byte[AttachmentFormat.MaxBytes + 1]));
+        using var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", Bytes(new byte[LargeFiles.Bound + 1]));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, note.StatusCode);
         Assert.Equal("A note can have at most 1 MiB.", await BodyAsync(note));
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, file.StatusCode);
-        Assert.Equal("A file can have at most 15 MB.", await BodyAsync(file));
+        Assert.Equal("A file can have at most 20 MiB.", await BodyAsync(file));
     }
 
     [Fact]
@@ -456,6 +457,22 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, put.StatusCode);
         Assert.Null(await NoteAsync(dav, "big.md"));
+    }
+
+    [Fact]
+    public async Task Put_over_a_note_records_the_lines_it_changes_as_the_shares()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        await dav.Owner.CreateAsync("plan.md", "one\ntwo\n");
+
+        using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/plan.md", Text("one\nfrom the share\n"));
+
+        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+        var store = new Kumbu.Server.Vaults.EncryptedNoteStore(
+            Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>(), new Kumbu.Server.Vaults.UserCredential(dav.Owner.User.Id, dav.Owner.UserKey));
+        var lines = (await store.GetAsync(VaultPath.Root.Child(dav.Owner.Vault).Child("plan.md"), Ct))!.Authorship!.ByLine();
+        Assert.NotEqual("Work PC (dav)", lines[0]!.Label);
+        Assert.Equal("Work PC (dav)", lines[1]!.Label);
     }
 
     [Fact]
@@ -514,17 +531,40 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Put_of_xlsx_is_415_with_the_message()
+    public async Task Put_of_any_file_is_kept()
     {
         var dav = await DavClient.NewAsync(Api);
 
         using var put = await dav.SendAsync(HttpMethod.Put, "/dav/Work/sheet.xlsx", Bytes([0x50, 0x4B, 0x03, 0x04]));
+        using var make = await dav.SendAsync(HttpMethod.Put, "/dav/Work/Makefile", Text("all:\n"));
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, put.StatusCode);
-        Assert.Equal("text/plain", put.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(AttachmentFormat.UnsupportedMessage, await BodyAsync(put));
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, make.StatusCode);
         using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/sheet.xlsx");
-        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        Assert.Equal([0x50, 0x4B, 0x03, 0x04], await get.Content.ReadAsByteArrayAsync(Ct));
+        using var text = await dav.Owner.GetAsync(dav.Owner.Url("Makefile", "files"));
+        Assert.Equal("text/plain; charset=utf-8", text.Content.Headers.ContentType?.ToString());
+    }
+
+    [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name()
+    {
+        var dav = await DavClient.NewAsync(Api);
+        using (var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/Makefile", Text("all:\n"))) Assert.Equal(HttpStatusCode.Created, file.StatusCode);
+        using (var folder = await dav.SendAsync(new HttpMethod("MKCOL"), "/dav/Work/v1.2/")) Assert.Equal(HttpStatusCode.Created, folder.StatusCode);
+
+        using var onFolder = await dav.SendAsync(HttpMethod.Put, "/dav/Work/v1.2", Text("x"));
+        using var mkcolOnFile = await dav.SendAsync(new HttpMethod("MKCOL"), "/dav/Work/Makefile/");
+        using var belowFile = await dav.SendAsync(HttpMethod.Put, "/dav/Work/Makefile/x.md", Text("x"));
+        using var mkcolBelowFile = await dav.SendAsync(new HttpMethod("MKCOL"), "/dav/Work/Makefile/sub/");
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, onFolder.StatusCode);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, mkcolOnFile.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, belowFile.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, mkcolBelowFile.StatusCode);
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/Makefile");
+        Assert.Equal("all:\n", await BodyAsync(get));
     }
 
     [Fact]

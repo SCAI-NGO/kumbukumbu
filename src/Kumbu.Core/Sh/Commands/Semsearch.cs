@@ -48,7 +48,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
           text or a regex, use rg. Pages of PDFs rank among the sections by meaning, not by words and
           not with --tag: a hit prints as path p7 with its score and the part of the page that matches
           best, and pdf path 7 reads the page; a PDF as the path ranks its own pages.
-          Pages without a text layer (scans) and images are not searched.
+          Pages without a text layer (scans), images and other files are not searched.
           The query is the words before the path; quoting it is optional.
           -C         also print the text around each hit, its lines marked with ┊; context, not part of the match
           -l         one line per hit: path, lines and score
