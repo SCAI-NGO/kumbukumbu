@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Query, QueryClient } from "@tanstack/react-query";
 import type { NavigateFunction } from "react-router-dom";
-import { vaultOf } from "../api/paths";
+import { noteUrl, vaultOf } from "../api/paths";
 import { badgeQuery } from "../calendar/api";
 import { clearAppBadge } from "../calendar/useBadge";
 import { useConsole } from "../console/store";
-import { useEditor } from "../state/editor";
+import { editedPath, useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { vaultOfRoute } from "./neutralWindow";
 import { useDiscreet } from "./state";
@@ -28,7 +28,12 @@ const named = (data: unknown, names: ReadonlySet<string>) => {
  */
 export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction, pathname: string, names: ReadonlySet<string>) {
   const editor = useEditor.getState();
-  const open = editor.currentPath !== null && names.has(vaultOf(editor.currentPath)) ? editor.currentPath : null;
+  // The editor's note, in either pane of the split view; a note of theirs only in the right pane leaves that pane.
+  const edited = editedPath(editor);
+  const open = edited !== null && names.has(vaultOf(edited)) ? edited : null;
+  const { left: leftPane, right } = editor.panes;
+  const besideOnly =
+    !!right && names.has(vaultOf(right.path)) && leftPane.path !== null && !names.has(vaultOf(leftPane.path)) && pathname.startsWith("/notes/");
   const username = useSession.getState().user?.username;
   const text = open ? editor.unsaved?.() : null;
   if (open && text && username && !editor.draft) editor.setDraft({ username, path: open, ...text });
@@ -39,7 +44,8 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
   useDiscreet.setState({ hiding: true, gone: new Set([...useDiscreet.getState().gone, ...names]) });
   try {
     const shown = vaultOfRoute(pathname);
-    if ((shown !== null && names.has(shown)) || open) navigate("/", { replace: true });
+    if (besideOnly) navigate(noteUrl(leftPane.path!), { replace: true });
+    else if ((shown !== null && names.has(shown)) || open) navigate("/", { replace: true });
     useEditor.getState().forgetShown(names);
   } finally {
     if (!hiding) useDiscreet.setState({ hiding: false });

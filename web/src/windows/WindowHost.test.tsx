@@ -242,6 +242,28 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
+  it("stays open as the discreet vault beside the note behind it hides, and then closes to that note alone", async () => {
+    let shown = true;
+    signedInApi(() => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md?beside=Tagebuch/a.md", queryClient);
+    await screen.findByText("Text of /Work/inbox.md.");
+    await waitFor(() => expect(useEditor.getState().panes.right?.path).toBe("/Tagebuch/a.md"));
+    await act(() => router.navigate("/console"));
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+
+    shown = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: false, hiding: false }));
+    expect(router.state.location.pathname).toBe("/console");
+    expect(useEditor.getState().panes.right).toBeNull();
+
+    await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname + router.state.location.search).toBe("/notes/Work/inbox.md"));
+    expect(screen.getByText("Text of /Work/inbox.md.")).toBeInTheDocument();
+    expect(useEditor.getState().panes.right).toBeNull();
+  });
+
   it("leaves nothing of a peeked discreet note in the console as its vault hides, and reads it no more", async () => {
     let shown = true;
     const fetch = signedInApi(() => shown);

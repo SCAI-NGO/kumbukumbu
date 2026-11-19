@@ -701,6 +701,59 @@ describe("hiding the discreet vaults again", () => {
   });
 });
 
+describe("hiding the discreet vaults again in the split view", () => {
+  /** Opened on `url`, with the note of `Work` read before, the discreet vaults shown. */
+  async function openPanes(url: string) {
+    const api = server(inMinutes(10));
+    useEditor.setState({ recentPaths: ["/Work/a.md"] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp(url, queryClient);
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    await waitFor(() => expect(useEditor.getState().panes.right).not.toBeNull());
+    return { ...api, queryClient, router };
+  }
+  const panes = () => [useEditor.getState().panes.left.path, useEditor.getState().panes.right?.path ?? null];
+  const at = (router: ReturnType<typeof renderApp>) => router.state.location.pathname + router.state.location.search;
+
+  it("closes the right pane showing a discreet note, and the left stays", async () => {
+    const { log, queryClient, router } = await openPanes("/notes/Work/a.md?beside=Tagebuch/a.md");
+    editorOn(log);
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
+    await waitFor(() => expectForgotten(queryClient));
+    expect(panes()).toEqual(["/Work/a.md", null]);
+    expect(useEditor.getState().currentPath).toBe("/Work/a.md");
+    // In place of the entry that named it.
+    expect(router.state.historyAction).toBe("REPLACE");
+  });
+
+  it("closes the left pane showing a discreet note, and the right becomes the only pane", async () => {
+    const { log, queryClient, router } = await openPanes("/notes/Tagebuch/a.md?beside=Work/b.md");
+    editorOn(log);
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
+    await doneHiding(router, "/notes/Work/b.md");
+    await waitFor(() => expectForgotten(queryClient));
+    expect(panes()).toEqual(["/Work/b.md", null]);
+    expect(useEditor.getState().currentPath).toBe("/Work/b.md");
+  });
+
+  it("holds the unsaved text of a discreet note written in the right pane, as of the only one, and closes it", async () => {
+    const { log, queryClient, router } = await openPanes("/notes/Work/a.md?beside=Tagebuch/a.md");
+    act(() => useEditor.setState({ panes: { left: { path: "/Work/a.md", mode: "read" }, right: { path: "/Tagebuch/a.md", mode: "write" } } }));
+    const beforeRead = editorOn(log, false);
+    await userEvent.click(hideButton());
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+    await doneHiding(router);
+    await waitFor(() => expectForgotten(queryClient));
+    expect(beforeRead).toHaveBeenCalledWith({ reread: false });
+    expect(holding()).toBe(true);
+    expect(JSON.stringify(useEditor.getState())).not.toContain("Liebes Tagebuch");
+    expect(panes()).toEqual(["/Work/a.md", null]);
+  });
+});
+
 describe("What's on and the badge, as the discreet vaults are hidden again", () => {
   const setAppBadge = vi.fn(async (_count?: number) => {});
   const clearAppBadge = vi.fn(async () => {});
