@@ -87,6 +87,17 @@ describe("the neutral window", () => {
     for (const url of ["/notes/Work/a.md", "/", "/settings", "/discreet", "/notes/Tagebuchx/a.md"]) expect(discreetUrl(url), url).toBe(false);
   });
 
+  it("counts the split view's right pane, beside the note, as shown by the URL", () => {
+    shown("Tagebuch");
+    expect(discreetUrl("/notes/Work/a.md?beside=Tagebuch/b.md")).toBe(true);
+    expect(discreetUrl("/notes/Work/a.md?beside=Work/b.md")).toBe(false);
+    neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/notes/Work/a.md?beside=Tagebuch/b.md");
+
+    expect(window.location.pathname + window.location.search).toBe("/discreet");
+    expect(neutralWindow.location.pathname + neutralWindow.location.search).toBe("/notes/Work/a.md?beside=Tagebuch/b.md");
+    expect(browserKeeps()).not.toContain("Tagebuch");
+  });
+
   it("Recent changes is no vault's route: its address names none, whatever is shown", () => {
     shown("Tagebuch", "recent");
     neutralWindow.history.pushState({ key: "k1", idx: 1 }, "", "/recent");

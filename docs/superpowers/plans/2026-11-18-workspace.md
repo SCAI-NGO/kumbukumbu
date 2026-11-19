@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-11-18-workspace-design.md` (approved 2026-11-
 
 ## Before the first task
 
-1. **Wait for the base:** #233, #234, #235, #236, #237 and note actions (`claude/note-actions`, spec `2026-11-18-note-actions-design.md`) merged to `master`. Note actions changes `MarkdownEditor.tsx`, `MobileShell.tsx`, `TopBar.tsx` and adds `useNoteActions`, `PointMenu` and `flushDraft`; PRs 1 and 3 build on them.
+1. **Wait for the base:** #233, #234, #235, #236, #237 and note actions (`claude/note-actions`, spec `2026-11-18-note-actions-design.md`) merged to `master`. Note actions changes `MarkdownEditor.tsx`, `MobileShell.tsx`, `TopBar.tsx` and adds `useNoteActions` and `PointMenu`, its save before a copy being the editor's `beforeRead({ reread: false })`; PRs 1 and 3 build on them.
 2. Rebase `claude/workspace` (spec and this plan) onto the new `master`.
 3. `pnpm -C web install --frozen-lockfile`, then `pnpm -C web test --run` and `pnpm -C web build` green on the base. Record the counts.
 4. Read on `master` as it then is: `web/src/state/editor.ts`, `web/src/shell/MobileShell.tsx` (render from the shell's `return`), `web/src/note/NoteView.tsx`, `web/src/note/MarkdownEditor.tsx`, `web/src/note/linkCompletion.ts`, `web/src/palette/filter.ts`, `web/src/discreet/hideAgain.ts`. Line numbers below are from `b5edc95` and will have moved.
@@ -114,17 +114,17 @@ Gate as PR 1. Open PR 2.
 
 ### Task 3a.1: the audit, written down
 
-- Before code: list every reader and writer of `currentPath`, `mode`, `setMode`, `openNote`, `endWrite`, `beforeRead`, `unsaved`, `draft`, `flushDraft`, `noteTool`, `find` in `web/src` (not tests), and mark each "focused note" or "note being written". Put the list into the PR description. The rule from the spec: `currentPath` and `mode` mean the focused pane's; the save state belongs to the one editor.
+- Before code: list every reader and writer of `currentPath`, `mode`, `setMode`, `openNote`, `endWrite`, `beforeRead` (the note actions' save before a copy, `beforeRead({ reread: false })` in `web/src/shell/useNoteActions.tsx:111`, among them), `unsaved`, `draft`, `noteTool`, `find` in `web/src` (not tests), and mark each "focused note" or "note being written". Put the list into the PR description. The rule from the spec: `currentPath` and `mode` mean the focused pane's; the save state belongs to the one editor.
 
 ### Task 3a.2: panes in the store
 
-- Tests (`editor.test.ts`): `panes.left`, `panes.right` (null), `focused`; `currentPath` and `mode` are the focused pane's after `focus("right")`; `openNote` opens in the focused pane; at most one pane in Write mode: `setMode("write")` on the focused pane first awaits `endWrite` of the other; a failed save keeps Write where it was, the text untouched; `closePane(side)` saves a writing pane first.
+- Tests (`editor.test.ts`): `panes.left`, `panes.right` (null), `focused`; `currentPath` and `mode` are the focused pane's after `focus("right")`; `openNote` opens in the focused pane; at most one pane in Write mode: `setMode("write")` on the focused pane first awaits `endWrite` of the other; a failed save keeps Write where it was, the text untouched; `closePane(side)` saves a writing pane first. The save before a copy stays the one editor's `beforeRead({ reread: false })`; there is no `flushDraft`.
 - Code: `web/src/state/editor.ts`. Keep `currentPath` and `mode` as stored fields kept in step (simplest for the 40 readers), or derive them; decide by which keeps the diff smaller and say why.
 
 ### Task 3a.3: the URL
 
 - Tests: `?beside=` is read into `panes.right` and written from it; opening in the right pane pushes a history entry; back and forward restore both.
-- Code: where the shell keeps the store in step with the URL (`MobileShell.tsx`, the effect on `path`).
+- Code: the store follows the URL where the shell keeps it in step (`MobileShell.tsx`, the effect on `path`). The URL is written by explicit navigation where a pane is opened or closed (`web/src/shell/usePaneUrl.ts`), not by an effect following the store: such an effect raced the router's transition and pushed extra history entries.
 
 ### Task 3a.4: discreet vaults
 

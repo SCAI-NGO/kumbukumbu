@@ -37,7 +37,7 @@ function Root() {
     // after signing in (in Write mode, with the draft). Left on, Write mode would outlive the editor.
     useEditor.setState({ mode: "read", currentPath: null });
     // Never the way back into a discreet view: the session's end has forgotten which vaults are discreet already.
-    const neutral = pathname === NEUTRAL || discreetUrl(pathname) || showsDiscreet();
+    const neutral = pathname === NEUTRAL || discreetUrl(pathname + search) || showsDiscreet();
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(neutral ? "/" : pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
