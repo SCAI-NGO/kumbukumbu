@@ -183,6 +183,8 @@ A folder: one line per note in path order, `/Work/Protocols/2026-11-18.md  Brita
 
 The command lives in `src/Kumbu.Core/Sh/Commands/Blame.cs`, beside `History.cs`, with the same constructor (`INoteStore`, clock, `IWriterLabels`).
 
+*Amended while building:* the constructor takes no clock (`Blame(INoteStore, IWriterLabels?)`): nothing in the output is relative to now. The web app's console runs `blame` too, a read like `history` (`ConsoleApi.Allowed`, its completion in `web/src/console/paths.ts`), and a line with it takes a permit of the history scans as `history` does: on a folder it reads every note below, with the history of those from before the record.
+
 ## 7. The web app: the "Who wrote what" window
 
 **The window.** A light window (`WindowFrame` kind `light`, 672 × 720 px, a click on the dimmed notes closes it), like Recent and What's on since #232, title "Who wrote what", heading the note's title. Route `/blame/:vault/*` with `handle: { window: true }` (`web/src/router.tsx:136`), and `blame` added to the vault routes of `web/src/discreet/neutralWindow.ts:8`, so a discreet note's address stays `/discreet`. Not a sheet like History (`HistorySheet.tsx`) *(Claude's call)*: the text needs the room.
@@ -221,6 +223,8 @@ BlameCountView(int? Writer, string Display, int Lines, DateTime At)
 ```
 
 The content and its version come in the same answer, so the text and the record are of one state. Lines are 1-based, inclusive. `Earlier`: the record's (§5.1), for the sentence of §7 item 1; null when every line is recorded.
+
+*Amended while building:* `Writers` are the writers by identity (§7.1) and kind as shown, so two writers shown alike are one entry and an index tells no one apart; `Writer` in a section and in a count is an index into them. A count is per writer as shown, the mark kept ("Chris (mv)" beside "Chris", both of writer "Chris"); the unrecorded lines' count has `Writer` null, `Display` "earlier" and `At` the record's `Earlier`, for the web app to word as "before <date>". An attachment answers 400 with "… is an attachment: only notes have lines."
 
 ## 8. Security
 
