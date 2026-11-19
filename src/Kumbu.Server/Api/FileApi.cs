@@ -42,7 +42,10 @@ public static class FileApi
 
     private const string CutOff = "The upload ended before all of the file arrived; nothing was stored. Try again.";
 
-    private static readonly string[] MediaTypes = [.. AttachmentFormat.All.Select(f => f.MediaType).Append(AttachmentFormat.TextMediaType).Distinct()];
+    /// <summary>The media types a browser may be given inline: the known formats', and text.</summary>
+    private static readonly string[] InlineTypes = [.. AttachmentFormat.All.Select(f => f.MediaType).Append(AttachmentFormat.TextMediaType).Distinct()];
+
+    private static readonly string[] MediaTypes = [.. InlineTypes, AttachmentFormat.OctetStream];
 
     public static void MapFileApi(this IEndpointRouteBuilder app)
     {
@@ -83,7 +86,8 @@ public static class FileApi
     /// <summary>
     /// The file's bytes, typed by its format. <c>version</c>: a token from its history (or, for a session, of a file at
     /// this path in the trash) instead of the current state. <c>download=1</c>: <c>Content-Disposition: attachment</c>,
-    /// else <c>inline</c>. The <c>ETag</c> is the version token of what is served.
+    /// else <c>inline</c>; a file of kind <c>file</c> is always an attachment (<see cref="OnlyAsDownload"/>). The
+    /// <c>ETag</c> is the version token of what is served.
     /// </summary>
     private static async Task<FileStreamHttpResult> ReadAsync(
         string vault, string? path, string? version, string? download, HttpResponse response, RequestCaller caller, INoteStore store, CancellationToken ct)
@@ -116,9 +120,17 @@ public static class FileApi
         HttpResponse response, IAttachmentStore files, VaultPath path, AttachmentState state, string? download, CancellationToken ct)
     {
         var bytes = await OpenAsync(files, path, state, ct);
-        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true");
+        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true" || OnlyAsDownload(path, state.MediaType));
         return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
     }
+
+    /// <summary>
+    /// Whether a state's bytes go out only as <c>attachment</c>, whatever the request asks (files spec, decision 4): a
+    /// file of kind <c>file</c>, and anything stored with a media type no known format has. An uploaded <c>.html</c>
+    /// opened inline would be stored XSS; <c>nosniff</c> and <see cref="Security.FileContentPolicy"/> come on top.
+    /// </summary>
+    internal static bool OnlyAsDownload(VaultPath path, string mediaType) =>
+        AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.File || !InlineTypes.Contains(mediaType);
 
     /// <summary>One state's bytes; <see cref="ContentMissingException"/> if they are gone or don't open.</summary>
     internal static async Task<Stream> OpenAsync(IAttachmentStore files, VaultPath path, AttachmentState state, CancellationToken ct)

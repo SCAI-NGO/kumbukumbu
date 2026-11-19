@@ -236,17 +236,39 @@ public sealed class FileApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_docx_is_a_400_naming_the_formats()
+    public async Task Any_file_is_kept_with_the_media_type_of_its_content()
     {
         var user = await UserAsync();
 
-        using var docx = await user.PutFileAsync("letter.docx", "PK\u0003\u0004"u8.ToArray());
+        using var docx = await user.PutFileAsync("letter.docx", [0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]);
+        using var csv = await user.PutFileAsync("data.csv", "a;b\n1;2\n"u8.ToArray());
         using var note = await user.PutFileAsync("plan.md", "# Plan\n"u8.ToArray());
 
-        Assert.Equal(HttpStatusCode.BadRequest, docx.StatusCode);
-        Assert.Contains("PDFs and images (PNG, JPEG, GIF, WebP, SVG)", await RestClient.ErrorAsync(docx), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Created, docx.StatusCode);
+        Assert.Equal("application/octet-stream", (await JsonAsync(docx))["mediaType"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, csv.StatusCode);
+        Assert.Equal("text/plain; charset=utf-8", (await JsonAsync(csv))["mediaType"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.BadRequest, note.StatusCode);
         Assert.Contains("/api/notes", await RestClient.ErrorAsync(note), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_file_and_a_folder_never_share_a_name()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("Makefile", "all:\n"u8.ToArray());
+        await user.CreateAsync("v1.2/notes.md", "notes\n");
+
+        using var onFolder = await user.PutFileAsync("v1.2", "x"u8.ToArray());
+        using var belowFile = await user.PutFileAsync("Makefile/x.csv", "x"u8.ToArray());
+        using var noteBelowFile = await user.SendAsync(HttpMethod.Put, user.Url("Makefile/x.md"), new { content = "x\n" });
+
+        Assert.Equal(HttpStatusCode.Conflict, onFolder.StatusCode);
+        Assert.Contains($"/{user.Vault}/v1.2 is a folder; a file and a folder can't share a name", await RestClient.ErrorAsync(onFolder), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Conflict, belowFile.StatusCode);
+        Assert.Contains($"/{user.Vault}/Makefile is a file, not a folder", await RestClient.ErrorAsync(belowFile), StringComparison.Ordinal);
+        Assert.False(noteBelowFile.IsSuccessStatusCode);
+        Assert.Contains($"/{user.Vault}/Makefile is a file, not a folder", await RestClient.ErrorAsync(noteBelowFile), StringComparison.Ordinal);
     }
 
     [Fact]

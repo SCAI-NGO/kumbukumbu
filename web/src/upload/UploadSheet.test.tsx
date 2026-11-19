@@ -114,12 +114,12 @@ function folderFiles(paths: string[]) {
 }
 
 const bulk = Array.from({ length: 200 }, (_, i) => `Vault/bulk/n${String(i).padStart(3, "0")}.md`);
-// An Obsidian vault: settings, an image, nested folders; two of its notes are in Kumbu² already.
+// An Obsidian vault: settings, a Finder's dot file, nested folders; two of its notes are in Kumbu² already.
 const vault = [
   ...bulk,
   "Vault/.obsidian/app.json",
   "Vault/.obsidian/workspace.json",
-  "Vault/img/pic.heic",
+  "Vault/img/.DS_Store",
   "Vault/a.md",
   "Vault/notes/b.md",
   "Vault/notes/deep/c.md",
@@ -186,7 +186,7 @@ describe("the upload", () => {
     expect(within(skipped).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
       "Vault/.obsidian/app.jsonObsidian's settings or trash, not a note",
       "Vault/.obsidian/workspace.jsonObsidian's settings or trash, not a note",
-      "Vault/img/pic.heicnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)",
+      "Vault/img/.DS_Store'.DS_Store' starts with '.', which hides it in Obsidian",
       "Vault/notes/deep/c.mda note exists at this path",
     ]);
     for (const key of [["tree", "Work"], ["vaults"], ["search"], ["note"]]) expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
@@ -383,29 +383,26 @@ describe("images and PDFs", () => {
     ]);
   });
 
-  it("the file input lists concrete types, not image/*", async () => {
+  it("the file input offers every file", async () => {
     uploadApi([]);
     renderApp("/notes/Work/inbox.md");
     const sheet = await openFromDock();
-    const accept = within(sheet).getByLabelText("Choose files").getAttribute("accept")!;
-    expect(accept).toContain(".pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp");
-    expect(accept).toContain(".md");
-    expect(accept).not.toContain("*");
+    expect(within(sheet).getByLabelText("Choose files")).not.toHaveAttribute("accept");
   });
 
-  it("a heic file is refused with the formats named", async () => {
+  it("a heic file or a spreadsheet is kept as a file, as it is", async () => {
     const { puts } = uploadApi([]);
     renderApp("/notes/Work/inbox.md");
     const sheet = await openFromDock();
-    // The file picker's list keeps it out (user-event applies `accept` as browsers do); a folder or a drop doesn't.
-    await userEvent.upload(within(sheet).getByLabelText("Choose a folder"), folderFiles(["Photos/IMG_0001.HEIC"]));
-    expect(await within(sheet).findByText("Nothing to upload, 1 file skipped")).toBeInTheDocument();
-    expect(within(sheet).getByRole("button", { name: "Upload" })).toBeDisabled();
-    await userEvent.click(within(sheet).getByText("1 file skipped"));
-    expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent(
-      "Photos/IMG_0001.HEICnot a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp, .svg)",
+    await userEvent.upload(within(sheet).getByLabelText("Choose files"), [new File(["heic"], "IMG_0001.HEIC", { type: "image/heic" }), new File(["xlsx"], "data.xlsx")]);
+    expect(await within(sheet).findByText("2 files to upload, 0 files skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+    await waitFor(() =>
+      expect(puts).toEqual([
+        { url: "/api/files/Work/IMG_0001.HEIC", version: null, body: "heic" },
+        { url: "/api/files/Work/data.xlsx", version: null, body: "xlsx" },
+      ]),
     );
-    expect(puts).toEqual([]);
   });
 
   it("offers to shrink an image over 15 MB and says when the extension changes", async () => {

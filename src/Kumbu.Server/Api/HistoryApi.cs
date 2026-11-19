@@ -32,7 +32,7 @@ public sealed record NoteVersionView(
 /// note's UTF-8), <c>lines</c> 0 for an attachment. <c>kind</c> and <c>mediaType</c> as in the tree; a removed folder is its marker,
 /// <c>/Work/Drafts/.vaultkeep</c> with the kind <c>folder</c>.</summary>
 public sealed record TrashEntryView(
-    string Path, string Version, DateTime DeletedAt, string DeletedBy, DateTime ExpiresAt, int Lines, int Size,
+    string Path, string Version, DateTime DeletedAt, string DeletedBy, DateTime ExpiresAt, int Lines, long Size,
     string Kind = "note", string MediaType = NoteApi.NoteMediaType);
 
 /// <summary>The vault's removed notes and attachments (both in <c>notes</c>), most recently removed first; each stays <c>retentionDays</c>.</summary>
@@ -262,7 +262,7 @@ public static class HistoryApi
         {
             files.Add(new TrashEntryView(
                 t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, (await labels.RenderAsync(t.Attachment.Path.Segments[0], t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
-                0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Value), t.Attachment.Current.MediaType));
+                0, t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Value), t.Attachment.Current.MediaType));
         }
 
         // Stable: entries removed at one instant keep the order each list gives them.

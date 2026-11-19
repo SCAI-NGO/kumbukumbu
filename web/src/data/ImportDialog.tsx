@@ -7,7 +7,6 @@ import { useVaults } from "../api/notes";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useHoldUpdates } from "../update/apply";
-import { isAttachmentName } from "../upload/planUpload";
 import { SkippedList } from "../upload/UploadSheet";
 import { ImportTooLarge, readImport, vaultKey, type ImportVault } from "./readImport";
 import { planImport, runImport, serverImportApi, summaryText, type Choice, type ImportApi, type ImportSummary, type VaultPlan } from "./runImport";
@@ -16,7 +15,7 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 /** "2 notes", "1 file", "2 notes and 1 file": of paths below a vault. */
 function itemsText(paths: string[]) {
-  const files = paths.filter((p) => isAttachmentName(p.slice(p.lastIndexOf("/") + 1))).length;
+  const files = paths.filter((p) => !p.endsWith(".md")).length;
   const notes = paths.length - files;
   return files === 0 ? count(notes, "note", "notes") : notes === 0 ? count(files, "file", "files") : `${count(notes, "note", "notes")} and ${count(files, "file", "files")}`;
 }

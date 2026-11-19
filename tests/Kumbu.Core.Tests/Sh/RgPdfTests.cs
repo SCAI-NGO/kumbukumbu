@@ -496,7 +496,7 @@ public class RgPdfTests
         var written = await _files.WriteAsync("/V/shot.png", png, (1, 1), null, Ct);
         Assert.False(written.Result.IsError, written.Result.Output);
 
-        Assert.Equal("rg: /V/shot.png is an attachment; rg searches the text of notes only", (await Run("rg x /V/shot.png")).Output);
+        Assert.Equal("rg: /V/shot.png is an attachment; rg searches the text of notes and text files only", (await Run("rg x /V/shot.png")).Output);
     }
 
     [Fact]
@@ -508,7 +508,7 @@ public class RgPdfTests
 
         var result = await bare.RunAsync("rg needle /V/plain.pdf", Ct);
 
-        Assert.Equal("rg: /V/plain.pdf is an attachment; rg searches the text of notes only", result.Output);
+        Assert.Equal("rg: /V/plain.pdf is an attachment; rg searches the text of notes and text files only", result.Output);
         Assert.Equal("/V/plan.md:2:needle in a note", (await bare.RunAsync("rg needle /V", Ct)).Output);
     }
 

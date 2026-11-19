@@ -128,16 +128,17 @@ public sealed record TreeFolder(
     IReadOnlyList<TreeNote> Notes,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
 
-/// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
-/// <c>pdf</c> (never <c>folder</c>: a folder marker keeps its folder in the tree and is no entry of it); <c>mediaType</c>
-/// <c>text/markdown</c> for a note, an attachment's from its checked format. <c>writtenAt</c>: its last write (the gallery
-/// orders by date); an attachment also has its <c>version</c> (the gallery trashes at the version it shows). A note has its
+/// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c>,
+/// <c>pdf</c>, <c>file</c> or a skill folder's <c>text</c> (never <c>folder</c>: a folder marker keeps its folder in the
+/// tree and is no entry of it); <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format
+/// or, for a file, its content. <c>writtenAt</c>: its last write (the gallery orders by date); an attachment also has its
+/// <c>version</c> (the gallery trashes at the version it shows). A note has its
 /// <c>flag</c> (<c>red</c>, <c>done</c>, …) when it carries one, in the frontmatter or the text. A checkpoint's tree has a
 /// note's entry without <c>writtenAt</c> and <c>flag</c>.</summary>
 public sealed record TreeNote(
     string Name,
     string Path,
-    int Size,
+    long Size,
     string Kind = "note",
     string MediaType = NoteApi.NoteMediaType,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Version = null,
@@ -195,7 +196,7 @@ public sealed record MentionMarkView(int Start, int Length);
 /// <c>kind</c> and <c>mediaType</c> as in the tree; an attachment has no <c>lines</c> (0), and its version's bytes
 /// come from <c>GET /api/files</c> with <c>?version=</c>.</summary>
 public sealed record HistoryEntryView(
-    string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null,
+    string Version, DateTime WrittenAt, string Writer, int Lines, long Size, bool Current, string? Changeset, string? WriterKind = null,
     string Kind = "note", string MediaType = NoteApi.NoteMediaType, string? Message = null);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
@@ -627,7 +628,7 @@ public static class NoteApi
             .Concat(attachments.Select(a => (a.Path, TreeFile(a)))), writtenAt);
 
     private static TreeNote TreeFile(StoredAttachment file) =>
-        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
+        new(file.Path.Name, file.Path.Value, file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
     private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below, Func<VaultPath, DateTime?>? writtenAt)
     {
@@ -764,14 +765,18 @@ public static class NoteApi
         // The trailing '/' says "the folder", as in mv: a mistyped note name never moves a folder.
         var folder = body.From.EndsWith('/');
         if (!folder && body.To.EndsWith('/')) target = target.Child(source.Name);
-        if (await store.GetAsync(source, ct) is null && await StoreAttachments.GetAsync(store, source, ct) is null
+        var file = await StoreAttachments.GetAsync(store, source, ct);
+        if (await store.GetAsync(source, ct) is null && file is null
             && (await store.ListNotesUnderAsync(source, ct)).Count == 0 && (await StoreAttachments.UnderAsync(store, source, ct)).Count == 0)
         {
             throw await MissingAsync(store, source, ct);
         }
 
         // A name that contradicts the file's bytes is the request's fault, not the vault's state.
-        if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
+        if (!folder && file is not null && AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+        {
+            throw ApiErrors.BadRequest(renameProblem + ".");
+        }
 
         var result = folder
             ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, "mv", body.Exact, ct)
@@ -883,7 +888,7 @@ public static class NoteApi
             {
                 var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
                 versions.Add(new HistoryEntryView(
-                    v.Version, v.WrittenAt, writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, kind,
+                    v.Version, v.WrittenAt, writer, 0, v.State.Size, v.Current, v.Changeset?.Short, kind,
                     AttachmentFormat.KindOf(notePath.Value), v.State.MediaType));
             }
 
@@ -1119,9 +1124,6 @@ internal static class ApiPaths
         {
             PathKind.Note when !path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md."),
             PathKind.Attachment when path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is a note: /api/notes reads and writes it."),
-            PathKind.Attachment when !path.IsAttachment => throw ApiErrors.BadRequest($"{path.Value}: {AttachmentFormat.UnsupportedMessage}."),
-            PathKind.NoteOrAttachment when !path.IsNote && !path.IsAttachment =>
-                throw ApiErrors.BadRequest($"{path.Value} is neither a note (.md) nor a file Kumbu² keeps (PDF, PNG, JPEG, GIF, WebP, SVG)."),
             _ => path,
         };
     }

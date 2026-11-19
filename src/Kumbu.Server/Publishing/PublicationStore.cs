@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Security.Cryptography;
 using System.Text.Json;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson;
@@ -304,11 +305,14 @@ internal sealed class PublicationStore(VaultCatalog catalog)
         await OpenPublicationAsync(code, ct) is { } opened ? await OpenFileAsync(opened, index, ct) : null;
 
     /// <summary>As <see cref="OpenFileAsync(string, int, CancellationToken)"/>, of a copy already opened: only the file's
-    /// document is read and opened.</summary>
+    /// document is read and opened. Only an image: a note's copy takes no other file (files spec, decision 6), and the
+    /// reader and AI links serve what this gives inline.</summary>
     public async Task<(byte[] Bytes, string MediaType)?> OpenFileAsync(OpenedPublication opened, int index, CancellationToken ct) =>
-        opened.Copy.Files.FirstOrDefault(f => f.Index == index) is { } file && await OpenFileBytesAsync(opened.Id, opened.Key, opened.Lookup, index, ct) is { } bytes
+        opened.Copy.Files.FirstOrDefault(f => f.Index == index) is { } file && ImageTypes.Contains(file.MediaType) && await OpenFileBytesAsync(opened.Id, opened.Key, opened.Lookup, index, ct) is { } bytes
             ? (bytes, file.MediaType)
             : null;
+
+    private static readonly HashSet<string> ImageTypes = [.. AttachmentFormat.All.Where(f => f.Kind == AttachmentKind.Image).Select(f => f.MediaType)];
 
     /// <summary>File <paramref name="index"/> of a skill's copy already opened; null as <see cref="OpenFileAsync(OpenedPublication, int, CancellationToken)"/>.</summary>
     public async Task<(byte[] Bytes, string MediaType)?> OpenSkillFileAsync(OpenedSkill opened, int index, CancellationToken ct) =>

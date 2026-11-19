@@ -14,7 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Kumbu.Server.Tests.Skills;
 
 /// <summary>Text files in a skill's folder through <c>/api/files</c> and the store's last check: kept as plain text
-/// there, refused (as before) anywhere else.</summary>
+/// there, and a binary file never (spec 2026-11-18: elsewhere any file is kept).</summary>
 [Collection("app")]
 public sealed class TextFileChannelTests(KumbuAppFactory app)
 {
@@ -48,12 +48,15 @@ public sealed class TextFileChannelTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_text_file_outside__skills_is_400_as_before()
+    public async Task A_text_file_outside__skills_is_a_file_and_a_binary_one_inside_is_400()
     {
         var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
         using var put = await alice.PutFileAsync("run.py", Script);
-        Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
-        Assert.Contains(AttachmentFormat.UnsupportedMessage, await RestClient.ErrorAsync(put));
+        using var binary = await alice.PutFileAsync("_skills/x/tool.bin", [0, 1, 2]);
+        Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        Assert.Equal("text/plain; charset=utf-8", (await RestClient.JsonAsync(put))["mediaType"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.BadRequest, binary.StatusCode);
+        Assert.Contains(AttachmentFormat.SkillFolderMessage, await RestClient.ErrorAsync(binary));
     }
 
     [Fact]
@@ -84,51 +87,57 @@ public sealed class TextFileChannelTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_store_refuses_a_text_file_outside_a_skill_folder()
+    public async Task The_store_refuses_a_binary_file_in_a_skill_folder()
     {
-        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
-        var store = new EncryptedNoteStore(app.PublicApi.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
-        var blob = await store.PutBlobAsync("Work", Script, Ct);
-        var state = new AttachmentState(AttachmentFormat.TextMediaType, Script.Length, null, null, VersionToken.Of(Script), blob);
-        var created = new StoredAttachment(P("/Work/run.py"), state, 1, "alice", DateTime.UtcNow, [], null, WriterRef.ForOwner(WriterRef.Session, null));
+        var (store, _) = await KeptFileAsync();
+        var by = WriterRef.ForOwner(WriterRef.Session, null);
+        var created = await BinaryAsync(store, "/Work/_skills/x/tool.bin");
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
-        Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
-    }
-
-    private async Task<(EncryptedNoteStore Store, StoredAttachment Kept)> KeptScriptAsync()
-    {
-        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
-        var store = new EncryptedNoteStore(app.PublicApi.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
-        var blob = await store.PutBlobAsync("Work", Script, Ct);
-        var state = new AttachmentState(AttachmentFormat.TextMediaType, Script.Length, null, null, VersionToken.Of(Script), blob);
-        var kept = new StoredAttachment(P("/Work/_skills/x/run.py"), state, 1, "alice", DateTime.UtcNow, [], null, WriterRef.ForOwner(WriterRef.Session, null));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { kept } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
-        return (store, (await store.GetAttachmentAsync(kept.Path, Ct))!);
+            store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, "alice", by, DateTime.UtcNow, Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/_skills/x/tool.bin"), Ct));
     }
 
     [Fact]
-    public async Task The_store_refuses_to_move_a_text_file_out_of_a_skill_folder()
+    public async Task The_store_refuses_to_move_a_binary_file_into_a_skill_folder()
     {
-        var (store, kept) = await KeptScriptAsync();
-        var moved = kept with { Path = P("/Work/run.py"), Revision = kept.Revision + 1 };
+        var (store, kept) = await KeptFileAsync();
+        var moved = kept with { Path = P("/Work/_skills/x/tool.bin"), Revision = kept.Revision + 1 };
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             store.TryCommitAsync(new NoteBatch { AttachmentMoves = { (kept, moved) } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
-        Assert.NotNull(await store.GetAttachmentAsync(P("/Work/_skills/x/run.py"), Ct));
-        Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
+        Assert.NotNull(await store.GetAttachmentAsync(P("/Work/tool.bin"), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/_skills/x/tool.bin"), Ct));
     }
 
     [Fact]
-    public async Task The_store_refuses_to_restore_a_text_file_to_a_place_outside_a_skill_folder()
+    public async Task The_store_refuses_to_restore_a_binary_file_into_a_skill_folder()
     {
-        var (store, kept) = await KeptScriptAsync();
+        var (store, kept) = await KeptFileAsync();
         var by = WriterRef.ForOwner(WriterRef.Session, null);
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { kept } }, "alice", by, DateTime.UtcNow, Ct));
         var trashed = Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
-        var restored = trashed.Attachment with { Path = P("/Work/run.py"), Revision = trashed.Attachment.Revision + 1, Changeset = null };
+        var restored = trashed.Attachment with { Path = P("/Work/_skills/x/tool.bin"), Revision = trashed.Attachment.Revision + 1, Changeset = null };
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "alice", by, DateTime.UtcNow, Ct));
-        Assert.Null(await store.GetAttachmentAsync(P("/Work/run.py"), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/_skills/x/tool.bin"), Ct));
         Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
+    }
+
+    private static readonly byte[] Binary = [0, 1, 2, 0xFF];
+
+    private static async Task<StoredAttachment> BinaryAsync(EncryptedNoteStore store, string path)
+    {
+        var blob = await store.PutBlobAsync("Work", Binary, Ct);
+        var state = new AttachmentState(AttachmentFormat.OctetStream, Binary.Length, null, null, VersionToken.Of(Binary), blob);
+        return new StoredAttachment(P(path), state, 1, "alice", DateTime.UtcNow, [], null, WriterRef.ForOwner(WriterRef.Session, null));
+    }
+
+    /// <summary>A binary file kept at /Work/tool.bin, outside any skill's folder.</summary>
+    private async Task<(EncryptedNoteStore Store, StoredAttachment Kept)> KeptFileAsync()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        var store = new EncryptedNoteStore(app.PublicApi.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
+        var kept = await BinaryAsync(store, "/Work/tool.bin");
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { kept } }, "alice", WriterRef.ForOwner(WriterRef.Session, null), DateTime.UtcNow, Ct));
+        return (store, (await store.GetAttachmentAsync(kept.Path, Ct))!);
     }
 }
