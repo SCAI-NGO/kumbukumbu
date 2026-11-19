@@ -1,6 +1,6 @@
 # Security audit of 0.6.0
 
-Status: draft, for Chris's review (the scope itself agreed on 2026-11-19).
+Status: approved by Chris, 2026-11-19.
 
 ## 1. Goal and decisions
 
