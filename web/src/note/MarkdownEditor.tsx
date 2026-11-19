@@ -288,7 +288,9 @@ export default function MarkdownEditor({
       if (keepsPane(side, currentLocation, nextLocation) || nextLocation.pathname === "/signin" || !unresolved()) return false;
       // A window opens over the note, and closes back to it: the editor stays, and so does what it holds unsaved.
       if (isWindowLocation(nextLocation)) return false;
-      if (isWindowLocation(currentLocation) && nextLocation.pathname === useWindows.getState().behind?.pathname) return false;
+      // Back to the note behind the window: only where this pane's note stays as it is there (the other pane's may change).
+      const behind = useWindows.getState().behind;
+      if (isWindowLocation(currentLocation) && behind && keepsPane(side, behind, nextLocation)) return false;
       // A discreet note on its way out with the vaults hidden again: the hide has held what is unsaved (`hold`), and
       // the note goes with its vault. Blocked, the hidden note would stay on screen, put back as the open note. An
       // ordinary note keeps its guard, and so does this one until the hide has its text: until the mode is reset, its

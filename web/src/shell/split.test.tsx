@@ -447,3 +447,26 @@ describe("the writing editor, unsaved text and all", () => {
     expect(right).toHaveValue(typed("b", " r"));
   });
 });
+
+describe("a note opened from a window into the writing pane", () => {
+  it("waits for the writing pane's save, and stays on the window with the text kept when it fails", async () => {
+    const { router, u } = await split(undefined, { "PUT /api/notes/*": () => json(500, { title: "boom" }), "GET /api/recent": () => json(200, { items: [], vaults: [], more: false }) });
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const right = await within(pane("right")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(right, " w");
+    await act(() => router.navigate("/recent"));
+
+    // A link in the window (Recent), then an opener that moves the store first (the palette, What's on).
+    await act(() => router.navigate("/notes/Work/a.md?beside=Work/c.md"));
+    await act(async () => {
+      useEditor.getState().openIn("right", "/Work/d.md");
+      await router.navigate("/notes/Work/a.md?beside=Work/d.md");
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(at(router)).toBe("/recent");
+    expect(screen.getByRole("textbox", { name: "Markdown source", hidden: true })).toBe(right);
+    expect(right).toHaveValue("# Note b\n\nSee [[next b]].\n w");
+    expect(useEditor.getState().panes).toMatchObject({ left: { path: "/Work/a.md", mode: "read" }, right: { path: "/Work/b.md", mode: "write" } });
+  });
+});
