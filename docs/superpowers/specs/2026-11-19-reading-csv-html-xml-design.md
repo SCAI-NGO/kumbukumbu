@@ -1,6 +1,6 @@
 # Reading CSV, HTML and XML
 
-**Status:** draft for Chris's review, 2026-11-19 (overnight). Version 0.6.0, track B, part 3 of the brief (`/SWE/Kumbu/Internal Roadmap/0.6.0 tracks/Track B Files.md`). Builds on every file type (spec `2026-11-18-files-design.md`): a CSV, HTML or XML file is a text file there when it is UTF-8 up to 15 MB, and `cat` and `rg` read it already. Each decision below is a recommendation until Chris approves it.
+**Status:** approved by Chris on 2026-11-19 ("spec passt so"). Version 0.6.0, track B, part 3 of the brief (`/SWE/Kumbu/Internal Roadmap/0.6.0 tracks/Track B Files.md`). Builds on every file type (spec `2026-11-18-files-design.md`): a CSV, HTML or XML file is a text file there when it is UTF-8 up to 15 MB, and `cat` and `rg` read it already.
 
 ## Goal
 
@@ -8,7 +8,7 @@ Agents read structured files the way they read notes: a range of a spreadsheet's
 
 Why (brief, power user feedback of 2026-11-16): agents working on a CSV over MCP is Kumbu²'s strength; `cat` of a 4 MB CSV is cut at the output limit, and a page's HTML is mostly markup. Writing comes later (CSV cells with a tool, then the DOM), once reading has proven itself.
 
-## Decisions (proposed)
+## Decisions
 
 1. **Three commands named after their formats: `csv`, `html`, `xml`.** Each takes one path (a text file, or a piped input for `csv`), follows the `sh` conventions (options as in `head`/`rg`, errors as `<command>: <path>: …`, the output limit with a closing line on how to narrow it), and is listed in `help` and the manual. Why three and not one `query`: each format has its own selector language, and a command named after the format is what an agent guesses first.
 2. **Only text files.** A file kept as bytes (not UTF-8, over 15 MB) gets "csv: costs.csv is kept as bytes (not UTF-8 text); Kumbu² can't read it as CSV". A note (`.md`) is refused too: its tables are read with `cat`. No extension check: a `.txt` holding CSV is read as CSV when asked.
