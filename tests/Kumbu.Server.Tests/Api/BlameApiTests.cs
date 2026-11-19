@@ -5,6 +5,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -110,6 +111,36 @@ public sealed class BlameApiTests(KumbuAppFactory app)
         Assert.DoesNotContain("Claude", text.Replace("Alice's agent", "", StringComparison.Ordinal), StringComparison.Ordinal);
         Assert.DoesNotContain(carol.Username, text, StringComparison.Ordinal);
         Assert.DoesNotContain(dave.Username, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Writers_whose_names_differ_only_in_brackets_stay_apart_and_whole()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Work");
+        var dave = await RestClient.NewAsync(Api, vault: "Work");
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "Alice (Lab)"), cancellationToken: Ct);
+        await alice.ShareWithAsync(bob, "garten");
+        await alice.ShareWithAsync(carol, "garten", label: "Sam (Lab)");
+        await alice.ShareWithAsync(dave, "garten", label: "Sam (Home)");
+
+        var version = await PutAsync(alice, "/api/notes/Gartenarbeit/beet.md", "Alice\n", null);
+        version = await PutAsync(carol, "/api/notes/garten/beet.md", "Alice\nCarol\n", version);
+        await PutAsync(dave, "/api/notes/garten/beet.md", "Alice\nCarol\nDave\n", version);
+
+        // The owner tells her members apart by her labels for them, as her history does.
+        var owners = await BlameAsync(alice, "/api/blame/Gartenarbeit/beet.md");
+        Assert.Equal([alice.Username, "Sam (Lab)", "Sam (Home)"], owners["writers"]!.AsArray().Select(w => w!["display"]!.GetValue<string>()));
+        Assert.Equal([$"0 {alice.Username} 1", "1 Sam (Lab) 1", "2 Sam (Home) 1"],
+            Assert.Single(owners["sections"]!.AsArray())!["counts"]!.AsArray().Select(c => $"{c!["writer"]} {c["display"]} {c["lines"]}"));
+
+        // A member sees the owner's name whole, and the other two members as one.
+        var members = await BlameAsync(bob, "/api/blame/garten/beet.md");
+        Assert.Equal(["\"Alice (Lab)\"", WriterLabels.AnotherUser], members["writers"]!.AsArray().Select(w => w!["display"]!.GetValue<string>()));
+        Assert.Equal(["0 \"Alice (Lab)\" 1", $"1 {WriterLabels.AnotherUser} 2"],
+            Assert.Single(members["sections"]!.AsArray())!["counts"]!.AsArray().Select(c => $"{c!["writer"]} {c["display"]} {c["lines"]}"));
     }
 
     [Fact]

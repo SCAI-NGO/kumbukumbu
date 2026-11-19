@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -93,9 +92,37 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
 
         var record = Authorship.Of(note);
         var shown = await ShownAsync(path, record, ct);
-        var output = options.Has("lines") ? ByLine(path, lines, shown, record, from, to) : ByRun(lines, shown, record, from, to);
-        if (record.Dropped) output += $"\n(the record started again at {History.Time(record.Earlier!.Value)}: more than {Authorship.MaxRuns} changes of writer)";
-        return ShellResult.Ok(output) with { Version = new NoteVersion(path.Value, note.Version) };
+        var byLine = options.Has("lines");
+        var (rows, after) = byLine ? (ByLine(lines, shown, record, from, to), new List<string>()) : ByRun(lines, shown, record, from, to);
+        if (record.Dropped) after.Add($"(the record started again at {History.Time(record.Earlier!.Value)}: more than {Authorship.MaxRuns} changes of writer)");
+        var hint = byLine
+            ? $"[too long for one call; blame a section: blame --lines \"{path.Value}#Section\" ('outline {SectionLookup.Quote(path)}' lists them)]"
+            : $"[too many runs for one call; blame a section: blame \"{path.Value}#Section\" ('outline {SectionLookup.Quote(path)}' lists them)]";
+        return ShellResult.Ok(Fit(rows, after, hint)) with { Version = new NoteVersion(path.Value, note.Version) };
+    }
+
+    /// <summary>The rows that fit the shell's output limit beside the lines that always come after them, and the hint in
+    /// place of the rest, so that the counts and the record's restart are never what the limit cuts.</summary>
+    private static string Fit(IReadOnlyList<string> rows, IReadOnlyList<string> after, string hint)
+    {
+        var budget = OutputLimit.MaxChars - after.Sum(l => l.Length + 1);
+        var kept = new List<string>();
+        var used = 0;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            // The last row needs no room for the hint after it.
+            var reserve = i + 1 < rows.Count ? hint.Length + 1 : 0;
+            if (used + rows[i].Length + 1 + reserve > budget)
+            {
+                kept.Add(hint);
+                break;
+            }
+
+            kept.Add(rows[i]);
+            used += rows[i].Length + 1;
+        }
+
+        return Lines.Join(kept.Concat(after));
     }
 
     /// <summary>Each line's writer as the caller is shown it, and its time; null for a line not recorded.</summary>
@@ -114,7 +141,8 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
 
     private static string When((string Writer, DateTime At)? line, Authorship record) => History.Time(line?.At ?? record.Earlier!.Value);
 
-    private static string ByRun(IReadOnlyList<string> lines, (string Writer, DateTime At)?[] shown, Authorship record, int from, int to)
+    /// <summary>The runs, and the counts below them.</summary>
+    private static (List<string> Rows, List<string> After) ByRun(IReadOnlyList<string> lines, (string Writer, DateTime At)?[] shown, Authorship record, int from, int to)
     {
         var runs = new List<(string Range, (string Writer, DateTime At)? Line)>();
         for (var i = from; i < to;)
@@ -130,30 +158,22 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
             runs.Add((i - start == 1 ? $"{start + 1}" : $"{start + 1}-{i}", newest));
         }
 
-        if (runs.Count == 0) return "(no lines)";
+        if (runs.Count == 0) return (["(no lines)"], []);
         var rangeWidth = runs.Max(r => r.Range.Length);
-        var writerWidth = runs.Max(r => Who(r.Line).Length);
-        var output = runs.Select(r => $"{r.Range.PadRight(rangeWidth)}  {Who(r.Line).PadRight(writerWidth)}  {When(r.Line, record)}").ToList();
-        output.Add(Counts(Count(lines, shown, from, to)) is { Length: > 0 } counts ? $"{counts} (blank lines not counted)" : "(blank lines only)");
-        return Lines.Join(output);
+        // Unrecorded runs read as a sentence, "earlier than <time>", and set no column.
+        var writerWidth = runs.Where(r => r.Line is not null).Select(r => r.Line!.Value.Writer.Length).DefaultIfEmpty(0).Max();
+        var rows = runs.Select(r => r.Line is { } line
+            ? $"{r.Range.PadRight(rangeWidth)}  {line.Writer.PadRight(writerWidth)}  {History.Time(line.At)}"
+            : $"{r.Range.PadRight(rangeWidth)}  {EarlierThan} {History.Time(record.Earlier!.Value)}").ToList();
+        return (rows, [Counts(Count(lines, shown, from, to)) is { Length: > 0 } counts ? $"{counts} (blank lines not counted)" : "(blank lines only)"]);
     }
 
-    private static string ByLine(VaultPath path, IReadOnlyList<string> lines, (string Writer, DateTime At)?[] shown, Authorship record, int from, int to)
+    private static List<string> ByLine(IReadOnlyList<string> lines, (string Writer, DateTime At)?[] shown, Authorship record, int from, int to)
     {
-        if (from == to) return "(no lines)";
+        if (from == to) return ["(no lines)"];
         var numberWidth = $"{to}".Length;
         var writerWidth = Enumerable.Range(from, to - from).Max(i => Who(shown[i]).Length);
-        var hint = $"\n[too long for one call; blame a section: blame --lines \"{path.Value}#Section\" ('outline {SectionLookup.Quote(path)}' lists them)]";
-        var output = new StringBuilder();
-        for (var i = from; i < to; i++)
-        {
-            var line = $"{$"{i + 1}".PadRight(numberWidth)}  {Who(shown[i]).PadRight(writerWidth)}  {When(shown[i], record)}  {lines[i]}";
-            if (output.Length + line.Length + 1 + hint.Length > OutputLimit.MaxChars) return output + hint;
-            if (output.Length > 0) output.Append('\n');
-            output.Append(line);
-        }
-
-        return output.ToString();
+        return [.. Enumerable.Range(from, to - from).Select(i => $"{$"{i + 1}".PadRight(numberWidth)}  {Who(shown[i]).PadRight(writerWidth)}  {When(shown[i], record)}  {lines[i]}")];
     }
 
     /// <summary>The non-blank lines per writer shown, in the order they first appear; the unrecorded ones (null) last.</summary>
@@ -179,36 +199,51 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
     private async Task<ShellResult> FolderAsync(VaultPath dir, CancellationToken ct)
     {
         var paths = (await notes.ListNotesUnderAsync(dir, ct)).OrderBy(p => p.Value, TextOrder.Default).ToList();
-        var rows = new List<(string Path, string Counts)>();
-        var totals = new List<(string? Writer, int Lines, int Notes)>();
+        var rows = new List<(string Path, List<(string? Writer, int Lines)> Counts)>();
+        var damaged = 0;
         foreach (var path in paths.Take(MaxNotes))
         {
-            if (await notes.GetAsync(path, ct) is not { } note) continue;
-            var lines = Lines.Split(note.Content);
-            var record = Authorship.Of(note);
-            var counts = Count(lines, await ShownAsync(path, record, ct), 0, lines.Count);
-            rows.Add((path.Value, counts.Count == 0 ? "(blank lines only)" : string.Join(", ", counts.Select(c => $"{c.Writer ?? "earlier"} {c.Lines}"))));
-            foreach (var (writer, n) in counts)
+            if (await notes.GetAsync(path, ct) is not { } note)
             {
-                var at = totals.FindIndex(t => t.Writer == writer);
-                if (at < 0) totals.Add((writer, n, 1));
-                else totals[at] = (writer, totals[at].Lines + n, totals[at].Notes + 1);
+                damaged++;
+                continue;
             }
+
+            var lines = Lines.Split(note.Content);
+            rows.Add((path.Value, Count(lines, await ShownAsync(path, Authorship.Of(note), ct), 0, lines.Count)));
         }
 
         if (rows.Count == 0) return ShellResult.Ok($"(no notes below {dir.Value})");
         var width = rows.Max(r => r.Path.Length);
-        var output = rows.Select(r => $"{r.Path.PadRight(width)}  {r.Counts}").ToList();
-        var more = paths.Count - MaxNotes;
-        if (more > 0) output.Add($"… and {more} more {(more == 1 ? "note" : "notes")}; blame a folder below it");
-        if (totals.Count > 0)
+        var shown = rows.Select(r => $"{r.Path.PadRight(width)}  {(r.Counts.Count == 0 ? "(blank lines only)" : string.Join(", ", r.Counts.Select(c => $"{c.Writer ?? "earlier"} {c.Lines}")))}").ToList();
+
+        // As many notes as fit the shell's output limit with the lines below them, which count only the notes shown.
+        for (var kept = rows.Count; ; kept--)
         {
-            output.Add("total: " + string.Join(", ", totals.OrderBy(t => t.Writer is null).Select((t, i) =>
-                i == 0
-                    ? $"{t.Writer ?? "earlier"} {t.Lines} {(t.Lines == 1 ? "line" : "lines")} in {t.Notes} {(t.Notes == 1 ? "note" : "notes")}"
-                    : $"{t.Writer ?? "earlier"} {t.Lines} in {t.Notes}")));
+            var below = new List<string>();
+            var more = paths.Count - damaged - kept;
+            if (more > 0) below.Add($"… and {more} more {(more == 1 ? "note" : "notes")}; blame a folder below it");
+            if (Total(rows.Take(kept).Select(r => r.Counts)) is { } total) below.Add(total);
+            var output = Lines.Join(shown.Take(kept).Concat(below));
+            if (output.Length <= OutputLimit.MaxChars || kept == 0) return ShellResult.Ok(output);
+        }
+    }
+
+    /// <summary>"total: Brita 240 lines in 12 notes, Veyalt 410 in 9"; null when no note has a line that counts.</summary>
+    private static string? Total(IEnumerable<List<(string? Writer, int Lines)>> notes)
+    {
+        var totals = new List<(string? Writer, int Lines, int Notes)>();
+        foreach (var (writer, n) in notes.SelectMany(c => c))
+        {
+            var at = totals.FindIndex(t => t.Writer == writer);
+            if (at < 0) totals.Add((writer, n, 1));
+            else totals[at] = (writer, totals[at].Lines + n, totals[at].Notes + 1);
         }
 
-        return ShellResult.Ok(Lines.Join(output));
+        if (totals.Count == 0) return null;
+        return "total: " + string.Join(", ", totals.OrderBy(t => t.Writer is null).Select((t, i) =>
+            i == 0
+                ? $"{t.Writer ?? "earlier"} {t.Lines} {(t.Lines == 1 ? "line" : "lines")} in {t.Notes} {(t.Notes == 1 ? "note" : "notes")}"
+                : $"{t.Writer ?? "earlier"} {t.Lines} in {t.Notes}"));
     }
 }

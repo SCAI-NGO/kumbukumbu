@@ -224,7 +224,7 @@ BlameCountView(int? Writer, string Display, int Lines, DateTime At)
 
 The content and its version come in the same answer, so the text and the record are of one state. Lines are 1-based, inclusive. `Earlier`: the record's (§5.1), for the sentence of §7 item 1; null when every line is recorded.
 
-*Amended while building:* `Writers` are the writers by identity (§7.1) and kind as shown, so two writers shown alike are one entry and an index tells no one apart; `Writer` in a section and in a count is an index into them. A count is per writer as shown, the mark kept ("Chris (mv)" beside "Chris", both of writer "Chris"); the unrecorded lines' count has `Writer` null, `Display` "earlier" and `At` the record's `Earlier`, for the web app to word as "before <date>". An attachment answers 400 with "… is an attachment: only notes have lines."
+*Amended while building:* `Writers` are the writers by identity (§7.1) and kind as shown: the label without the tool's mark, then rendered, since a rendered name ("Alice (Lab)", a member "Sam (Home)") may hold brackets of its own; so two writers shown alike are one entry and an index tells no one apart; `Writer` in a section and in a count is an index into them. A count is per writer as shown, the mark kept ("Chris (mv)" beside "Chris", both of writer "Chris"); the unrecorded lines' count has `Writer` null, `Display` "earlier" and `At` the record's `Earlier`, for the web app to word as "before <date>". An attachment answers 400 with "… is an attachment: only notes have lines."
 
 ## 8. Security
 

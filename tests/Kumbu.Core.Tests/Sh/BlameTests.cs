@@ -126,8 +126,8 @@ public class BlameTests
 
         Assert.Equal(
             """
-            1-2  earlier than  2026-11-17 18:00 UTC
-            3    Veyalt        2026-11-18 09:00 UTC
+            1-2  earlier than 2026-11-17 18:00 UTC
+            3    Veyalt  2026-11-18 09:00 UTC
             Veyalt 1 line, earlier 2 (blank lines not counted)
             """.ReplaceLineEndings("\n"), result.Output);
     }
@@ -140,7 +140,7 @@ public class BlameTests
         var result = await Run("blame /Work/long.md");
 
         Assert.Equal("(the record started again at 2026-11-17 18:00 UTC: more than 4096 changes of writer)", result.Output.Split('\n')[^1]);
-        Assert.StartsWith("1-2  earlier than  2026-11-17 18:00 UTC\nearlier 2 lines", result.Output);
+        Assert.StartsWith("1-2  earlier than 2026-11-17 18:00 UTC\nearlier 2 lines", result.Output);
     }
 
     [Fact]
@@ -206,6 +206,68 @@ public class BlameTests
 
         Assert.True(output.Length <= OutputLimit.MaxChars, output.Length.ToString());
         Assert.EndsWith("[too long for one call; blame a section: blame --lines \"/Work/long.md#Section\" ('outline /Work/long.md' lists them)]", output);
+    }
+
+    /// <summary>A note of <paramref name="lines"/> lines whose writer changes every line, the record restarted before its last.</summary>
+    private void PutAlternating(string path, int lines, int length = 1)
+    {
+        var at = _time.GetUtcNow().UtcDateTime;
+        var content = string.Concat(Enumerable.Range(0, lines).Select(i => new string('x', length) + "\n"));
+        var runs = Enumerable.Range(0, lines - 1).Select(i => new Authorship.Run(1, i % 2)).Append(new Authorship.Run(1, -1)).ToArray();
+        Put(path, content, Earlier, true, [new("Brita", Brita.Reference, at), new("Veyalt", Veyalt.Reference, at)], runs);
+    }
+
+    [Fact]
+    public async Task Runs_too_many_for_one_call_keep_the_counts_and_the_restart()
+    {
+        PutAlternating("/Work/many.md", 3000);
+
+        var output = (await Run("blame /Work/many.md")).Output;
+        var lines = output.Split('\n');
+
+        Assert.True(output.Length <= OutputLimit.MaxChars, output.Length.ToString());
+        Assert.Equal("[too many runs for one call; blame a section: blame \"/Work/many.md#Section\" ('outline /Work/many.md' lists them)]", lines[^3]);
+        Assert.Equal("Brita 1500 lines, Veyalt 1499, earlier 1 (blank lines not counted)", lines[^2]);
+        Assert.StartsWith("(the record started again at ", lines[^1]);
+    }
+
+    [Fact]
+    public async Task Lines_too_many_for_one_call_keep_the_restart_under_the_limit()
+    {
+        PutAlternating("/Work/many.md", 1000, 40);
+
+        var output = (await Run("blame --lines /Work/many.md")).Output;
+        var lines = output.Split('\n');
+
+        Assert.True(output.Length <= OutputLimit.MaxChars, output.Length.ToString());
+        Assert.StartsWith("[too long for one call; blame a section", lines[^2]);
+        Assert.StartsWith("(the record started again at ", lines[^1]);
+    }
+
+    [Fact]
+    public async Task A_first_line_too_long_for_one_call_gives_the_hint_alone()
+    {
+        await Write(Veyalt, "/Work/wide.md", new string('x', OutputLimit.MaxChars) + "\n");
+
+        var output = (await Run("blame --lines /Work/wide.md")).Output;
+
+        Assert.Equal("[too long for one call; blame a section: blame --lines \"/Work/wide.md#Section\" ('outline /Work/wide.md' lists them)]", output);
+    }
+
+    [Fact]
+    public async Task A_folder_too_long_for_one_call_counts_the_rest_as_more_and_keeps_the_total()
+    {
+        var folder = "/Big/" + new string('f', 150);
+        for (var i = 0; i < 200; i++) _store.Put(new StoredNote(P($"{folder}/n{i:D3}.md"), "x\n", 1, "seed", InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server));
+
+        var output = (await Run("blame /Big")).Output;
+        var lines = output.Split('\n');
+        var shown = lines.Length - 2;
+
+        Assert.True(output.Length <= OutputLimit.MaxChars, output.Length.ToString());
+        Assert.InRange(shown, 100, 199);
+        Assert.Equal($"… and {200 - shown} more notes; blame a folder below it", lines[^2]);
+        Assert.Equal($"total: seed {shown} lines in {shown} notes", lines[^1]);
     }
 
     [Fact]

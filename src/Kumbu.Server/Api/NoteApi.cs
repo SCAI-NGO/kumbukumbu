@@ -932,12 +932,14 @@ public static class NoteApi
         var record = Authorship.Of(note);
 
         // Writers by identity and kind as shown, so that two writers shown alike are one; each line's index and shown name.
+        // The identity is the label's without the tool's mark, rendered: a rendered name may hold brackets of its own.
         var writers = new List<BlameWriterView>();
         var shown = new (int Writer, string Display)[record.Writes.Count];
         for (var i = 0; i < shown.Length; i++)
         {
-            var (display, kind) = await labels.RenderAsync(notePath.Segments[0], record.Writes[i].Label, record.Writes[i].Ref, ct);
-            var writer = new BlameWriterView(Writers.Identity(display), kind);
+            var (display, _) = await labels.RenderAsync(notePath.Segments[0], record.Writes[i].Label, record.Writes[i].Ref, ct);
+            var (identity, kind) = await labels.RenderAsync(notePath.Segments[0], Writers.Identity(record.Writes[i].Label), record.Writes[i].Ref, ct);
+            var writer = new BlameWriterView(identity, kind);
             var index = writers.IndexOf(writer);
             if (index < 0) writers.Add(writer);
             shown[i] = (index < 0 ? writers.Count - 1 : index, display);
