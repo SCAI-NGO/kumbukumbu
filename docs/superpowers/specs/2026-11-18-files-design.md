@@ -48,7 +48,7 @@ Why (brief, power user feedback of 2026-11-16): about 220 files in a professiona
 
 ## Still to do outside this repository
 
-- **The Obsidian plugin** (frozen, own repository): its spec says it doesn't sync attachments ("They stay local", `docs/obsidian-plugin-design-spec.md:22`); still to check there that the sync list's new kind `file` and large files don't trip it, as the `.svg` check due before the release. Chris takes this up in a session of its own on 2026-11-19.
+- **The Obsidian plugin** (frozen, own repository): its spec says it doesn't sync attachments ("They stay local", `docs/obsidian-plugin-design-spec.md:22`); still to check there that the sync list's new kind `file` and large files don't trip it, as the `.svg` check due before the release. Chris takes this up in a session of its own on 2026-11-19. Checked on 2026-11-19: plugin 0.3.0 leaves kind `file` and SVGs alone both ways (its "Not synced" list for local ones), but read a large PDF or image from Kumbu² whole into memory, and a failed download stopped every check. So `versions?attachments=1` names each attachment's `size`, and plugin 0.3.1 leaves one over 15 MB in Kumbu². Why the size in the list rather than a `HEAD` before each download: no extra request per file, and the server holds the size in memory already.
 - **rclone bisync over WebDAV** with a large file: at least one test by hand (the fixtures are in the backlog).
 
 ## Touch points

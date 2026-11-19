@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useLayoutEffect } from "react";
 import { Outlet, Route, Routes, useLocation } from "react-router-dom";
-import { vaultOfRoute } from "../discreet/neutralWindow";
+import { besideOf, noteUrl } from "../api/paths";
+import { besideVaultOf, vaultOfRoute } from "../discreet/neutralWindow";
 import { useDiscreet } from "../discreet/state";
 import MobileShell from "../shell/MobileShell";
 import { InWindow, useWindowOpen } from "./context";
@@ -28,13 +29,25 @@ export default function WindowHost() {
   useEffect(() => () => useWindows.setState({ open: false, behind: null, inApp: false }), []);
 
   // A discreet vault hidden again under a window: the window's address names no vault, so hiding doesn't navigate.
-  // The note behind gives way to the vault list, and the window stays, with what was typed into it.
+  // The note behind gives way to the vault list, and the window stays, with what was typed into it. A note of it in
+  // the split view's right pane goes from the address, and the window closes to the left one; with the left one's
+  // vault hidden, it closes to the right one alone.
   useEffect(
     () =>
       useDiscreet.subscribe((s, previous) => {
         if (s.gone === previous.gone) return;
-        const vault = vaultOfRoute(useWindows.getState().behind?.pathname ?? "");
-        if (vault !== null && s.gone.has(vault)) useWindows.setState({ behind: ROOT, inApp: false });
+        const behind = useWindows.getState().behind;
+        const vault = vaultOfRoute(behind?.pathname ?? "");
+        const besideVault = behind && besideVaultOf(behind.pathname + behind.search);
+        if (vault !== null && s.gone.has(vault)) {
+          // A note beside it of a vault still shown stays, as the only pane.
+          const beside = besideVault !== null && !s.gone.has(besideVault) ? besideOf(behind!.search) : null;
+          useWindows.setState({ behind: beside ? { ...behind!, pathname: noteUrl(beside), search: "" } : ROOT, inApp: false });
+        } else if (behind && s.gone.has(besideVault ?? "")) {
+          const search = new URLSearchParams(behind.search);
+          search.delete("beside");
+          useWindows.setState({ behind: { ...behind, search: search.size ? `?${search}` : "" }, inApp: false });
+        }
       }),
     [],
   );

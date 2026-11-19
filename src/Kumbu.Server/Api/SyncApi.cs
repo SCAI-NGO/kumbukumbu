@@ -18,9 +18,11 @@ namespace Kumbu.Server.Api;
 /// <summary>A note's path from the root of the vault tree and its version, as <c>GET /api/notes</c> gives it; an
 /// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c>, <c>pdf</c>, <c>file</c>, <c>text</c>
 /// with <c>text=1</c>, or <c>folder</c> for a <c>.vaultkeep</c> that keeps its folder, version <c>e3b0c44298fc</c>) only
-/// with <c>attachments=1</c>.</summary>
+/// with <c>attachments=1</c>. <c>size</c>: an attachment's bytes, so a client that reads files whole can leave one
+/// over its limit in Kumbu² without downloading it (files can be up to <c>Kumbu:Vaults:MaxFileBytes</c>).</summary>
 public sealed record VersionEntry(
-    string Path, string Version, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
+    string Path, string Version, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Size = null);
 
 /// <summary>
 /// A vault's versions (sync spec §5). <c>full</c>: every note of the vault is in <c>notes</c>; false only for an
@@ -30,7 +32,7 @@ public sealed record VersionEntry(
 /// versions and damaged count, also the <c>ETag</c>. <c>damaged</c>: stored notes that don't open (their paths are
 /// sealed with them, so they can't be listed; a touched path whose note doesn't open is in neither list). Both lists in path order.
 /// <c>attachments</c>: true when asked with <c>attachments=1</c>; then <c>notes</c> lists attachments (folder markers among them) too, each entry
-/// with its <c>kind</c>, and <c>state</c> and <c>deleted</c> cover them. Without it, the answer is what clients that
+/// with its <c>kind</c>, an attachment with its <c>size</c> in bytes, and <c>state</c> and <c>deleted</c> cover them. Without it, the answer is what clients that
 /// know no attachments have always had: no attachment path anywhere in it, and no <c>attachments</c> or <c>kind</c>.
 /// </summary>
 public sealed record VersionsView(
@@ -158,7 +160,7 @@ public static class SyncApi
         {
             if (since is null && EntityTags.NoneMatchNames(http.Request, new($"\"{state}\""))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
             var all = notes.Values.Select(n => Entry(access.ToCaller(n.Note.Path), n.Note.Version, withFiles))
-                .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles)))
+                .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles, a.Attachment.Current.Size)))
                 .OrderBy(e => e.Path, TextOrder.Default)
                 .ToList();
             return TypedResults.Ok(new VersionsView(true, cursor, state, damaged, all, [], marker));
@@ -172,7 +174,7 @@ public static class SyncApi
         foreach (var path in touched)
         {
             if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(access.ToCaller(path), entry.Note.Version, withFiles));
-            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(access.ToCaller(path), file.Attachment.Version, withFiles));
+            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(access.ToCaller(path), file.Attachment.Version, withFiles, file.Attachment.Current.Size));
             // A note that doesn't open isn't gone: the client mustn't trash its copy. It is counted in damaged.
             else if (!unlocked.IsDamaged(path)) deleted.Add(access.ToCaller(path).Value);
         }
@@ -183,8 +185,8 @@ public static class SyncApi
     /// <summary>Whether the path, current or gone, is one a skill folder keeps as text.</summary>
     private static bool IsText(VaultPath path) => AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text;
 
-    private static VersionEntry Entry(VaultPath path, string version, bool withKind) =>
-        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value) : null);
+    private static VersionEntry Entry(VaultPath path, string version, bool withKind, long? size = null) =>
+        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value) : null, size);
 
     /// <summary>
     /// Where a <c>since</c> answer starts, or null for the full list: no cursor, one that doesn't parse, one in the

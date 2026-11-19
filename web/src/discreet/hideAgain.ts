@@ -7,7 +7,7 @@ import { inVault, noteUrl, vaultOf } from "../api/paths";
 import { clearAppBadge } from "../calendar/useBadge";
 import { useConsole } from "../console/store";
 import { onDiscreetFrame } from "../hooks/useSyncSocket";
-import { useEditor } from "../state/editor";
+import { editedPath, useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { forgetDiscreet, showsDiscreet, vaultOfRoute } from "./neutralWindow";
@@ -71,10 +71,11 @@ export function forgetHeld() {
   held = null;
 }
 
-/** The open discreet note saves what is pending; true when nothing is left unsaved. */
+/** The open discreet note saves what is pending; true when nothing is left unsaved. The editor's note, in either pane. */
 async function saveOpen(names: ReadonlySet<string>): Promise<boolean> {
-  const { currentPath, beforeRead } = useEditor.getState();
-  if (!currentPath || !names.has(vaultOf(currentPath)) || !beforeRead) return true;
+  const edited = editedPath(useEditor.getState());
+  const { beforeRead } = useEditor.getState();
+  if (!edited || !names.has(vaultOf(edited)) || !beforeRead) return true;
   // No read of the note afterwards: it would ask for a vault about to be hidden.
   return beforeRead({ reread: false }).catch(() => false);
 }
@@ -134,11 +135,11 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
   // From here on no session read is followed, nor the URL of the note on its way out.
   useDiscreet.setState({ hiding: true });
   try {
-    const { currentPath } = useEditor.getState();
-    if (!(await saveOpen(names)) && discreet(currentPath)) {
+    const edited = editedPath(useEditor.getState());
+    if (!(await saveOpen(names)) && discreet(edited)) {
       const text = useEditor.getState().unsaved?.();
       const end = Math.min(Date.now(), until ? Date.parse(until) : Date.now());
-      if (text) hold(currentPath, text.text, text.version, end + LATE_SAVE, { open: true });
+      if (text) hold(edited, text.text, text.version, end + LATE_SAVE, { open: true });
     }
     // Text a session end left for a discreet note waits the same way, never in view.
     const { draft } = useEditor.getState();
@@ -154,6 +155,9 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     const fallback = listed?.find((v) => !v.discreet && !names.has(v.name))?.name ?? null;
     const vault = ordinary ? vaultOf(ordinary) : editor.activeVault && !names.has(editor.activeVault) ? editor.activeVault : fallback;
     const shown = vaultOfRoute(pathname);
+    // In the split view, either pane's note may be one of theirs: the other pane stays, as the only one.
+    const note = pathname.startsWith("/notes/");
+    const besideShown = note && discreet(editor.panes.right?.path);
 
     // From here on a view of these vaults that renders once more shows nothing of them, and once the mode is reset the
     // editor's guard lets the navigation away from such a note pass: what it had unsaved is saved or held above, and
@@ -169,13 +173,16 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
       mode: "read",
       ...(s.overlay === "palette" ? { overlay: "none" as const } : {}),
     }));
-    if (vault) useEditor.getState().setActiveVault(vault);
+    const stays = note && editor.panes.right ? useEditor.getState().currentPath : null;
+    if (stays) useEditor.getState().setActiveVault(vaultOf(stays));
+    else if (vault) useEditor.getState().setActiveVault(vault);
     useDiscreet.getState().reset();
     // The address bar shows /discreet for a discreet view whatever the router's location says.
-    if ((shown !== null && names.has(shown)) || showsDiscreet()) {
-      navigate(ordinary ? noteUrl(ordinary) : "/", { replace: true });
+    if ((shown !== null && names.has(shown)) || besideShown || showsDiscreet()) {
+      const to = stays ?? ordinary;
+      navigate(to ? noteUrl(to) : "/", { replace: true });
       // The shell doesn't follow the URL while hiding: the note it goes to opens here.
-      if (ordinary) useEditor.getState().openNote(ordinary);
+      if (to) useEditor.getState().openNote(to);
     }
     // The views of the discreet vaults go first, so that nothing still shown asks for them again.
     await new Promise((resolve) => setTimeout(resolve, 0));

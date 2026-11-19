@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { LayoutTemplate } from "lucide-react";
 import type { RefObject, SyntheticEvent } from "react";
 import { useVisualViewport } from "../hooks/useVisualViewport";
 import { apply, type Edit } from "./textEdit";
@@ -46,15 +47,23 @@ const tools: Tool[] = [
 /** Keeps the focus (and the on-screen keyboard) in the textarea when a button is pressed. */
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
-/** Write mode's bottom bar (MOBILE_EDITOR §4): insert or wrap at the caret, and Done. It sits above the keyboard. */
+/**
+ * Write mode's bottom bar (MOBILE_EDITOR §4): insert or wrap at the caret, Insert template (workspace spec §4), and
+ * Done. It sits above the keyboard; the row scrolls where its buttons don't fit.
+ */
 export default function MarkdownToolbar({
   textarea,
   onChange,
   onDone,
+  onTemplates,
+  templatesOpen,
 }: {
   textarea: RefObject<HTMLTextAreaElement | null>;
   onChange(value: string): void;
   onDone(): void;
+  onTemplates(): void;
+  /** Whether the templates' list is open, for the button's aria-expanded. */
+  templatesOpen: boolean;
 }) {
   const keyboard = useVisualViewport();
   const run = (tool: Tool) => {
@@ -84,6 +93,18 @@ export default function MarkdownToolbar({
             {tool.label}
           </button>
         ))}
+        <button
+          type="button"
+          aria-label="Insert template"
+          aria-haspopup="listbox"
+          aria-expanded={templatesOpen}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={onTemplates}
+          className="flex h-11 min-w-11 flex-none items-center justify-center rounded-[10px] bg-surface-2 px-2.5 text-text focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <LayoutTemplate size={18} strokeWidth={1.8} aria-hidden />
+        </button>
       </div>
       <button
         type="button"

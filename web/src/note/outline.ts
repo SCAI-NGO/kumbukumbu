@@ -5,7 +5,7 @@ import { linkLabel } from "./wikiLinks";
 export type Heading = { level: number; text: string; line: number };
 
 // A code span (`` `…` ``, its backticks paired by count), in which `%%` is text.
-const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
+export const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
 
 /** The text with its code spans blanked, so `%%` is found where it starts or ends a comment, at the same places. */
 const masked = (text: string) => text.replace(codeSpan, (span) => " ".repeat(span.length));
@@ -68,6 +68,12 @@ export function atxHeading(line: string, anyChar = false): { level: number; text
   return { level, text: line.slice(t, k < e && q < k ? q : e) };
 }
 
+/** The fence (```` ``` ````, `~~~~`) a line opens, none being open, or closes, the `open` one being open; else null. */
+export function fenceMarker(line: string, open: string | null): string | null {
+  const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+  return marker && (open === null || (marker[0] === open[0] && marker.length >= open.length)) ? marker : null;
+}
+
 /**
  * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
  * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code or a `%%` comment
@@ -81,8 +87,8 @@ export function outline(body: string): Heading[] {
   let para: { start: number; text: string[] } | null = null;
   body.split("\n").forEach((source, i) => {
     // Fences are found on the source, comments or not: Markdown parses the code first, and a `%%` in it is text.
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source)?.[1];
-    if (marker && (fence === null || (marker[0] === fence[0] && marker.length >= fence.length))) {
+    const marker = fenceMarker(source, fence);
+    if (marker) {
       fence = fence === null ? marker : null;
       para = null;
       return;
@@ -109,14 +115,41 @@ export function outline(body: string): Heading[] {
   return headings;
 }
 
+/** Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`). */
+const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
+/** A heading's text as written in the source (`The **road**map`), from its ATX line; a setext heading's as shown. */
+const writtenHeading = (lines: string[], h: Heading) => atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text;
+
 /**
- * The section under `heading` (its text as shown, ignoring case): from that heading to the next of the same or a
- * higher level. The other lines are left empty, so the section keeps the note's line numbers (its links go by them);
- * null when the note has no such heading.
+ * A heading as the link list writes it in a link (its text as shown, `headingText`): its escapes taken out, then
+ * without `# | ^ [ ]` and `%%`, blanks collapsed (`C\# notes | x` → `C notes x`).
+ */
+export const headingLink = (text: string) =>
+  unescaped(text)
+    .replace(/%%|[#|^[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Whether a link's heading names the heading, shown as `shown` and written as `written`: the characters a link can't
+ * hold dropped from all three, ignoring case. The list inserts the shown form; Obsidian users may write the other.
+ */
+const linksTo = (link: string, shown: string, written: string) => {
+  const own = headingLink(link).toLowerCase();
+  return own !== "" && (own === headingLink(shown).toLowerCase() || own === headingLink(written).toLowerCase());
+};
+
+/**
+ * The section under `heading` (its text as shown, ignoring case, else as a link holds the heading as shown or as
+ * written, `headingLink`): from that heading to the next of the same or a higher level. The other lines are left
+ * empty, so the section keeps the note's line numbers (its links go by them); null when the note has no such heading.
  */
 export function section(body: string, heading: string): string | null {
   const headings = outline(body);
-  const at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
+  const lines = body.split("\n");
+  let at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
+  if (at < 0) at = headings.findIndex((h) => linksTo(heading, h.text, writtenHeading(lines, h)));
   if (at < 0) return null;
   const start = headings[at].line;
   const end = headings.slice(at + 1).find((h) => h.level <= headings[at].level)?.line ?? Infinity;
@@ -151,8 +184,9 @@ function addressSegments(address: string): { text: string; index?: number }[] | 
 
 /**
  * The 1-based source line of the heading a section address names (`Roadmap`, `A#B`, `Notes[2]`), as `cat note#…`
- * resolves it: its own text and the parents above it match the segments, exactly or else ignoring case. Of several
- * matches the first in the note wins; null when none does.
+ * resolves it: its own text and the parents above it match the segments, exactly, else ignoring case, else as a link
+ * holds a heading as shown or as written (`headingLink`; the link list inserts the shown form). Of several matches
+ * the first in the note wins; null when none does.
  */
 export function headingLine(body: string, address: string): number | null {
   const segments = addressSegments(address);
@@ -160,8 +194,7 @@ export function headingLine(body: string, address: string): number | null {
   // Each heading's parent (the nearest earlier one of a lower level) and its place among siblings of the same text.
   // A heading answers to its text as written, as the Core keeps it (`The **road**map`), and as shown (`The roadmap`);
   // both with Markdown's backslash escapes taken out, as the Core and Obsidian read them (`C\#` is `C#`).
-  type Node = { written: string; shown: string; line: number; parent: Node | null; index: number };
-  const unescaped = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+  type Node = { written: string; shown: string; raw: [string, string]; line: number; parent: Node | null; index: number };
   const lines = body.split("\n");
   const nodes: Node[] = [];
   const open: (Node & { level: number })[] = [];
@@ -172,21 +205,28 @@ export function headingLine(body: string, address: string): number | null {
     const parent = open[open.length - 1] ?? null;
     const shown = unescaped(h.text);
     // A setext heading has no ATX line: its text as written is the one shown.
-    const written = unescaped(atxHeading(lines[h.line - 1].replace(/\r$/, ""))?.text?.trim() || h.text);
+    const raw = writtenHeading(lines, h);
+    const written = unescaped(raw);
     const siblings = seen.get(parent) ?? new Map<string, number>();
     seen.set(parent, siblings);
     const index = (siblings.get(written) ?? 0) + 1;
     siblings.set(written, index);
-    const node = { written, shown, line: h.line, parent, index, level: h.level };
+    const node = { written, shown, raw: [h.text, raw] as [string, string], line: h.line, parent, index, level: h.level };
     nodes.push(node);
     open.push(node);
   }
-  for (const same of [(a: string, b: string) => a === b, (a: string, b: string) => a.toLowerCase() === b.toLowerCase()]) {
+  // Exactly, then ignoring case, then as a link holds a heading (`[[N#C notes x]]` for `## C# notes | x`), shown or written.
+  const passes = [
+    (text: string, h: Node) => text === h.written || text === h.shown,
+    (text: string, h: Node) => [h.written, h.shown].some((t) => t.toLowerCase() === text.toLowerCase()),
+    (text: string, h: Node) => linksTo(text, ...h.raw),
+  ];
+  for (const same of passes) {
     const found = nodes.find((n) => {
       let h: Node | null = n;
       for (let i = segments.length - 1; i >= 0; i--, h = h.parent) {
         const { text, index } = segments[i];
-        if (!h || !(same(text, h.written) || same(text, h.shown)) || (index !== undefined && index !== h.index)) return false;
+        if (!h || !same(text, h) || (index !== undefined && index !== h.index)) return false;
       }
       return true;
     });

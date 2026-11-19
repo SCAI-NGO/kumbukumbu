@@ -697,6 +697,131 @@ describe("[[ completion", () => {
   });
 });
 
+describe("[[ completion of headings and blocks", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const roadmap = ["# Roadmap", "", "Why it matters. ^why", "", "## Next steps", "", "- ship it ^ship", "", "## C# [later]", "", "## The **road**map"].join("\n");
+  const withRoadmap = (answer: () => Response | Promise<Response> = () => json(200, noteView(ROADMAP, roadmap, "r1"))) => editorApi([ok], undefined, { [`GET /api/notes${ROADMAP}`]: answer });
+  const options = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
+
+  it("lists the headings of the note the name leads to, and inserts the one picked as a link can hold it", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(options("Headings to link")).toEqual(["RoadmapH1", "Next stepsH2", "C# [later]H2", "The roadmapH2"]);
+    await u.type(editorBox(), "c#");
+    expect(screen.queryByRole("listbox", { name: "Headings to link" })).toBeNull();
+    await u.type(editorBox(), "{Backspace}{Backspace}lat");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[Roadmap#C later]]`);
+  });
+
+  it("inserts a heading as shown, without its Markdown marks, so the link renders", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[Roadmap#the road");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[Roadmap#The roadmap]]`);
+  });
+
+  it("lists the block ids that note has, with their text, and inserts one", async () => {
+    withRoadmap();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#^");
+    expect(await screen.findByRole("listbox", { name: "Blocks to link" })).toBeInTheDocument();
+    expect(options("Blocks to link")).toEqual(["Why it matters.^why", "ship it^ship"]);
+    await u.type(editorBox(), "sh");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[roadmap#^ship]]`);
+  });
+
+  it("lists the open note's own headings after [[#, from the text as it is written", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control}{Enter}## Fresh{Enter}[[[[#");
+    expect(options("Headings to link")).toEqual(["PlanH1", "FreshH2"]);
+    await u.type(editorBox(), "fr");
+    await u.keyboard("{Tab}");
+    expect(editorBox().value).toBe(`${source}\n## Fresh\n[[#Fresh]]`);
+  });
+
+  it("takes a note it has read before from the cache, without reading it again", async () => {
+    const fetch = withRoadmap().fetch;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["note", ROADMAP], noteView(ROADMAP, roadmap, "r1"));
+    const { u } = await openInWrite(queryClient);
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    await u.type(editorBox(), "{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}[[roadmap#^");
+    expect(await screen.findByRole("listbox", { name: "Blocks to link" })).toBeInTheDocument();
+    const asked = fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname);
+    expect(asked.filter((p) => p.includes("roadmap"))).toEqual([]);
+  });
+
+  it("says Loading… in a status region that is there before it, and Escape dismisses it", async () => {
+    withRoadmap(() => new Promise(() => {}));
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap");
+    const region = document.getElementById("link-completion-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveTextContent("");
+    await u.type(editorBox(), "#");
+    expect(await screen.findByText("Loading…")).toBe(region);
+    await u.keyboard("{Escape}");
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(editorBox().value).toBe(`${source} [[roadmap#`);
+    expect(screen.getByRole("textbox", { name: "Markdown source" })).toHaveFocus();
+  });
+
+  it("says Loading… while the note loads, and offers nothing for a name no note has", async () => {
+    let answer!: () => void;
+    const fetch = withRoadmap(() => new Promise((resolve) => (answer = () => resolve(json(200, noteView(ROADMAP, roadmap, "r1")))))).fetch;
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[roadmap#");
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    // Enter is still the textarea's.
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [[roadmap#\n`);
+    await act(async () => answer());
+    await u.type(editorBox(), "{Backspace}");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).toBeNull();
+
+    await u.type(editorBox(), "]] [[[[nothing#");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
+    const asked = fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname);
+    expect(asked.filter((p) => p.includes("nothing"))).toEqual([]);
+  });
+});
+
+describe("Markdown link completion", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const roadmap = ["# Roadmap", "", "## Next steps"].join("\n");
+  const options = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
+
+  it("lists the notes after ](, and inserts the one picked by its path from the vault's root", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[the road](ro");
+    expect(options("Notes to link")).toEqual(["roadmapWork / projects"]);
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [the road](/projects/roadmap.md)`);
+    expect(editorBox().selectionStart).toBe(editorBox().value.length);
+  });
+
+  it("lists that note's headings after #, and inserts the one picked encoded", async () => {
+    editorApi([ok], undefined, { [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, roadmap, "r1")) });
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[next](/projects/roadmap.md#ne");
+    expect(await screen.findByRole("listbox", { name: "Headings to link" })).toBeInTheDocument();
+    expect(options("Headings to link")).toEqual(["Next stepsH2"]);
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source} [next](/projects/roadmap.md#Next%20steps)`);
+  });
+});
+
 describe("Named from its heading", () => {
   const UNTITLED = "/Home/Garden/Untitled.md";
   const untitledUrl = "/notes/Home/Garden/Untitled.md";
@@ -1171,5 +1296,166 @@ describe("Named from its heading", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Garden/Beet.md"));
     await wait(100);
     expect(moves).toEqual([named(BEET)]);
+  });
+});
+
+describe("Insert template", () => {
+  const MEETING = "/Work/Templates/Meeting.md";
+  const meeting = "---\ntags: [meeting]\n---\n## {{title}} on {{date}}\n";
+  const notesIn = (folder: string, names: string[]) => names.map((n) => ({ name: n, path: `${folder}/${n}`, size: 1 }));
+  const templates = {
+    name: "Templates",
+    path: "/Work/Templates",
+    folders: [{ name: "Daily", path: "/Work/Templates/Daily", folders: [], notes: notesIn("/Work/Templates/Daily", ["Day.md"]) }],
+    notes: [...notesIn("/Work/Templates", ["Meeting.md", "Review.md"]), { name: "scan.png", path: "/Work/Templates/scan.png", size: 1, kind: "image" }],
+  };
+  const withTemplates = { ...tree, root: { ...tree.root, folders: [...tree.root.folders, templates] } };
+  const list = () => screen.queryByRole("listbox", { name: "Templates" });
+  const names = () => within(list()!).getAllByRole("option").map((o) => o.textContent);
+
+  /** The plan note in Write mode, `content` its text, with the vault's templates (`root` its tree). */
+  async function writing(content = source, root = withTemplates) {
+    vi.setSystemTime(new Date("2026-11-19T23:30:00Z"));
+    const puts = editorApi([ok], () => json(200, noteView(PLAN, content, "v1")), {
+      "GET /api/vaults/Work/tree": () => json(200, root),
+      [`GET /api/notes${MEETING}`]: () => json(200, noteView(MEETING, meeting, "m1")),
+      "GET /api/account/calendar": () => json(200, { zone: "Europe/Vienna", serverZone: "UTC" }),
+      "PUT /api/notes/Work/Templates/Untitled.md": () => json(201, noteView("/Work/Templates/Untitled.md", "# ", "u1")),
+    });
+    const opened = await openInWrite();
+    return { ...opened, puts };
+  }
+
+  it("lists the notes under Templates by name, their folder below it, and filters them as typed", async () => {
+    const { u } = await writing();
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    expect(screen.getByRole("combobox", { name: "Find a template" })).toHaveFocus();
+    await waitFor(() => expect(names()).toEqual(["DayDaily", "Meeting", "Review"]));
+    await u.keyboard("rev");
+    expect(names()).toEqual(["Review"]);
+  });
+
+  it("Enter inserts the chosen one at the caret, its properties merged, in the user's zone; the template stays as it was", async () => {
+    const { u, puts } = await writing();
+    editorBox().setSelectionRange(source.indexOf("write"), source.indexOf("write") + "write".length);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await waitFor(() => expect(list()).not.toBeNull());
+    await u.keyboard("meet{Enter}");
+    // 23:30 in UTC is past midnight in Vienna.
+    const body = "## plan on 2026-11-20\n";
+    const expected = `---\ntags:\n  - meeting\n---\n${source.replace("write", body)}`;
+    await waitFor(() => expect(editorBox()).toHaveValue(expected));
+    expect(list()).toBeNull();
+    expect(editorBox()).toHaveFocus();
+    const caret = expected.indexOf(body) + body.length;
+    expect([editorBox().selectionStart, editorBox().selectionEnd]).toEqual([caret, caret]);
+    await wait(800);
+    await waitFor(() => expect(puts).toEqual([{ content: expected, version: "v1" }]));
+    // Only the plan was written; the template was only read.
+    const writes = puts.fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`).filter((k) => !k.startsWith("GET"));
+    expect(writes).toEqual([`PUT /api/notes${PLAN}`]);
+  });
+
+  it("inserts only the body where the note's properties can't be read, and says so", async () => {
+    const content = "---\nnested:\n  key: v\n---\n# Plan\n";
+    const { u } = await writing(content);
+    editorBox().setSelectionRange(content.length, content.length);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await waitFor(() => expect(list()).not.toBeNull());
+    await u.keyboard("meet{Enter}");
+    await waitFor(() => expect(editorBox()).toHaveValue(`${content}## plan on 2026-11-20\n`));
+    expect(screen.getByRole("status", { name: "Template" })).toHaveTextContent("The template's properties weren't added: this note's properties can't be read.");
+  });
+
+  it("tells assistive technology the toolbar button opens a listbox, and whether it is open", async () => {
+    const { u } = await writing();
+    const button = screen.getByRole("button", { name: "Insert template" });
+    expect(button).toHaveAttribute("aria-haspopup", "listbox");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await u.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("points the combobox at an element that is there while listing and matching nothing", async () => {
+    const controlled = () => {
+      const box = screen.getByRole("combobox", { name: "Find a template" });
+      const id = box.getAttribute("aria-controls");
+      expect(id).toBeTruthy();
+      expect(document.getElementById(id!)).not.toBeNull();
+      return box;
+    };
+    const { u } = await writing();
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    controlled();
+    await waitFor(() => expect(names()).toHaveLength(3));
+    const box = controlled();
+    expect(box.getAttribute("aria-activedescendant")).toBe(within(list()!).getAllByRole("option")[0].id);
+    await u.keyboard("nothing like it");
+    expect(screen.getByText("No template matches")).toBeInTheDocument();
+    expect(controlled()).toHaveAttribute("aria-expanded", "false");
+    expect(controlled()).not.toHaveAttribute("aria-activedescendant");
+  });
+
+  it("points the combobox at an element that is there without templates too", async () => {
+    const { u } = await writing(source, tree);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await screen.findByText(/No templates yet/);
+    const id = screen.getByRole("combobox", { name: "Find a template" }).getAttribute("aria-controls");
+    expect(document.getElementById(id!)).not.toBeNull();
+  });
+
+  it("keeps the hint's status region there, and clears its text when the list opens again, from the palette too", async () => {
+    const content = "---\nnested:\n  key: v\n---\n# Plan\n";
+    const { u } = await writing(content);
+    const status = screen.getByRole("status", { name: "Template" });
+    expect(status).toHaveTextContent("");
+    editorBox().setSelectionRange(content.length, content.length);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await waitFor(() => expect(list()).not.toBeNull());
+    await u.keyboard("meet{Enter}");
+    await waitFor(() => expect(status).toHaveTextContent("this note's properties can't be read"));
+    act(() => useEditor.getState().setTemplates(true));
+    await waitFor(() => expect(list()).not.toBeNull());
+    expect(screen.getByRole("status", { name: "Template" })).toBe(status);
+    expect(status).toHaveTextContent("");
+  });
+
+  it("Escape closes the list and gives the editor its caret back", async () => {
+    const { u } = await writing();
+    editorBox().setSelectionRange(3, 3);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await u.keyboard("{Escape}");
+    expect(list()).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Find a template" })).toBeNull();
+    expect(editorBox()).toHaveFocus();
+    expect(editorBox().selectionStart).toBe(3);
+    expect(editorBox()).toHaveValue(source);
+  });
+
+  it("without templates, says where they come from and makes the first with New template", async () => {
+    const { u, router } = await writing(source, tree);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    expect(await screen.findByText("No templates yet. Notes in a folder named Templates at the top of this vault show up here.")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "New template" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Templates/Untitled.md"));
+    expect(useEditor.getState()).toMatchObject({ currentPath: "/Work/Templates/Untitled.md", mode: "write" });
+  });
+
+  it("is a command in the palette while a note is in Write mode, and not in Read mode", async () => {
+    const { u } = await writing();
+    const palette = async () => {
+      act(() => useEditor.getState().setOverlay("palette"));
+      await u.type(await screen.findByRole("combobox", { name: "Find a command, vault or note" }), "insert template");
+    };
+    await palette();
+    await u.click(await screen.findByRole("option", { name: "Insert template, plan" }));
+    await waitFor(() => expect(list()).not.toBeNull());
+    expect(screen.getByRole("combobox", { name: "Find a template" })).toHaveFocus();
+    await u.keyboard("{Escape}");
+
+    await act(() => useEditor.getState().endWrite());
+    await palette();
+    await wait(50);
+    expect(screen.queryByRole("option", { name: "Insert template, plan" })).toBeNull();
   });
 });
