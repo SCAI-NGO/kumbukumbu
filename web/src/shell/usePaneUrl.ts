@@ -20,6 +20,8 @@ export function usePaneUrl() {
   );
   const close = useCallback(
     async (side: Side) => {
+      // With one pane there is nothing to close, and no entry to write.
+      if (!useEditor.getState().panes.right) return;
       await useEditor.getState().closePane(side);
       const { left, right } = useEditor.getState().panes;
       if (!right && left.path) navigate(paneUrl(left.path, null));

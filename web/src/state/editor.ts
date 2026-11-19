@@ -218,7 +218,9 @@ function onlyPane(pane: Pane | null, mode: Mode): Partial<EditorState> {
 function inStep(s: EditorState): Partial<EditorState> {
   if (s.currentPath === null) return s.panes.left.path === null && s.panes.left.mode === s.mode && s.panes.right === null ? {} : onlyPane(null, s.mode);
   const pane = s.panes[s.focused];
-  if (pane?.path === s.currentPath && pane.mode === s.mode) return {};
+  // A focus on a right pane there isn't goes to the only one, rather than opening one there.
+  if (!pane) return onlyPane({ path: s.currentPath, mode: s.mode }, s.mode);
+  if (pane.path === s.currentPath && pane.mode === s.mode) return {};
   return { panes: { ...s.panes, [s.focused]: { path: s.currentPath, mode: s.mode } } };
 }
 

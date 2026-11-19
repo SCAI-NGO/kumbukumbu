@@ -131,6 +131,13 @@ describe("the panes written to the URL", () => {
     expect(at(router)).toBe("/notes/Work/b.md");
   });
 
+  it("adds no entry closing a pane when there is only one", async () => {
+    useEditor.getState().openNote("/Work/a.md");
+    const router = on("/notes/Work/a.md");
+    await act(() => panesUrl.close("right"));
+    expect(router.state.historyAction).toBe("POP");
+  });
+
   it("keeps the URL while a writing pane's save fails, and the pane with it", async () => {
     useEditor.getState().openNote("/Work/a.md", "write");
     useEditor.getState().openNote("/Work/b.md", "read", "right");

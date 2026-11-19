@@ -121,6 +121,18 @@ describe("the panes", () => {
     expect(useEditor.getState().panes.left).toEqual({ path: "/Work/b.md", mode: "write" });
   });
 
+  it("correct a focus on a right pane there isn't to the only pane", () => {
+    useEditor.setState({ focused: "right", currentPath: "/Work/a.md" });
+    expect(useEditor.getState()).toMatchObject({ focused: "left", panes: { left: { path: "/Work/a.md" }, right: null } });
+  });
+
+  it("close both at a session's end", () => {
+    useEditor.getState().openNote("/Work/a.md");
+    useEditor.getState().openNote("/Work/b.md", "read", "right");
+    useEditor.setState({ currentPath: null });
+    expect(useEditor.getState()).toMatchObject({ focused: "left", panes: { left: { path: null }, right: null } });
+  });
+
   it("have one in Write mode at most: starting it in one first ends it in the other, with its save", async () => {
     writingLeft();
     const beforeRead = editor(true);
