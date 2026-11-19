@@ -300,8 +300,8 @@ describe("Split view", () => {
     await u.click(within(pane("left")).getByRole("button", { name: "Close this pane" }));
     await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
     expect(panes()).toEqual(["/Work/b.md", null]);
-    // The note is read afresh in its new place: on a busy machine that may take longer than a second.
-    expect(await screen.findByRole("heading", { name: "Note b" }, { timeout: 5000 })).toBeInTheDocument();
+    // The heading found may be the closing pane's, on its way out: asked again until it is the one that stays.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Note b" })).toBeInTheDocument(), { timeout: 5000 });
   });
 
   it("then opens a note picked in the tree in the right pane, in Read mode, while the left keeps Write mode", async () => {
@@ -489,7 +489,7 @@ describe("deleting the left pane's note while the right pane writes", () => {
     expect(puts).toEqual([{ path: "/Work/b.md", content: "# Note b\n\nSee [[next b]].\n d" }]);
     expect(deleted).toEqual(["/Work/a.md"]);
     expect(useEditor.getState().panes).toEqual({ left: { path: "/Work/b.md", mode: "read" }, right: null });
-    expect(await screen.findByRole("heading", { name: "Note b" }, { timeout: 5000 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Note b" })).toBeInTheDocument(), { timeout: 5000 });
   });
 
   it("deletes nothing when that save fails: the right pane keeps writing, its text and its editor", async () => {
@@ -580,5 +580,56 @@ describe("the pane reached from the keyboard", () => {
     } finally {
       Element.prototype.scrollIntoView = scrollIntoView;
     }
+  });
+});
+
+describe("a vault going from under a pane", () => {
+  const twoVaults = (home: Record<string, unknown>, leave: () => void) => {
+    let vaults = [{ name: "Work", notes: 4, embeddings: "internal" }, { name: "Home", notes: 1, embeddings: "internal", ...home }];
+    return {
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/keys": () => json(200, []),
+      "GET /api/vaults/Home/tree": () => json(200, { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [note("/Home/c.md")] } }),
+      "POST /api/vaults/Home/delete": () => {
+        vaults = vaults.filter((v) => v.name !== "Home");
+        leave();
+        return new Response(null, { status: 204 });
+      },
+      "POST /api/memberships/m1/leave": () => {
+        vaults = vaults.filter((v) => v.name !== "Home");
+        leave();
+        return new Response(null, { status: 204 });
+      },
+    } satisfies Parameters<typeof fakeApi>[0];
+  };
+
+  it("closes the right pane when its vault is deleted, the left one the only pane", async () => {
+    const gone: string[] = [];
+    const { router, u } = await split("/notes/Work/a.md?beside=Home/c.md", twoVaults({}, () => gone.push("Home")));
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("c"));
+    await u.click(await within(sidebar()).findByRole("button", { name: "Actions for Home" }));
+    await u.click(screen.getByRole("menuitem", { name: "Delete vault…" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Home?" });
+    await u.type(within(dialog).getByLabelText("Type Home to confirm"), "Home");
+    await u.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await u.click(within(dialog).getByRole("button", { name: "Delete vault" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+    expect(gone).toEqual(["Home"]);
+    expect(panes()).toEqual(["/Work/a.md", null]);
+    expect(within(await screen.findByRole("main")).getByRole("heading", { name: "Note a" })).toBeInTheDocument();
+  });
+
+  it("leaves the right pane as the only one when the left one's vault is left", async () => {
+    const { router, u } = await split("/notes/Home/c.md?beside=Work/b.md", twoVaults({ owner: '"Alice"', shared: true, level: "write", canWrite: true, membership: "m1" }, () => {}));
+    const seen: string[] = [];
+    router.subscribe((s) => seen.push(s.location.pathname));
+    await u.click(await within(sidebar()).findByRole("button", { name: "Actions for Home" }));
+    await u.click(screen.getByRole("menuitem", { name: "Leave this vault…" }));
+    await u.click(within(screen.getByRole("alertdialog", { name: "Leave Home?" })).getByRole("button", { name: "Leave vault" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/b.md"));
+    expect(panes()).toEqual(["/Work/b.md", null]);
+    // Straight there, not by the vaults.
+    expect(seen).not.toContain("/");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Note b" })).toBeInTheDocument(), { timeout: 5000 });
   });
 });

@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
-import { paneUrl } from "../api/paths";
+import { besideOf, noteUrl, paneUrl } from "../api/paths";
 import { movedPath, useEditor, type Mode, type Side } from "../state/editor";
 
 /** The pane a part of the page is in, for the links in it; null outside the panes (Recent changes, What's on, a window). */
@@ -29,6 +29,18 @@ export function movedPanesUrl({ left, right }: PanesNow, from: string, to: strin
   if (!left) return null;
   const [l, r] = [movedPath(left, from, to), right && movedPath(right, from, to)];
   return l === left && r === right ? null : paneUrl(l, r);
+}
+
+/**
+ * Where the shell goes once `vault` is forgotten (deleted, left; `forgetVault` closed its panes, the other one left as
+ * the only pane): null while neither pane of `location` is in it, else the panes the store kept, or the vaults.
+ */
+export function afterVaultGone(location: { pathname: string; search: string }, vault: string): string | null {
+  const left = location.pathname.startsWith(noteUrl(`/${vault}/`));
+  const right = location.pathname.startsWith("/notes/") && !!besideOf(location.search)?.startsWith(`/${vault}/`);
+  if (!left && !right) return null;
+  const { panes } = useEditor.getState();
+  return panes.left.path ? paneUrl(panes.left.path, panes.right?.path ?? null) : "/";
 }
 
 /** Where a link to a note leads from here: into the pane it is shown in, else the focused one (workspace spec §3). */
