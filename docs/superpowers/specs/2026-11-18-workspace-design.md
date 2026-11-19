@@ -64,7 +64,7 @@ Builds on `web/src/note/linkCompletion.ts` and `LinkCompletion.tsx`; the list, i
 
 The editor store (`web/src/state/editor.ts`) gets two panes, `left` and `right`, each `{ path, mode }`, and `focused: "left" | "right"`; `right` is null without the split. **`currentPath` and `mode` stay and mean the focused pane's**, so the top bar, the dock, the palette's Note group, Shift+F10 and the side panel follow the focus without change. The builder audits every reader of `currentPath` and `mode` (about 14 and 10 files) and names in the plan which mean "the focused note" and which "the note being written".
 
-**One editor at a time** (decided by the maintainer: "göttlich interaktiv", it gives the feeling of really switching; better than Obsidian and Ghostwriter offer, and the caret's place is never in doubt). At most one pane is in Write mode. Starting Write mode in one pane first ends it in the other with the same save as Done (`endWrite`); if that save fails, the switch doesn't happen and the failure shows where it shows today. So `beforeRead`, `unsaved`, `draft` and note actions' `flushDraft` stay single: they belong to the one editor there is. Claude's reason: everything around saving stays as proven since 0.4.0, and the pane model shrinks to a path and a mode per pane.
+**One editor at a time** (decided by the maintainer: "göttlich interaktiv", it gives the feeling of really switching; better than Obsidian and Ghostwriter offer, and the caret's place is never in doubt). At most one pane is in Write mode. Starting Write mode in one pane first ends it in the other with the same save as Done (`endWrite`); if that save fails, the switch doesn't happen and the failure shows where it shows today. So `beforeRead`, `unsaved` and `draft` stay single, and with `beforeRead` the note actions' save before a copy (`beforeRead({ reread: false })`, `web/src/shell/useNoteActions.tsx:111`): they belong to the one editor there is. Claude's reason: everything around saving stays as proven since 0.4.0, and the pane model shrinks to a path and a mode per pane.
 
 Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doesn't end Write mode in the other: you can scroll and read on the right while the left still holds your caret and text. Only starting Write mode moves it.
 
@@ -114,6 +114,8 @@ Its own note bar (rename, delete, split, ✕, the preview's mark), its own prope
 ### Discreet vaults
 
 Hiding the discreet vaults again (`web/src/discreet/hideAgain.ts`) closes a pane whose note is in a discreet vault, both panes alike; if that pane was writing, its unsaved text goes the way `unsaved` goes today. Hard (anti-goal 3).
+
+A discreet vault named in `?beside=` makes the address bar and history neutral (`/discreet`), as one in the left pane's address does (`discreetUrl`, `web/src/discreet/neutralWindow.ts`): the URL names no discreet vault in either pane.
 
 ## 4. Note templates
 
