@@ -1367,6 +1367,59 @@ describe("Insert template", () => {
     expect(screen.getByRole("status", { name: "Template" })).toHaveTextContent("The template's properties weren't added: this note's properties can't be read.");
   });
 
+  it("tells assistive technology the toolbar button opens a listbox, and whether it is open", async () => {
+    const { u } = await writing();
+    const button = screen.getByRole("button", { name: "Insert template" });
+    expect(button).toHaveAttribute("aria-haspopup", "listbox");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await u.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("points the combobox at an element that is there while listing and matching nothing", async () => {
+    const controlled = () => {
+      const box = screen.getByRole("combobox", { name: "Find a template" });
+      const id = box.getAttribute("aria-controls");
+      expect(id).toBeTruthy();
+      expect(document.getElementById(id!)).not.toBeNull();
+      return box;
+    };
+    const { u } = await writing();
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    controlled();
+    await waitFor(() => expect(names()).toHaveLength(3));
+    const box = controlled();
+    expect(box.getAttribute("aria-activedescendant")).toBe(within(list()!).getAllByRole("option")[0].id);
+    await u.keyboard("nothing like it");
+    expect(screen.getByText("No template matches")).toBeInTheDocument();
+    expect(controlled()).toHaveAttribute("aria-expanded", "false");
+    expect(controlled()).not.toHaveAttribute("aria-activedescendant");
+  });
+
+  it("points the combobox at an element that is there without templates too", async () => {
+    const { u } = await writing(source, tree);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await screen.findByText(/No templates yet/);
+    const id = screen.getByRole("combobox", { name: "Find a template" }).getAttribute("aria-controls");
+    expect(document.getElementById(id!)).not.toBeNull();
+  });
+
+  it("keeps the hint's status region there, and clears its text when the list opens again, from the palette too", async () => {
+    const content = "---\nnested:\n  key: v\n---\n# Plan\n";
+    const { u } = await writing(content);
+    const status = screen.getByRole("status", { name: "Template" });
+    expect(status).toHaveTextContent("");
+    editorBox().setSelectionRange(content.length, content.length);
+    await u.click(screen.getByRole("button", { name: "Insert template" }));
+    await waitFor(() => expect(list()).not.toBeNull());
+    await u.keyboard("meet{Enter}");
+    await waitFor(() => expect(status).toHaveTextContent("this note's properties can't be read"));
+    act(() => useEditor.getState().setTemplates(true));
+    await waitFor(() => expect(list()).not.toBeNull());
+    expect(screen.getByRole("status", { name: "Template" })).toBe(status);
+    expect(status).toHaveTextContent("");
+  });
+
   it("Escape closes the list and gives the editor its caret back", async () => {
     const { u } = await writing();
     editorBox().setSelectionRange(3, 3);

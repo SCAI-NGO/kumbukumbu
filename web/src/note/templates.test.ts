@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { fillPlaceholders, formatMoment, templateEdit } from "./templates";
+import { fillPlaceholders, formatMoment, templateEdit, templatePaths } from "./templates";
 
 // Thursday 2026-11-19, 14:05:09 in Vienna (UTC+1).
 const thursday = new Date("2026-11-19T13:05:09Z");
@@ -251,5 +251,20 @@ describe("templateEdit", () => {
     const { text, hint } = inserted(note, "---\ntype: a\ntype: b\n---\nbody");
     expect(text).toBe(`${note}body`);
     expect(hint).toBe("The template's properties weren't added: they couldn't be merged safely into this note's.");
+  });
+});
+
+describe("templatePaths", () => {
+  const notes = (folder: string, names: string[]) => names.map((n) => ({ name: n, path: `${folder}/${n}`, size: 1, kind: "note", mediaType: "text/markdown" }));
+  const root = {
+    name: "Work",
+    path: "/Work",
+    notes: [],
+    folders: [{ name: "Templates", path: "/Work/Templates", notes: notes("/Work/Templates", ["Meeting.md", "Review.md"]), folders: [] }],
+  };
+
+  it("lists the notes under Templates, not the note being written", () => {
+    expect(templatePaths(root, "Work", "/Work/projects/plan.md")).toEqual(["/Work/Templates/Meeting.md", "/Work/Templates/Review.md"]);
+    expect(templatePaths(root, "Work", "/Work/Templates/Meeting.md")).toEqual(["/Work/Templates/Review.md"]);
   });
 });

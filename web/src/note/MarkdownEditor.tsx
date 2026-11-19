@@ -162,8 +162,11 @@ export default function MarkdownEditor({
   // Why a template's properties weren't added, until the list is opened again.
   const [templateHint, setTemplateHint] = useState<string | null>(null);
   useEffect(() => () => useEditor.getState().setTemplates(false), []);
+  // However the list opens, from the toolbar or the palette.
+  useEffect(() => {
+    if (templates) setTemplateHint(null);
+  }, [templates]);
   const toggleTemplates = () => {
-    setTemplateHint(null);
     useEditor.getState().setTemplates(!templates);
     if (templates) textarea.current?.focus({ preventScroll: true });
   };
@@ -384,13 +387,12 @@ export default function MarkdownEditor({
       {conflict && <ConflictToast onReload={chooseReload} onKeepMine={chooseKeepMine} onViewDiff={() => setDiff(true)} />}
       {diff && conflict && <ConflictDiff theirs={conflict.content} mine={value} onReload={chooseReload} onKeepMine={chooseKeepMine} onClose={() => setDiff(false)} />}
       {completion.list}
-      {templateHint && (
-        <p role="status" aria-label="Template" className="mx-3 mb-2 flex-none rounded-[12px] border border-line bg-surface-2 px-3.5 py-2 text-sm text-text">
-          {templateHint}
-        </p>
-      )}
+      {/* Mounted throughout, so that a screen reader announces the hint when its text arrives. */}
+      <div role="status" aria-label="Template" className="flex-none">
+        {templateHint && <p className="mx-3 mb-2 rounded-[12px] border border-line bg-surface-2 px-3.5 py-2 text-sm text-text">{templateHint}</p>}
+      </div>
       {templates && <TemplateList path={path} textarea={textarea} onChange={change} onHint={setTemplateHint} />}
-      <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} onTemplates={toggleTemplates} />
+      <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} onTemplates={toggleTemplates} templatesOpen={templates} />
     </>
   );
 }

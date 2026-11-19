@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMemo, useState, type KeyboardEvent, type RefObject, type SyntheticEvent } from "react";
+import { useId, useMemo, useState, type KeyboardEvent, type RefObject, type SyntheticEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, call } from "../api/client";
 import { useCreateUntitled, useTree } from "../api/notes";
@@ -35,7 +35,8 @@ export default function TemplateList({
   const [active, setActive] = useState(0);
   const [problem, setProblem] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
-  const all = useMemo(() => (tree.data ? templatePaths(tree.data.root, vault) : []), [tree.data, vault]);
+  const listId = useId();
+  const all = useMemo(() => (tree.data ? templatePaths(tree.data.root, vault, path) : []), [tree.data, vault, path]);
   const shown = useMemo(() => findTemplates(all, vault, query), [all, vault, query]);
 
   /** Back to the textarea, its selection as it was. */
@@ -91,8 +92,8 @@ export default function TemplateList({
         role="combobox"
         aria-label="Find a template"
         aria-expanded={shown.length > 0}
-        aria-controls="template-list"
-        aria-activedescendant={at >= 0 ? `template-option-${at}` : undefined}
+        aria-controls={listId}
+        aria-activedescendant={at >= 0 ? `${listId}-${at}` : undefined}
         autoFocus
         value={query}
         onChange={(e) => {
@@ -107,6 +108,25 @@ export default function TemplateList({
         placeholder="Templates"
         className="h-11 flex-none rounded-[8px] bg-transparent px-3 text-[16px] text-text outline-none placeholder:text-muted"
       />
+      {/* There in every state, as the combobox's aria-controls needs, empty where there is nothing to choose. */}
+      <ul id={listId} role="listbox" aria-label="Templates" className="min-h-0 overflow-y-auto">
+        {shown.map((template, i) => (
+          <li
+            key={template.path}
+            id={`${listId}-${i}`}
+            role="option"
+            aria-selected={i === at}
+            onPointerDown={keepFocus}
+            onMouseDown={keepFocus}
+            onMouseMove={() => i !== at && setActive(i)}
+            onClick={() => void insert(template.path)}
+            className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === at ? "bg-accent/15" : ""}`}
+          >
+            <span className="truncate text-[15px] text-text">{template.name}</span>
+            {template.folder && <span className="truncate font-mono text-[11px] text-dim">{template.folder}</span>}
+          </li>
+        ))}
+      </ul>
       {tree.isPending ? (
         <p className="px-3 py-2 text-[15px] text-muted">Loading…</p>
       ) : tree.isError ? (
@@ -126,24 +146,7 @@ export default function TemplateList({
           </button>
         </div>
       ) : (
-        <ul id="template-list" role="listbox" aria-label="Templates" className="min-h-0 overflow-y-auto">
-          {shown.map((template, i) => (
-            <li
-              key={template.path}
-              id={`template-option-${i}`}
-              role="option"
-              aria-selected={i === at}
-              onPointerDown={keepFocus}
-              onMouseDown={keepFocus}
-              onMouseMove={() => i !== at && setActive(i)}
-              onClick={() => void insert(template.path)}
-              className={`flex min-h-11 cursor-pointer flex-col justify-center rounded-[8px] px-3 py-1 ${i === at ? "bg-accent/15" : ""}`}
-            >
-              <span className="truncate text-[15px] text-text">{template.name}</span>
-              {template.folder && <span className="truncate font-mono text-[11px] text-dim">{template.folder}</span>}
-            </li>
-          ))}
-        </ul>
+        shown.length === 0 && <p className="px-3 py-2 text-[15px] text-muted">No template matches</p>
       )}
       {problem && (
         <p role="alert" className="px-3 py-2 text-[15px] text-text">

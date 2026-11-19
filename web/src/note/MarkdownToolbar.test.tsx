@@ -13,7 +13,7 @@ function Harness({ initial, onDone = () => {} }: { initial: string; onDone?: () 
   return (
     <>
       <textarea aria-label="Markdown source" ref={ref} value={value} onChange={(e) => setValue(e.target.value)} />
-      <MarkdownToolbar textarea={ref} onChange={setValue} onDone={onDone} onTemplates={() => {}} />
+      <MarkdownToolbar textarea={ref} onChange={setValue} onDone={onDone} onTemplates={() => {}} templatesOpen={false} />
     </>
   );
 }

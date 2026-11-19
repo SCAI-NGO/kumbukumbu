@@ -56,11 +56,14 @@ export default function MarkdownToolbar({
   onChange,
   onDone,
   onTemplates,
+  templatesOpen,
 }: {
   textarea: RefObject<HTMLTextAreaElement | null>;
   onChange(value: string): void;
   onDone(): void;
   onTemplates(): void;
+  /** Whether the templates' list is open, for the button's aria-expanded. */
+  templatesOpen: boolean;
 }) {
   const keyboard = useVisualViewport();
   const run = (tool: Tool) => {
@@ -93,6 +96,8 @@ export default function MarkdownToolbar({
         <button
           type="button"
           aria-label="Insert template"
+          aria-haspopup="listbox"
+          aria-expanded={templatesOpen}
           onPointerDown={keepFocus}
           onMouseDown={keepFocus}
           onClick={onTemplates}

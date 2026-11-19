@@ -146,10 +146,13 @@ export function templateEdit(value: string, start: number, end: number, template
 /** The folder a vault's templates are in, by convention as `Board` is a board's: `Templates` at its top, this spelling. */
 export const templatesFolder = (vault: string) => `/${vault}/Templates`;
 
-/** The notes in the vault's templates folder and below it, not its attachments. */
-export function templatePaths(root: TreeFolder, vault: string): string[] {
+/** The notes in the vault's templates folder and below it, not its attachments, nor `writing`, the note they'd go into. */
+export function templatePaths(root: TreeFolder, vault: string, writing: string): string[] {
   const folder = findFolder(root, templatesFolder(vault));
-  const walk = (f: TreeFolder): string[] => [...f.notes.filter((n) => fileKindOfEntry(n) === "note").map((n) => n.path), ...f.folders.flatMap(walk)];
+  const walk = (f: TreeFolder): string[] => [
+    ...f.notes.filter((n) => fileKindOfEntry(n) === "note" && n.path !== writing).map((n) => n.path),
+    ...f.folders.flatMap(walk),
+  ];
   return folder ? walk(folder) : [];
 }
 
