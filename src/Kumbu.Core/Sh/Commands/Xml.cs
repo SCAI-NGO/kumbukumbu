@@ -114,7 +114,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         budget.CancelAfter(Budget);
         try
         {
-            return Picked(new Guarded(root, budget.Token), expression, manager, xpath, modes, options.Has("xml"), defaultNamespace, budget.Token);
+            return Picked(new Guarded(root, budget.Token), expression, manager, xpath, modes, options.Has("xml"), defaultNamespace);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -123,7 +123,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
     }
 
     private static ShellResult Picked(
-        XPathNavigator root, XPathExpression expression, XmlNamespaceManager manager, string xpath, List<string> modes, bool asXml, string defaultNamespace, CancellationToken ct)
+        XPathNavigator root, XPathExpression expression, XmlNamespaceManager manager, string xpath, List<string> modes, bool asXml, string defaultNamespace)
     {
         object result;
         try

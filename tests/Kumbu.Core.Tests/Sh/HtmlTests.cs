@@ -274,14 +274,15 @@ public class HtmlTests
     public async Task Matching_stops_at_the_time_budget()
     {
         // :nth-child counts the siblings before each element: quadratic in a long list.
-        _store.AddTextFile("/Work/flat.html", $"<ul>{string.Concat(Enumerable.Repeat("<li>x</li>", 30_000))}</ul>");
-        _sh.Register(new Html(_store) { Budget = TimeSpan.FromMilliseconds(100) });
+        _store.AddTextFile("/Work/flat.html", $"<ul>{string.Concat(Enumerable.Repeat("<li>x</li>", 100_000))}</ul>");
+        _sh.Register(new Html(_store) { Budget = TimeSpan.FromMilliseconds(500) });
         var started = Stopwatch.GetTimestamp();
 
         Assert.Equal(
-            ShellResult.Error("html: 'li:nth-child(2n)' took longer than 0.1 seconds on /Work/flat.html; narrow the selector or the page"),
+            ShellResult.Error("html: 'li:nth-child(2n)' took longer than 0.5 seconds on /Work/flat.html; narrow the selector or the page"),
             await Run("html /Work/flat.html 'li:nth-child(2n)'"));
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
+        // Unbounded, this takes about half a minute.
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -293,7 +294,8 @@ public class HtmlTests
         var started = Stopwatch.GetTimestamp();
 
         Assert.Equal(ShellResult.Error("html: /Work/deep.html took longer than 0.1 seconds to parse; Kumbu² reads it no further"), await Run("html /Work/deep.html div"));
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
+        // Unbounded, this takes about half a minute.
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
     [Fact]

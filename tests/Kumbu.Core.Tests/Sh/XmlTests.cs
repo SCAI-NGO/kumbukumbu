@@ -228,14 +228,15 @@ public class XmlTests
     public async Task An_xpath_stops_at_the_time_budget(string xpath)
     {
         // Each of these walks the whole document once for every element: quadratic.
-        _store.AddTextFile("/Work/big.xml", $"<r>{string.Concat(Enumerable.Repeat("<a>x</a>", 30_000))}</r>");
+        _store.AddTextFile("/Work/big.xml", $"<r>{string.Concat(Enumerable.Repeat("<a>x</a>", 100_000))}</r>");
         _sh.Register(new Kumbu.Core.Sh.Commands.Xml(_store) { Budget = TimeSpan.FromMilliseconds(100) });
         var started = Stopwatch.GetTimestamp();
 
         Assert.Equal(
             ShellResult.Error($"xml: '{xpath}' took longer than 0.1 seconds on /Work/big.xml; narrow the XPath"),
             await Run($"xml /Work/big.xml '{xpath}'"));
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3));
+        // Unbounded, this takes minutes.
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
     [Fact]
