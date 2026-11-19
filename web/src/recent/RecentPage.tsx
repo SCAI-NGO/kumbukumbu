@@ -6,7 +6,8 @@ import { Link } from "react-router-dom";
 import { writerText } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { fileKindOfEntry } from "../api/notes";
-import { noteUrl, viewUrl, type LightboxState } from "../api/paths";
+import { viewUrl, type LightboxState } from "../api/paths";
+import { useNoteHref } from "../shell/openInPane";
 import { fileKindIcon } from "../components/fileKindIcon";
 import FlagChips, { Chip } from "../flags/FlagChips";
 import { useDiscreet } from "../discreet/state";
@@ -159,13 +160,14 @@ export default function RecentPage() {
 
 /** A note opens as the note; an attachment in the lightbox, which pages through the attachments listed, as the tree's do. Either replaces the window. */
 function Row({ item, attachments }: { item: RecentItem; attachments: string[] }) {
+  const noteHref = useNoteHref();
   const kind = fileKindOfEntry(item);
   const Icon = fileKindIcon[kind];
   const note = kind === "note";
   return (
     <li>
       <Link
-        to={note ? noteUrl(item.path) : viewUrl(item.path)}
+        to={note ? noteHref(item.path) : viewUrl(item.path)}
         replace
         state={note ? undefined : ({ paths: attachments } satisfies LightboxState)}
         className="flex min-h-12 items-start gap-3 rounded-[10px] px-2 py-2 hover:bg-surface focus-visible:outline-2 focus-visible:outline-accent"

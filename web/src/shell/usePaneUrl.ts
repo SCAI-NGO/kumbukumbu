@@ -5,19 +5,12 @@ import { paneUrl } from "../api/paths";
 import { useEditor, type Side } from "../state/editor";
 
 /**
- * The split view's panes by the URL, which the shell's store follows (`?beside=`), written from the store's panes:
- * a note opened in the right pane is a new history entry, as one opened on the left is; a pane closes in the store
- * first, a writing one once it has saved (`closePane`), and the URL follows only then.
+ * The split view's panes by the URL, which the shell's store follows (`?beside=`), written from the store's panes as a
+ * pane closes: in the store first, a writing one once it has saved (`closePane`), and the URL follows only then. A note
+ * opened in a pane is `useOpenNote`'s.
  */
 export function usePaneUrl() {
   const navigate = useNavigate();
-  const openBeside = useCallback(
-    (path: string) => {
-      const left = useEditor.getState().panes.left.path;
-      if (left) navigate(paneUrl(left, path));
-    },
-    [navigate],
-  );
   const close = useCallback(
     async (side: Side) => {
       // With one pane there is nothing to close, and no entry to write.
@@ -28,5 +21,5 @@ export function usePaneUrl() {
     },
     [navigate],
   );
-  return { openBeside, close };
+  return { close };
 }

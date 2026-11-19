@@ -41,7 +41,8 @@ export default function ModeToggle({ writable, refusal }: { writable: boolean; r
           aria-pressed={current === mode}
           disabled={mode === "write" && !writable}
           title={mode === "write" && !writable ? (refusal ?? "You can only read this note.") : undefined}
-          onClick={() => (mode === "read" ? void endWrite() : current !== "write" && startWrite())}
+          // Each on the focused pane only: its Read ends Write mode there, never in the other pane.
+          onClick={() => (mode === "read" ? current === "write" && void endWrite() : current !== "write" && startWrite())}
           className={`min-h-11 rounded-[9px] px-3.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
             current === mode ? "bg-accent text-on-accent" : "text-muted"
           } disabled:opacity-50`}

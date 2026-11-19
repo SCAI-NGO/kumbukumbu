@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Link2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { useBacklinks } from "../api/notes";
-import { crumbOf, noteUrl, titleOf } from "../api/paths";
+import { crumbOf, titleOf } from "../api/paths";
+import { useOpenNote } from "../shell/openInPane";
 import UnlinkedMentions from "./UnlinkedMentions";
 
 /**
@@ -11,7 +11,7 @@ import UnlinkedMentions from "./UnlinkedMentions";
  */
 export default function BacklinksList({ path, panel = false }: { path: string; panel?: boolean }) {
   const backlinks = useBacklinks(path);
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   const sources = [...new Map((backlinks.data ?? []).map((b) => [b.path, b])).values()];
   const mentions = <UnlinkedMentions path={path} linked={sources.length > 0} panel={panel} />;
   if (sources.length === 0) return mentions;
@@ -27,7 +27,7 @@ export default function BacklinksList({ path, panel = false }: { path: string; p
             <li key={b.path}>
               <button
                 type="button"
-                onClick={() => navigate(noteUrl(b.path))}
+                onClick={() => openNote(b.path)}
                 className="flex min-h-12 w-full items-center gap-2.5 border-b border-line px-1 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
               >
                 <Link2 size={18} strokeWidth={1.8} aria-hidden className="flex-none text-accent-text" />

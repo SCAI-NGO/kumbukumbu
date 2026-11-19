@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -15,7 +15,7 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useErrorTextFor, useUnnamedVault } from "../discreet/errorText";
-import { useEditor } from "../state/editor";
+import { previewSide, useEditor, writingSide, type Live, type Side } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
@@ -24,6 +24,7 @@ import AgentBanner, { ago, shownWriter, useAgentChange, useAgentHighlight } from
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
+import { clickToSource } from "./clickToSource";
 import BacklinksList from "./BacklinksList";
 import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -47,6 +48,7 @@ import { cameFromOf } from "../calendar/backLink";
 import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
 import { startWrite } from "../shell/ModeToggle";
+import { PaneSide, useOpenNote } from "../shell/openInPane";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -66,8 +68,24 @@ function EditorLoadFailed() {
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.dataset.standIn !== undefined) active.blur();
   }, []);
-  return <LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />;
+  // Ends Write mode where it is, which may be the pane that isn't focused.
+  return <LoadFailedSheet onClose={() => void useEditor.getState().endWrite()} />;
 }
+
+/** Links, task boxes, buttons, the properties box and what else answers a click of its own: no Write mode from these. */
+const OWN_CLICK = "a, button, input, label, select, summary, textarea, [role=button], [role=checkbox], [aria-label=Properties]";
+
+/** How long a plain click waits for a second one before it starts Write mode: a double click selects a word. */
+const DOUBLE_CLICK_MS = 250;
+
+/** How long the typing pauses before the live preview shows what was typed. */
+const PREVIEW_PAUSE_MS = 250;
+
+/** The editor's live text where the pane on `side` is its live preview, on `path`. */
+const liveFor = (s: ReturnType<typeof useEditor.getState>, side: Side, path: string) => (previewSide(s) === side && s.live?.path === path ? s.live : null);
+
+/** Find in the note, as the pane that isn't focused has it: nothing looked for. */
+const idleFind = { query: "", index: 0, count: 0 };
 
 /** One write of the note: a version alone may come back (a restore), its time doesn't. */
 const versionKey = (v: { version: string; lastWriteAt: string }) => `${v.version}@${v.lastWriteAt}`;
@@ -114,11 +132,19 @@ function keepCentred(article: HTMLElement, target: HTMLElement): () => void {
 
 /**
  * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it, unless the side
- * panel beside it shows them (`panel`). Write mode: the editor with its toolbar, in place of the dock.
+ * panel beside it shows them (`panel`). Write mode: the editor with its toolbar, in place of the dock. In its pane
+ * (`PaneSide`, the left without one) with that pane's mode; the note's tools are the focused pane's only. `dim`: the
+ * title dimmed, in the split view's pane that isn't focused. `clickToWrite`, in the split view: a plain click on the
+ * note's text starts Write mode here, the caret where it was clicked (workspace spec §3). Beside the editor's pane on
+ * the same note, it is that note's live preview: the editor's text as it stands, the caret's block kept in view.
  */
-export default function NoteView({ path, panel = false }: { path: string; panel?: boolean }) {
+export default function NoteView({ path, panel = false, dim = false, clickToWrite = false }: { path: string; panel?: boolean; dim?: boolean; clickToWrite?: boolean }) {
   const note = useNote(path);
-  const mode = useEditor((s) => s.mode);
+  const side = useContext(PaneSide) ?? "left";
+  const focusedHere = useEditor((s) => s.focused === side);
+  // The focused pane's mode is the store's `mode`, the other's its pane's; either only for the note this pane has: a pane
+  // changing hands (one closed, the other in its place) would show the other note's mode for a moment.
+  const mode = useEditor((s) => (s.focused === side ? (s.currentPath === path ? s.mode : "read") : s.panes[side]?.path === path ? s.panes[side]!.mode : "read"));
   const errorFor = useErrorTextFor(path);
   const noteError = errorFor(note.error);
   // Every save is a new version; the links are only asked for once they are shown again.
@@ -136,12 +162,44 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
   // Files dropped on the note are an upload into its folder: none below `write`.
   const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
-  const openNote = useEditor((s) => s.openNote);
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   const location = useLocation();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
-  const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  // The live preview renders the editor's text, unsaved included, once the typing pauses: a long note's render takes
+  // longer than the time between two keys, and the next key would wait for it. Taken from the store outside of
+  // rendering, so a key renders nothing here; and in one go, not deferred (`useDeferredValue`): each key's render of the
+  // editor would break off a deferred render under way and start it again, and each new start hold up the next key.
+  const [settled, setSettled] = useState<Live | null>(() => liveFor(useEditor.getState(), side, path));
+  useEffect(() => {
+    let shown = liveFor(useEditor.getState(), side, path);
+    let next = shown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setSettled(shown);
+    const unsubscribe = useEditor.subscribe((s) => {
+      const now = liveFor(s, side, path);
+      if (now === next) return;
+      next = now;
+      clearTimeout(timer);
+      const show = () => {
+        shown = now;
+        setSettled(now);
+      };
+      // Starting and ending at once: only the text as it is typed waits.
+      if (!now || !shown) show();
+      else timer = setTimeout(show, PREVIEW_PAUSE_MS);
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [side, path]);
+  const live = settled;
+  // The live preview writes nothing of the note: its text is the editor's beside it, whose next save a write from here
+  // would conflict with. Known before the editor's text comes in.
+  const preview = useEditor((s) => previewSide(s) === side);
+  const content = live?.text ?? note.data?.content ?? "";
+  const parts = useMemo(() => splitFrontmatter(content), [content]);
   const props = useMemo(() => (parts.frontmatter === null ? null : parseProperties(parts.frontmatter)), [parts.frontmatter]);
   const card = boardCard(path, props);
   // Where the header says it in words (a calendar line, one of the flags as the flag line reads them, a board card), the box folds away. The entry is the
@@ -149,7 +207,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
   const entry = useNoteEntry(path, !!note.data).data?.entry;
   const flagged = !!props?.some((p) => p.key === "tags" && frontmatterTags(p.value).some((t) => t.toLowerCase().startsWith("flag/") && isFlag(t.slice(5).toLowerCase())));
   const foldable = !!props && props.length > 0 && (!!entry || flagged || card !== null);
-  const shown = useMemo(() => maskedBody(note.data?.content ?? ""), [note.data?.content]);
+  const shown = useMemo(() => maskedBody(content), [content]);
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
   const elsewhere = useChangedElsewhere(path, note.data);
@@ -165,8 +223,8 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
 
-  const noteTool = useEditor((s) => s.noteTool);
-  const find = useEditor((s) => s.find);
+  const noteTool = useEditor((s) => (focusedHere ? s.noteTool : null));
+  const find = useEditor((s) => (focusedHere ? s.find : idleFind));
   const headings = useMemo(() => (noteTool === "outline" ? outline(parts.body) : []), [noteTool, parts.body]);
   // Typing stays quick in a long note: the marks follow the query when React has time.
   const query = useDeferredValue(find.query);
@@ -229,7 +287,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
     if (!restore) return;
     // A reload finds the reader where they were, not at the block or line the note was opened at.
     opened.current = location.key;
-    if (restore.mode === "write") {
+    if (restore.mode === "write" && useEditor.getState().focused === side) {
       editorScroll.current = restore.scrollTop;
       useEditor.getState().setMode("write");
     } else if (scroller.current) {
@@ -244,16 +302,18 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
   }, [note.data?.content]);
 
   // A note opened in Read mode puts the screen reader at its title, unless something holds the focus already (the
-  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself.
+  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself. Only in the focused pane: the
+  // focus in a pane focuses it, and the other pane's note changing (its save held a navigation) mustn't.
   const titled = useRef<string | null>(null);
   const fileTitle = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (mode !== "read" || !note.data || titled.current === path) return;
     titled.current = path;
     if (document.activeElement && document.activeElement !== document.body) return;
+    if (useEditor.getState().focused !== side) return;
     // The note's own H1 carries `data-line`; an embedded note's H1 doesn't.
     (fileTitle.current ?? article.current?.querySelector<HTMLElement>("h1[data-line]"))?.focus({ preventScroll: true });
-  }, [mode, path, note.data]);
+  }, [mode, path, note.data, side]);
 
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();
@@ -288,6 +348,8 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
   useEffect(() => {
     if (mode !== "read" || !note.data || !article.current || opened.current === location.key) return;
     opened.current = location.key;
+    // Where the note opens is the opened pane's, the focused one: the other pane keeps its place.
+    if (!focusedHere) return;
     setNotice((n) => (n?.kind === "block" || n?.kind === "heading" ? null : n));
     // A `NoteAt`; any other state (or none) opens the note as usual.
     const at = location.state as { block?: unknown; heading?: unknown; line?: unknown } | null;
@@ -324,7 +386,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
     unflash();
     target.classList.add("k-flash");
     flash.current = { target, timer: setTimeout(unflash, FLASH_MS), stop: keepCentred(article.current, target) };
-  }, [mode, note.data, parts.body, location.key, location.state, unflash]);
+  }, [mode, note.data, parts.body, location.key, location.state, unflash, focusedHere]);
 
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {
@@ -370,6 +432,51 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
     },
     [path],
   );
+
+  // The live preview follows the caret: the block at or above its line comes into view where it is out of it. Only as
+  // the text or the caret moves, so a scroll by hand stays until the next keystroke.
+  useEffect(() => {
+    if (!live || !scroller.current || !article.current) return;
+    let target: HTMLElement | undefined;
+    for (const e of article.current.querySelectorAll<HTMLElement>("[data-line]")) {
+      const n = Number(e.dataset.line);
+      if (n <= live.caretLine && (!target || n > Number(target.dataset.line)) && !e.closest(".k-embed")) target = e;
+    }
+    if (!target) return;
+    const box = scroller.current.getBoundingClientRect();
+    const at = target.getBoundingClientRect();
+    if (at.top >= box.top && at.top < box.bottom - 48) return;
+    scroller.current.scrollTop += at.top - box.top - box.height / 3;
+  }, [live]);
+
+  // Write follows the click: a plain one (no move between down and up, nothing selected) on the note's text, not on
+  // what has a click of its own; a drag selects, as in Read mode, and starts nothing. Nor does a double or triple click,
+  // which selects a word or a paragraph to copy: the click waits for a second one, and a press or a selection
+  // meanwhile calls it off.
+  const down = useRef<{ x: number; y: number } | null>(null);
+  const waiting = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(waiting.current), []);
+  const editorDirect = useRef<boolean | null>(null);
+  const pressed = (e: MouseEvent) => {
+    clearTimeout(waiting.current);
+    down.current = { x: e.clientX, y: e.clientY };
+  };
+  const writeHere = (e: MouseEvent) => {
+    const from = down.current;
+    down.current = null;
+    if (!clickToWrite || !writeOn || !note.data || !article.current || !from || e.button !== 0 || e.detail > 1 || e.defaultPrevented) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return;
+    if (window.getSelection()?.isCollapsed === false || (e.target instanceof Element && e.target.closest(OWN_CLICK))) return;
+    // Mapped now, on the text clicked: the preview may show newer text by the time the wait is over.
+    const offset = clickToSource(content, article.current, e.clientX, e.clientY);
+    if (offset === null) return;
+    const y = e.clientY;
+    waiting.current = setTimeout(() => {
+      // The pointer down focused this pane; one in the other pane meanwhile (its note bar, say) keeps the focus there.
+      if (window.getSelection()?.isCollapsed === false || useEditor.getState().focused !== side) return;
+      void useEditor.getState().writeHere({ path, offset, y });
+    }, DOUBLE_CLICK_MS);
+  };
 
   const jump = (line: number) => {
     useEditor.getState().setNoteTool(null);
@@ -428,7 +535,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
 
   // Blocks below the title that look like frontmatter, and what the last tap on Move to properties came to: for the
   // block at that line, in the version it speaks of.
-  const blocks = useMemo(() => findPropertyBlocks(note.data?.content ?? ""), [note.data?.content]);
+  const blocks = useMemo(() => findPropertyBlocks(content), [content]);
   const [moveSaid, setMoveSaid] = useState<{ start: number; version: string; said: MoveSaid } | null>(null);
   const moveBlock = useCallback(
     async (block: PropertyBlock) => {
@@ -471,24 +578,28 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
       const block = blocks.find((b) => b.start === line - 1);
       if (!block) return null;
       const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
-      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
+      return <PropertyHint path={path} onMove={mayWrite && !preview ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
     },
-    [blocks, moveSaid, note.data?.version, path, mayWrite, writeOn, moveBlock],
+    [blocks, moveSaid, note.data?.version, path, mayWrite, preview, writeOn, moveBlock],
   );
 
   const createMissing = useCallback(
     (target: string) => {
       const created = createdPath(path, target);
       createNote.mutate(created, {
-        onSuccess: () => {
-          openNote(created, "write");
-          navigate(noteUrl(created));
-        },
+        // In the pane the link is in, as a link opens.
+        onSuccess: () => openNote(created, { side, mode: "write" }),
         onError: (err) => setNotice({ kind: "error", text: errorFor(err) }),
       });
     },
-    [path, createNote, openNote, navigate, errorFor],
+    [path, createNote, openNote, side, errorFor],
   );
+
+  // Rendered directly once loaded, but as it was mounted until Write mode ends: the editor loading meanwhile would
+  // otherwise swap the lazy one for it, a new editor, losing its caret and what it holds unsaved.
+  if (mode !== "write") editorDirect.current = null;
+  else editorDirect.current ??= !!LoadedEditor;
+  const Direct = editorDirect.current ? LoadedEditor : null;
 
   if (mode === "write") {
     if (note.data) {
@@ -499,8 +610,8 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
           <EntryLine key="entry-line" path={path} version={note.data.version} />
           <PresenceLine path={path} />
           <LoadBoundary fallback={<EditorLoadFailed />}>
-            {LoadedEditor ? (
-              <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
+            {Direct ? (
+              <Direct path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
             ) : (
               <Suspense fallback={<div className="flex-1" />}>
                 <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
@@ -583,10 +694,16 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
           </p>
         )
       )}
-      <div ref={scroller} {...dropTarget} onScroll={panel ? readAt : undefined} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      <div
+        ref={scroller}
+        {...dropTarget}
+        onScroll={panel ? readAt : undefined}
+        onMouseDown={clickToWrite ? pressed : undefined}
+        onClick={clickToWrite ? writeHere : undefined}
+        className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {/* Nor one made from the path of a missing note whose vault the list doesn't name (a hidden one's bookmark). */}
-        {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
+        {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className={`text-[28px] leading-tight font-bold focus:outline-none ${dim ? "text-dim" : "text-text"}`}>{titleOf(path)}</h1>}
         {notice && (
           <p
             role={notice.kind === "error" ? "alert" : "status"}
@@ -609,14 +726,15 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
                 yaml={parts.frontmatter}
                 changed={frontmatterChanged ? highlight!.writer : null}
                 foldable={foldable}
-                onAdd={mayWrite ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
+                onAdd={mayWrite && !preview ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
               />
             )}
             <MarkdownView
               source={shown.body}
               mask={shown.mask}
               links={links.data}
-              tasksDisabled={save.isPending || !changes}
+              // In the live preview a tick would be written under the editor's text: it is ticked there.
+              tasksDisabled={save.isPending || !changes || preview}
               onToggleTask={toggleTask}
               onCreateMissing={createMissing}
               highlight={highlight}
@@ -629,7 +747,7 @@ export default function NoteView({ path, panel = false }: { path: string; panel?
         {note.data && !panel && <BacklinksList path={path} />}
       </div>
       {noteTool === "outline" && note.data && !panel && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
-      {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
+      {noteTool === "addProperty" && note.data && mayWrite && !preview && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );
 }
@@ -720,8 +838,8 @@ export function Properties({ yaml, changed, still = false, foldable = false, onA
 
 /**
  * Asks before a note goes: the API's `DELETE` answers only 204, so the notes that link to it (whose links then
- * lead nowhere) are named here first. Afterwards, if it was the open note (`open`), the folder's next note opens, or
- * the vaults; another note's deletion leaves the page as it is.
+ * lead nowhere) are named here first. Afterwards, if it was an open note (`open`), the folder's next note opens, or
+ * the vaults, or in the split view the other pane stays; another note's deletion leaves the page as it is.
  */
 export function DeleteNoteDialog({ path, open = true, onClose }: { path: string; open?: boolean; onClose(): void }) {
   const backlinks = useBacklinks(path);
@@ -735,14 +853,29 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
   // The vault's list, which holds no link: this question needs none.
   const published = !!usePublications(vaultOf(path), own).data?.publications.some((p) => p.path === path);
 
-  const confirm = () =>
+  const [unsaved, setUnsaved] = useState(false);
+
+  const confirm = async () => {
+    // The left pane's note going while the right pane writes: the right one takes its place, and its editor goes with
+    // its place, so its text is saved first as Done saves it (`closePane`); if that fails, nothing is deleted.
+    const s = useEditor.getState();
+    if (s.panes.right && s.panes.left.path === path && writingSide(s) === "right") {
+      setUnsaved(false);
+      await s.endWrite();
+      if (writingSide(useEditor.getState()) !== null) return setUnsaved(true);
+    }
     remove.mutate(path, {
       onSuccess: (next) => {
+        const split = !!useEditor.getState().panes.right;
         useEditor.getState().forgetNote(path);
         onClose();
-        if (open) navigate(next ? noteUrl(next) : "/", { replace: true });
+        if (!open) return;
+        // In the split view its pane closes and the other stays, the only one; else the folder's next note opens.
+        const { left } = useEditor.getState().panes;
+        navigate(split && left.path ? noteUrl(left.path) : next ? noteUrl(next) : "/", { replace: true });
       },
     });
+  };
 
   return (
     <div className="absolute inset-0 z-30 flex items-end justify-center bg-black/55 p-3 sm:items-center">
@@ -771,6 +904,11 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
             </ul>
           </div>
         )}
+        {unsaved && (
+          <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+            The other pane's text couldn't be saved, so {titleOf(path)} wasn't deleted.
+          </p>
+        )}
         {remove.isError && (
           <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
             {errorText(remove.error)}
@@ -783,7 +921,7 @@ export function DeleteNoteDialog({ path, open = true, onClose }: { path: string;
           <button
             type="button"
             disabled={remove.isPending}
-            onClick={confirm}
+            onClick={() => void confirm()}
             className="min-h-11 flex-1 rounded-[10px] bg-accent px-4 font-medium text-on-accent disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             Delete

@@ -2,7 +2,7 @@
 import { AlertTriangle, Check, CircleDot, Clock, ListTodo, SquareKanban, StickyNote, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { noteUrl } from "../api/paths";
+import { useNoteHref } from "../shell/openInPane";
 import { useInWindow } from "../windows/context";
 import type { EntryKind, EntryState, EntryView } from "./api";
 import { cameFromHere, withCameFrom } from "./backLink";
@@ -52,6 +52,7 @@ const movable = (entry: EntryView) => closable(entry) || (entry.kind === "card" 
  * time stands above it and its box and Later on a line below; where there is room, beside it.
  */
 export default function EntryItem({ entry, actions, range, vault, kept }: { entry: EntryView; actions?: EntryActions; range?: string; vault?: string; kept?: string }) {
+  const noteHref = useNoteHref();
   const state = states[entry.state];
   const kind = kinds[entry.kind];
   const done = actions && closable(entry);
@@ -67,7 +68,7 @@ export default function EntryItem({ entry, actions, range, vault, kept }: { entr
           <div className="flex flex-col @xs:flex-row @xs:items-start @xs:gap-2">
             {entry.time && <span className="pt-2 font-mono text-sm text-text-body @xs:flex-none @xs:pt-3.5">{entry.time}</span>}
             <Link
-              to={noteUrl(entry.path)}
+              to={noteHref(entry.path)}
               replace={inWindow}
               state={withCameFrom(undefined, cameFromHere(location, kept))}
               className="block min-h-12 min-w-0 py-3 font-medium break-words text-text hover:underline focus-visible:outline-2 focus-visible:outline-accent @xs:flex-1"

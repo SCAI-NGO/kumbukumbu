@@ -3,12 +3,12 @@ import { useId, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { levelOf, ownerLabel, useEmbeddingProviders, useVaults, type Level, type VaultView } from "../api/notes";
-import { noteUrl, vaultOf } from "../api/paths";
 import { useLeave, useRenameAlias } from "../api/sharing";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { maintainSentence } from "../routes/rights";
-import { movedPath, useEditor } from "../state/editor";
+import { useEditor } from "../state/editor";
+import { afterVaultGone, movedPanesUrl, panesNow } from "./openInPane";
 
 const levelLabels: Record<Level, string> = { read: "Read", write: "Read and write", maintain: "Maintain", owner: "Owner" };
 
@@ -58,7 +58,8 @@ export function LeaveVaultDialog({ vault, membership, onClose, onLeft }: { vault
                 { membership, vault },
                 {
                   onSuccess: () => {
-                    if (location.pathname.startsWith(noteUrl(`/${vault}/`))) navigate("/", { replace: true });
+                    const to = afterVaultGone(location, vault);
+                    if (to) navigate(to, { replace: true });
                     onLeft?.();
                     onClose();
                   },
@@ -101,12 +102,14 @@ function Panel({ vault, membership, onClose }: { vault: VaultView; membership: s
     e.preventDefault();
     if (!changed) return;
     const to = alias.normalize("NFC").trim();
-    const open = useEditor.getState().currentPath;
+    const open = panesNow(useEditor.getState());
     rename.mutate(
       { membership, vault: name, alias: to },
       {
         onSuccess: () => {
-          if (open && vaultOf(open) === name) navigate(noteUrl(movedPath(open, `/${name}/`, `/${to}/`)), { replace: true });
+          // Either pane's note may be in it.
+          const url = movedPanesUrl(open, `/${name}/`, `/${to}/`);
+          if (url) navigate(url, { replace: true });
           onClose();
         },
       },

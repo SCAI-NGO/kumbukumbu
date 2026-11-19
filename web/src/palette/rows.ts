@@ -51,6 +51,9 @@ export function commandRows({ admin, shared, marketplaces }: { admin: boolean; s
   ];
 }
 
+/** Split view on or off (from 1280 px on, a note open), beside its button in the left pane's note bar. */
+export const splitRow = (action: () => void): Row => command("view.split", "View", "Split view", { action });
+
 /** The open note's menu, as rows placed with its title; not pinnable, as they act on the note that is open. */
 export function noteActionRows(title: string, items: MenuItem[]): Row[] {
   return items.map((item) => ({ key: `note-action:${item.label}`, group: "Note", name: item.label, place: title, run: { action: item.onSelect } }));

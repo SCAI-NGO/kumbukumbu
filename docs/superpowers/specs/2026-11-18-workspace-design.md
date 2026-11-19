@@ -66,7 +66,7 @@ The editor store (`web/src/state/editor.ts`) gets two panes, `left` and `right`,
 
 **One editor at a time** (decided by the maintainer: "göttlich interaktiv", it gives the feeling of really switching; better than Obsidian and Ghostwriter offer, and the caret's place is never in doubt). At most one pane is in Write mode. Starting Write mode in one pane first ends it in the other with the same save as Done (`endWrite`); if that save fails, the switch doesn't happen and the failure shows where it shows today. So `beforeRead`, `unsaved` and `draft` stay single, and with `beforeRead` the note actions' save before a copy (`beforeRead({ reread: false })`, `web/src/shell/useNoteActions.tsx:111`): they belong to the one editor there is. Claude's reason: everything around saving stays as proven since 0.4.0, and the pane model shrinks to a path and a mode per pane.
 
-Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doesn't end Write mode in the other: you can scroll and read on the right while the left still holds your caret and text. Only starting Write mode moves it.
+Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →, Tab into it) doesn't end Write mode in the other: you can scroll and read on the right while the left still holds your caret and text. Only starting Write mode moves it.
 
 ### Turning it on and off
 
@@ -74,11 +74,13 @@ Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doe
 - **Turning it on always starts the same way:** the left pane in Write mode, the right pane the same note's live preview. The focus stays in the left pane's editor. Where the note can't be written (a read-only share, a refused save), the left pane stays in Read mode and the right starts on the same note.
 - **Then the right pane is chosen** (a click on its note bar or margins, or Ctrl+Alt+→) and a note picked in the tree opens there, in Read mode, as a note opens today; the left pane keeps Write mode and its caret. A click on the preview's *text* instead swaps the roles (see below), so the note bar is the way to choose the pane without writing in it; its focus mark says so at once.
 - **Also, besides the button:** "Open beside" in a tree row's menu, Ctrl+Enter on a note row in the palette, Ctrl+Alt+click on a link (Obsidian's "open to the right"). These open the note in the right pane, starting the split if needed, and focus it. A plain Ctrl+click stays the browser's.
-- **Turning it off:** the button again, or the ✕ in the right pane's note bar: the right pane closes. The left pane's ✕ (shown only in the split) closes the left; the right becomes the only pane. If the pane closed is in Write mode, it saves first as Done does.
+- **Turning it off:** the button again, or the ✕ in the right pane's note bar: the right pane closes. The left pane's ✕ (shown only in the split) closes the left; the right becomes the only pane. If the pane closed is in Write mode, it saves first as Done does. So does the right pane when it writes and the left closes: it takes the left's place, and its editor with it (decided by the builder: the editor is mounted where its pane is, and moving it unsaved would risk the text; saving as Done is the proven way).
 
 ### Where a note opens
 
-One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL.
+One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL. Every opener goes through one function, `useOpenNote` (`web/src/shell/openInPane.ts`), and every link to a note through `useNoteHref`: the URL keeps the other pane, so no opener ends the split by the way. A pointer down in a pane focuses it, and so does the keyboard's focus moving into it (Tab to one of its links), so the pane a link is clicked or opened with Enter in is the focused one once it opens there.
+
+A note opened in the pane that isn't focused (back or forward on the right pane's note, a note opened beside) joins Recent too, as one opened in the focused pane does (decided by the builder: it is what the person opened).
 
 ### Which pane is focused, shown plainly
 
@@ -88,28 +90,35 @@ One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on op
 
 ### Write follows the click, and the caret starts where you click
 
-Hard (the maintainer: people will use the split for copy and paste). In the split view, a **plain click** (pointer down and up without moving, no selection made) on the text of a pane that isn't writing starts Write mode in that pane, with the caret at the spot clicked. A **drag selects text** as Read mode does and switches nothing, so text can be copied from the other pane. Links, task boxes, images, embeds, buttons and the properties box keep their own click. The single pane and narrow screens keep today's Read mode, where a click starts nothing.
+Hard (the maintainer: people will use the split for copy and paste). In the split view, a **plain click** (pointer down and up without moving, no selection made) on the text of a pane that isn't writing starts Write mode in that pane, with the caret at the spot clicked. A **drag selects text** as Read mode does and switches nothing, so text can be copied from the other pane. So does a **double or triple click**, which selects a word or a paragraph (decided by Claude, to be confirmed by the maintainer): a plain click waits a quarter of a second for a second one before Write mode starts, and a press or a selection meanwhile calls it off. Why: double click to select a word is the most common copy gesture, and the split serves copy and paste. Why not the system's double-click time (often half a second): every click into the other pane would wait that long for Write mode, and a second click comes well within a quarter of a second for most people. Links, task boxes, images, embeds, buttons and the properties box keep their own click. The single pane and narrow screens keep today's Read mode, where a click starts nothing.
 
-Mapping the click back to the source: the clicked block's source line (`data-line`; the builder adds it to paragraphs, list items, quotes, code blocks and tables, where only headings, tasks and callouts carry it today, `MarkdownView.tsx`), and the clicked text node with its offset (`caretPositionFromPoint`, `caretRangeFromPoint` in Safari). The rendered text around the point (up to 16 characters before and after) is found in that block's source lines; the caret goes there. If it isn't found, or found more than once in the block, the nearest match to the proportional position is taken; inside a formula, a diagram or an embed, the caret goes to the start of the block's line.
+Mapping the click back to the source: the clicked block's source lines (`data-line` and `data-line-end`, on headings, paragraphs, list items, tasks, quotes, callouts, code blocks, tables, diagrams and lines of embeds, `MarkdownView.tsx`), and the clicked text node with its offset (`caretPositionFromPoint`, `caretRangeFromPoint` in Safari). The rendered text around the point (up to 16 characters before and after) is found in that block's source lines; the caret goes there. If it isn't found, or found more than once in the block, the nearest match to the proportional position is taken; inside a formula, a diagram or an embed, the caret goes to the start of the block's line. In `web/src/note/clickToSource.ts`.
+
+The proportional fallback in detail (decided by the builder): every place in the block's lines is scored by how much of the text before and after the point the source matches there, reading outwards and skipping the markup the rendering leaves out where it doesn't match (`*`, `_`, `~`, `` ` ``, `=`, `[`, `]`, `|`, `>`, `#`, `\`); the highest score wins; among equal scores, the place right beside the clicked text (the text node's own side of the point: after it, or before it at the node's end), so a click at the start of `**strong**` puts the caret before `s`, outside the stars, where typing lands in the word and not in the markup; then the place nearest to the point's share of the block's rendered text, laid over the block's source. Why not an exact search for the text, shortened until found once: markup between the point and its context (`**bold** and bold`) makes a shorter context found once in the wrong place. The editor opens with the caret there and its line where the click was on screen, so the text doesn't jump under the pointer.
 
 ### The same note beside itself: live preview
 
 The maintainer's rule: **the pane that isn't writing, on the same note as the writing one, shows that note's live preview.** No separate mode.
 
-- It renders the editor's text, unsaved included, with `MarkdownView` (the editor publishes its text to the store as it changes; the preview takes it through `useDeferredValue`, so typing never waits for the render).
+- It renders the editor's text, unsaved included, with `MarkdownView` (the editor publishes its text to the store as it changes; the preview takes it once the typing pauses, so typing never waits for the render; see below).
 - **It is marked:** lucide `Glasses` (reading glasses) in its note bar, labelled "Live preview of <note>". Why not the eye: `Eye` already stands for discreet vaults, publishing and the password field.
 - **It follows the caret:** the block at or above the caret's line is kept in view (by `data-line`); scrolling the preview by hand stops the following until the next keystroke.
 - **Symmetric by the rule:** a click into the preview's text starts Write mode there (caret where clicked), and the other pane becomes the preview.
 - **A link clicked in the preview** opens in the preview's pane (where a link opens): you write, follow a link, and see that note beside you. The preview ends there.
+- It writes nothing of the note (decided by the builder): its task boxes don't tick, and focused, it has no Add property, Move to properties, Flag, calendar items, History or Publish; a tick, a property, a date, a flag or a restored version written from the preview would land under the editor's unsaved text, and the editor's next save would meet a conflict. They are done in the editor's pane beside it. Find, the copy items, Duplicate, Rename or move and Delete stay: Duplicate saves the editor's text first, Rename or move and Delete act on the note as they do from Write mode itself. The note's header lines (its date, its flag) end Write mode in the editor's pane before they write, as they do in that pane (`editorSettled`, `web/src/calendar/api.ts`). Why not let each write save the editor first and go on top: the write would end Write mode in the other pane, a change the click in the preview didn't ask for; leaving them out is the smaller rule. Links in text not yet saved show as text until the save they come with is read (the API resolves the links of what is saved).
+- It shows the text once the typing pauses for a quarter of a second, rendered then in one go (decided by the builder; not through `useDeferredValue`, as first planned): a long note's render (2,000 lines take some 100–150 ms) can't be broken off midway, and a deferred one is started again by every key the editor renders, each new start holding up the next key. Read from the store outside of rendering, so a key renders nothing in the preview. At most the key right after a pause can wait for that one render; measured in `web/e2e/workspace/split.spec.ts`.
+- It follows the caret only where the caret's block is out of view, and only as the text or the caret moves (decided by the builder): a scroll by hand stays as it is, without a timer, until the next keystroke.
 - In Read mode in both panes on the same note: both show the note; nothing is special.
 
 ### The URL
 
 `/notes/<vault>/<path>?beside=<vault path of the right pane>`, encoded as paths are. The left pane is the path, the right `beside`. Reload, back, forward and a shared link keep the split; which pane is focused is not in the URL (the left after a reload). Opening in the right pane pushes a history entry, as opening in the left does. A `beside` note that doesn't exist or can't be read shows in its pane as a missing note does today. Either pane may be in another vault; the active vault (the tree's) follows the focused pane.
 
+Below 1280 px the pane that isn't focused is hidden, not unmounted, and the panes keep their place as the split starts and ends (decided by the builder: a writing pane's editor mounted afresh would lose its caret and what it holds unsaved; hidden, it keeps both until the window is wide again or its pane is focused).
+
 ### Each pane
 
-Its own note bar (rename, delete, split, ✕, the preview's mark), its own properties box, banners (agent change, changed elsewhere, presence) and Read/Write; the top bar's Read/Write acts on the focused pane. The Write toolbar is the writing pane's. Find in note acts on the focused pane in Read mode.
+Its own note bar (its note's title, rename, delete, split, ✕, the preview's mark; the title only in the split, where the top bar names the focused pane's note alone), its own properties box, banners (agent change, changed elsewhere, presence) and Read/Write; the top bar's Read/Write acts on the focused pane. The Write toolbar is the writing pane's. Find in note acts on the focused pane in Read mode.
 
 ### Discreet vaults
 
@@ -131,11 +140,15 @@ A discreet vault named in `?beside=` makes the address bar and history neutral (
 | Keys | What |
 |---|---|
 | Ctrl+Shift+\ | side panel shown or hidden |
-| Ctrl+Alt+← / → | focus the left or right pane |
-| Ctrl+Alt+click on a link | open it in the right pane |
+| Ctrl+Alt+← / → | focus the left or right pane (Ctrl+Option on a Mac too, never Cmd) |
+| Ctrl+Alt+click on a link | open it in the right pane (Cmd+Option+click on a Mac) |
 | Ctrl+Enter on a palette note row | open it in the right pane |
 
-Cmd for Ctrl on a Mac. Split view and Insert template have no key of their own (palette and their buttons). No Ctrl+Space for completion: it switches the input method under fcitx/ibus and on a Mac, the reason note actions didn't take it. None of these clash with the browser, Ctrl+S, Ctrl+\, Ctrl+P or Shift+F10.
+Cmd for Ctrl on a Mac, except for Ctrl+Alt+← / →.
+
+Decided by Claude (2026-11-19), to be confirmed by the maintainer: Ctrl+Alt on every platform, because Cmd+Option+←/→ switches tabs in browsers on macOS; Ctrl+Alt+←/→ may switch workspaces on some Linux desktops (GNOME), where the note bar click chooses the pane. With VoiceOver on, Ctrl+Option+←/→ are VoiceOver's own; there, as anywhere, moving the keyboard's focus into a pane (Tab) focuses it. Ctrl+Alt+click on a link stays, with Cmd+Option+click on a Mac: there Ctrl+click is the secondary click, and the click is the page's (its default prevented) either way.
+
+Split view and Insert template have no key of their own (palette and their buttons). No Ctrl+Space for completion: it switches the input method under fcitx/ibus and on a Mac, the reason note actions didn't take it. None of these clash with the browser, Ctrl+S, Ctrl+\, Ctrl+P or Shift+F10.
 
 ## Pull requests
 
@@ -164,5 +177,6 @@ Vitest for the logic, Playwright (`web/e2e/`) for the flows.
 
 - The live text's way from the editor to the store (a field set on change, or a subscription), as long as the preview never slows typing.
 - The proportional fallback of click-to-write in detail.
-- How "Open beside" sits in the tree row's menu, beside its other items.
+- How "Open beside" sits in the tree row's menu, beside its other items: first, from 1280 px on, a note's row only (it is how the note opens, as a tap is; the copies and moves come after).
+- Deleting a note shown in a pane of the split view closes that pane, and the other stays as the only one, rather than the folder's next note opening in its place.
 - Whether the side panel's tabs use the existing tab pattern of the windows (#232) or the Access screen's.

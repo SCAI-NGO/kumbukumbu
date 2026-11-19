@@ -11,14 +11,16 @@ import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
 import type { MenuItem } from "../components/Menu";
 import { useDesktop } from "../hooks/useDesktop";
+import { useWide } from "../hooks/useWide";
+import { useOpenNote } from "../shell/openInPane";
 import { useDialog } from "../hooks/useDialog";
-import { editedPath, useEditor, writingSide } from "../state/editor";
+import { editedPath, useEditor, writingSide, type Side } from "../state/editor";
 import { useSession } from "../state/session";
 import { applyScheme } from "../theme/apply";
 import { useCloseWindow } from "../windows/context";
 import { useWindows } from "../windows/store";
 import { filterRows } from "./filter";
-import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows, writeRows, type ReadTree, type Row } from "./rows";
+import { commandRows, noteActionRows, noteRows, splitRow, staleNotes, vaultRows, writeRows, type ReadTree, type Row } from "./rows";
 import { withMod } from "./usePaletteShortcut";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
@@ -51,7 +53,7 @@ const FRESH = 60_000;
  * the session lists; and the loaded trees by vault, which say which note favourites are gone. Until something is typed
  * only the trees of vaults with a note favourite are read: the empty palette shows no other note of a tree.
  */
-function useRows(note: PaletteNote | null, typed: boolean, favourites: Favourite[]): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
+function useRows(note: PaletteNote | null, onSplit: (() => void) | null, typed: boolean, favourites: Favourite[]): { rows: Row[]; trees: ReadonlyMap<string, ReadTree> } {
   const admin = useSession((s) => s.user?.role) === "admin";
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
@@ -81,7 +83,12 @@ function useRows(note: PaletteNote | null, typed: boolean, favourites: Favourite
   );
   // Apart from the rest: the shell hands over new items on each of its renders, and the trees needn't be walked again for them.
   return {
-    rows: [...(note ? noteActionRows(titleOf(note.path), note.items) : []), ...(writing ? writeRows(titleOf(writing)) : []), ...all.rows],
+    rows: [
+      ...(note ? noteActionRows(titleOf(note.path), note.items) : []),
+      ...(writing ? writeRows(titleOf(writing)) : []),
+      ...(onSplit ? [splitRow(onSplit)] : []),
+      ...all.rows,
+    ],
     trees: all.trees,
   };
 }
@@ -103,19 +110,22 @@ export type PaletteNote = { path: string; items: MenuItem[] };
  * near the top with the field above the list; on the phone a sheet from below with the field near the thumb. Rendered
  * into the body, so that it is reachable over a window too (the shell under one is inert).
  */
-export default function Palette({ note = null }: { note?: PaletteNote | null }) {
+export default function Palette({ note = null, onSplit = null }: { note?: PaletteNote | null; onSplit?: (() => void) | null }) {
   const navigate = useNavigate();
   const closeWindow = useCloseWindow();
   const recentPaths = useEditor((s) => s.recentPaths);
   const close = () => useEditor.getState().setOverlay("none");
   const dialog = useDialog<HTMLDivElement>(close);
   const desktop = useDesktop();
+  // From 1280 px on, Ctrl+Enter (Cmd+Enter on a Mac) opens a note row in the split view's right pane.
+  const wide = useWide();
+  const openNote = useOpenNote();
   const id = useId();
   const [query, setQuery] = useState("");
   // By its key, not its place: a star moves a row to the favourites, or off them.
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const favourites = useFavourites();
-  const { rows, trees } = useRows(note, query.trim() !== "", favourites.list);
+  const { rows, trees } = useRows(note, onSplit, query.trim() !== "", favourites.list);
   // Each change lets go of the note favourites whose note is gone, in the same write.
   const toggle = (f: FavouriteInput) => favourites.toggle(f, staleNotes(favourites.list, trees));
   const typed = query.trim();
@@ -150,9 +160,9 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
     if (at >= 0) document.getElementById(`${id}-option-${at}`)?.scrollIntoView?.({ block: "nearest" });
   }, [id, at]);
 
-  const run = (entry: Row | null) => {
-    // Search and the actions (the note's, Insert template) are the shell's: under a window they would be out of reach,
-    // so the window closes first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
+  const run = (entry: Row | null, side?: Side) => {
+    // Search and the actions (the note's, Insert template, Split view) are the shell's: under a window they would be out
+    // of reach, so the window closes first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
     const overWindow = (entry === null || "action" in entry.run) && useWindows.getState().open;
     if (overWindow) closeWindow();
     if (entry === null) {
@@ -167,7 +177,10 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
       else action();
     } else {
       close();
+      // A note opens in the focused pane, as from the tree, or in `side`.
+      const note = entry.favourite?.kind === "note" && entry.favourite.vault && entry.favourite.path ? `/${entry.favourite.vault}/${entry.favourite.path}` : null;
       if ("scheme" in entry.run) applyScheme(entry.run.scheme);
+      else if (note) openNote(note, { side });
       else void navigate(entry.run.to);
     }
   };
@@ -178,7 +191,7 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (entries.length) setActiveKey(keyOf(entries[(at + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length]));
     } else if (e.key === "Enter") {
-      if (at >= 0) run(entries[at]);
+      if (at >= 0) run(entries[at], wide && (e.ctrlKey || e.metaKey) ? "right" : undefined);
     } else if (withMod(e, "d")) {
       // Caught here only, as a browser's bookmark is: the highlighted row's star.
       // The highlight goes with the row, wherever the star moves it.

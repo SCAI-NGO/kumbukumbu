@@ -6,7 +6,7 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { useLinks, useNote } from "../api/notes";
-import { fileKindOf, fileUrl, inVault, isAttachment, namesKnownFormat, noteUrl, titleOf, vaultOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
+import { fileKindOf, fileUrl, inVault, isAttachment, namesKnownFormat, titleOf, vaultOf, viewUrl, type LightboxState, type NoteAt } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { download } from "../data/exportUrl";
 import { useErrorTextFor } from "../discreet/errorText";
@@ -16,6 +16,7 @@ import MermaidDiagram from "../reader/MermaidDiagram";
 import TagChip from "../tags/TagChip";
 import { remarkTags } from "../tags/tags";
 import { useDarkScheme } from "../theme/dark";
+import { useNoteHref } from "../shell/openInPane";
 import { useInWindow } from "../windows/context";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { blockSource, findBlock } from "./blocks";
@@ -145,7 +146,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   const checked = taskChecked(node);
   const line = node.position!.start.line;
   return (
-    <li data-line={useLine(node)} className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
+    <li {...useLines(node)} className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
       <button
         type="button"
         role="checkbox"
@@ -175,6 +176,7 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   const links = useLinks(path, note.data?.version);
   const { onCreateMissing, diagramsAsCode, tagsStill } = useContext(NoteContext);
   const inWindow = useInWindow();
+  const noteHref = useNoteHref();
   const body = useMemo(() => {
     if (!note.data) return null;
     const masked = maskComments(note.data.content);
@@ -190,8 +192,9 @@ function EmbeddedNote({ path, heading, block }: { path: string; heading: string 
   return (
     <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
       <Link
-        to={noteUrl(path)}
+        to={noteHref(path)}
         replace={inWindow}
+        data-note-path={path}
         className="-mx-1 flex min-h-11 items-center gap-1.5 rounded-[6px] px-1 font-mono text-[12px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
       >
         <CornerDownRight size={14} aria-hidden className="flex-none" />
@@ -272,6 +275,8 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   const [choosing, setChoosing] = useState(false);
   // From a window (the console's peek), the note takes the window's place in the history.
   const inWindow = useInWindow();
+  // Into the pane the link is in (workspace spec §3), which Ctrl+Alt+click turns to the right one (`data-note-path`).
+  const noteHref = useNoteHref();
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
   if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
     return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} block={subpathBlock(link.raw)} />;
@@ -285,9 +290,10 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
     case "note": {
       return (
         <Link
-          to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)}
+          to={checkpointLink ? checkpointLink(link.path!) : noteHref(link.path!)}
           replace={inWindow}
           state={noteAt(link.raw)}
+          {...(checkpointLink ? {} : { "data-note-path": link.path!, "data-note-at": JSON.stringify(noteAt(link.raw) ?? null) })}
           className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
         >
           {children}
@@ -340,7 +346,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
             <AmbiguousLinkDialog
               target={link.target}
               candidates={link.candidates}
-              hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
+              hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteHref(p))}
               stateOf={(p) => (isAttachment(p) ? undefined : noteAt(link.raw))}
               onClose={() => setChoosing(false)}
             />
@@ -352,7 +358,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       const block = link?.kind === "self" ? subpathBlock(link.raw) : null;
       if (block && path && !checkpointLink) {
         return (
-          <Link to={noteUrl(path)} replace={inWindow} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+          <Link to={noteHref(path)} replace={inWindow} state={{ block } satisfies NoteAt} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
             {children}
           </Link>
         );
@@ -425,6 +431,12 @@ function useLine(node: HastNode | undefined) {
   return nested ? undefined : node?.position?.start.line;
 }
 
+/** A block's first and last source lines as its `data-line` and `data-line-end`, which a click is mapped back by (`clickToSource`). */
+function useLines(node: HastNode | undefined) {
+  const line = useLine(node);
+  return line === undefined ? {} : { "data-line": line, "data-line-end": node!.position!.end.line };
+}
+
 const calloutIcons: Record<CalloutKind, LucideIcon> = { note: Pencil, tip: Lightbulb, info: Info, warning: TriangleAlert, danger: OctagonAlert, quote: Quote };
 
 // Tokens only: the kinds differ by icon and title first; warnings and dangers also take the accent.
@@ -483,14 +495,14 @@ const components: Components = {
   // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
   aside: ({ node, children, ...props }) =>
     node?.properties.dataCallout ? (
-      <aside data-line={useLine(node)} {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
+      <aside {...useLines(node)} {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
         {children}
       </aside>
     ) : (
       <aside {...props}>{children}</aside>
     ),
   details: ({ node, children, ...props }) => (
-    <details data-line={useLine(node)} {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
+    <details {...useLines(node)} {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
       {children}
     </details>
   ),
@@ -501,14 +513,14 @@ const components: Components = {
       </CalloutTitle>
     </summary>
   ),
-  h1: ({ node, ...props }) => <h1 data-line={useLine(node)} tabIndex={-1} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0 focus:outline-none" {...props} />,
+  h1: ({ node, ...props }) => <h1 {...useLines(node)} tabIndex={-1} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0 focus:outline-none" {...props} />,
   h2: ({ node, ...props }) => (
-    <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} id={useHeadingId(props.id)} />
+    <h2 {...useLines(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} id={useHeadingId(props.id)} />
   ),
-  h3: ({ node, ...props }) => <h3 data-line={useLine(node)} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
-  h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
-  h5: ({ node, ...props }) => <h5 data-line={useLine(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
-  h6: ({ node, ...props }) => <h6 data-line={useLine(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
+  h3: ({ node, ...props }) => <h3 {...useLines(node)} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
+  h4: ({ node, ...props }) => <h4 {...useLines(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
+  h5: ({ node, ...props }) => <h5 {...useLines(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
+  h6: ({ node, ...props }) => <h6 {...useLines(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
   // Find's matches take the accent, `==highlights==` (highlights.ts) a highlighter's yellow. dataFind is a number
   // from 0, so test for presence.
   mark: ({ node, ...props }) =>
@@ -525,7 +537,7 @@ const components: Components = {
         </CalloutTitle>
       </p>
     ) : (
-      <p data-line={useLine(node)} className="my-3" {...props}>
+      <p {...useLines(node)} className="my-3" {...props}>
         {children}
       </p>
     ),
@@ -548,19 +560,19 @@ const components: Components = {
       <TaskItem node={node} {...props}>
         {children}
       </TaskItem>
-    ) : <li data-line={useLine(node)} className="my-1 marker:text-dim" {...props}>{children}</li>,
+    ) : <li {...useLines(node)} className="my-1 marker:text-dim" {...props}>{children}</li>,
   // The task's checkbox is the button of its item, above.
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
-  blockquote: ({ node, ...props }) => <blockquote data-line={useLine(node)} className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote {...useLines(node)} className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
   pre: ({ node, ...props }) => {
     const code = useContext(NoteContext).diagramsAsCode ? null : mermaidCode(node);
-    const line = useLine(node);
+    const lines = useLines(node);
     return code ? (
-      <div data-line={line} data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
+      <div {...lines} data-diagram data-changed={code.properties.dataChanged} data-writer={code.properties.dataWriter}>
         <Mermaid source={textOf(code).replace(/\n$/, "")} order={Number(code.properties.dataDiagram ?? 0)} />
       </div>
     ) : (
-      <pre data-line={line} className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
+      <pre {...lines} className="my-3 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text-body [&>code]:bg-transparent [&>code]:p-0" {...props} />
     );
   },
   code: ({ node: _, ...props }) => <code className="rounded-[4px] bg-surface-2 px-[5px] py-px font-mono text-[0.85em]" {...props} />,
@@ -576,7 +588,7 @@ const components: Components = {
     );
   },
   table: ({ node, ...props }) => (
-    <div data-line={useLine(node)} className="my-3 overflow-x-auto">
+    <div {...useLines(node)} className="my-3 overflow-x-auto">
       <table className="border-collapse text-[15px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left" {...props} />
     </div>
   ),
@@ -598,7 +610,7 @@ const components: Components = {
   // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when. One of the vault's
   // own (`![](/Screenshots/shot.png)`) is an attachment chip instead (`remarkWikiLinks`).
   // A line of embeds (`remarkWikiLinks`) and a display of maths.
-  div: ({ node, ...props }) => <div data-line={useLine(node)} {...props} />,
+  div: ({ node, ...props }) => <div {...useLines(node)} {...props} />,
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;

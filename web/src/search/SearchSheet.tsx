@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Search, X } from "lucide-react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { crumbOf, noteUrl, titleOf } from "../api/paths";
+import { crumbOf, titleOf } from "../api/paths";
+import { useOpenNote } from "../shell/openInPane";
 import { secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
@@ -23,7 +23,7 @@ import { useEarlierSearch, useSearch, type EarlierResult, type SearchResult } fr
  */
 export default function SearchSheet() {
   const { searchQuery, searchMode, searchTag, recentPaths, setSearchQuery, setSearchMode, setSearchTag, setOverlay } = useEditor();
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   const dialog = useDialog<HTMLDivElement>(() => setOverlay("none"));
   // `#research ` (the tag finished by a space) becomes the filter; a `#res` still being typed offers the tags.
   const typed = splitTagQuery(searchQuery);
@@ -51,9 +51,8 @@ export default function SearchSheet() {
   const [comparing, setComparing] = useState<EarlierResult | null>(null);
 
   const open = (path: string, line?: number) => {
-    useEditor.getState().openNote(path);
     useEditor.getState().setScrollTarget(line === undefined ? null : { path, line });
-    navigate(noteUrl(path));
+    openNote(path);
   };
   const openResult = (r: SearchResult) => open(r.path, r.address ? Number(r.startLine) : undefined);
 

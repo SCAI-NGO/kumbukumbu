@@ -18,7 +18,7 @@ function saving(answer: () => Response) {
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   const { result } = renderHook(() => useSaveNote(PLAN), { wrapper });
   const keys = () => invalidated.mock.calls.map(([filters]) => filters?.queryKey);
-  return { save: () => act(() => result.current.mutateAsync({ content: "Text.", version: "v1" })), keys };
+  return { save: () => act(() => result.current.mutateAsync({ content: "Text.", version: "v1" })), keys, queryClient };
 }
 
 describe("saving a note", () => {
@@ -33,5 +33,13 @@ describe("saving a note", () => {
     const { save, keys } = saving(() => json(409, { error: "changed", current: saved }));
     await save();
     expect(keys()).not.toContainEqual(["tree", "Work"]);
+  });
+
+  // The server answers with the note as stored: what it holds, not what was sent, is the note.
+  it("keeps the note as the server answers it stored", async () => {
+    const { save, queryClient } = saving(() => json(200, { ...saved, content: "Text, as stored." }));
+    queryClient.setQueryData(["note", PLAN], { ...saved, version: "v1" });
+    await save();
+    expect(queryClient.getQueryData(["note", PLAN])).toMatchObject({ content: "Text, as stored.", version: "v2" });
   });
 });

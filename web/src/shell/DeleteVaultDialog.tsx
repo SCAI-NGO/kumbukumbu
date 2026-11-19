@@ -5,13 +5,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import type { VaultView } from "../api/notes";
-import { noteUrl } from "../api/paths";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { useEditor } from "../state/editor";
+import { afterVaultGone } from "./openInPane";
 
 /**
  * "Delete <vault>?", with its name typed and the password: from Settings and from the vault's menu. Away from the
- * vault afterwards, if one of its notes was open.
+ * vault afterwards, if one of its notes was open: in the split view the other pane stays.
  */
 export default function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
   const queryClient = useQueryClient();
@@ -25,7 +25,8 @@ export default function DeleteVaultDialog({ vault, onClose }: { vault: string; o
       // Out of the list at once: the shell, finding no vault chosen, picks the first one it lists.
       queryClient.setQueryData<VaultView[]>(["vaults"], (list) => list?.filter((v) => v.name !== vault));
       useEditor.getState().forgetVault(vault);
-      if (location.pathname.startsWith(noteUrl(`/${vault}/`))) navigate("/", { replace: true });
+      const to = afterVaultGone(location, vault);
+      if (to) navigate(to, { replace: true });
       // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
       queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
       await Promise.all(["vaults", "keys", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));

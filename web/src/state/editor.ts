@@ -81,6 +81,12 @@ interface EditorState {
   live: Live | null;
   /** Set by the open editor: puts the caret at the start of a line (1-based), the focus in the editor, the line in view. */
   goToLine: ((line: number) => void) | null;
+  /**
+   * Where Write mode, started by a click into a pane's text, puts the caret in the note at `path` (workspace spec §3):
+   * at `offset` in its text, the caret's line at `y` on screen, where the click was, in the pane on `side`. Taken by the
+   * editor as it mounts; gone as that pane leaves Write mode (an editor that failed to load never took it).
+   */
+  writeAt: { path: string; offset: number; y: number; side: Side } | null;
   /** Where the reader of the note at `path` is in Read mode: the line of the last heading above the top of the visible text, 0 above the first. */
   reading: { path: string; line: number } | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
@@ -99,9 +105,14 @@ interface EditorState {
 
   /**
    * Opens a note in the focused pane: overlays close, its vault becomes active and its folder chain opens in the drawer.
-   * In the other pane (`side`) it only shows there, in Read mode. Write mode only while the other pane doesn't write.
+   * In the other pane (`side`) it only shows there, in Read mode, once a writing one there has saved as Done does (not
+   * if that fails). Write mode only while the other pane doesn't write. Either way it joins the recent notes.
    */
-  openNote(path: string, mode?: Mode, side?: Side): void;
+  openNote(path: string, mode?: Mode, side?: Side): void | Promise<void>;
+  /** Opens a note in pane `side` and focuses it, the right one starting the split view if there is none. */
+  openIn(side: Side, path: string, mode?: Mode): void;
+  /** Sets a pane as it is (the editor's guard holding its note while a navigation waits): the focused one by `currentPath` and `mode`. */
+  setPane(side: Side, pane: Pane & { path: string }): void;
   /** The focused pane's mode. Write mode in it first ends Write mode in the other pane (`endWrite`), and not if that fails. */
   setMode(mode: Mode): void | Promise<void>;
   /** Ends Write mode (Done, the Read toggle) in the pane that writes: only once the editor has saved everything. */
@@ -115,6 +126,9 @@ interface EditorState {
   setCaretAt(caretAt: CaretAt | null): void;
   setLive(live: Live | null): void;
   setGoToLine(goToLine: ((line: number) => void) | null): void;
+  /** Write mode in the focused pane, its caret at `at` (a click into its text); not if the other pane's save fails. */
+  writeHere(at: { path: string; offset: number; y: number }): Promise<void>;
+  setWriteAt(writeAt: EditorState["writeAt"]): void;
   setReading(reading: { path: string; line: number } | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
@@ -178,6 +192,7 @@ const initial = {
   caretAt: null as CaretAt | null,
   live: null as Live | null,
   goToLine: null as ((line: number) => void) | null,
+  writeAt: null as EditorState["writeAt"],
   reading: null as { path: string; line: number } | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
@@ -202,6 +217,17 @@ const other = (side: Side): Side => (side === "left" ? "right" : "left");
 /** The pane in Write mode, if one is. */
 export const writingSide = (s: Pick<EditorState, "panes">): Side | null =>
   s.panes.left.mode === "write" ? "left" : s.panes.right?.mode === "write" ? "right" : null;
+
+/**
+ * The split view's pane that is the live preview (workspace spec §3): the one that isn't writing, on the note the other
+ * writes; null without one.
+ */
+export const previewSide = (s: Pick<EditorState, "panes">): Side | null => {
+  const writing = writingSide(s);
+  if (!writing || !s.panes.right) return null;
+  const side = other(writing);
+  return s.panes[side]!.path === s.panes[writing]!.path ? side : null;
+};
 
 /** The note the one editor has open: the writing pane's, or else the focused one's. */
 export const editedPath = (s: Pick<EditorState, "panes" | "currentPath">): string | null => {
@@ -243,9 +269,22 @@ const focusedInStep =
 
 export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
   ...initial,
-  openNote: (path, mode = "read", side) =>
+  openNote: (path, mode = "read", side) => {
+    const s = get();
+    if (side && side !== s.focused) {
+      const show = () =>
+        set((s) => ({ panes: { ...s.panes, [side]: { path, mode: "read" } }, recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT) }));
+      const pane = s.panes[side];
+      // A writing pane's text is saved first, as Done saves it; its own note again leaves it as it is.
+      if (pane?.mode !== "write") return show();
+      if (pane.path === path) return;
+      return get()
+        .endWrite()
+        .then(() => {
+          if (writingSide(get()) !== side) show();
+        });
+    }
     set((s) => {
-      if (side && side !== s.focused) return { panes: { ...s.panes, [side]: { path, mode: "read" } } };
       // One pane in Write mode at most: Write mode moves only with `setMode`, which saves first.
       const writes = (m: Mode): Mode => (writingSide(s) === other(s.focused) ? "read" : m);
       return {
@@ -254,6 +293,8 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
         revealing: false,
         // While the note is being named, a save would make it again at its old path.
         mode: s.renaming.includes(path) ? "read" : writes(s.draft?.path === path ? "write" : mode),
+        // A click's place in this pane is for the note it was on, as a change of mode forgets it too.
+        writeAt: s.writeAt?.side === s.focused ? null : s.writeAt,
         overlay: "none",
         noteTool: s.currentPath === path ? s.noteTool : null,
         find: s.currentPath === path ? s.find : initial.find,
@@ -261,22 +302,32 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
         expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(folderOf(path)).map((f) => [f, true])) },
         recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
       };
-    }),
+    });
+  },
+  openIn: (side, path, mode = "read") => {
+    if (side === "right" && !get().panes.right) set((s) => ({ panes: { ...s.panes, right: { path, mode: "read" } } }));
+    get().focus(side);
+    void get().openNote(path, mode);
+  },
+  setPane: (side, pane) =>
+    set((s) => (side === s.focused ? { currentPath: pane.path, mode: pane.mode } : { panes: { ...s.panes, [side]: pane } })),
   setMode: (mode) => {
     const apply = (mode: Mode) =>
       set((s) =>
         mode !== "write"
-          ? { mode }
+          ? { mode, writeAt: s.writeAt?.side === s.focused ? null : s.writeAt }
           : s.currentPath !== null && s.renaming.includes(s.currentPath)
             ? {}
             : { mode, noteTool: null, renameProblem: s.renameProblem?.path === s.currentPath ? null : s.renameProblem },
       );
     // Answered at once unless it waits for the other pane's save: `act()` in a test takes a promise for async work.
     if (mode !== "write" || writingSide(get()) !== other(get().focused)) return apply(mode);
+    // Meant for the note focused now: once the save is in, the focus or its note may have moved on.
+    const { focused, currentPath } = get();
     return get()
       .endWrite()
       .then(() => {
-        if (writingSide(get()) === null) apply(mode);
+        if (writingSide(get()) === null && get().focused === focused && get().currentPath === currentPath) apply(mode);
       });
   },
   setRefused: (refused) => set({ refused }),
@@ -285,8 +336,9 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
     const guard = get().beforeRead;
     if (guard && !(await guard())) return;
     const s = get();
-    if (side === s.focused) set({ mode: "read" });
-    else if (s.panes[side]) set({ panes: { ...s.panes, [side]: { ...s.panes[side], mode: "read" } } });
+    const writeAt = s.writeAt?.side === side ? null : s.writeAt;
+    if (side === s.focused) set({ mode: "read", writeAt });
+    else if (s.panes[side]) set({ panes: { ...s.panes, [side]: { ...s.panes[side], mode: "read" } }, writeAt });
   },
   focus: (side) =>
     set((s) => {
@@ -304,9 +356,11 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
     }),
   closePane: async (side) => {
     if (!get().panes.right) return;
-    if (writingSide(get()) === side) {
+    // The right pane, writing, takes the left's place as the left closes: the editor goes with its place, so it saves first too.
+    const writing = writingSide(get());
+    if (writing === side || (side === "left" && writing === "right")) {
       await get().endWrite();
-      if (writingSide(get()) === side) return;
+      if (writingSide(get()) !== null) return;
     }
     set((s) => (s.panes.right ? onlyPane(side === "left" ? s.panes.right : s.panes.left, s.mode) : {}));
   },
@@ -314,6 +368,14 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
   setCaretAt: (caretAt) => set({ caretAt }),
   setLive: (live) => set({ live }),
   setGoToLine: (goToLine) => set({ goToLine }),
+  setWriteAt: (writeAt) => set({ writeAt }),
+  writeHere: async (at) => {
+    const writeAt = { ...at, side: get().focused };
+    set({ writeAt });
+    await get().setMode("write");
+    // Not started (the other pane's save failed, the note being named): nothing is left for a later editor to take.
+    if (get().writeAt === writeAt && get().mode !== "write") set({ writeAt: null });
+  },
   setReading: (reading) => set({ reading }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
@@ -390,7 +452,10 @@ function forgotten(s: EditorState, vault: string, keepDraft: boolean): Partial<E
     refused: outside(s.refused?.path) ? s.refused : null,
     scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
     live: outside(s.live?.path) ? s.live : null,
+    writeAt: outside(s.writeAt?.path) ? s.writeAt : null,
     reading: outside(s.reading?.path) ? s.reading : null,
+    renaming: s.renaming.filter(outside),
+    renameProblem: outside(s.renameProblem?.path) ? s.renameProblem : null,
     activeVault: s.activeVault === vault ? null : s.activeVault,
     expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
   };

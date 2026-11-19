@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -8,7 +8,7 @@ import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
-import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, noteUrl, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -26,6 +26,8 @@ import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPi
 import PinDialog from "../discreet/PinDialog";
 import { goneVault, useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
+import { useWide } from "../hooks/useWide";
+import { useOpenNote } from "./openInPane";
 import { isPhone } from "../update/InstallHint";
 import { extOf, photoName } from "../upload/photoName";
 import { useSession } from "../state/session";
@@ -288,6 +290,7 @@ function FileMenu({
   onRemoveDate,
   onTask,
   onFlag,
+  onOpenBeside,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -300,6 +303,8 @@ function FileMenu({
   onRemoveDate(path: string): void;
   onTask(path: string, task: boolean): void;
   onFlag?: (path: string) => void;
+  /** From 1280 px on: opens the note in the split view's right pane. */
+  onOpenBeside?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
@@ -310,6 +315,7 @@ function FileMenu({
   const [asked, setAsked] = useState(false);
   const dated = useNoteEntry(note ? path : null, asked && changes && !!onDate);
   const items: MenuItem[] = [
+    ...(note && onOpenBeside ? [{ label: "Open beside", icon: Columns2, onSelect: () => onOpenBeside(path) }] : []),
     ...copyItems(path, names, note, copy),
     ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
@@ -329,18 +335,27 @@ function FileMenu({
   );
 }
 
-function NoteButton({ path, fileKind, flag, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; flag?: string | null; current: boolean; unpublishable: boolean; onOpen(): void }) {
+/** The quieter mark's words, for the note open in the split view's other pane. */
+const otherPaneId = "tree-other-pane";
+
+/**
+ * A note's row: the current note (the focused pane's) marked with a fill; the note in the split view's other pane
+ * (`other`) with an outline only, described as such.
+ */
+function NoteButton({ path, fileKind, flag, current, other = false, unpublishable, onOpen }: { path: string; fileKind: FileKind; flag?: string | null; current: boolean; other?: boolean; unpublishable: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
   const Icon = fileKindIcon[fileKind];
+  const quiet = other && !current;
   return (
     <button
       type="button"
       data-tree-row
       aria-current={current ? "page" : undefined}
+      aria-describedby={quiet ? otherPaneId : undefined}
       onClick={onOpen}
       data-file-kind={fileKind}
       {...truncated}
-      className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+      className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : quiet ? "text-text-body outline-1 -outline-offset-1 outline-accent/60" : "text-text-body"}`}
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
@@ -536,6 +551,10 @@ export default function TreeDrawer(props: {
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor(
     useShallow(({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay }) => ({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay })),
   );
+  // The split view is there from 1280 px on: its other pane's note, and Open beside.
+  const wide = useWide();
+  const otherPath = useEditor((s) => (wide && s.panes.right ? s.panes[s.focused === "left" ? "right" : "left"]!.path : null));
+  const openNote = useOpenNote();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
   const vaults = useVaults();
@@ -686,7 +705,7 @@ export default function TreeDrawer(props: {
   /** A note opens as the note; an attachment in the lightbox, which pages through its folder's attachments. */
   const openEntry = (path: string, fileKind: FileKind) => {
     if (!docked) setOverlay("none");
-    if (fileKind === "note") return navigate(noteUrl(path));
+    if (fileKind === "note") return openNote(path);
     const folder = tree.data && findFolder(tree.data.root, folderOf(path));
     const paths = folder?.notes.filter((n) => fileKindOfEntry(n) !== "note").map((n) => n.path) ?? [path];
     navigate(viewUrl(path), { state: { paths } satisfies LightboxState });
@@ -802,6 +821,11 @@ export default function TreeDrawer(props: {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
+        {otherPath && (
+          <span id={otherPaneId} hidden>
+            Open in the other pane
+          </span>
+        )}
         {shownRoot && (
           <ul>
             {rows(shownRoot, expanded).map((row) => (
@@ -826,10 +850,11 @@ export default function TreeDrawer(props: {
                       fileKind={row.fileKind}
                       flag={row.flag}
                       current={row.path === currentPath}
+                      other={row.path === otherPath}
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} onOpenBeside={wide ? (path) => openNote(path, { side: "right" }) : undefined} />
                   </>
                 )}
               </li>
