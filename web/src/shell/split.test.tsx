@@ -241,6 +241,20 @@ describe("where a note opens", () => {
     expect(pane("right")).toContainElement(document.activeElement as HTMLElement);
   });
 
+  it("gives the focus to the focused pane's editor where it writes, as a dialog closes whose opener is in the other pane", async () => {
+    const { u } = await split();
+    act(() => useEditor.getState().setPane("right", { path: "/Work/b.md", mode: "write" }));
+    const right = await within(pane("right")).findByRole("textbox", { name: "Markdown source" });
+    within(pane("left")).getByRole("heading", { name: "Note a" }).focus();
+    await waitFor(() => expect(useEditor.getState().focused).toBe("left"));
+    await u.keyboard("{Control>}p{/Control}");
+    await screen.findByRole("combobox");
+    act(() => useEditor.getState().focus("right"));
+    await u.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("combobox")).toBeNull());
+    expect(right).toHaveFocus();
+  });
+
   it("is the link's own pane for a link, which takes the focus", async () => {
     const { router, u } = await split();
     await u.click(await within(pane("right")).findByRole("link", { name: "next b" }));
