@@ -47,6 +47,30 @@ public static class FileOrFolder
         return null;
     }
 
+    /// <summary>
+    /// <see cref="Clash(IReadOnlyCollection{VaultPath}, IReadOnlySet{VaultPath})"/> for a few placed paths, without a set
+    /// of the vault: what is stored after the write is <paramref name="placed"/>, and what <paramref name="isStored"/> says
+    /// is stored now unless it is <paramref name="leaving"/>; <paramref name="storedNow"/> are those paths, scanned once
+    /// per placed path for anything below it.
+    /// </summary>
+    public static VaultPath? Clash(
+        IReadOnlyCollection<VaultPath> placed, IReadOnlySet<VaultPath> leaving, Func<VaultPath, bool> isStored, IEnumerable<VaultPath> storedNow)
+    {
+        foreach (var path in placed)
+        {
+            var below = path.Value + "/";
+            if (placed.Any(p => p.Value.StartsWith(below, StringComparison.Ordinal))
+                || storedNow.Any(p => p.Value.StartsWith(below, StringComparison.Ordinal) && !leaving.Contains(p)))
+            {
+                return path;
+            }
+
+            if (FoldersAbove(path).FirstOrDefault(dir => placed.Contains(dir) || (isStored(dir) && !leaving.Contains(dir))) is { } entry) return entry;
+        }
+
+        return null;
+    }
+
     /// <summary>The folders <paramref name="path"/> lies in, below its vault, from the top.</summary>
     public static IEnumerable<VaultPath> FoldersAbove(VaultPath path)
     {

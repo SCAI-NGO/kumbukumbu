@@ -551,6 +551,20 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_batch_of_many_paths_still_refuses_a_clash()
+    {
+        // Past the few paths checked one by one: the whole vault's folders are built, and the rule holds the same.
+        var (_, _, store) = await WorldAsync();
+        await CreateAsync(store, "/Work/Makefile", Png(64));
+        var batch = new NoteBatch();
+        for (var i = 0; i < 100; i++) batch.Creates.Add(new StoredNote(P($"/Work/many/n{i}.md"), "n", 1, Writers.Dev, T0, [], Ref: WriterRef.Server));
+        batch.Creates.Add(new StoredNote(P("/Work/Makefile/x.md"), "x", 1, Writers.Dev, T0, [], Ref: WriterRef.Server));
+
+        Assert.Equal([P("/Work/Makefile")], await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.Null(await store.GetAsync(P("/Work/many/n0.md"), Ct));
+    }
+
+    [Fact]
     public async Task Whether_blobs_are_stored_is_read_from_the_index_alone()
     {
         var (world, _, store) = await WorldAsync();

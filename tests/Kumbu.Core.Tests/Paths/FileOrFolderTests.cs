@@ -10,7 +10,11 @@ public class FileOrFolderTests
     private static string? Clash(string[] placed, params string[] others)
     {
         var stored = others.Concat(placed).Select(P).ToHashSet();
-        return FileOrFolder.Clash([.. placed.Select(P)], stored)?.Value;
+        var bulk = FileOrFolder.Clash([.. placed.Select(P)], stored)?.Value;
+        // The few-paths form answers the same, from what is stored before the write.
+        var now = others.Select(P).ToHashSet();
+        Assert.Equal(bulk, FileOrFolder.Clash([.. placed.Select(P)], new HashSet<VaultPath>(), now.Contains, now)?.Value);
+        return bulk;
     }
 
     [Theory]
@@ -31,6 +35,15 @@ public class FileOrFolderTests
         Assert.Null(Clash(["/W/Makefile"], "/W/v1.2/notes.md", "/W/Makefile.md", "/W/Make/x.md"));
         Assert.Null(Clash(["/W/v1.2/x.md", "/W/v1.2/y.csv"], "/W/v1.2/notes.md"));
         Assert.Null(Clash([], "/W/a", "/W/a/b"));
+    }
+
+    [Fact]
+    public void What_leaves_in_the_batch_is_in_nobodys_way()
+    {
+        HashSet<VaultPath> now = [P("/W/v1.2/notes.md"), P("/W/Makefile")];
+        Assert.Null(FileOrFolder.Clash([P("/W/v1.2")], new HashSet<VaultPath> { P("/W/v1.2/notes.md") }, now.Contains, now));
+        Assert.Null(FileOrFolder.Clash([P("/W/Makefile/x.md")], new HashSet<VaultPath> { P("/W/Makefile") }, now.Contains, now));
+        Assert.Equal(P("/W/Makefile"), FileOrFolder.Clash([P("/W/Makefile/x.md")], new HashSet<VaultPath>(), now.Contains, now));
     }
 
     [Fact]

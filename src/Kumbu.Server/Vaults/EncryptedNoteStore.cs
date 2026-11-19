@@ -385,6 +385,10 @@ public sealed class EncryptedNoteStore(
         }
     }
 
+    /// <summary>Up to this many placed paths, <see cref="Clash"/> scans the vault's paths once per placed path instead of
+    /// building their folders: a few scans of some thousand keys cost less than a set of them all.</summary>
+    private const int FewPlaced = 64;
+
     /// <summary>
     /// The file and folder rule (<see cref="FileOrFolder"/>) once more, under the vault's gate in the write's transaction,
     /// so two writes racing can't break it: the path in the way when <paramref name="placed"/> are stored and
@@ -393,6 +397,13 @@ public sealed class EncryptedNoteStore(
     private static VaultPath? Clash(UnlockedVault vault, IEnumerable<VaultPath> leaving, IReadOnlyCollection<VaultPath> placed)
     {
         if (placed.Count == 0) return null;
+        // Most writes place a path or a few: look those up, rather than build a set of the whole vault under its gate.
+        if (placed.Count <= FewPlaced)
+        {
+            return FileOrFolder.Clash(
+                placed, leaving.ToHashSet(), p => vault.Notes.ContainsKey(p) || vault.Attachments.ContainsKey(p), vault.Notes.Keys.Concat(vault.Attachments.Keys));
+        }
+
         var stored = vault.Notes.Keys.Concat(vault.Attachments.Keys).ToHashSet();
         stored.ExceptWith(leaving);
         stored.UnionWith(placed);
