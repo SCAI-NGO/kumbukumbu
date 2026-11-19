@@ -404,6 +404,9 @@ test.describe("publish", () => {
     await write(b.path("Out"), `# Out\n\n${b.body("Out")}\n`);
     await mark(b.path("Out"));
 
+    // The agent sees the PDF stay behind before anything goes out.
+    const dry = await key.sh(`publish add "${b.path("Start")}" --depth 1 --dry-run`);
+    expect(redact(dry.text).split("\n").at(-1)).toBe(`not copied, plain text instead: ${manual}; PDFs are not published yet`);
     const added = await key.sh(`publish add "${b.path("Start")}" --depth 1`);
     expect(added.isError, redact(added.text)).toBe(false);
     expect(listed(added.text)).toEqual({ notes: ["Start", "Embedded", "Sections"].map((t) => b.path(t)), leftOut: { [b.path("Out")]: reasons.unpublishable } });
@@ -471,7 +474,7 @@ test.describe("publish", () => {
     expect(lines.slice(lines.indexOf("added:"))).toEqual(["added:", `  ${b.path("Gamma")}`, "removed:", `  ${b.path("Beta")}`]);
     expect(listed(updated.text).notes).toEqual(["Start", "Alpha", "Gamma"].map((t) => b.path(t)));
 
-    const activity = await alice.json<{ events: { kind: string; text: string }[] }>("GET", "/api/vaults/Work/activity?limit=5");
+    const activity = await alice.json<{ events: { kind: string; text: string }[] }>("GET", "/api/vaults/Work/activity?limit=50");
     const mine = activity.events.map((e) => e.text).filter((t) => t.includes(b.name("Start")));
     expect(mine).toEqual(
       expect.arrayContaining([

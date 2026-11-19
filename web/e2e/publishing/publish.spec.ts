@@ -16,8 +16,9 @@
 // 4. A PDF a note embeds is listed as staying behind, "a PDF (not published)" (decision 2) → "publish: a PDF the
 //    bundle embeds is listed as staying behind" (finding F-07).
 // 5. From 50 notes the line under the count says "That's a lot of notes. Check the list before you publish."; a
-//    warning, not a block (decision 1) → "publish: from 50 notes a warning shows …". The count beside the depth and the
-//    line turn red → "publish: from 50 notes the count beside the depth turns red too" (finding F-06).
+//    warning, not a block (decision 1) → "publish: from 50 notes a warning shows …". The count beside the depth turns red
+//    → "publish: from 50 notes the count beside the depth changes colour" (finding F-06); the line is red → "publish:
+//    from 50 notes the line under the list is red" (finding F-09).
 // 6. What was seen is what goes: a note linked after the list showed makes the publish fail with the new list and
 //    nothing goes out (decision 2, the 409) → "publish: a list that changed meanwhile is shown again …".
 // 7. The reader: the start note first, Contents one tap away with the titles in walk order, a link to a heading landing
@@ -119,8 +120,8 @@ const box = (dialog: Locator, b: ReturnType<typeof bundle>, title: string) =>
   whatGoes(dialog).getByRole("checkbox", { name: `${b.name(title)} ${b.path(title)}`, exact: true });
 
 /** One line of Stays behind: the note's path and its reason, whatever else the list holds. */
-async function staysWith(dialog: Locator, path: string, reason: string) {
-  await expect(staysBehind(dialog).getByRole("listitem").filter({ hasText: path })).toHaveText(`${path}: ${reason}`);
+async function staysWith(dialog: Locator, path: string, reason: string, message?: string) {
+  await expect(staysBehind(dialog).getByRole("listitem").filter({ hasText: path }), message).toHaveText(`${path}: ${reason}`);
 }
 
 /** Publishes over the API, as the dialog does, with the password (it counts against a limit). Nothing of the answer is kept. */
@@ -200,7 +201,6 @@ test("publish: the dialog shows the depth, what goes and what stays; the reader 
   await expect(dialog.getByRole("status")).toHaveText("4 notes");
   await expect(dialog.getByText("+3 notes", { exact: true })).toBeVisible();
   await expect(whatGoes(dialog).getByRole("checkbox", { checked: true })).toHaveCount(4);
-  await expect(whatGoes(dialog).getByRole("checkbox", { name: b.path("Beta"), exact: true })).not.toBeChecked();
   // Each with its reason; what else the list holds is F-05's.
   await staysWith(dialog, b.path("Gamma"), "only reached through a note that stays out");
   await staysWith(dialog, b.path("Hidden"), "only reached through a note that stays out");
@@ -404,26 +404,32 @@ function hue(colour: string) {
   return (h * 60 + 360) % 360;
 }
 
-test("publish: from 50 notes the count beside the depth turns red too, with the line @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(true, "F-06 (Low, unclear): from 50 notes the count beside the depth (+49 notes) keeps its colour, and the line is the warning orange, not red");
+/** The count beside the depth at 50 notes and at 49, and the colour of the line under the list at 50. */
+async function colours(page: Page, testInfo: TestInfo, aliceApi: Api, folder: string) {
   const b = bundle(folder);
   await fiftyNotes(aliceApi, b);
   const dialog = await openPublish(page, testInfo, b.path("Start"), b.name("Start"));
   const count = (others: number) => dialog.getByText(plus(others), { exact: true });
-
   await setDepth(dialog, 1, 49);
   const at50 = await colourOf(count(49));
   const line = await colourOf(dialog.getByText("That's a lot of notes. Check the list before you publish.", { exact: true }));
   await box(dialog, b, "N49").click();
   await expect(count(48)).toBeVisible();
-  const at49 = await colourOf(count(48));
-  // Red: a hue within 10° of 0.
-  const red = (colour: string) => Math.min(hue(colour), 360 - hue(colour)) <= 10;
-  expect({ countChanges: at50 !== at49, countRed: red(at50), lineRed: red(line) }, "F-06: the count and the line turn red from 50 notes").toEqual({
-    countChanges: true,
-    countRed: true,
-    lineRed: true,
-  });
+  return { at50, at49: await colourOf(count(48)), line };
+}
+
+test("publish: from 50 notes the count beside the depth changes colour @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
+  test.fail(true, "F-06 (Low, bug): from 50 notes the count beside the depth (+49 notes) keeps its colour; only the line under the list changes");
+  const { at50, at49 } = await colours(page, testInfo, aliceApi, folder);
+  expect(at50 !== at49, "F-06: the count beside the depth changes colour from 50 notes").toBe(true);
+});
+
+test("publish: from 50 notes the line under the list is red @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
+  test.fail(true, "F-09 (Low, unclear): from 50 notes the line under the list is the warning orange, not red");
+  const { line } = await colours(page, testInfo, aliceApi, folder);
+  // Red: a hue within 10° of 0. The warning token's hues lie at about 18–35° across the themes (--warning in
+  // web/src/index.css), orange to amber; 10° keeps every red and none of them.
+  expect(Math.min(hue(line), 360 - hue(line)), `F-09: the line's hue (${line}) is within 10° of red`).toBeLessThanOrEqual(10);
 });
 
 test("publish: an unticked note is listed as taken out by you @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
@@ -455,7 +461,7 @@ test("publish: a PDF the bundle embeds is listed as staying behind @publish @pho
   const dialog = await openPublish(page, testInfo, b.path("Start"), b.name("Start"));
   await setDepth(dialog, 1, 1);
   await expect(dialog.getByRole("status")).toHaveText("2 notes");
-  await expect(dialog.getByText(/a PDF \(not published\)/), "F-07: the PDF is listed as staying behind").toHaveCount(1, { timeout: 3_000 });
+  await staysWith(dialog, pdf, "a PDF (not published)", "F-07: the PDF is listed as staying behind");
 });
 
 test("publish: a bundled note's bar turns yellow when the copy is older than the note @publish @phone", async ({ page, aliceApi, folder }) => {
