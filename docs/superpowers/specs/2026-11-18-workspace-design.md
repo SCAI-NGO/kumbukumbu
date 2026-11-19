@@ -74,11 +74,13 @@ Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doe
 - **Turning it on always starts the same way:** the left pane in Write mode, the right pane the same note's live preview. The focus stays in the left pane's editor. Where the note can't be written (a read-only share, a refused save), the left pane stays in Read mode and the right starts on the same note.
 - **Then the right pane is chosen** (a click on its note bar or margins, or Ctrl+Alt+→) and a note picked in the tree opens there, in Read mode, as a note opens today; the left pane keeps Write mode and its caret. A click on the preview's *text* instead swaps the roles (see below), so the note bar is the way to choose the pane without writing in it; its focus mark says so at once.
 - **Also, besides the button:** "Open beside" in a tree row's menu, Ctrl+Enter on a note row in the palette, Ctrl+Alt+click on a link (Obsidian's "open to the right"). These open the note in the right pane, starting the split if needed, and focus it. A plain Ctrl+click stays the browser's.
-- **Turning it off:** the button again, or the ✕ in the right pane's note bar: the right pane closes. The left pane's ✕ (shown only in the split) closes the left; the right becomes the only pane. If the pane closed is in Write mode, it saves first as Done does.
+- **Turning it off:** the button again, or the ✕ in the right pane's note bar: the right pane closes. The left pane's ✕ (shown only in the split) closes the left; the right becomes the only pane. If the pane closed is in Write mode, it saves first as Done does. So does the right pane when it writes and the left closes: it takes the left's place, and its editor with it (decided by the builder: the editor is mounted where its pane is, and moving it unsaved would risk the text; saving as Done is the proven way).
 
 ### Where a note opens
 
-One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL.
+One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL. Every opener goes through one function, `useOpenNote` (`web/src/shell/openInPane.ts`), and every link to a note through `useNoteHref`: the URL keeps the other pane, so no opener ends the split by the way. A pointer down in a pane focuses it, so the pane a link is clicked in is the focused one once it opens there.
+
+A note opened in the pane that isn't focused (back or forward on the right pane's note, a note opened beside) joins Recent too, as one opened in the focused pane does (decided by the builder: it is what the person opened).
 
 ### Which pane is focused, shown plainly
 
@@ -109,7 +111,7 @@ The maintainer's rule: **the pane that isn't writing, on the same note as the wr
 
 ### Each pane
 
-Its own note bar (rename, delete, split, ✕, the preview's mark), its own properties box, banners (agent change, changed elsewhere, presence) and Read/Write; the top bar's Read/Write acts on the focused pane. The Write toolbar is the writing pane's. Find in note acts on the focused pane in Read mode.
+Its own note bar (its note's title, rename, delete, split, ✕, the preview's mark; the title only in the split, where the top bar names the focused pane's note alone), its own properties box, banners (agent change, changed elsewhere, presence) and Read/Write; the top bar's Read/Write acts on the focused pane. The Write toolbar is the writing pane's. Find in note acts on the focused pane in Read mode.
 
 ### Discreet vaults
 
@@ -164,5 +166,6 @@ Vitest for the logic, Playwright (`web/e2e/`) for the flows.
 
 - The live text's way from the editor to the store (a field set on change, or a subscription), as long as the preview never slows typing.
 - The proportional fallback of click-to-write in detail.
-- How "Open beside" sits in the tree row's menu, beside its other items.
+- How "Open beside" sits in the tree row's menu, beside its other items: first, from 1280 px on, a note's row only (it is how the note opens, as a tap is; the copies and moves come after).
+- Deleting a note shown in a pane of the split view closes that pane, and the other stays as the only one, rather than the folder's next note opening in its place.
 - Whether the side panel's tabs use the existing tab pattern of the windows (#232) or the Access screen's.
