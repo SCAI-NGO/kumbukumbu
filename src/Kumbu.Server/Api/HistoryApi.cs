@@ -415,7 +415,7 @@ public static class HistoryApi
         var filePath = ApiPaths.Parse(vault, path, PathKind.Attachment);
         var view = await OpenCheckpointAsync(filePath, name, store, checkpoints, ct);
         var held = await view.GetAttachmentAsync(filePath, ct) ?? throw ApiErrors.NotFound($"Checkpoint '{name}' holds no file at {filePath.Value}.");
-        return await FileApi.ServeAsync(response, view, filePath, held.Current, download, ct);
+        return await FileApi.ServeAsync(response, view, filePath, held.Current, download, await store.SkillsVaultAsync(ct), ct);
     }
 
     /// <summary>One note as the checkpoint held it, its links resolved inside the checkpoint (a note moved since is still where it was).</summary>

@@ -95,7 +95,8 @@ public static class FileApi
         var filePath = ApiPaths.Parse(vault, path, PathKind.Attachment);
         var files = Files(store);
         var attachment = await files.GetAttachmentAsync(filePath, ct);
-        if (version is null) return await ServeAsync(response, files, filePath, (attachment ?? throw await NoteApi.MissingAsync(store, filePath, ct)).Current, download, ct);
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        if (version is null) return await ServeAsync(response, files, filePath, (attachment ?? throw await NoteApi.MissingAsync(store, filePath, ct)).Current, download, skillsVault, ct);
 
         // As a note's ?version=: its history, then (sessions only: the trash is the owner's) the trash.
         var found = attachment is null ? null : NoteHistory.Versions(attachment).FirstOrDefault(v => v.Version == version)?.State;
@@ -112,15 +113,16 @@ public static class FileApi
             throw attachment is null ? await NoteApi.MissingAsync(store, filePath, ct) : ApiErrors.NotFound($"{filePath.Value} has no version {version} (its history lists them).");
         }
 
-        return await ServeAsync(response, files, filePath, found, download, ct);
+        return await ServeAsync(response, files, filePath, found, download, skillsVault, ct);
     }
 
-    /// <summary>One state's bytes from <paramref name="files"/> (the vault, or a checkpoint's view of it).</summary>
+    /// <summary>One state's bytes from <paramref name="files"/> (the vault, or a checkpoint's view of it); <paramref name="skillsVault"/>
+    /// as <see cref="OnlyAsDownload"/> takes it.</summary>
     internal static async Task<FileStreamHttpResult> ServeAsync(
-        HttpResponse response, IAttachmentStore files, VaultPath path, AttachmentState state, string? download, CancellationToken ct)
+        HttpResponse response, IAttachmentStore files, VaultPath path, AttachmentState state, string? download, string? skillsVault, CancellationToken ct)
     {
         var bytes = await OpenAsync(files, path, state, ct);
-        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true" || OnlyAsDownload(path, state.MediaType));
+        response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true" || OnlyAsDownload(path, state.MediaType, skillsVault));
         return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
     }
 
@@ -128,9 +130,11 @@ public static class FileApi
     /// Whether a state's bytes go out only as <c>attachment</c>, whatever the request asks (files spec, decision 4): a
     /// file of kind <c>file</c>, and anything stored with a media type no known format has. An uploaded <c>.html</c>
     /// opened inline would be stored XSS; <c>nosniff</c> and <see cref="Security.FileContentPolicy"/> come on top.
+    /// <paramref name="skillsVault"/> is the caller's name for the vault marked as the skills vault, as the writers pass
+    /// it (<see cref="AttachmentFormat.ForPath"/>): text in a skill's folder is a file anywhere else.
     /// </summary>
-    internal static bool OnlyAsDownload(VaultPath path, string mediaType) =>
-        AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.File || !InlineTypes.Contains(mediaType);
+    internal static bool OnlyAsDownload(VaultPath path, string mediaType, string? skillsVault) =>
+        AttachmentFormat.ForPath(path, skillsVault)?.Kind == AttachmentKind.File || !InlineTypes.Contains(mediaType);
 
     /// <summary>One state's bytes; <see cref="ContentMissingException"/> if they are gone or don't open.</summary>
     internal static async Task<Stream> OpenAsync(IAttachmentStore files, VaultPath path, AttachmentState state, CancellationToken ct)

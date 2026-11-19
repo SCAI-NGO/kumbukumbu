@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Paths;
 using Kumbu.Server.Api;
 using Microsoft.AspNetCore.Mvc.Testing;
 
@@ -64,6 +65,40 @@ public sealed class FileDownloadTests(KumbuAppFactory app)
         Assert.Equal("inline", png.Content.Headers.ContentDisposition!.DispositionType);
         Assert.Equal("image/png", png.Content.Headers.ContentType!.MediaType);
     }
+
+    [Fact]
+    public async Task A_trashed_files_version_is_a_download()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var version = await user.CreateFileAsync("page.html", Page);
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("page.html", "files"));
+        Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+
+        foreach (var query in new[] { "", "&download=0" })
+        {
+            using var page = await user.GetAsync(user.Url("page.html", "files") + $"?version={version}{query}");
+            await AssertDownloadAsync(page, "page.html", Text, Page);
+        }
+    }
+
+    /// <summary>The rule itself: a state is stored only with a media type its writer decided, so one that no known
+    /// format or text has can't be made through the API; were one there, it would still go out as a download. A text
+    /// name in a skill's folder is text only in the vault marked as the skills vault, not in one that happens to be
+    /// named Skills.</summary>
+    [Fact]
+    public void Only_a_known_formats_media_type_or_a_skill_folders_text_is_served_inline()
+    {
+        Assert.True(FileApi.OnlyAsDownload(P("/Arbeit/shot.png"), "text/html", skillsVault: null));
+        Assert.True(FileApi.OnlyAsDownload(P("/Arbeit/shot.png"), "image/svg+xml; charset=utf-8", skillsVault: null));
+        Assert.False(FileApi.OnlyAsDownload(P("/Arbeit/shot.png"), "image/png", skillsVault: null));
+
+        Assert.False(FileApi.OnlyAsDownload(P("/Skills/tidy/run.py"), Text, skillsVault: "Skills"));
+        Assert.True(FileApi.OnlyAsDownload(P("/Skills/tidy/run.py"), Text, skillsVault: null));
+        Assert.True(FileApi.OnlyAsDownload(P("/Skills/tidy/run.py"), Text, skillsVault: "Fähigkeiten"));
+        Assert.False(FileApi.OnlyAsDownload(P("/Fähigkeiten/tidy/run.py"), Text, skillsVault: "Fähigkeiten"));
+    }
+
+    private static VaultPath P(string path) => VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path);
 
     [Fact]
     public async Task A_file_from_a_checkpoint_is_a_download()
