@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text.RegularExpressions;
 using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 
@@ -101,4 +102,49 @@ public class SectionAddressTests
     [InlineData("A#")]
     [InlineData("  ")]
     public void InvalidAddresses(string fragment) => Assert.False(SectionAddress.TryParse(fragment, out _));
+
+    [Fact]
+    public void A_heading_with_code_highlight_and_a_link_is_found_by_its_shown_text()
+    {
+        var headings = Outline.Parse(Lines.Split("# Use ``a`b`` with ==care== and [the plan](x.md)"));
+        Assert.True(SectionAddress.TryParse("Use `ab`` with care and the plan", out var segments));
+        Assert.Equal(["#Use ``a`b`` with ==care== and [the plan](x.md)"], SectionAddress.Resolve(headings, segments).Select(h => h.Address));
+    }
+
+    // The web app's patterns (outline.ts), which a heading's shown text must give exactly.
+    [Fact]
+    public void Code_spans_are_masked_as_the_web_app_finds_them()
+    {
+        var pattern = new Regex(@"(`+)[\s\S]*?(?<!`)\1(?!`)");
+        foreach (var s in AllStrings("`a ", 9))
+            Assert.Equal(pattern.Replace(s, m => new string(' ', m.Length)), SectionAddress.MaskCodeSpans(s));
+    }
+
+    [Fact]
+    public void Highlights_are_taken_out_as_the_web_app_does()
+    {
+        var pattern = new Regex(@"==(?=[^\s=])(.+?)(?<=[^\s=])==");
+        foreach (var s in AllStrings("= a\n", 8))
+            Assert.Equal(pattern.Replace(s, "$1"), SectionAddress.WithoutHighlights(s));
+    }
+
+    [Fact]
+    public void Markdown_links_become_their_text_as_the_web_app_shows_them()
+    {
+        var pattern = new Regex(@"!?\[([^\]]*)\]\([^)]*\)");
+        foreach (var s in AllStrings("![]()a\n", 7))
+            Assert.Equal(pattern.Replace(s, "$1"), SectionAddress.WithoutMarkdownLinks(s));
+    }
+
+    /// <summary>Every string over the alphabet up to the length, the empty one included.</summary>
+    private static IEnumerable<string> AllStrings(string alphabet, int maxLength)
+    {
+        var level = new List<string> { "" };
+        yield return "";
+        for (var length = 1; length <= maxLength; length++)
+        {
+            level = [.. level.SelectMany(s => alphabet.Select(c => s + c))];
+            foreach (var s in level) yield return s;
+        }
+    }
 }
