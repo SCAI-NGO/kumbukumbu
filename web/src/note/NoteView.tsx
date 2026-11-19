@@ -668,7 +668,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
       {note.data && <EntryLine key="entry-line" path={path} version={note.data.version} />}
       {note.data && card && <BoardLine column={card.column} since={card.since} />}
       {/* Once the vault list says whose vault it is: the owner's bar and a member's differ. */}
-      {vault && <PublicationBar path={path} owner={vault.owner == null} />}
+      {vault && <PublicationBar path={path} owner={vault.owner == null} lastWriteAt={note.data?.lastWriteAt} />}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
         {bannerHasIt && failedText}
       </AgentBanner>

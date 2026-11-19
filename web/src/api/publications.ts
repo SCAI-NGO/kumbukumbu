@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call, HttpError } from "./client";
 import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
@@ -102,24 +102,30 @@ export const usePublications = (vault: string, enabled = true) =>
     queryFn: () => call(api.GET("/api/vaults/{vault}/publications", { params: { path: { vault } } })),
   });
 
+/** The note's publication, shared by its own bar and the bars of the notes in its bundle. */
+const publicationQuery = (path: string) => ({
+  queryKey: ["publication", path],
+  gcTime: 0,
+  queryFn: async () => {
+    try {
+      return await call(api.GET("/api/publications/{vault}/{path}", { params: params(path) }));
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
+  },
+});
+
 /**
  * The note's publication, with the link for the owner; null when it isn't published. Asked only while `enabled`. The
  * link holds the code: once nothing shows it, it is gone from the cache (as the share dialog's links are).
  */
-export const usePublication = (path: string, enabled = true) =>
-  useQuery({
-    queryKey: ["publication", path],
-    enabled,
-    gcTime: 0,
-    queryFn: async () => {
-      try {
-        return await call(api.GET("/api/publications/{vault}/{path}", { params: params(path) }));
-      } catch (e) {
-        if (e instanceof HttpError && e.status === 404) return null;
-        throw e;
-      }
-    },
-  });
+export const usePublication = (path: string, enabled = true) => useQuery({ ...publicationQuery(path), enabled });
+
+/** When the copy of each of `starts`' bundles was made (Publish 2.0 decision 7), from the start's own publication;
+ * undefined until it answers, null when it holds no time. Asked only while `enabled`. */
+export const useBundleCopies = (starts: readonly string[], enabled: boolean): (string | null | undefined)[] =>
+  useQueries({ queries: starts.map((start) => ({ ...publicationQuery(start), enabled })) }).map((q) => q.data && (q.data.snapshotAt ?? null));
 
 /**
  * The note's publication as its bar wants it: asked of its own only once the vault's list names it, so an unpublished

@@ -3,7 +3,7 @@ import { lazy, Suspense, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useNoteHref } from "../shell/openInPane";
-import { useBundledIn, useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
+import { useBundleCopies, useBundledIn, useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
 const PublishDialog = lazy(() => import("../shell/PublishDialog"));
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
@@ -28,7 +28,7 @@ function olderText(snapshotAt: string, changedAt: string | null) {
  * the note changed since, with the link to copy again, Update copy and Unpublish. A member learns only that it is
  * published (§3.10). Switched off, only Unpublish is left: withdrawing always works.
  */
-export default function PublicationBar({ path, owner }: { path: string; owner: boolean }) {
+export default function PublicationBar({ path, owner, lastWriteAt }: { path: string; owner: boolean; lastWriteAt?: string }) {
   const publication = useNotePublication(path);
   const enabled = usePublishEnabled();
   const update = useUpdatePublication(path);
@@ -40,7 +40,7 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
 
   const p = publication.data;
   // A note published with another one's bundle (Publish 2.0 decision 7): where it went out, for owner and member alike.
-  if (!p && starts.length > 0) return <BundledBar starts={owner ? starts : null} />;
+  if (!p && starts.length > 0) return <BundledBar starts={owner ? starts : null} enabled={enabled === true} lastWriteAt={lastWriteAt} />;
   if (!p) return null;
 
   if (!owner) {
@@ -108,10 +108,11 @@ export default function PublicationBar({ path, owner }: { path: string; owner: b
 
 const titleOf = (path: string) => path.split("/").at(-1)!.replace(/\.md$/i, "");
 
-/** "Published with Plan": this note went out inside the bundle of each start note named; a member learns only that
- * it is published (publish spec §3.10). */
-function BundledBar({ starts }: { starts: string[] | null }) {
+/** "Published with Plan": this note went out inside the bundle of each start note named, yellow when a copy is older
+ * than the note, its update at the start note; a member learns only that it is published (publish spec §3.10). */
+function BundledBar({ starts, enabled, lastWriteAt }: { starts: string[] | null; enabled: boolean; lastWriteAt?: string }) {
   const noteHref = useNoteHref();
+  const copies = useBundleCopies(starts ?? [], enabled);
   if (!starts) {
     return (
       <section aria-label="Publication" className={barClass}>
@@ -119,9 +120,15 @@ function BundledBar({ starts }: { starts: string[] | null }) {
       </section>
     );
   }
+  // Oldest first; a copy without a time is never older.
+  const copied = copies.filter((at): at is string => !!at).sort((a, b) => Date.parse(a) - Date.parse(b));
+  const older = !!lastWriteAt && copied.some((at) => Date.parse(lastWriteAt) > Date.parse(at));
   return (
-    <section aria-label="Publication" className={barClass}>
-      <span className="py-2">
+    <section aria-label="Publication" data-tone={older ? "yellow" : undefined} className={barClass}>
+      {older && <span aria-hidden className="size-2 flex-none rounded-full bg-warning" />}
+      {/* A status from the start, so the yellow is announced when the start's copy answers. */}
+      <span role="status" className={older ? "min-w-0 flex-1 py-2 pl-1.5" : "py-2"}>
+        {older && `Published copy is older than this note. ${olderText(copied[0], lastWriteAt)}. `}
         Published with{" "}
         {starts.map((start, i) => (
           <span key={start}>

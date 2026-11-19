@@ -32,7 +32,7 @@
 //    shows the list again before anything goes out (decisions 4, 7; "Update copy … always shows the list first")
 //    → "publish: the bar names the start note …".
 // 10. A bundled note's bar turns yellow when the copy is older than the note (decision 7) → "publish: a bundled note's
-//    bar turns yellow …" (finding F-08).
+//    bar turns yellow …" (F-08, fixed in 0.6.0).
 // Left out: the limits of 500 notes and 64 MB (decision 9): not cheap to reach, covered by xUnit; marking and removing a
 // note later, the activity entries (decision 10), the API's refusals and a member's prune: covered over MCP
 // (e2e/mcp/publish.spec.ts) through the reader's API, the activity API and `sh`; Link for your AI with a bundle: over
@@ -465,7 +465,6 @@ test("publish: a PDF the bundle embeds is listed as staying behind @publish @pho
 });
 
 test("publish: a bundled note's bar turns yellow when the copy is older than the note @publish @phone", async ({ page, aliceApi, folder }) => {
-  test.fail(true, 'F-08 (Medium, bug): the bar of a bundled note says only "Published with …" and never turns yellow when the note changed after the copy');
   const b = bundle(folder);
   afterTest(() => cleanUp(aliceApi, b.path("Start"), [], [b.path("Start"), b.path("Alpha")]));
   await aliceApi.putNote(b.path("Start"), `# Start\n\n${b.link("Alpha")}\n`);
