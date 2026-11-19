@@ -1557,6 +1557,7 @@ public static partial class FairCopies
     [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
 
-    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)")]
-    private static partial Regex NoteLinkRegex();
+    // Linear in the text, as the outline's patterns.
+    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)", RegexOptions.NonBacktracking)]
+    internal static partial Regex NoteLinkRegex();
 }

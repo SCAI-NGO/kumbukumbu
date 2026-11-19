@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Publishing;
 
@@ -584,4 +585,25 @@ public class FairCopyTests
     [Fact]
     public void NoteIds_reads_ids_outside_code() =>
         Assert.Equal(new HashSet<int> { 4, 5 }, FairCopies.NoteIds("`[a](#kn-3)` [b](#kn-4/x)\n\n![c](#kn-5)").ToHashSet());
+
+    [Fact]
+    public void Note_links_are_found_in_every_short_text_as_the_pattern_reads_them()
+    {
+        var pattern = new Regex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)");
+        string[] tokens = ["[", "]", "](#kn-1)", "](#kn-12/a%20b)", "](#kn-12/a b)", "\\", "!", "x", " "];
+        var texts = new List<string> { "" };
+        for (var (from, length) = (0, 1); length <= 5; length++)
+        {
+            var to = texts.Count;
+            for (var i = from; i < to; i++)
+                foreach (var token in tokens) texts.Add(texts[i] + token);
+            from = to;
+        }
+
+        foreach (var text in texts)
+            Assert.Equal(Found(pattern.Matches(text)), Found(FairCopies.NoteLinkRegex().Matches(text)));
+
+        static string[] Found(MatchCollection matches) =>
+            [.. matches.Select(m => $"{m.Index}:{m.Length}:" + string.Join(":", m.Groups.Cast<Group>().Skip(1).Select(g => g.Success ? g.Value : "-")))];
+    }
 }
