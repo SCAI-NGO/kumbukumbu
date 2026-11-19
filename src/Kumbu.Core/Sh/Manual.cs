@@ -26,6 +26,7 @@ public static class Manual
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
+          csv [options] [path] [B2:D20]   read a CSV text file as a table: its shape, then --rows 2-20, --cols Date,Amount or a range (help csv)
           history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
           blame [--lines] <path>          who wrote what: the last writer of each run of lines of a note (#section works); on a folder: lines per writer per note
           diff <path> [from [to]]         what changed between versions (default: last change); --word
@@ -54,7 +55,7 @@ public static class Manual
         Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes only there, not PDFs.
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
-        '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.
+        '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg, csv.
         All paths are absolute (e.g. /Work/projects/plan.md); there is no working directory.
         Quote paths with spaces: cat "/Work/Meeting Notes.md". Quote regexes with | ( ) or spaces.
         Sections: cat "/Work/plan.md#Architecture#Gates"; a unique heading works alone (#Gates); duplicates take [2]; a block by its id: cat "/Work/plan.md#^goal".

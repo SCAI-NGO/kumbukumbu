@@ -49,6 +49,7 @@ public sealed class Shell
         ICommand[] commands =
         [
             .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
+            new Csv(notes),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],

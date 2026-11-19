@@ -96,7 +96,7 @@ public class ShellTests
     {
         var result = await Run(line);
         Assert.True(result.IsError);
-        Assert.EndsWith(" does not read from a pipe; only rg, head, tail, wc, sort do", result.Output);
+        Assert.EndsWith(" does not read from a pipe; only rg, head, tail, wc, sort, csv do", result.Output);
     }
 
     [Fact]

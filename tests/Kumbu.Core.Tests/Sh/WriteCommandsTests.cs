@@ -122,7 +122,7 @@ public class WriteCommandsTests
     [InlineData("ls /Demo | rm")]
     [InlineData("ls /Demo | restore")]
     public async Task WritingCommandsDoNotReadFromAPipe(string line) =>
-        Assert.EndsWith("does not read from a pipe; only rg, head, tail, wc, sort do", (await Run(line)).Output);
+        Assert.EndsWith("does not read from a pipe; only rg, head, tail, wc, sort, csv do", (await Run(line)).Output);
 
     [Fact]
     public async Task RestoreAnOlderRemovalByItsVersion()
