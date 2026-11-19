@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useSyncExternalStore } from "react";
 import { defaultSchemeFor, schemes } from "./schemes";
 
 const storageKey = "kumbu.scheme";
+
+// Told of every choice, wherever it is made: the palette's and the Appearance window's.
+const listeners = new Set<() => void>();
 
 /** The user's choice, if they made one; storage may be blocked, so every access is guarded. */
 export function storedScheme(): string | null {
@@ -21,8 +25,17 @@ export function applyScheme(id: string | null): void {
   } catch {
     // The scheme still applies for this visit.
   }
+  listeners.forEach((l) => l());
   const effective = id ?? defaultSchemeFor(window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.scheme = effective;
+}
+
+/** The user's choice as `storedScheme` reads it, kept up to date with every `applyScheme`. */
+export function useStoredScheme(): string | null {
+  return useSyncExternalStore((l) => {
+    listeners.add(l);
+    return () => listeners.delete(l);
+  }, storedScheme);
 }
 
 export function initScheme(): void {

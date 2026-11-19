@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net.Http.Json;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
@@ -185,8 +186,11 @@ public sealed class VaultLockMetricsTests(MongoFixture fixture)
         Assert.True(Scrape.Value(await ExportAsync(), series) >= before + 1);
     }
 
+    /// <summary>Configured first, as the server does: run before any host, the first collection would otherwise start
+    /// prometheus-net's meter adapter on every meter, and the routing meter's series would reach every later scrape.</summary>
     private static async Task<string> ExportAsync()
     {
+        KumbuMetrics.Configure();
         using var stream = new MemoryStream();
         await Prometheus.Metrics.DefaultRegistry.CollectAndExportAsTextAsync(stream, Ct);
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());

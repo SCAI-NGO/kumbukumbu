@@ -154,7 +154,7 @@ A value the calendar can't read (`when: tomorrow`, `task: maybe`, `until` before
 ### 6.1 Reading
 
 ```
-calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11] [--tag <tag>]
+calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11 | --from 2026-11-20 --to 2026-12-06] [--tag <tag>]
 calendar notifications [--tag <tag>]
 ```
 
@@ -162,6 +162,16 @@ calendar notifications [--tag <tag>]
 - A vault without `Calendar/` answers like any other (§4).
 - `--tag` as in `board` and `rg` (nested tags, with or without `#`, ignoring case; frontmatter and inline tags, `TagReader`): whole notes, not lines. For a weekly report the agent reads the listed notes with `cat` (or combines with `rg --tag`). *Maintainer:* no `--lines` option.
 - `calendar` is a reader: it runs on a checkpoint as the others in `Shell.Readers` do.
+
+#### A free range (amended 2026-11-18)
+
+*Decided by Chris on 2026-11-18, because the people asked wanted a free range.* `--from 2026-11-20 --to 2026-12-06` prints those days as the month prints its weeks (§7.4): each ISO week a heading cut to the days in the range ("Week 47 · 20–22 Nov"), only the days with entries, "nothing yet" for an empty week; above them the range ("20 November – 6 December 2026 · /Work").
+
+- Days are ISO days in the caller's zone (§3), both ends included. What counts in the range is what counts in a week: an entry on one of its days, and a window or week entry overlapping it, even when it began before `--from`; states (overdue, upcoming) as everywhere.
+- Both are needed: one without the other is refused ("calendar: --from needs --to; give both"), so there is no default length to remember. `--to` before `--from` is refused.
+- **At most 366 days**, so that one call can't ask for centuries; a year, a leap year's too, fits.
+- Not with `--week` or `--month` (refused, as those two are together); `--tag` narrows it as it narrows a week.
+- Only `sh`: the web app's views stay week and month, and its API takes only those.
 
 ### 6.2 Writing
 

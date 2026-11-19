@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Links;
 using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Tests.Tags;
@@ -104,6 +105,18 @@ public class TagReaderTests
 
         Assert.Equal([new TagUse("a", 3), new TagUse("b", 4), new TagUse("c", 7)], uses);
         Assert.Equal([new TagUse("a", 1), new TagUse("b", 1)], TagReader.Read("---\ntags: [a, b]\n---\n"));
+    }
+
+    [Fact]
+    public void Frontmatter_longer_than_aliases_are_read_from_has_no_tags_but_the_text_keeps_its_own()
+    {
+        const string start = "---\ntags: [a]\nnotes: ";
+        const string end = "\n---\n#inline\n";
+        var fits = start + new string('x', NoteAliases.MaxFrontmatterLength - start.Length - "\n---\n".Length) + end;
+        var over = start + new string('x', NoteAliases.MaxFrontmatterLength - start.Length - "\n---\n".Length + 1) + end;
+
+        Assert.Equal("a inline", Tags(fits));
+        Assert.Equal("inline", Tags(over));
     }
 
     [Fact]

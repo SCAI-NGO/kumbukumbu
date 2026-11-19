@@ -53,11 +53,7 @@ export async function expectLoaded(image: Locator) {
 
 const watched = new WeakSet<Page>();
 
-/**
- * Once per page, before a note is opened: the install hint's handler, and a record of each Blob the page makes an
- * object URL of, by its URL (the app's CSP doesn't let a page fetch a `blob:` URL, so the SVG behind a diagram's
- * image is read from its Blob: `svgOf`).
- */
+/** Once per page, before a note is opened: the install hint's handler. */
 async function preparePage(page: Page) {
   if (watched.has(page)) return;
   watched.add(page);
@@ -65,25 +61,16 @@ async function preparePage(page: Page) {
   await page.addLocatorHandler(hint, async () => {
     await hint.getByRole("button", { name: "Not now" }).click();
   });
-  await page.addInitScript(() => {
-    const w = window as unknown as { __blobs: Map<string, Blob> };
-    w.__blobs = new Map();
-    const make = URL.createObjectURL.bind(URL);
-    URL.createObjectURL = (object: Blob | MediaSource) => {
-      const url = make(object);
-      if (object instanceof Blob) w.__blobs.set(url, object);
-      return url;
-    };
-  });
 }
 
-/** The SVG behind a diagram's `blob:` image, as text: what it draws and in which colours. */
-export const svgOf = (image: Locator) =>
-  image.evaluate(async (i: HTMLImageElement) => {
-    const blob = (window as unknown as { __blobs: Map<string, Blob> }).__blobs.get(i.src);
-    if (!blob) throw new Error("No Blob kept for the image (opened without openNote?).");
-    return blob.text();
-  });
+const dataPrefix = "data:image/svg+xml;charset=utf-8,";
+
+/** The SVG behind a diagram's `data:` image, as text: what it draws and in which colours. */
+export async function svgOf(image: Locator) {
+  const src = (await image.getAttribute("src")) ?? "";
+  if (!src.startsWith(dataPrefix)) throw new Error(`The diagram's image is no SVG data URL: ${src.slice(0, 40)}`);
+  return decodeURIComponent(src.slice(dataPrefix.length));
+}
 
 /** Mermaid's `default` theme fills a flowchart's nodes with #ECECFF; its `dark` theme doesn't use it. */
 export const lightFill = /#ececff/i;

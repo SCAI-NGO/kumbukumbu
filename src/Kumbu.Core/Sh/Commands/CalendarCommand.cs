@@ -16,7 +16,8 @@ namespace Kumbu.Core.Sh.Commands;
 /// </summary>
 public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> now, ICallerZone zone, CalendarService? service = null) : ICommand
 {
-    private static readonly Option[] ReadSpec = [new(null, "week", TakesValue: true), new(null, "month", TakesValue: true), new(null, "tag", TakesValue: true)];
+    private static readonly Option[] ReadSpec = [new(null, "week", TakesValue: true), new(null, "month", TakesValue: true),
+        new(null, "from", TakesValue: true), new(null, "to", TakesValue: true), new(null, "tag", TakesValue: true)];
     private static readonly Option[] NotificationsSpec = [new(null, "tag", TakesValue: true)];
 
     private static readonly Option[] SetSpec =
@@ -35,12 +36,12 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     public string Name => "calendar";
 
-    public string Usage => "calendar <vault> [--week W | --month M] [--tag T] | calendar notifications";
+    public string Usage => "calendar <vault> [--week W | --month M | --from D --to D] [--tag T] | calendar notifications";
 
-    public string Summary => "the notes with a time: a vault's week or month; notifications: what's on in every vault; set, move, close, reopen, unset change one";
+    public string Summary => "the notes with a time: a vault's week, month or days; notifications: what's on in every vault; set, move, close, reopen, unset change one";
 
     public string Help => """
-        calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11] [--tag <tag>]
+        calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11 | --from 2026-11-20 --to 2026-12-06] [--tag <tag>]
         calendar notifications [--tag <tag>]
         calendar set <note> --when <value> [--until <value>] [--task | --no-task] [--upcoming 7d] [--tz <zone>] [--reason <text>]
         calendar move <note> <when>
@@ -59,6 +60,9 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
           read, never dropped.
           --week W   that week: 46 of the current year, or 2026-W46
           --month M  that month as its weeks, only the days with entries: 2026-11
+          --from D --to D
+                     those days (2026-11-20), both included, as their weeks, only the days
+                     with entries; give both, at most 366 days
           --tag T    only the notes with that tag or one nested below it, frontmatter or text
                      (ignoring case, with or without '#'); read them with cat
           calendar notifications lists what's on in every vault you can read: overdue first
@@ -77,6 +81,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
           calendar /Work
           calendar /Work --week 47
           calendar /Work --month 2026-12 --tag kumbu
+          calendar /Work --from 2026-11-20 --to 2026-12-06
           calendar notifications
           calendar set "/Work/Pump/Certificate.md" --when 2026-12-15 --task --upcoming 14d
           calendar close "/Work/Pump/Certificate.md" --reason "renewed until 2027"
@@ -95,7 +100,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         for (var i = 0; i < args.Count; i++)
         {
             if (args[i] == "--") return i + 1 < args.Count ? args[i + 1] : null;
-            if (args[i] is "--week" or "--month" or "--tag") i++;
+            if (args[i] is "--week" or "--month" or "--from" or "--to" or "--tag") i++;
             else if (!args[i].StartsWith('-')) return args[i];
         }
 
@@ -131,6 +136,10 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         var (vault, vaultError) = await VaultAsync(options.Operands[0], "calendar /Work", ct);
         if (vault is null) return vaultError!;
         if (options.Has("week") && options.Has("month")) return ShellResult.Error("calendar: --week and --month can't go together; give one");
+        if ((options.Has("from") || options.Has("to")) && (options.Has("week") || options.Has("month")))
+            return ShellResult.Error("calendar: --from and --to can't go together with --week or --month; give one");
+        if (options.Has("from") != options.Has("to"))
+            return ShellResult.Error(options.Has("from") ? "calendar: --from needs --to; give both" : "calendar: --to needs --from; give both");
         if (!TryTag(options, out var tag, out var tagError)) return tagError!;
 
         var zoneNow = await zone.ZoneAsync(ct);
@@ -138,12 +147,21 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         var today = Zones.ToLocal(nowUtc, zoneNow).Day;
 
         (int Year, int Month)? month = null;
-        (int Year, int Week) week;
-        if (options.Value("month") is { } monthText)
+        (DateOnly From, DateOnly To)? range = null;
+        (int Year, int Week) week = default;
+        if (options.Value("from") is { } fromText)
+        {
+            if (ParseDay("from", fromText, out var from) is { } fromError) return fromError;
+            if (ParseDay("to", options.Value("to")!, out var to) is { } toError) return toError;
+            if (to < from) return ShellResult.Error($"calendar: --to {options.Value("to")} is before --from {fromText}");
+            var days = to.DayNumber - from.DayNumber + 1;
+            if (days > MaxRangeDays) return ShellResult.Error($"calendar: a range has at most {MaxRangeDays} days, not {days}");
+            range = (from, to);
+        }
+        else if (options.Value("month") is { } monthText)
         {
             if (ParseMonth(monthText, out var asked) is { } monthError) return monthError;
             month = asked;
-            week = default;
         }
         else
         {
@@ -160,21 +178,17 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
         var printer = new Printer(zoneNow, today);
         var lines = new List<string>();
-        if (month is var (year, number))
+        if (range is var (first, last))
+        {
+            lines.Add($"{Range(first, last, "MMMM", years: true)} · /{vault}");
+            foreach (var shown in CalendarLayout.Range(calendar, first, last, nowUtc, zoneNow))
+                AddWeek(lines, printer, shown, Range(shown.Days[0].Day, shown.Days[^1].Day, "MMM", years: false));
+        }
+        else if (month is var (year, number))
         {
             lines.Add($"{new DateOnly(year, number, 1).ToString("MMMM yyyy", Invariant)} · /{vault}");
             foreach (var shown in CalendarLayout.Month(calendar, year, number, nowUtc, zoneNow))
-            {
-                lines.Add($"Week {shown.Week} · {Range(shown.Monday, shown.Monday.AddDays(6), "MMM", years: false)}");
-                lines.AddRange(shown.Spanning.Select(e => "  " + printer.Spanning(e)));
-                foreach (var day in shown.Days.Where(d => d.Entries.Count > 0))
-                {
-                    lines.Add("  " + DayHeading(day.Day));
-                    lines.AddRange(day.Entries.Select(e => "    " + printer.OnDay(e)));
-                }
-
-                if (shown.Spanning.Count == 0 && shown.Days.All(d => d.Entries.Count == 0)) lines.Add("  nothing yet");
-            }
+                AddWeek(lines, printer, shown, Range(shown.Monday, shown.Monday.AddDays(6), "MMM", years: false));
         }
         else
         {
@@ -201,6 +215,20 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         }
 
         return ShellResult.Ok(string.Join('\n', lines));
+    }
+
+    // A week of a month or a range: its heading, then only the days with entries.
+    private static void AddWeek(List<string> lines, Printer printer, CalendarWeek shown, string days)
+    {
+        lines.Add($"Week {shown.Week} · {days}");
+        lines.AddRange(shown.Spanning.Select(e => "  " + printer.Spanning(e)));
+        foreach (var day in shown.Days.Where(d => d.Entries.Count > 0))
+        {
+            lines.Add("  " + DayHeading(day.Day));
+            lines.AddRange(day.Entries.Select(e => "    " + printer.OnDay(e)));
+        }
+
+        if (shown.Spanning.Count == 0 && shown.Days.All(d => d.Entries.Count == 0)) lines.Add("  nothing yet");
     }
 
     private async Task<ShellResult> WriteAsync(CalendarService calendar, string verb, IReadOnlyList<string> args, CancellationToken ct)
@@ -328,6 +356,9 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     private const string Years = "calendar: a calendar has the years 2 to 9998";
 
+    // So that one call can't ask for centuries; a year, a leap year's too, fits.
+    private const int MaxRangeDays = 366;
+
     [GeneratedRegex(@"\A[0-9]{1,2}\z")]
     private static partial Regex WeekNumber();
 
@@ -336,6 +367,9 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     [GeneratedRegex(@"\A([0-9]{4})-([0-9]{2})\z")]
     private static partial Regex MonthForm();
+
+    [GeneratedRegex(@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z")]
+    private static partial Regex DayForm();
 
     // The layout takes real weeks and months only; the years are those a value can be read in (CalendarTime).
     private static ShellResult? ParseWeek(string text, int currentYear, out (int Year, int Week) week)
@@ -367,12 +401,21 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
         return null;
     }
 
+    private static ShellResult? ParseDay(string option, string text, out DateOnly day)
+    {
+        day = default;
+        if (!DayForm().IsMatch(text) || !DateOnly.TryParseExact(text, "yyyy-MM-dd", Invariant, DateTimeStyles.None, out day))
+            return ShellResult.Error($"calendar: --{option} takes a day such as 2026-11-20, not {text}");
+        return day.Year is < 2 or > 9998 ? ShellResult.Error(Years) : null;
+    }
+
     private static string DayHeading(DateOnly day) => day.ToString("ddd d MMM", Invariant);
 
-    /// <summary>"9–15 November 2026", "26 October – 1 November 2026", "28 December 2026 – 3 January 2027"; without the years "9–15 Nov".</summary>
+    /// <summary>"9–15 November 2026", "26 October – 1 November 2026", "28 December 2026 – 3 January 2027", "4 December 2026"; without the years "9–15 Nov".</summary>
     private static string Range(DateOnly first, DateOnly last, string monthForm, bool years)
     {
         var year = years ? " yyyy" : "";
+        if (first == last) return last.ToString("d " + monthForm + year, Invariant);
         if (first.Year == last.Year && first.Month == last.Month) return $"{first.Day}–{last.ToString("d " + monthForm + year, Invariant)}";
         var from = first.ToString("d " + monthForm + (first.Year != last.Year ? year : ""), Invariant);
         return $"{from} – {last.ToString("d " + monthForm + year, Invariant)}";

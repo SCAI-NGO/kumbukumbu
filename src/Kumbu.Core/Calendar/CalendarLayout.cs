@@ -10,7 +10,7 @@ public sealed record DayEntry(Entry Entry, EntryStatus Status);
 public sealed record CalendarDay(DateOnly Day, IReadOnlyList<DayEntry> Entries, IReadOnlyList<DayEntry> AlsoOngoing);
 
 /// <param name="Spanning">Week entries and entries over several days touching the week: by first day, then title.</param>
-/// <param name="Days">Always seven, Monday to Sunday.</param>
+/// <param name="Days">Monday to Sunday; in a range only its days.</param>
 public sealed record CalendarWeek(int IsoYear, int Week, DateOnly Monday, IReadOnlyList<DayEntry> Spanning, IReadOnlyList<CalendarDay> Days);
 
 /// <summary>
@@ -20,8 +20,11 @@ public sealed record CalendarWeek(int IsoYear, int Week, DateOnly Monday, IReadO
 /// </summary>
 public static class CalendarLayout
 {
-    public static CalendarWeek Week(VaultCalendar calendar, int isoYear, int week, DateTime nowUtc, TimeZoneInfo zone) =>
-        WeekOf(Place(calendar, nowUtc, zone), isoYear, week);
+    public static CalendarWeek Week(VaultCalendar calendar, int isoYear, int week, DateTime nowUtc, TimeZoneInfo zone)
+    {
+        var monday = DateOnly.FromDateTime(ISOWeek.ToDateTime(isoYear, week, DayOfWeek.Monday));
+        return WeekOf(Place(calendar, nowUtc, zone), monday, monday.AddDays(6));
+    }
 
     /// <summary>The ISO weeks from that of the 1st to that of the last day, so that every day of the month is in a week shown.</summary>
     public static IReadOnlyList<CalendarWeek> Month(VaultCalendar calendar, int year, int month, DateTime nowUtc, TimeZoneInfo zone)
@@ -30,9 +33,21 @@ public static class CalendarLayout
         var last = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
         var weeks = new List<CalendarWeek>();
         for (var monday = MondayOf(new DateOnly(year, month, 1)); monday <= last; monday = monday.AddDays(7))
+            weeks.Add(WeekOf(placed, monday, monday.AddDays(6)));
+
+        return weeks;
+    }
+
+    /// <summary>The ISO weeks from <paramref name="from"/> to <paramref name="to"/>, both included, each cut to the days in the range;
+    /// an entry spanning several days stands above each week whose days in the range it touches.</summary>
+    public static IReadOnlyList<CalendarWeek> Range(VaultCalendar calendar, DateOnly from, DateOnly to, DateTime nowUtc, TimeZoneInfo zone)
+    {
+        var placed = Place(calendar, nowUtc, zone);
+        var weeks = new List<CalendarWeek>();
+        for (var monday = MondayOf(from); monday <= to; monday = monday.AddDays(7))
         {
-            var day = monday.ToDateTime(TimeOnly.MinValue);
-            weeks.Add(WeekOf(placed, ISOWeek.GetYear(day), ISOWeek.GetWeekOfYear(day)));
+            var sunday = monday.AddDays(6);
+            weeks.Add(WeekOf(placed, monday > from ? monday : from, sunday < to ? sunday : to));
         }
 
         return weeks;
@@ -68,15 +83,15 @@ public static class CalendarLayout
                 .ThenBy(p => p.Item.Entry.Title, TextOrder.IgnoreCase).ThenBy(p => p.Item.Entry.Path.Value, StringComparer.Ordinal)]);
     }
 
-    private static CalendarWeek WeekOf(Places places, int isoYear, int week)
+    // The days first to last of one ISO week: all seven, or those of a range.
+    private static CalendarWeek WeekOf(Places places, DateOnly first, DateOnly last)
     {
-        var monday = DateOnly.FromDateTime(ISOWeek.ToDateTime(isoYear, week, DayOfWeek.Monday));
-        var sunday = monday.AddDays(6);
-        var spanning = places.Spanning.Where(p => p.First <= sunday && p.Last >= monday).ToList();
-        var days = Enumerable.Range(0, 7).Select(i => monday.AddDays(i)).Select(day => new CalendarDay(day,
+        var spanning = places.Spanning.Where(p => p.First <= last && p.Last >= first).ToList();
+        var days = Enumerable.Range(0, last.DayNumber - first.DayNumber + 1).Select(i => first.AddDays(i)).Select(day => new CalendarDay(day,
             [.. places.OnDays.Where(p => p.First == day).Select(p => p.Item)],
             [.. spanning.Where(p => p.First <= day && p.Last >= day).Select(p => p.Item)])).ToList();
-        return new CalendarWeek(isoYear, week, monday, [.. spanning.Select(p => p.Item)], days);
+        var date = first.ToDateTime(TimeOnly.MinValue);
+        return new CalendarWeek(ISOWeek.GetYear(date), ISOWeek.GetWeekOfYear(date), MondayOf(first), [.. spanning.Select(p => p.Item)], days);
     }
 
     /// <summary>The viewer's first and last day of an entry. A time window ends at its instant, so one ending at midnight doesn't

@@ -43,7 +43,9 @@ internal static class PictureText
         var share = picture.Width / (crop?.Width ?? (Rotation.SwapsSides(rotate) ? picture.OriginalHeight : picture.OriginalWidth));
         if (share < ReadableShare)
         {
-            notes.Add($"Reduced to {share * 100:0} %: small text and digits may be misread; look at {(crop is null ? "a part" : "a smaller part")} with --crop x,y,w,h before quoting them.");
+            // The factor spares a model the division when it reads a crop off the picture (wished for on 2026-11-04).
+            var factor = (1 / share).ToString("0.##", CultureInfo.InvariantCulture);
+            notes.Add($"Reduced to {share * 100:0} % (1 px here is {factor} px of the original): small text and digits may be misread; look at {(crop is null ? "a part" : "a smaller part")} with --crop x,y,w,h before quoting them.");
         }
 
         if (gif && frame is null)

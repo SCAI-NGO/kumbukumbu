@@ -8,7 +8,7 @@ import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError } from "../../components/form";
 import { usePreferences } from "../../attachments/downloadFiles";
 import { setAutoRefresh, storedAutoRefresh } from "../../note/autoRefresh";
-import { applyScheme, storedScheme } from "../../theme/apply";
+import { applyScheme, useStoredScheme } from "../../theme/apply";
 import { schemes, type Scheme, type Tokens } from "../../theme/schemes";
 import { isStandalone } from "../../update/InstallHint";
 import { Section } from "./Section";
@@ -28,12 +28,9 @@ const follow = "system";
 
 /** Kept in this browser only, and only the scheme's name (there is no account setting for it). */
 function SchemeSection() {
-  const [chosen, setChosen] = useState(() => storedScheme() ?? follow);
-
-  const choose = (id: string) => {
-    setChosen(id);
-    applyScheme(id === follow ? null : id);
-  };
+  // Read from the store, not kept here: the palette may choose one while this window is open.
+  const chosen = useStoredScheme() ?? follow;
+  const choose = (id: string) => applyScheme(id === follow ? null : id);
 
   return (
     <Section title="Colour scheme">

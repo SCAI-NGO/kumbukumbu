@@ -85,6 +85,9 @@ public sealed class UnlockedVault
 
     public string Name { get; }
 
+    /// <summary>The id of the account that owns the vault; null for a vault without one, the dev token's.</summary>
+    public string? Owner { get; init; }
+
     /// <summary>The name its owner renamed the vault to (rename spec §1.2), or null; <see cref="Name"/>, in every stored
     /// path, never changes. Set under <see cref="Gate"/>; after a rename, on the object current then, under the catalog's
     /// loading lock instead, under which a load publishes its object.</summary>

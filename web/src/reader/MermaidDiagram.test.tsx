@@ -14,7 +14,7 @@ const flowchart = "flowchart LR\n  Sensor --> Controller --> Pump";
 const chain = (size: number) => ["flowchart LR", ...Array.from({ length: size >> 1 }, (_, i) => `  n${i} --> n${i + 1}`)].join("\n");
 const svg = '<svg viewBox="0 0 640 120" width="100%" style="max-width: 640px;"><g/></svg>';
 
-/** jsdom has no blob URLs: they are stubbed, and spied on. */
+/** jsdom has no blob URLs: they are stubbed, and spied on, so a test can tell that none is made. */
 function blobUrls() {
   for (const name of ["createObjectURL", "revokeObjectURL"] as const) {
     if (!(name in URL)) Object.defineProperty(URL, name, { value: () => undefined, configurable: true, writable: true });
@@ -34,6 +34,16 @@ const deferred = <T,>() => {
 
 type Rendered = Awaited<ReturnType<typeof mermaid.render>>;
 const drawn = (text = svg) => ({ svg: text }) as Rendered;
+/** Another drawing, so that a redraw gives the image another URL. */
+const redrawn = () => drawn(svg.replace("640 120", "640 121"));
+
+const dataPrefix = "data:image/svg+xml;charset=utf-8,";
+/** The SVG the image shows, from its `data:` URL. */
+const svgOf = (img: HTMLElement) => {
+  const src = img.getAttribute("src")!;
+  expect(src.startsWith(dataPrefix)).toBe(true);
+  return decodeURIComponent(src.slice(dataPrefix.length));
+};
 
 let urls: ReturnType<typeof blobUrls>;
 
@@ -53,11 +63,10 @@ describe("MermaidDiagram", () => {
     render(<MermaidDiagram source={flowchart} dark={false} />);
     expect(screen.getByText("Drawing the diagram …")).toBeInTheDocument();
     const img = await screen.findByRole("img", { name: "Diagram (flowchart)" });
-    expect(img.getAttribute("src")).toMatch(/^blob:/);
+    expect(img.getAttribute("src")).toMatch(/^data:image\/svg\+xml;/);
+    expect(urls.create).not.toHaveBeenCalled();
     expect(screen.queryByText("Drawing the diagram …")).not.toBeInTheDocument();
-    const blob = urls.create.mock.calls[0][0] as Blob;
-    expect(blob.type).toBe("image/svg+xml");
-    const text = await blob.text();
+    const text = svgOf(img);
     expect(text).toContain('width="640"');
     expect(text).toContain('height="120"');
     expect(text).not.toContain('width="100%"');
@@ -73,8 +82,7 @@ describe("MermaidDiagram", () => {
       ),
     );
     render(<MermaidDiagram source={flowchart} dark={false} />);
-    await screen.findByRole("img");
-    const text = await (urls.create.mock.calls[0][0] as Blob).text();
+    const text = svgOf(await screen.findByRole("img"));
     const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
     expect(parsed.getElementsByTagName("parsererror")).toHaveLength(0);
     expect(parsed.documentElement.getAttribute("width")).toBe("640");
@@ -92,8 +100,7 @@ describe("MermaidDiagram", () => {
       ),
     );
     render(<MermaidDiagram source={flowchart} dark={false} />);
-    await screen.findByRole("img");
-    const text = await (urls.create.mock.calls[0][0] as Blob).text();
+    const text = svgOf(await screen.findByRole("img"));
     expect(text).toContain("Pump");
     expect(text).not.toMatch(/<a[\s>]/);
     expect(text).toContain("Home");
@@ -103,14 +110,12 @@ describe("MermaidDiagram", () => {
   it("an image that can't be shown shows the source and says so", async () => {
     render(<MermaidDiagram source={flowchart} dark={false} />);
     const img = await screen.findByRole("img");
-    const url = img.getAttribute("src");
     fireEvent.error(img);
     expect(await screen.findByRole("note")).toHaveTextContent(/^This diagram can't be drawn: the image could not be shown\.$/);
     const code = document.querySelector("code.language-mermaid")!;
     expect(code).toBeVisible();
     expect(code.textContent).toBe(flowchart);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
-    expect(urls.revoke).toHaveBeenCalledWith(url);
   });
 
   it("uses accTitle and accDescr as the alt text", async () => {
@@ -126,11 +131,11 @@ describe("MermaidDiagram", () => {
       expect.objectContaining({ theme: "dark", securityLevel: "strict", htmlLabels: false, flowchart: expect.objectContaining({ htmlLabels: false }) }),
     );
 
+    m.render.mockResolvedValue(redrawn());
     rerender(<MermaidDiagram source={flowchart} dark={false} />);
     await waitFor(() => expect(m.render).toHaveBeenCalledTimes(2));
     expect(m.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "default" }));
     await waitFor(() => expect(screen.getByRole("img").getAttribute("src")).not.toBe(firstUrl));
-    expect(urls.revoke).toHaveBeenCalledWith(firstUrl);
   });
 
   it("an init directive cannot loosen the security level", async () => {
@@ -183,6 +188,7 @@ describe("MermaidDiagram", () => {
     fireEvent.click(screen.getByRole("button", { name: "Full size" }));
     const first = img.getAttribute("src");
 
+    m.render.mockResolvedValue(redrawn());
     rerender(<MermaidDiagram source={flowchart} dark />);
     await waitFor(() => expect(screen.getByRole("img").getAttribute("src")).not.toBe(first));
     expect(screen.getByRole("img")).toHaveClass("max-w-full");
@@ -233,14 +239,6 @@ describe("MermaidDiagram", () => {
     expect(screen.getByRole("img", { name: "Diagram (flowchart)" })).toBeInTheDocument();
   });
 
-  it("revokes the image's URL when it goes", async () => {
-    const { unmount } = render(<MermaidDiagram source={flowchart} dark={false} />);
-    const url = (await screen.findByRole("img")).getAttribute("src");
-    expect(urls.revoke).not.toHaveBeenCalled();
-    unmount();
-    expect(urls.revoke).toHaveBeenCalledWith(url);
-  });
-
   it("a render that finishes after unmount makes no image", async () => {
     const held = deferred<Rendered>();
     m.render.mockReturnValueOnce(held.promise);
@@ -249,7 +247,7 @@ describe("MermaidDiagram", () => {
     unmount();
     held.resolve(drawn());
     await new Promise((r) => setTimeout(r, 20));
-    expect(urls.create).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   it("a large diagram waits for Draw diagram, showing its first lines", async () => {
