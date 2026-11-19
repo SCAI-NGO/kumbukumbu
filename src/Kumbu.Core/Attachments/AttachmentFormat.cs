@@ -73,11 +73,13 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     public static string MediaTypeOf(ReadOnlySpan<byte> content) =>
         content.Length <= MaxBytes && TextProblem("", content) is null ? TextMediaType : OctetStream;
 
-    /// <summary>The format a path is kept as: <see cref="Text"/> for a text name strictly inside a skill's folder, else by <see cref="ForName"/>.</summary>
-    public static AttachmentFormat? ForPath(VaultPath path)
+    /// <summary>The format a path is kept as: <see cref="Text"/> for a text name strictly inside a skill's folder, else by <see cref="ForName"/>.
+    /// <paramref name="skillsVault"/> is the caller's name for the vault marked as the vault Skills (<see cref="SkillPaths"/>);
+    /// writers pass it, so that a skills vault of another name keeps its rule, and a vault named Skills that holds no skills keeps files.</summary>
+    public static AttachmentFormat? ForPath(VaultPath path, string? skillsVault = SkillPaths.SkillsVault)
     {
         if (path.IsRoot) return null;
-        if (IsTextName(path.Name) && SkillPaths.IsInSkillFolder(path)) return Text;
+        if (IsTextName(path.Name) && SkillPaths.IsInSkillFolder(path, skillsVault)) return Text;
         return ForName(path.Name);
     }
 
@@ -108,35 +110,32 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     }
 
     /// <summary>
-    /// Null when an attachment at <paramref name="source"/> may be named <paramref name="target"/>; otherwise why not.
-    /// Renaming doesn't change the bytes, so the new extension must name their format (.jpg and .jpeg are one);
-    /// a file may take any name that names no format (spec 2026-11-18, decision 7).
+    /// Null when an attachment at <paramref name="source"/>, kept as <paramref name="mediaType"/>, may be named
+    /// <paramref name="target"/>; otherwise why not. Renaming doesn't change the bytes, so the new extension must name
+    /// their format (.jpg and .jpeg are one); a file may take any name that names no format (spec 2026-11-18, decision 7).
+    /// A skill's text file and a file are one kind of thing in two places: text leaves a skill's folder as a file, and a
+    /// file enters one under a text name only if it is text. <paramref name="skillsVault"/> as for <see cref="ForPath"/>.
     /// </summary>
-    public static string? RenameProblem(VaultPath source, VaultPath target)
+    public static string? RenameProblem(VaultPath source, string mediaType, VaultPath target, string? skillsVault = SkillPaths.SkillsVault)
     {
-        if (ForPath(source) is not { } format) return null;
-        if (format == File)
+        if (ForPath(source, skillsVault) is not { } format) return null;
+        var kept = ForPath(target, skillsVault);
+        if (format == File || format == Text)
         {
-            return ForPath(target) switch
+            var what = format == Text ? "a text file" : "a file";
+            return kept switch
             {
-                { } kept when kept == File => SkillPaths.IsInSkillFolder(target) ? $"{target.Name}: {SkillFolderMessage}" : null,
-                null => $"{source.Name} is a file, not a note; its new name can't end in .md (a new name doesn't change what the file is)",
-                { } kept when kept == Marker => $"{source.Name} is a file; only a folder's marker is named {FolderMarker.Name}",
-                { } kept when kept == Text => $"{source.Name} is a file, and inside a skill's folder {target.Name} is a text file; upload it there instead",
-                { } kept => $"{source.Name} is a file, not {kept.Description}; its new name can't end in {kept.Extension} (a new name doesn't change what the file is)",
+                _ when kept == File => SkillPaths.IsInSkillFolder(target, skillsVault) ? $"{target.Name}: {SkillFolderMessage}" : null,
+                _ when kept == Text => mediaType == TextMediaType ? null : $"{source.Name} isn't text; {SkillFolderMessage}",
+                null => $"{source.Name} is {what}, not a note; its new name can't end in .md (a new name doesn't change what the file is)",
+                _ when kept == Marker => $"{source.Name} is {what}; only a folder's marker is named {FolderMarker.Name}",
+                _ => $"{source.Name} is {what}, not {kept.Description}; its new name can't end in {kept.Extension} (a new name doesn't change what the file is)",
             };
         }
 
-        if (format == Marker) return ForPath(target) == Marker ? null : $"{FolderMarker.Name} keeps its name";
-        if (format == Text)
-        {
-            return ForPath(target)?.Kind == AttachmentKind.Text
-                ? null
-                : $"{source.Name} is a text file, kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)";
-        }
-
-        if (ForPath(target)?.MediaType == format.MediaType) return null;
-        if (format == Svg && ForPath(target) == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
+        if (format == Marker) return kept == Marker ? null : $"{FolderMarker.Name} keeps its name";
+        if (kept?.MediaType == format.MediaType) return null;
+        if (format == Svg && kept == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
@@ -154,13 +153,13 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
 
     /// <summary>Null when the file is accepted; otherwise the reason to show the user. <paramref name="head"/>
     /// is the start of the content (at least 12 bytes where the file has them); for a text file and an SVG callers pass the whole content.</summary>
-    public static string? Problem(VaultPath path, ReadOnlySpan<byte> head)
+    public static string? Problem(VaultPath path, ReadOnlySpan<byte> head, string? skillsVault = SkillPaths.SkillsVault)
     {
-        var format = ForPath(path);
+        var format = ForPath(path, skillsVault);
         if (format is null) return $"{path.Name} is a note's name (it ends in .md); notes are written as text, not uploaded";
 
         // Any bytes, but not in a skill's folder; their media type is MediaTypeOf's, the size bound the writer's.
-        if (format == File) return SkillPaths.IsInSkillFolder(path) ? $"{path.Name}: {SkillFolderMessage}" : null;
+        if (format == File) return SkillPaths.IsInSkillFolder(path, skillsVault) ? $"{path.Name}: {SkillFolderMessage}" : null;
 
         if (format == Marker)
         {

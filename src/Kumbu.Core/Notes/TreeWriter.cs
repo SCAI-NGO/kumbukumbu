@@ -105,15 +105,11 @@ public sealed class TreeWriter(INoteStore store, TimeProvider time, ICaller call
             if (NoteNames.Problem(to) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {problem}");
         }
 
-        if (folder && NoteMover.TextFilesOutsideSkills(files.Select(f => KeyValuePair.Create(f.From.Path, f.To)), source, await store.SkillsVaultAsync(ct)) is { } outside)
-        {
-            return Fail(ShellErrorKind.Invalid, $"{Cp}: {source.Value}/ can't be copied to {target.Value}/: text files are kept only inside a skill's folder: {outside} (copy them into a skill's folder first, or leave them out)");
-        }
-
+        var skillsVault = await store.SkillsVaultAsync(ct);
         foreach (var (from, to) in files)
         {
             // Every file, as mv checks them: a folder copied into a skill's folder would make its SVGs text files.
-            if (AttachmentFormat.RenameProblem(from.Path, to) is { } renameProblem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {renameProblem}");
+            if (AttachmentFormat.RenameProblem(from.Path, from.Current.MediaType, to, skillsVault) is { } renameProblem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {to.Value}: {renameProblem}");
             if (NoteNames.NameProblem(to) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Cp}: {FolderMarker.Shown(to)}: {problem}");
         }
 

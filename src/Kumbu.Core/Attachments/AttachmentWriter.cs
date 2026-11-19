@@ -62,14 +62,11 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: {FolderMarker.InVaultRoot}");
         }
 
-        if (AttachmentFormat.ForPath(path) is not { } format)
+        // A skill's folder by the vault's mark, not its name: the store refuses what it doesn't keep by the same rule.
+        var skillsVault = await notes.SkillsVaultAsync(ct);
+        if (AttachmentFormat.ForPath(path, skillsVault) is not { } format)
         {
-            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, bytes.Span)}");
-        }
-
-        if (format.Kind == AttachmentKind.Text && !SkillPaths.IsInSkillFolder(path, await notes.SkillsVaultAsync(ct)))
-        {
-            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: text files are kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)");
+            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, bytes.Span, skillsVault)}");
         }
 
         if (bytes.Length > AttachmentFormat.MaxBytes)
@@ -77,7 +74,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name} is larger than 15 MB, the limit for a file");
         }
 
-        if (AttachmentFormat.Problem(path, bytes.Span) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
+        if (AttachmentFormat.Problem(path, bytes.Span, skillsVault) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
 
         var image = format == AttachmentFormat.Svg ? SvgImage.Size(bytes.Span) : format.Kind == AttachmentKind.Image ? dimensions : null;
         var existing = await store.GetAttachmentAsync(path, ct);

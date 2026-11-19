@@ -62,42 +62,46 @@ public sealed class DavSkillTextTests(KumbuAppFactory app)
         Assert.Contains("getcontenttype>text/plain; charset=utf-8<", await found.Content.ReadAsStringAsync(Ct));
     }
 
+    // A text file leaves a skill's folder as a file, its media type kept (spec 2026-11-18).
     [Fact]
-    public async Task Move_of_a_folder_with_a_script_out_of__skills_is_400_naming_it()
+    public async Task Move_of_a_folder_with_a_script_out_of__skills_takes_it_along_as_a_file()
     {
         var dav = await DavClient.NewAsync(app.PublicApi);
         await SkillFolderAsync(dav);
         using var made = await dav.SendAsync(new HttpMethod("MKCOL"), "/dav/Work/_skills/x/scripts/");
         (await dav.SendAsync(HttpMethod.Put, "/dav/Work/_skills/x/scripts/run.py", new ByteArrayContent(Script))).Dispose();
         using var move = await dav.SendAsync(DavClient.Move, "/dav/Work/_skills/x/", headers: new Dictionary<string, string> { ["Destination"] = "https://localhost/dav/Work/x/" });
-        Assert.Equal(HttpStatusCode.BadRequest, move.StatusCode);
-        Assert.Contains("scripts/run.py", await move.Content.ReadAsStringAsync(Ct));
-        using var still = await dav.SendAsync(HttpMethod.Get, "/dav/Work/_skills/x/scripts/run.py");
-        Assert.Equal(HttpStatusCode.OK, still.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, move.StatusCode);
+        await AssertTextFileAsync(dav, "/dav/Work/x/scripts/run.py");
     }
 
     [Fact]
-    public async Task Copy_of_a_script_out_of__skills_is_refused()
+    public async Task Copy_of_a_script_out_of__skills_is_a_text_file()
     {
         var dav = await DavClient.NewAsync(app.PublicApi);
         await SkillFolderAsync(dav);
         (await dav.SendAsync(HttpMethod.Put, "/dav/Work/_skills/x/run.py", new ByteArrayContent(Script))).Dispose();
         using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/_skills/x/run.py", headers: new Dictionary<string, string> { ["Destination"] = "https://localhost/dav/Work/run.py" });
-        Assert.True(copy.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnsupportedMediaType, copy.StatusCode.ToString());
-        using var none = await dav.SendAsync(HttpMethod.Get, "/dav/Work/run.py");
-        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, copy.StatusCode);
+        await AssertTextFileAsync(dav, "/dav/Work/run.py");
     }
 
     [Fact]
-    public async Task Copy_of_a_folder_with_a_script_out_of__skills_is_refused_naming_it()
+    public async Task Copy_of_a_folder_with_a_script_out_of__skills_keeps_it()
     {
         var dav = await DavClient.NewAsync(app.PublicApi);
         await SkillFolderAsync(dav);
         (await dav.SendAsync(HttpMethod.Put, "/dav/Work/_skills/x/run.py", new ByteArrayContent(Script))).Dispose();
         using var copy = await dav.SendAsync(DavClient.Copy, "/dav/Work/_skills/x/", headers: new Dictionary<string, string> { ["Destination"] = "https://localhost/dav/Work/y/" });
-        Assert.Equal(HttpStatusCode.BadRequest, copy.StatusCode);
-        Assert.Contains("run.py", await copy.Content.ReadAsStringAsync(Ct));
-        using var none = await dav.SendAsync(HttpMethod.Get, "/dav/Work/y/run.py");
-        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, copy.StatusCode);
+        await AssertTextFileAsync(dav, "/dav/Work/y/run.py");
+    }
+
+    private static async Task AssertTextFileAsync(DavClient dav, string path)
+    {
+        using var got = await dav.SendAsync(HttpMethod.Get, path);
+        Assert.Equal(HttpStatusCode.OK, got.StatusCode);
+        Assert.Equal("text/plain; charset=utf-8", got.Content.Headers.ContentType!.ToString());
+        Assert.Equal(Script, await got.Content.ReadAsByteArrayAsync(Ct));
     }
 }

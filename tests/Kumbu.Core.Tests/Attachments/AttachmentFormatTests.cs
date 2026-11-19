@@ -104,7 +104,7 @@ public class AttachmentFormatTests
     [InlineData("/Work/report.docx", "/Work/Makefile")]
     [InlineData("/Work/data.csv", "/Work/data.txt")]
     public void A_file_takes_any_name_but_a_notes_or_a_known_formats(string source, string target) =>
-        Assert.Null(AttachmentFormat.RenameProblem(P(source), P(target)));
+        Assert.Null(AttachmentFormat.RenameProblem(P(source), AttachmentFormat.OctetStream, P(target)));
 
     [Theory]
     [InlineData("/Work/report.docx", "/Work/report.png", "report.docx is a file, not a PNG image; its new name can't end in .png (a new name doesn't change what the file is)")]
@@ -112,9 +112,16 @@ public class AttachmentFormatTests
     [InlineData("/Work/report.docx", "/Work/report.svg", "report.docx is a file, not an SVG image; its new name can't end in .svg (a new name doesn't change what the file is)")]
     [InlineData("/Work/report.docx", "/Work/report.md", "report.docx is a file, not a note; its new name can't end in .md (a new name doesn't change what the file is)")]
     [InlineData("/Work/data.csv", "/Work/D/.vaultkeep", "data.csv is a file; only a folder's marker is named .vaultkeep")]
-    [InlineData("/Work/run.py", "/Skills/pdf/run.py", "run.py is a file, and inside a skill's folder run.py is a text file; upload it there instead")]
+    [InlineData("/Work/run.py", "/Skills/pdf/run.py", "run.py isn't text; " + AttachmentFormat.SkillFolderMessage)]
     public void A_file_cant_take_a_notes_or_a_known_formats_name(string source, string target, string expected) =>
-        Assert.Equal(expected, AttachmentFormat.RenameProblem(P(source), P(target)));
+        Assert.Equal(expected, AttachmentFormat.RenameProblem(P(source), AttachmentFormat.OctetStream, P(target)));
+
+    [Fact]
+    public void A_text_file_enters_a_skills_folder_under_a_text_name()
+    {
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Work/run.py"), AttachmentFormat.TextMediaType, P("/Skills/pdf/run.py")));
+        Assert.Equal("run.dat: " + AttachmentFormat.SkillFolderMessage, AttachmentFormat.RenameProblem(P("/Work/run.py"), AttachmentFormat.TextMediaType, P("/Skills/pdf/run.dat")));
+    }
 
     [Theory]
     [InlineData("/Work/x.png", "/Work/x.docx", "x.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)")]
@@ -122,7 +129,7 @@ public class AttachmentFormatTests
     [InlineData("/Work/x.webp", "/Work/x.bin", "x.webp is a WebP image; its new name must end in .webp (a new name doesn't change what the file is)")]
     [InlineData("/Work/x.jpg", "/Work/y.jpeg", null)]
     public void A_known_format_doesnt_become_a_file(string source, string target, string? expected) =>
-        Assert.Equal(expected, AttachmentFormat.RenameProblem(P(source), P(target)));
+        Assert.Equal(expected, AttachmentFormat.RenameProblem(P(source), AttachmentFormat.ForPath(P(source))!.MediaType, P(target)));
 
     [Fact]
     public void Text_is_utf8_without_nul()
@@ -139,18 +146,22 @@ public class AttachmentFormatTests
         var refusal = $": {AttachmentFormat.SkillFolderMessage}";
         Assert.Equal("tool.bin" + refusal, AttachmentFormat.Problem(P("/Skills/pdf/tool.bin"), "x"u8));
         Assert.Equal("notes" + refusal, AttachmentFormat.Problem(P("/Work/_skills/x/notes"), "x"u8));
-        Assert.Equal("report.docx" + refusal, AttachmentFormat.RenameProblem(P("/Work/report.docx"), P("/Skills/pdf/report.docx")));
+        Assert.Equal("report.docx" + refusal, AttachmentFormat.RenameProblem(P("/Work/report.docx"), AttachmentFormat.TextMediaType, P("/Skills/pdf/report.docx")));
         // The skill's folder itself and the location hold no files of a skill.
         Assert.Null(AttachmentFormat.Problem(P("/Work/_skills/notes"), "x"u8));
         Assert.Equal("x.md is a note's name (it ends in .md); notes are written as text, not uploaded", AttachmentFormat.Problem(P("/Work/x.md"), "x"u8));
     }
 
     [Fact]
-    public void A_text_file_can_be_renamed_only_within_skill_folders()
+    public void A_text_file_leaves_a_skills_folder_as_a_file()
     {
-        Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), P("/Skills/pdf/b.txt")));
-        Assert.Equal("a.py is a text file, kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)",
-            AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), P("/Skills/a.py")));
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), AttachmentFormat.TextMediaType, P("/Skills/pdf/b.txt")));
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), AttachmentFormat.TextMediaType, P("/Skills/a.py")));
+        Assert.Null(AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), AttachmentFormat.TextMediaType, P("/Work/a.py")));
+        Assert.Equal("a.py is a text file, not a PNG image; its new name can't end in .png (a new name doesn't change what the file is)",
+            AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), AttachmentFormat.TextMediaType, P("/Work/a.png")));
+        Assert.Equal("a.py is a text file, not a note; its new name can't end in .md (a new name doesn't change what the file is)",
+            AttachmentFormat.RenameProblem(P("/Skills/pdf/a.py"), AttachmentFormat.TextMediaType, P("/Work/a.md")));
     }
 
     [Fact]
@@ -214,8 +225,8 @@ public class AttachmentFormatTests
     [Fact]
     public void A_marker_keeps_its_name_and_nothing_else_is_renamed_to_it()
     {
-        Assert.Null(AttachmentFormat.RenameProblem(P("/W/D/.vaultkeep"), P("/W/E/.vaultkeep")));
-        Assert.Equal(".vaultkeep keeps its name", AttachmentFormat.RenameProblem(P("/W/D/.vaultkeep"), P("/W/D/x.png")));
+        Assert.Null(AttachmentFormat.RenameProblem(P("/W/D/.vaultkeep"), FolderMarker.MediaType, P("/W/E/.vaultkeep")));
+        Assert.Equal(".vaultkeep keeps its name", AttachmentFormat.RenameProblem(P("/W/D/.vaultkeep"), FolderMarker.MediaType, P("/W/D/x.png")));
     }
 
     [Fact]

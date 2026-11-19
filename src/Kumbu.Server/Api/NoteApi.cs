@@ -765,14 +765,18 @@ public static class NoteApi
         // The trailing '/' says "the folder", as in mv: a mistyped note name never moves a folder.
         var folder = body.From.EndsWith('/');
         if (!folder && body.To.EndsWith('/')) target = target.Child(source.Name);
-        if (await store.GetAsync(source, ct) is null && await StoreAttachments.GetAsync(store, source, ct) is null
+        var file = await StoreAttachments.GetAsync(store, source, ct);
+        if (await store.GetAsync(source, ct) is null && file is null
             && (await store.ListNotesUnderAsync(source, ct)).Count == 0 && (await StoreAttachments.UnderAsync(store, source, ct)).Count == 0)
         {
             throw await MissingAsync(store, source, ct);
         }
 
         // A name that contradicts the file's bytes is the request's fault, not the vault's state.
-        if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
+        if (!folder && file is not null && AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+        {
+            throw ApiErrors.BadRequest(renameProblem + ".");
+        }
 
         var result = folder
             ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, "mv", body.Exact, ct)
