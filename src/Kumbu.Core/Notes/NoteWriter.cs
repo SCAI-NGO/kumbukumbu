@@ -26,6 +26,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     public const int MaxBytes = 1_048_576;
     public const int HistoryLimit = 10;
     public const int MaxMessage = 200;
+    private const string MessageNotKept = "\nmessage not kept: an SVG's or a skill file's history keeps no messages";
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);
 
     /// <summary>
@@ -128,10 +129,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (AttachmentFormat.ForPath(path) is { } kept && (kept.Kind == AttachmentKind.Text || kept == AttachmentFormat.Svg))
         {
             if (ForAttachments() is not { } files) return ShellResult.Error($"{tool}: {path.Name}: this server keeps no files besides notes") with { Kind = ShellErrorKind.Invalid };
-            var written = (await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct)).Result;
+            var (written, stored) = await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct);
             // The attachment writer speaks as "upload"; this call was a write.
-            return written.IsError && written.Output.StartsWith("upload:", StringComparison.Ordinal)
-                ? written with { Output = tool + written.Output["upload".Length..] }
+            if (written.IsError && written.Output.StartsWith("upload:", StringComparison.Ordinal)) return written with { Output = tool + written.Output["upload".Length..] };
+            // An attachment's versions have no message field: say so, unless the write made no version ("is unchanged").
+            return !written.IsError && message is not null && stored?.Version != version
+                ? written with { Output = written.Output + MessageNotKept }
                 : written;
         }
 

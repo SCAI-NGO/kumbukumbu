@@ -208,4 +208,11 @@ public class HelpTests
         Assert.Contains("shared by", (await Run("help ls")).Output);
         Assert.Contains("last written by another user", (await Run("help cat")).Output);
     }
+
+    [Fact]
+    public void Write_description_says_an_SVG_and_a_skill_file_keep_no_message()
+    {
+        var text = System.Text.RegularExpressions.Regex.Replace(Manual.WriteDescription, @"\s+", " ");
+        Assert.Contains("kept with this version in the note's history; an SVG's or a skill file's history keeps none", text);
+    }
 }

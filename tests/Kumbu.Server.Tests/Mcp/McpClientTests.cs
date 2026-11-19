@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.ComponentModel;
+using System.Reflection;
 using Kumbu.Core.Sh;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
@@ -51,6 +53,15 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);
         Assert.StartsWith("Replace a text in every note", tools.Single(t => t.Name == "replace").Description, StringComparison.Ordinal);
         Assert.True(tools.Single(t => t.Name == "replace").ProtocolTool.Annotations?.DestructiveHint);
+    }
+
+    [Fact]
+    public void Writes_message_parameter_says_an_SVG_and_a_skill_file_keep_none()
+    {
+        var message = typeof(Kumbu.Server.Mcp.WriteTools).GetMethod(nameof(Kumbu.Server.Mcp.WriteTools.Write))!
+            .GetParameters().Single(p => p.Name == "message");
+        var description = message.GetCustomAttribute<DescriptionAttribute>()!.Description;
+        Assert.Contains("kept with this version in the note's history; an SVG's or a skill file's history keeps none", description);
     }
 
     [Fact]

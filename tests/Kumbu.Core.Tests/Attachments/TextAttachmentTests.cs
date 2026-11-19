@@ -62,6 +62,18 @@ public sealed class TextAttachmentTests
     }
 
     [Fact]
+    public async Task A_message_on_a_skill_text_file_write_is_not_kept_and_the_answer_says_so()
+    {
+        var (_, writer, _, _) = Make();
+        var created = await writer.WriteAsync("/Skills/pdf/run.py", "print(1)\n", null, Ct);
+
+        var replaced = await writer.WriteAsync("/Skills/pdf/run.py", "print(2)\n", created.Version!.Token, Ct, message: "print two");
+
+        Assert.False(replaced.IsError, replaced.Output);
+        Assert.Equal("wrote /Skills/pdf/run.py\nmessage not kept: an SVG's or a skill file's history keeps no messages", replaced.Output);
+    }
+
+    [Fact]
     public async Task Write_outside_a_skill_folder_answers_as_before()
     {
         var (_, writer, _, _) = Make();

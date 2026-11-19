@@ -83,8 +83,9 @@ public static class Manual
         Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
-        message: optionally one line on why you wrote, kept with the version and shown by history. A write that
-        changes nothing makes no version and so keeps no message.
+        message: optionally one line on why you wrote, kept with this version in the note's history; an SVG's or a
+        skill file's history keeps none. Shown by history. A write that changes nothing makes no version and so keeps
+        no message.
         The answer carries the note's link into the web app (it opens after sign-in): show it to the user.
         """;
 
