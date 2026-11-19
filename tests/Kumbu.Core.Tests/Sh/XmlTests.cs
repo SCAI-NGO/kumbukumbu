@@ -239,6 +239,34 @@ public class XmlTests
         Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
+    [Theory]
+    [InlineData("string-length(concat(/,/,/,/,/,/,/,/,/))")]
+    [InlineData("concat(concat(/,/,/,/,/), concat(/,/,/,/))")]
+    [InlineData("translate(concat(., ., ., .), 'a', 'b') = concat (/, /, /, /, /)")]
+    public async Task Concat_takes_at_most_eight_arguments_in_all(string xpath)
+    {
+        // Each argument can be the whole document's text, built in one call the token can't stop: 15 MB, 500 times over.
+        Assert.Equal(
+            ShellResult.Error($"xml: '{xpath}': concat() takes at most 8 arguments in all, as each can be the whole document's text"),
+            await Run($"xml /Work/rss.xml \"{xpath}\""));
+    }
+
+    [Theory]
+    [InlineData("string-length(concat(/,/,/,/,/,/,/,/))", "888")]
+    [InlineData("concat(concat('a','b'), concat('c','d','e','f'))", "abcdef")]
+    [InlineData("concat('concat(1,2,3,4,5,6,7,8,9)', 'concat(,,,,,,,,,,)')", "concat(1,2,3,4,5,6,7,8,9)concat(,,,,,,,,,,)")]
+    [InlineData("count(//*[local-name() = 'concat'])", "0")]
+    public async Task Concat_with_eight_arguments_or_fewer_works(string xpath, string expected) =>
+        Assert.Equal(ShellResult.Ok(expected), await Run($"xml /Work/rss.xml \"{xpath}\""));
+
+    [Fact]
+    public async Task An_xpath_is_at_most_1000_characters_long()
+    {
+        Assert.Equal(ShellResult.Ok("2"), await Run($"xml /Work/rss.xml '{new string(' ', 987)}count(//item)'"));
+        var tooLong = $"{new string(' ', 988)}count(//item)";
+        Assert.Equal(ShellResult.Error($"xml: '{tooLong}': an XPath is at most 1,000 characters long"), await Run($"xml /Work/rss.xml '{tooLong}'"));
+    }
+
     [Fact]
     public async Task A_union_over_a_large_feed_finishes_well_within_the_budget()
     {

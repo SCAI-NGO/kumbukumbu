@@ -29,6 +29,16 @@ public sealed partial class Xml(INoteReader notes) : ICommand
     /// <summary>How long one call may evaluate and print; the steps of an ordinary XPath over a 15 MB file take well under a second.</summary>
     internal TimeSpan Budget { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>The longest XPath evaluated: far longer than one written for a document, and short enough that the
+    /// arguments it can give its functions stay few.</summary>
+    private const int MaxLength = 1000;
+
+    /// <summary>The most arguments all of an XPath's concat() calls take together. Each can be the whole document's
+    /// text ('/'), built in one call the token can't stop: concat(/,/,…) of 500 slashes on 15 MB would be 15 GB. No
+    /// other XPath 1.0 function makes a string longer than its argument, so no string an XPath builds is longer than
+    /// eight times the document's text.</summary>
+    private const int MaxConcatArguments = 8;
+
     /// <summary>The prefix the document's default namespace is offered as.</summary>
     private const string DefaultPrefix = "d";
 
@@ -50,7 +60,8 @@ public sealed partial class Xml(INoteReader notes) : ICommand
                              element declares work as they are, and the document's default namespace is the prefix d:
                              in an Atom feed, //d:entry/d:title. XPath names an element without a prefix only in no namespace.
           A document with a DTD (<!DOCTYPE …>) is refused: Kumbu² neither expands its entities nor reads anything
-          outside the file. A call stops after 10 seconds.
+          outside the file. A call stops after 10 seconds. An XPath is at most 1,000 characters long, and its
+          concat() calls take at most 8 arguments in all.
 
           xml /Work/feed.xml
           xml /Work/feed.xml '//item/title'
@@ -92,6 +103,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         if (options.Operands.Count == 1) return Overview(root);
 
         var xpath = options.Operands[1];
+        if (xpath.Length > MaxLength) return ShellResult.Error($"xml: '{xpath}': an XPath is at most {MaxLength:N0} characters long");
         XPathExpression expression;
         try
         {
@@ -100,6 +112,11 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         catch (XPathException)
         {
             return ShellResult.Error($"xml: not an XPath expression: '{xpath}'");
+        }
+
+        if (ConcatArguments(xpath) > MaxConcatArguments)
+        {
+            return ShellResult.Error($"xml: '{xpath}': concat() takes at most {MaxConcatArguments} arguments in all, as each can be the whole document's text");
         }
 
         var manager = new XmlNamespaceManager(root.NameTable);
@@ -327,6 +344,26 @@ public sealed partial class Xml(INoteReader notes) : ICommand
 
     private static string FirstChildName(XPathNavigator root) => Children(root).FirstOrDefault()?.LocalName ?? root.LocalName;
 
+    /// <summary>The arguments of all concat() calls in a compiled XPath: the commas between its parentheses, outside
+    /// string literals and deeper calls, and one.</summary>
+    private static int ConcatArguments(string xpath)
+    {
+        var code = Literal().Replace(xpath, "''");
+        var arguments = 0;
+        foreach (Match call in Concat().Matches(code))
+        {
+            arguments++;
+            for (int i = call.Index + call.Length, depth = 1; i < code.Length && depth > 0; i++)
+            {
+                if (code[i] == '(') depth++;
+                else if (code[i] == ')') depth--;
+                else if (code[i] == ',' && depth == 1) arguments++;
+            }
+        }
+
+        return arguments;
+    }
+
     /// <summary>Whether an XPath names a prefix: a single colon outside its string literals (an axis has two).</summary>
     private static bool HasPrefix(string xpath) => Prefixed().IsMatch(Literal().Replace(xpath, ""));
 
@@ -352,6 +389,10 @@ public sealed partial class Xml(INoteReader notes) : ICommand
 
     [GeneratedRegex("\"[^\"]*\"|'[^']*'")]
     private static partial Regex Literal();
+
+    // A function call: concat, not part of a longer name (my-concat), then its opening parenthesis.
+    [GeneratedRegex(@"(?<![\w.:-])concat\s*\(")]
+    private static partial Regex Concat();
 
     [GeneratedRegex("(?<!:):(?!:)")]
     private static partial Regex Prefixed();
