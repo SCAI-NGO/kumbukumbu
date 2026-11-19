@@ -16,6 +16,8 @@ public static class Manual
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           pdfimages <pdf> [pages] <dir>/  store a PDF's pictures as images, to place in notes
+          html <path> [selector]          read an HTML file: title and headings, or what a CSS selector picks (--attr, --html, --count)
+          xml <path> [xpath]              read an XML file: its root and elements, or what an XPath picks (--ns, --xml, --count)
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead; [[note#^id]] to a block
           backlinks [--archive] <path>    the notes that link to a note, as path:line:text; --unlinked: the lines that name it without a link
           graph <note> [--depth N]        how notes link: a note's neighbourhood (--out, --in, --cap); graph --path a b: how two notes connect; --orphans, --hubs, --unresolved [path]
@@ -26,6 +28,7 @@ public static class Manual
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
+          csv [options] [path] [B2:D20]   read a CSV text file as a table: its shape, then --rows 2-20, --cols Date,Amount or a range (help csv)
           history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
           blame [--lines] <path>          who wrote what: the last writer of each run of lines of a note (#section works); on a folder: lines per writer per note
           diff <path> [from [to]]         what changed between versions (default: last change); --word
@@ -46,7 +49,7 @@ public static class Manual
           uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold every file type: images (an SVG among them, which you can draw: help attachments), PDFs and any other file; ls lists them, cat describes one and prints a text file (UTF-8, a CSV or a script), img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg searches text files and finds text in PDFs, not in scans, and semsearch PDFs by meaning only (help attachments). To put a file from your own machine into a vault, use the upload tool.
+        Attachments: vaults also hold every file type: images (an SVG among them, which you can draw: help attachments), PDFs and any other file; ls lists them, cat describes one and prints a text file (UTF-8, a CSV or a script), csv, html and xml read one as a table, by CSS selector or by XPath, img shows an image, pdf reads a PDF page by page, pdfimages stores a PDF's pictures as images to place in notes, rg searches text files and finds text in PDFs, not in scans, and semsearch PDFs by meaning only (help attachments). To put a file from your own machine into a vault, use the upload tool.
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day or a week (2026-11-12.md, 2026-W46.md); until ends it (an entry over days, or a time with an end), task: open makes it a to-do, upcoming: 7d shows it that early; calendar notifications is what's on in every vault, in the user's time zone; calendar set, move, close, reopen and unset change only those keys and leave a version (calendar set <note> --until 2026-11-22 gives an entry its end). On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
@@ -54,7 +57,7 @@ public static class Manual
         Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes only there, not PDFs.
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
-        '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.
+        '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg, csv.
         All paths are absolute (e.g. /Work/projects/plan.md); there is no working directory.
         Quote paths with spaces: cat "/Work/Meeting Notes.md". Quote regexes with | ( ) or spaces.
         Sections: cat "/Work/plan.md#Architecture#Gates"; a unique heading works alone (#Gates); duplicates take [2]; a block by its id: cat "/Work/plan.md#^goal".

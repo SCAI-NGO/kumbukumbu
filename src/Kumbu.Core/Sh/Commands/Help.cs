@@ -73,6 +73,9 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 rg         searches the text of PDFs (not scans) and text files as well as notes: /Work/paper.pdf:p7: text
                 semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
                              1. /Work/paper.pdf p7  score 0.61
+                csv        reads a text file as a table: its shape, then rows, columns or a range B2:D20 ('help csv')
+                html       reads a text file as HTML: its headings, or what a CSS selector picks ('help html')
+                xml        reads a text file as XML: its elements, or what an XPath picks ('help xml')
               What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
               neither rg nor semsearch searches images (an SVG's source neither) or other files, semsearch no text
               files, and rg not PDFs in a checkpoint; head, tail, wc, sort and outline read notes, not attachments.

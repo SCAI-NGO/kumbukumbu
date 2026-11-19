@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "calendar", "head", "tail", "wc", "sort", "history", "blame", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "calendar", "head", "tail", "wc", "sort", "csv", "html", "xml", "history", "blame", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "publish", "uname", "help"];
 
     // A shell without the pixels has none of these; the tool description names them all the same.
     private static readonly string[] AttachmentCommands = ["img", "pdf", "pdfimages"];
@@ -21,7 +21,7 @@ public class HelpTests
         var positions = Commands.Select(c => result.Output.IndexOf("\n  " + c + " ", StringComparison.Ordinal)).ToList();
         Assert.DoesNotContain(-1, positions);
         Assert.Equal(positions.Order(), positions);
-        Assert.Contains("right of a pipe only rg, head, tail, wc, sort work", result.Output);
+        Assert.Contains("right of a pipe only rg, head, tail, wc, sort, csv work", result.Output);
     }
 
     [Theory]
@@ -126,6 +126,10 @@ public class HelpTests
         Assert.Contains("\n    rg         searches the text of PDFs", topic);
         Assert.Contains("\n    semsearch  ranks the pages of PDFs", topic);
         Assert.Contains("\n                 1. /Work/paper.pdf p7  score 0.61", topic);
+        // The readers of text files' formats are items too, each pointing to its own help.
+        Assert.Contains("\n    csv        reads a text file as a table", topic);
+        Assert.Contains("\n    html       reads a text file as HTML", topic);
+        Assert.Contains("\n    xml        reads a text file as XML", topic);
 
         // The stub is gone: a shell without the pixels has no pdf to explain.
         Assert.Equal(ShellResult.Error("help: no such command: pdf — try 'help'"), await Run("help pdf"));

@@ -29,6 +29,9 @@ const first = (operands: string[]) => (operands.length > 0 ? [0] : []);
 /** A path in a place where a bare word means something else (a query word, a tag). */
 const looksLikePath = (word: string) => word.startsWith("/") || word.startsWith("./") || word.startsWith("../");
 
+/** `RangePattern` in Csv.cs: B2:D20, B2 or B:D. */
+const spreadsheetRange = /^([A-Z]+[0-9]+(:[A-Z]+[0-9]+)?|[A-Z]+:[A-Z]+)$/;
+
 const oneDirectory: CommandEntry = { values: [], find: (o) => ({ paths: all(o), missing: "cwd" }) };
 const oneNote = (values: readonly string[] = []): CommandEntry => ({ values, find: (o) => ({ paths: first(o) }) });
 // Filters: without a path they read the pipe, so nothing is added.
@@ -57,6 +60,10 @@ export const commandTable: Record<string, CommandEntry> = {
     },
   },
   img: oneNote(["--size", "--crop"]),
+  // Csv.cs: an operand shaped as a spreadsheet range is the range, any other the file; without one it reads the pipe.
+  csv: { values: ["--rows", "--cols", "--sep"], find: (o) => ({ paths: all(o).filter((i) => !spreadsheetRange.test(o[i])) }) },
+  html: oneNote(["--attr"]),
+  xml: oneNote(["--ns"]),
   rg: {
     values: [
       "-m", "--max-count", "-e", "--regexp", "-A", "--after-context", "-B", "--before-context", "-C", "--context",
