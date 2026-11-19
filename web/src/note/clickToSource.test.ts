@@ -65,6 +65,14 @@ describe("a click mapped to the source", () => {
     expect(clicked(source, "here")).toBe(sourceAt(source, "here"));
   });
 
+  for (const [mark, word] of [["**", "strong"], ["~~", "gone"], ["==", "marked"], ["__", "under"]] as const) {
+    it(`${mark}${word}${mark}: at its start and its end, the caret beside the word, not inside the markup`, () => {
+      const source = `Some ${mark}${word}${mark} text.\n`;
+      expect(clicked(source, word, 0, 0)).toBe(sourceAt(source, word, 0, 0));
+      expect(clicked(source, word, 0, word.length)).toBe(sourceAt(source, word, 0, word.length));
+    });
+  }
+
   it("a link's label, a wiki link's and a Markdown link's", () => {
     const source = "See [[Plan|the plan]] and [the docs](https://example.org/docs) for more.\n";
     expect(clicked(source, "plan", 0, 2)).toBe(sourceAt(source, "plan", 0, 2));

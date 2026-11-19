@@ -33,19 +33,24 @@ function matched(block: string, at: number, rendered: string, step: 1 | -1) {
  * The source offset of a point in a block of lines `start` to `end` (1-based) of `source`, with the rendered text
  * `before` and `after` the point and its place in the block's rendered text (`ratio`, 0 to 1). The caret goes where
  * the most of that text is found around it in the block's lines, the markup the rendering leaves out (`**`, `[[`, `>`)
- * skipped. Found as well in more than one place, the one nearest to the proportional place is taken; not found at
- * all, that place itself.
+ * skipped. Among places that match as much, the one right beside the clicked text (`lean`: the text after the point, 1,
+ * or before it, -1) wins, so a click at the start of `**strong**` puts the caret before `s`, not between the stars; then
+ * the one nearest to the proportional place. Not found at all, that place itself.
  */
-export function sourceOffset(source: string, { start, end }: { start: number; end: number }, before: string, after: string, ratio: number): number {
+export function sourceOffset(source: string, { start, end }: { start: number; end: number }, before: string, after: string, ratio: number, lean: 1 | -1 = 1): number {
   const from = lineStart(source, start);
   const next = source.indexOf("\n", lineStart(source, end));
   const block = source.slice(from, next < 0 ? source.length : next);
   const guess = Math.round(ratio * block.length);
   let best = guess;
   let score = 0;
+  let beside = false;
   for (let at = 0; at <= block.length; at++) {
     const found = matched(block, at, before, -1) + matched(block, at, after, 1);
-    if (found > score || (found === score && found > 0 && Math.abs(at - guess) < Math.abs(best - guess))) [best, score] = [at, found];
+    // The clicked text's first (or last) character right there, no markup skipped to reach it.
+    const near = lean === 1 ? !!after && block[at] === after[0] : !!before && block[at - 1] === before.at(-1);
+    const nearer = near === beside ? Math.abs(at - guess) < Math.abs(best - guess) : near;
+    if (found > score || (found === score && found > 0 && nearer)) [best, score, beside] = [at, found, near];
   }
   return from + best;
 }
@@ -64,7 +69,9 @@ export function offsetAt(source: string, block: HTMLElement, node: Node, offset:
   range.setEnd(node, offset);
   const at = range.toString().length;
   const lines = { start, end: Number(block.dataset.lineEnd ?? start) };
-  return sourceOffset(source, lines, text.slice(Math.max(0, at - AROUND), at), text.slice(at, at + AROUND), text.length ? at / text.length : 0);
+  // At the end of a text node, the clicked text is the one before the point.
+  const lean = node.nodeType === Node.TEXT_NODE && offset > 0 && offset === (node as Text).length ? -1 : 1;
+  return sourceOffset(source, lines, text.slice(Math.max(0, at - AROUND), at), text.slice(at, at + AROUND), text.length ? at / text.length : 0, lean);
 }
 
 /** The text node and offset at a point on screen: `caretPositionFromPoint`, or `caretRangeFromPoint` in Safari. */
