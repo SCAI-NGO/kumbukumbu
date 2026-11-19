@@ -289,11 +289,13 @@ public class CsvTests
     [Theory]
     [InlineData("Name,Score\nrose,3\n", true)]
     [InlineData("Name,Day\nrose,2026-01-02\n", true)]
-    [InlineData("Name,Kind\nrose,flower\n", false)]
+    [InlineData("Name,City\nAlice,Berlin\n", true)]
+    [InlineData("Name,City\n", true)]
     [InlineData("Name,\nrose,3\n", false)]
     [InlineData("Name,2026\nrose,3\n", false)]
+    [InlineData("Name,Name\nrose,tulip\n", false)]
     [InlineData("1,2\n3,4\n", false)]
-    public async Task A_header_is_a_first_row_without_empty_cells_or_numbers_over_a_row_with_a_number(string text, bool header)
+    public async Task The_first_row_is_the_header_unless_it_has_a_number_an_empty_cell_or_a_name_twice(string text, bool header)
     {
         _store.AddTextFile("/Work/h.csv", text);
 
@@ -322,8 +324,8 @@ public class CsvTests
             | Date | Amount |
             | --- | --- |
             """, await Ok("csv /Work/head.csv --header"));
-        // Without a second row to compare with, a lone row is a row.
-        Assert.Contains("no header", await Ok("csv /Work/head.csv"));
+        // A lone row of names is a header too.
+        Assert.Contains("a header row", await Ok("csv /Work/head.csv"));
         Assert.Equal("csv: --rows 1: the file has 0 rows", await Fails("csv /Work/head.csv --header --rows 1"));
     }
 
@@ -333,16 +335,16 @@ public class CsvTests
         _store.AddTextFile("/Work/one.csv", "Name\nrose\ntulip\n");
 
         Assert.Equal("""
-            dialect: one column (no separator found), no quotes, no header (columns by letter or number)
-            rows: 3, columns: 1
+            dialect: one column (no separator found), no quotes, a header row
+            rows: 2, columns: 1
+            header: A Name
 
-            | A |
-            | --- |
             | Name |
+            | --- |
             | rose |
             | tulip |
             """, await Ok("csv /Work/one.csv"));
-        Assert.Equal("| Name |\n| --- |\n| tulip |", await Ok("csv /Work/one.csv --header --rows 2"));
+        Assert.Equal("| Name |\n| --- |\n| tulip |", await Ok("csv /Work/one.csv --rows 2"));
     }
 
     [Fact]

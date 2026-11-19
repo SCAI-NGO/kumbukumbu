@@ -40,8 +40,8 @@ public sealed partial class Csv(INoteReader notes) : ICommand
                           tabs and line breaks inside cells become spaces
           --sep S         the separator: ',', ';', '|' or a tab ('\t' or tab). Otherwise the one that splits the
                           first 20 lines most evenly (Excel in German locales writes ';')
-          --header, --no-header   whether the first row is the header. Otherwise it is when it has no empty cell
-                          and no number (or date), and the second row has one
+          --header, --no-header   whether the first row is the header. Otherwise it is, unless it has an
+                          empty cell, a number (or date) or a name twice
           Quoting as RFC 4180 has it ("a, b", "say ""hi"""); a quoted field may span lines, shown as <br>, and
           a quote left open is an error with its line. A table is cut at the output limit with a line on how
           to narrow it; --tsv isn't, so a pipe gets every row.
@@ -198,9 +198,11 @@ public sealed partial class Csv(INoteReader notes) : ICommand
         public string NameOf(int column) => Header is { } h && column < h.Length && h[column].Length > 0 ? h[column] : Letters(column + 1);
     }
 
-    /// <summary>Decision 5: a first row without an empty cell and without a number, over a second row with one.</summary>
+    /// <summary>Decision 5: the first row, unless it has an empty cell, a number or a name twice. Most CSVs start with a
+    /// header, and a header taken by mistake costs less than one missed (decided by Chris on 2026-11-19).</summary>
     private static bool LooksLikeHeader(List<string[]> records) =>
-        records.Count >= 2 && records[0].All(c => c.Trim().Length > 0 && !IsNumber(c)) && records[1].Any(IsNumber);
+        records.Count >= 1 && records[0].All(c => c.Trim().Length > 0 && !IsNumber(c))
+        && records[0].Select(c => c.Trim()).Distinct(StringComparer.Ordinal).Count() == records[0].Length;
 
     // A date counts as a number: "Date,Amount" over "2026-01-02,…" is a header as much as over "12.50".
     private static bool IsNumber(string cell) => NumberPattern().IsMatch(cell.Trim()) || DatePattern().IsMatch(cell.Trim());
