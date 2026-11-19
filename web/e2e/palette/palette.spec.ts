@@ -431,12 +431,12 @@ test("palette #8: the keyboard menu takes the focus, and Esc closes it with the 
   const menu = page.getByRole("menu", { name: "Note actions" });
   await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
-  const focused = await page.evaluate(() => document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName ?? "");
-  expect(focused, "F-12: the focus on the menu's first item").toBe("menuitem");
-  const focusedText = () => page.evaluate(() => document.activeElement?.textContent ?? "");
-  const first = await focusedText();
+  // The focused element's role and text, beside the items' own texts.
+  const focused = () => page.evaluate(() => ({ role: document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName ?? "", text: document.activeElement?.textContent ?? "" }));
+  const items = await menu.getByRole("menuitem").allTextContents();
+  expect(await focused(), "F-12: the focus on the menu's first item").toEqual({ role: "menuitem", text: items[0] });
   await page.keyboard.press("ArrowDown");
-  expect(await focusedText(), "F-12: ↓ moves the focus to the second item").not.toBe(first);
+  expect(await focused(), "F-12: ↓ moves the focus to the second item").toEqual({ role: "menuitem", text: items[1] });
   await page.keyboard.press("Escape");
   await expect(menu, "F-12: Esc closes the menu").toHaveCount(0);
   await expect(source).toBeFocused();
@@ -445,7 +445,7 @@ test("palette #8: the keyboard menu takes the focus, and Esc closes it with the 
   // Shift+Tab on the first item closes it too (the list doesn't wrap).
   await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.activeElement?.getAttribute("role")), "F-12: the focus on the first item again").toBe("menuitem");
+  expect(await focused(), "F-12: the focus on the first item again").toEqual({ role: "menuitem", text: items[0] });
   await page.keyboard.press("Shift+Tab");
   await expect(menu, "F-12: Shift+Tab on the first item closes the menu").toHaveCount(0);
 });
@@ -474,6 +474,7 @@ test("palette #9: Shift+F10 straight after the note opens gives a menu that fits
   await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeAttached();
   const box = await boxOf(menu);
   expect(box.bottom, `F-13: the menu ends within the window (${page.viewportSize()!.height} px)`).toBeLessThanOrEqual(page.viewportSize()!.height);
+  expect(box.top, "F-13: and starts within it").toBeGreaterThanOrEqual(0);
 });
 
 test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ opens it @palette", async ({ page, aliceApi, folder }) => {
@@ -482,6 +483,12 @@ test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ op
   await openNote(page, path);
 
   const menu = page.getByRole("menu", { name: "Note actions" });
+  // The dock's menu is placed once, when it opens: opened first until every item is in, the favourites' too, then
+  // again to be measured.
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
   await page.getByRole("button", { name: "Note actions" }).click();
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
   const byMouse = await boxOf(menu);
@@ -490,6 +497,7 @@ test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ op
 
   await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.activeElement?.getAttribute("role")), "F-12: the focus on a menu item in Read mode too").toBe("menuitem");
   const byKey = await boxOf(menu);
   const place = (box: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom) });
