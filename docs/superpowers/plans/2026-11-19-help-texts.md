@@ -39,6 +39,8 @@
 
 ### Task 0: Baseline
 
+Cloud note: Docker runs but can't start the tests' own Mongo container (they ask for `nofile` 64000, above this host's hard limit of 20000). Run `mongo:7.0` by hand (`docker run -d --name kumbu-test-mongo --ulimit nofile=20000:20000 -p 27017:27017 mongo:7.0 mongod --replSet rs0 --bind_ip_all --wiredTigerEngineConfigString "file_manager=(close_idle_time=5,close_scan_interval=5,close_handle_minimum=250)"`), initiate `rs0` with member `127.0.0.1:27017` by `mongosh`, and run every server test with `KUMBU_TEST_MONGO=mongodb://127.0.0.1:27017`.
+
 **Files:** none changed.
 
 - [ ] **Step 1:** Tools: .NET SDK per `global.json` (roll forward; 10.0.404 present), `DOTNET_CLI_TELEMETRY_OPTOUT=1`; Node 26.13.1 in `/opt/node26`, pnpm 10.32.1 (`npm install -g pnpm@10.32.1`, `/opt/node26/bin` first on `PATH`); Docker running (`docker info`).
@@ -60,11 +62,12 @@
 - [ ] **Step 1: Failing tests.**
   - `SvgWriteTests.A_message_on_an_SVG_write_is_not_kept_and_the_answer_says_so`: write `/Work/diagram.svg` (a valid `<svg xmlns="http://www.w3.org/2000/svg"/>`) with `message: "first sketch"`; assert not error, `Output == "created /Work/diagram.svg\nmessage not kept: an SVG's or a skill file's history keeps no messages"`, version not null.
   - Same file, `A_failed_SVG_write_with_a_message_answers_the_error_alone`: write malformed `<svg` with a message; assert error and `DoesNotContain("message not kept")`.
-  - Same file, `An_SVG_write_without_a_message_answers_as_before`: no message → output is exactly `created /Work/diagram.svg`; and a whitespace-only message `"  "` → the same (TryMessage normalises it to null; check `TryMessage` first and adjust if it refuses whitespace — then assert what it does).
+  - Same file, `An_SVG_write_without_a_message_answers_as_before`: no message → output is exactly `created /Work/diagram.svg`; a whitespace-only message `"  "` → the same (`TryMessage`, `NoteWriter.cs:67-72`, turns a blank message into null).
+  - Same file, `An_unchanged_SVG_write_with_a_message_answers_as_before`: write the same SVG again with its version and a message → the `… is unchanged` answer (`AttachmentWriter.cs:156`) alone. Decision: the line is added only when a version was written; a write that changes nothing makes no version and so keeps no message for anything, as `WriteDescription` already says.
   - `TextAttachmentTests.A_message_on_a_skill_text_file_write_is_not_kept_and_the_answer_says_so`: `/Skills/pdf/run.py`, replace with version and message → `Output == "wrote /Skills/pdf/run.py\nmessage not kept: …"` (full line).
   - `HelpTests.Write_description_says_an_SVG_and_a_skill_file_keep_no_message`: `Manual.WriteDescription` (whitespace collapsed) contains `kept with this version in the note's history; an SVG's or a skill file's history keeps none`. For `WriteTools`'s parameter description: if `tests/Kumbu.Server.Tests` has a test reading tool descriptions (`rg -n 'WriteTools|Description' tests/Kumbu.Server.Tests/Mcp`), add the same assertion there by reflection on the parameter's `DescriptionAttribute`; otherwise add it to the nearest Mcp test class.
 - [ ] **Step 2:** Run the three classes; expect the new tests to fail on the missing line / old wording.
-- [ ] **Step 3:** In the branch, after `written` is computed and renamed: when `!written.IsError && message is not null`, return `written with { Output = written.Output + "\nmessage not kept: …" }`. Don't touch `AttachmentWriter`'s answer, `ShellResult.Notice` or `Mcp/Notices.cs`. Change `WriteDescription`'s message paragraph and the parameter description to say "kept with this version in the note's history; an SVG's or a skill file's history keeps none" (keep "shown by history" and the no-change sentence).
+- [ ] **Step 3:** In the branch, after `written` is computed and renamed: when `!written.IsError && message is not null` and a version was written (not the "is unchanged" answer: tell it apart by what `AttachmentWriter` returns, e.g. its `WriteResult`, not by matching text if a field says it), return `written with { Output = written.Output + "\nmessage not kept: …" }`. Don't touch `AttachmentWriter`'s answer, `ShellResult.Notice` or `Mcp/Notices.cs`. Change `WriteDescription`'s message paragraph and the parameter description to say "kept with this version in the note's history; an SVG's or a skill file's history keeps none" (keep "shown by history" and the no-change sentence).
 - [ ] **Step 4:** Run the classes; all pass.
 - [ ] **Step 5:** Commit: "Say in write's answer that an SVG or a skill file keeps no message" (message body names the cause: attachment versions have no message field, `AttachmentWriter.WriteAsync` takes none).
 - [ ] **Step 6: Mutations:** (a) drop the appended line → the two "not kept" tests fail; (b) append it also on error → the malformed test fails; (c) restore the old `WriteDescription` sentence → the help test fails.
@@ -87,9 +90,9 @@
   - Both directions of the boundary: `Write_keeps_refusing_what_upload_refuses_in_a_marked_vault`: with `Tools` marked, `/Tools/run.py` (in the location, not in a skill's folder) and `/Tools/x/tool.bin` are refused by `write` (assert error and that nothing is stored).
 - [ ] **Step 2:** `dotnet test --project tests/Kumbu.Core.Tests -- --filter-class "*TextAttachmentTests"`: the first three fail for the reasons in brackets; record the messages.
 - [ ] **Step 3:** In `WriteAsync`, take `var skillsVault = await store.SkillsVaultAsync(ct);` after parsing and pass it to `ForPath` and `NotText`; give `NotText` the parameter and pass it to each `ForPath` inside; update the other callers.
-- [ ] **Step 4:** Run the full Core suite: `dotnet test --project tests/Kumbu.Core.Tests`. Each test that now fails because it wrote into `/Skills/…` relying on the default name gets `SkillsVault = "Skills"` on its fake (as `TextAttachmentTests.cs:20`); never a looser assertion. List each one changed.
+- [ ] **Step 4:** Run the full Core suite: `dotnet test --project tests/Kumbu.Core.Tests`, and the server classes that write into `/Skills/…`: `dotnet test --project tests/Kumbu.Server.Tests -- --filter-class "*SkillCopyTests"`, the same for `*SkillPublicationTests`, `*FileDownloadTests` and every class under `tests/Kumbu.Server.Tests/Mcp` that writes (`rg -l 'WriteAsync|"write"' tests/Kumbu.Server.Tests/Mcp`); the server tests need `KUMBU_TEST_MONGO` here (see Task 0). Each test that now fails because it wrote into `/Skills/…` relying on the default name gets `SkillsVault = "Skills"` on its fake (as `TextAttachmentTests.cs:20`); never a looser assertion. List each one changed.
 - [ ] **Step 5:** Commit: "Let write and edit find a skill's text file in a skills vault of any name" — the body names the cause: `NoteWriter` called `AttachmentFormat.ForPath` without the caller's mark, so it fell back to the name `Skills`.
-- [ ] **Step 6: The other callers.** `rg -n 'ForPath\(' src`. For each call without the argument decide and record the verdict (for the report):
+- [ ] **Step 6: The other callers.** `rg -n 'ForPath\(' src` and `rg -n 'AttachmentFormat\.(Problem|LargeProblem|TooLargeToCheck|RenameProblem)\(' src` (these default `skillsVault` to `Skills` too, `AttachmentFormat.cs:165,191,197`; known: `FileApi.cs:194,213,214` with `store` in scope, `DavWrites.cs:623,624,634`, `MarketplaceIndex.cs:276`). For each call without the argument decide and record the verdict (for the report):
   - decides whether a path is a skill's text file on a write, or on a read that must agree with the writers → pass the mark if it is already reachable (a store with `SkillsVaultAsync`, an `access.IsSkillsVault`, `open.FirstOrDefault(v => v.IsSkillsVault)`); candidates: `SyncApi.cs:186` `IsText`, `SkillUpdateTaker.cs:264` `IsText`, `DavWrites.cs:760`, `MarketplaceIndex.cs:275`.
   - asks only whether a path is an image or a PDF (`AgentUploadApi.cs:60`, `FileApi.cs:215,282`, `SkillCopier.cs:175`, `Bundles.cs:185`, `Publications.cs:909`, `AttachmentFormat.IsPdf` `:100`) → stays; but note that an `.svg` inside a skill's folder is Text under the mark and Image outside it, so check whether the answer can differ for `.svg`, and say so in the verdict.
   - `AttachmentFormat.KindOf` (`:153`) and any caller that would need a new dependency through several layers or a change of an endpoint's contract → leave it, add a row to `docs/superpowers/open-items.md` saying what and why.
@@ -109,7 +112,7 @@
   - `Links_on_a_missing_folder_is_no_such_file`: `links /Work/nothing` → error containing `No such file or directory` (unchanged); `links /Nope` likewise.
   - `Links_with_a_version_on_an_empty_folder_keeps_its_error`: `links --version <any token> /Home` → `"links: --version names a version of one note; a directory has none"`.
 - [ ] **Step 2:** Run the class; the three empty-folder tests fail ("Is a directory" / "No such file or directory").
-- [ ] **Step 3:** A folder exists when its vault exists (`ListVaultsAsync`) and the path is the vault, or `StoreAttachments.PathsUnderAsync` finds attachments or a folder marker below it — as `Blame.cs:58-63` decides. Take the folder form when there are notes below or the folder exists. If the help (`:39-41`) needs a word to stay true, adjust it.
+- [ ] **Step 3:** A folder exists when the path is a vault in `ListVaultsAsync` (`path.Segments.Count == 1`), or `(await StoreAttachments.UnderAsync(notes, path, ct)).Count > 0` (attachments or a folder marker below it), as `ArchiveCommand.cs:110-111` and `NoteMover.cs:175-176` decide. (The brief points at `Blame.cs:58-63`, which checks the vault list but not attachments or markers; the report notes it.) Take the folder form when there are notes below or the folder exists. If the help (`:39-41`) needs a word to stay true, adjust it.
 - [ ] **Step 4:** Run the class; pass.
 - [ ] **Step 5:** Commit: "Answer links on an empty folder as on a folder with no broken links".
 - [ ] **Step 6: Mutations:** (a) drop the vault check → the empty-vault test fails; (b) drop the attachments/marker check → the image and mkdir tests fail; (c) treat every path as a folder → the missing-folder test fails.
@@ -123,9 +126,9 @@
 - [ ] **Step 1: Failing tests:**
   - `Blame_lines_on_a_folder_is_refused`: `blame --lines /Work` and `blame --lines /Work/Protocols/` → `Error("blame: --lines takes a note, not a folder")`.
   - `Blame_lines_on_a_note_still_works`: `blame --lines /Work/note.md` → not error (existing behaviour; may already exist — then skip).
-  - `HelpTests.Help_blame_names_the_folder_limit_and_the_section_forms`: help contains `$"{Blame.MaxNotes}"` notes (make `MaxNotes` `internal` or `public const` if needed; Core.Tests has InternalsVisibleTo? check `rg -n InternalsVisibleTo src/Kumbu.Core`), contains `… and` / `more notes` as the command prints it, `#^block` (as the help writes it), and its synopsis line contains `[#section]`.
+  - `HelpTests.Help_blame_names_the_folder_limit_and_the_section_forms`: help contains `$"{Blame.MaxNotes}"` notes (make `MaxNotes` `internal` or `public const` if needed; Core.Tests has InternalsVisibleTo? check `rg -n InternalsVisibleTo src/Kumbu.Core`), contains `… and` / `more notes` as the command prints it, `#^block` (as the help writes it), and its synopsis line contains `[#section]`. (`Usage` already has it.)
 - [ ] **Step 2:** Run; fail.
-- [ ] **Step 3:** Refuse before `FolderAsync` when `options` has `lines`. Help: synopsis `blame [--lines] <path>[#section]`, the 200-note limit from `MaxNotes` (interpolated), the "… and N more notes" line as `FolderAsync` prints it, the `#^block` form beside `#Heading`. `Usage` shows `[#section]` too, if the tool-description line of `blame` (`Manual.cs`) stays true (it says "#section works": fine).
+- [ ] **Step 3:** Refuse before `FolderAsync` when `options` has `lines`. `Usage` (`Blame.cs:21`) already shows `<path>[#section]`; only the help synopsis changes: `blame [--lines] <path>[#section]`, the 200-note limit from `MaxNotes` (interpolated), the "… and N more notes" line as `FolderAsync` prints it, the `#^block` form beside `#Heading`. `Usage` shows `[#section]` too, if the tool-description line of `blame` (`Manual.cs`) stays true (it says "#section works": fine).
 - [ ] **Step 4:** Run; pass. Also `HelpTests` whole class.
 - [ ] **Step 5:** Commit: "Refuse blame --lines on a folder and say in help what blame does there".
 - [ ] **Step 6: Mutations:** (a) drop the refusal → the refusal test fails; (b) refuse for notes too → the note test fails; (c) hard-code 300 in the help → the help test fails.
@@ -136,7 +139,7 @@
 - Modify: `src/Kumbu.Core/Sh/Commands/Help.cs` (the `attachments` topic: the `write` exception paragraph and "rg --files lists notes only"; the `archive` topic's list and "Asking" line; the command list's `rg --files` line if `Help.cs` holds one — find "--files")
 - Modify: `src/Kumbu.Core/Sh/Commands/ArchiveCommand.cs` (`:35`, the list of what hides it)
 - Modify: `src/Kumbu.Core/Sh/Commands/Rg.cs` (pipe error `:787`)
-- Test: `tests/Kumbu.Core.Tests/Sh/HelpTests.cs`, `tests/Kumbu.Core.Tests/Sh/RgTests.cs` (or the class asserting the pipe error)
+- Test: `tests/Kumbu.Core.Tests/Sh/HelpTests.cs` (existing pins to update: `:154` "Asking: --archive on each of them…", `:155` "Not hidden: …"), `tests/Kumbu.Core.Tests/Sh/RgTests.cs:157-158` (pins both pipe errors)
 
 - [ ] **Step 1: Read the code each text describes:** `GraphCommand.cs:19,118` (graph hides the archive, `--archive` shows it), `CalendarCommand.cs:56,351`, `EntryReader.cs:60` (calendar leaves archived notes out, no `--archive`), `Rg.cs:815-818` (`--files` lists notes and text files; with `--tag` notes only), `NoteWriter.NotText` and `UploadTool.cs:66-72` (write: notes, SVGs, a skill's text files; upload takes an SVG too).
 - [ ] **Step 2: Failing tests** in `HelpTests`:
@@ -176,17 +179,18 @@
 - Modify: `src/Kumbu.Core/Sh/Commands/SkillsCommand.cs` (`Summary` `:30`, help `:46`)
 - Modify: `src/Kumbu.Core/Sh/Commands/PdfImages.cs` (`Usage`, help `:30,40,54,56-57`; constants `Budget`, `Ceiling` `:25-26`, the 500 images limit)
 - Modify: `src/Kumbu.Core/Sh/Commands/Xml.cs` (help `:63`)
-- Test: `tests/Kumbu.Core.Tests/Sh/SkillsCommandTests.cs`, the pdfimages test class (`rg -l pdfimages tests`), the xml test class, `HelpTests`
+- Test: `tests/Kumbu.Core.Tests/Sh/SkillsCommandTests.cs` (`:407` pins "only reads and finds": update it), the pdfimages test class (`rg -l pdfimages tests`), the xml test class, `HelpTests`
 
 - [ ] **Step 1: Read** `NoteWriter.NotText` (write/edit on a skill), `PdfImages.cs:12` (`Forms`), `:215` (`Budget / 2` for `--list`), `:337-353` (`Ceiling`), `:377` (`.png`/`.jpg`), `:520` (500 images: suggests `--crop`), `Xml.cs:130-131`.
 - [ ] **Step 2: Failing tests:**
   - skills: `Summary` contains `find, read, check and copy`; help contains `skills reads, finds and copies a built-in skill; it changes no skill` and `write and edit change SKILL.md and a skill's other notes; its other text files are replaced whole with write`.
   - pdfimages: `Usage` shows its three forms as `Forms` does; help says `--list` stops after about `{Budget/2}` seconds, and "storing stops at the first page boundary after {Budget} seconds; after {Ceiling} it stops even within a page, and names that page as partly stored" (brief §7 — this corrects the spec's "a page started finishes within 50"), the file name is `.png` or `.jpg`, and over 500 images on the first page it suggests `--crop`. Numbers from the constants (assert with the constants' values).
   - xml: help contains `an XPath and its printing stop after 10 seconds` (number from its constant), and not `A call stops after 10 seconds`.
-  If pdfimages' help isn't reachable from `TestShell.Of()` (it needs the pixels), test the command object's `Help` directly.
+  pdfimages' help isn't reachable from `TestShell.Of()` (it needs the pixels and an `AttachmentWriter`): build the command as its own tests do and read its `Help`. `Budget` and `Ceiling` are instance `internal TimeSpan` properties (`PdfImages.cs:23-26`), the xml budget likewise (`Xml.cs:30`): interpolate from the instance's values, and take 500 from `MaxImages` (`PdfImages.cs:68`). Tests assert the literal numbers as the help prints them (`10 seconds`, `20 seconds`, `50`, `500`) and that they equal the defaults.
 - [ ] **Step 3:** Run; fail. **Step 4:** Change the texts. **Step 5:** Run; pass.
 - [ ] **Step 6:** Commit: "Say in help what skills, pdfimages and xml do, with pdfimages' real time limits".
-- [ ] **Step 7: Mutations:** restore each old text → its test fails; a constant changed in a scratch edit → the number test fails.
+- [ ] **Step 7: Mutations:** restore each old text → its test fails; hard-code a number back into a help and change its default in a scratch edit → the number test fails.
+- [ ] **Found on the way:** `Html.cs:42` says "A call stops after 10 seconds", the same kind of claim as xml's: check its budget against the code and fix the text in this task if it is the same case.
 
 ### Task 8: §3.7, §3.8, §3.11 — `publish`, `cat`, calendar through a checkpoint
 
@@ -198,7 +202,8 @@
 
 - [ ] **Step 1: Read** `Publications.cs:161-162` (update keeps the stored depth and `--without` unless given), `Cat.cs:184-189` (text file anywhere), `Shell.cs:261-263` (embeds left out in a pipe, with `--version`, with `--checkpoint`), `Shell.cs:225`, `CalendarCommand.cs:110-111`.
 - [ ] **Step 2: Failing tests:**
-  - publish: help contains each line `publish ls [path]`, `publish add <note> [--depth N] [--without <note>]... [--dry-run]`, `publish update <note> [--depth N] [--without <note>]...`, `publish rm <note>`; says `update` keeps the stored depth and `--without` list unless given; the option lines come after add/update and before rm (assert index order). `Usage` per the spec if it stays one line; the `Manual.cs` line `publish ls|add|update|rm <note>` stays.
+  - Usage width: `Help.cs:151-152` pads every row of the `help` list to the longest `Usage` + 2; today's longest is graph's (`GraphCommand.cs:27`, 119 characters). Decision: `Usage` lines stay compact, no longer than graph's; the full shapes go into the help synopsis. A test `No_usage_is_longer_than_graphs` in `HelpTests` asserts it over every command of `TestShell.Of()`.
+  - publish: help contains each line `publish ls [path]`, `publish add <note> [--depth N] [--without <note>]... [--dry-run]`, `publish update <note> [--depth N] [--without <note>]...`, `publish rm <note>`; says `update` keeps the stored depth and `--without` list unless given; the option lines come after add/update and before rm (assert index order). `Usage`: `publish ls [path] | add|update <note> [--depth N] [--without <note>]... | rm <note>` (or as close as fits; `[--dry-run]` only in the synopsis); the `Manual.cs` line `publish ls|add|update|rm <note>` stays.
   - cat: help says an image or a PDF prints one line, an SVG its line and then its source, a text file its content (anywhere), any other file one line; the embedded-notes block is left out in a pipe, with `--version` and with `--checkpoint`; the synopsis shows `[--version V]`.
   - calendar: its help (as `help calendar` prints it, after `Help.Of` adds the checkpoint pointer) contains `the reading forms only; set, move, close, reopen and unset are refused there` right after the `--checkpoint` line.
 - [ ] **Step 3:** Run; fail. **Step 4:** Change the texts. For calendar: if the `--checkpoint` line is the one `Help.Of` appends for every reader, add the sentence in `CalendarCommand`'s own help next to where it names checkpoints, or extend `Help.Of` for calendar only — choose the smaller change that prints the sentence right after the line; say which in the commit body. **Step 5:** Run; pass.
@@ -209,10 +214,10 @@
 
 **Files:**
 - Modify: `web/src/console/help.ts` (`helpBlock`, the "It only reads:" line)
-- Create: `web/src/console/help.test.ts`
+- Test: `web/src/console/ConsolePage.test.tsx` (`:306-316` already builds the refused list from `fixture.refused` plus the subcommand forms, with a pointer to `ConsoleApi.ShAsync`, and compares it exactly; `:282` pins the whole line). No new test file: extending the exact comparison is stronger than substring checks ("rm" is inside "rmcp").
 
-- [ ] **Step 1: Failing test** `help.test.ts`: reads `refused` from `./console-fixture.json` (kept equal to `ConsoleApi.Refused` by `tests/Kumbu.Server.Tests/Api/ConsoleFixtureTests.cs`) and asserts `helpBlock` names each; a copied list, with a comment pointing at `src/Kumbu.Server/Api/ConsoleApi.cs` (`ShAsync`), of the subcommand refusals: `publish add`, `update`, `rm` (as the text phrases them), `calendar set, move, close, reopen and unset`, `skills copy` — assert each form appears in the text.
-- [ ] **Step 2:** `pnpm -C web test --run src/console/help.test.ts` → fails on the calendar forms.
+- [ ] **Step 1: Failing test:** in `ConsolePage.test.tsx:312-313` add `calendar set, move, close, reopen and unset` to the expected subcommand forms (the comment points at `src/Kumbu.Server/Api/ConsoleApi.cs`); update `:282` to the new line.
+- [ ] **Step 2:** `pnpm -C web test --run src/console/ConsolePage.test.tsx` → fails on the calendar forms.
 - [ ] **Step 3:** Add `calendar set, move, close, reopen and unset` to the refused list, keeping the sentence readable.
 - [ ] **Step 4:** Run; pass. Also `pnpm -C web test --run src/console`.
 - [ ] **Step 5:** Commit: "Name calendar's write verbs among what the console refuses".
@@ -222,11 +227,11 @@
 
 **Files (Usage line and help synopsis, as the command already keeps them):**
 - `src/Kumbu.Core/Sh/Commands/Head.cs` (`--version V`), `Sort.cs` (`--version V`; flags as separate brackets as its help synopsis), `Tail.cs` (`--version V`; Usage `[-n N|-n +N]`), `Wc.cs` (`--version V`; separate brackets), `OutlineCommand.cs` (help synopsis `--version V`), `LinksCommand.cs` (help synopsis `--version V`; other files marked `attachment (not a note)` `:22,193`)
-- `Semsearch.cs` (`-n N` has `--max N`), `Restore.cs` (Usage `--plan <token>`), `PdfCommand.cs` (Usage options as its help synopsis), `Df.cs`, `Du.cs` (`-h, --human-readable`), `Backlinks.cs` (Usage `--unlinked` — note `HelpTests.The_readers_that_hide_the_archive_take_archive` pins `backlinks [--archive] <path>` in `Manual.ToolDescription` and the `help` list: the list is built from `Usage`, so update that test's `usage` value to the new `Usage` and keep the tool description's line as it is only if the test is split accordingly — choose: update the test's expected list line, and assert the tool description's line separately, unchanged), `DiffCommand.cs` (Usage `[--word]` on the checkpoint form)
+- `Semsearch.cs` (`-n N` has `--max N`), `Restore.cs` (Usage `--plan <token>`), `PdfCommand.cs` (Usage options as its help synopsis), `Df.cs`, `Du.cs` (`-h, --human-readable`), `Backlinks.cs` (Usage `--unlinked`; `HelpTests.cs:54-62` uses one `usage` value for both the tool description and the `help` list: split it into `listUsage` (`backlinks [--archive] [--unlinked] <path>`) and `manualUsage` (unchanged `backlinks [--archive] <path>`)), `DiffCommand.cs` (Usage `[--word]` on the checkpoint form)
 - Test: `HelpTests` (one theory over the commands)
 
 - [ ] **Step 1: Read** each command's option parsing to confirm each option exists as written (`TryTakeVersion`, `Options` specs).
-- [ ] **Step 2: Failing tests:** a `[Theory]` `Usage_and_help_name_the_options_the_command_takes(command, fragment)` asserting `help <command>` (which starts with the synopsis) and the `help` list line both contain the fragment, rows: head/sort/tail/wc `--version V`; outline/links help `--version V`; semsearch `--max N`; restore `--plan <token>`; df/du `--human-readable`; backlinks `--unlinked`; diff `--word` on the checkpoint line; tail `-n +N`; links help `attachment (not a note)`; pdf's options (from its synopsis).
+- [ ] **Step 2: Failing tests:** a `[Theory]` `Usage_and_help_name_the_options_the_command_takes(command, fragment)` asserting `help <command>` (which starts with the synopsis) and the `help` list line both contain the fragment, rows: head/sort/tail/wc `--version V`; outline/links help `--version V`; semsearch `--max N`; restore `--plan <token>`; df/du `--human-readable`; backlinks `--unlinked`; diff `--word` on the checkpoint line; tail `-n +N`; links help `attachment (not a note)`. pdf is not in `TestShell.Of()` (no pixels, `Shell.cs:55`; `HelpTests.cs:136` asserts `help pdf` is an error): a separate test builds `PdfCommand` as `PdfCommandTests` does and asserts its `Usage` names the options its help synopsis names.
 - [ ] **Step 3:** Run; fail. **Step 4:** Change `Usage` and help synopsis lines. Keep `Manual.ToolDescription` as it is. **Step 5:** Run `HelpTests`; pass; also `EveryCommandHasHelpThatStartsWithItsName`.
 - [ ] **Step 6:** Commit: "Show in help every option head, tail, wc, sort, outline, links, semsearch, restore, pdf, df, du, backlinks and diff take".
 - [ ] **Step 7: Mutations:** remove one fragment from two commands in turn → their rows fail.
@@ -235,7 +240,7 @@
 
 **Files:**
 - `src/Kumbu.Core/Sh/Commands/CalendarCommand.cs` (Usage `calendar notifications [--tag t] [vault]` and the write forms; synopsis shows the vault operand; states include `today · <time>` for an entry ongoing before its time `:455`; `--week 46` is a week of the current ISO week-year `:169-170`)
-- `Rg.cs` (`-l`, `-c` name text files beside notes and PDFs `:84-85,466-468`; `-l` right of a pipe is an error, about `:774`)
+- `Rg.cs` (`-l`, `-c` name text files beside notes and PDFs `:84-85,466-468`; `-l` right of a pipe is an error, about `:774`; that error says "-l lists notes…": name text files and PDFs there too and update `RgTests.cs:157`)
 - `Trash.cs` (a removed folder's row `<path>/  folder  (by …)` `:22,52`)
 - `History.cs` (any attachment, not "an image or a PDF"; a note's row may end in `— message` and `(current)` or `(restored)` `:66,79,115-124,142,150`; "10 versions" `:87` from `NoteWriter.HistoryLimit`)
 - `CheckpointCommands.cs` (`lscp`: any path but `/` tells how many checkpoints the vault can still keep `:51`, `Notes/Checkpoints.cs:153`; "10 versions" `:17` from `NoteWriter.HistoryLimit`)
