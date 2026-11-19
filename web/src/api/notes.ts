@@ -365,8 +365,10 @@ export function useSaveNote(path: string) {
       if (response.status === 409 && error && "current" in error) return { conflict: error.current };
       return { saved: await call(Promise.resolve({ data, error, response })) };
     },
-    onSuccess: (result) => {
-      const now = "saved" in result ? result.saved : result.conflict;
+    onSuccess: (result, { content }) => {
+      // Saved, the note is the text sent: an editor mounted before the note is read again (Write mode moving to the
+      // other pane of the split view on its note) starts from it, not from the text before the save on its version.
+      const now = "saved" in result ? { ...result.saved, content } : result.conflict;
       queryClient.setQueryData<NoteView>(["note", path], (old) => old && { ...old, ...now });
       // The banner counts the last write; after the user's own it no longer applies.
       if ("saved" in result) {

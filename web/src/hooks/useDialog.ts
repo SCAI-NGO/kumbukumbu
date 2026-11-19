@@ -16,7 +16,8 @@ const controlsOf = (dialog: HTMLElement) => [...dialog.querySelectorAll<HTMLElem
  * What `aria-modal` promises: focus moves in on open (to `[data-autofocus]`, else the first control), Tab stays
  * inside, Escape calls `onClose` wherever focus is, and focus goes back to the opener on close. An opener that only
  * held the focus for a moment (`data-focus-return="<id>"`, the dock's keyboard stand-in) hands it to that element;
- * without one (a deep link) or with one gone meanwhile, `fallback` names where the focus goes instead.
+ * without one (a deep link) or with one gone meanwhile, `fallback` names where the focus goes instead. An opener in
+ * the split view's pane that is no longer the focused one leaves the focus to the focused pane.
  */
 export function useDialog<T extends HTMLElement>(onClose: () => void, fallback?: () => HTMLElement | null) {
   const ref = useRef<T>(null);
@@ -57,7 +58,11 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, fallback?:
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       stack.splice(stack.indexOf(dialog), 1);
-      if (opener?.isConnected && opener !== document.body) opener.focus();
+      // In the split view, an opener in the pane that isn't focused any more (a note opened beside from the palette)
+      // would take the focus back there: the focused pane takes it instead.
+      const pane = opener?.closest("[data-pane]");
+      if (pane && pane.getAttribute("aria-current") !== "true") document.querySelector<HTMLElement>('[data-pane][aria-current="true"]')?.focus();
+      else if (opener?.isConnected && opener !== document.body) opener.focus();
       else instead.current?.()?.focus();
     };
   }, []);
