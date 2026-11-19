@@ -85,10 +85,10 @@ public class AttachmentLinkTests
     }
 
     [Theory]
-    [InlineData("data.csv", "attachment /W/data.csv")]
+    [InlineData("data.csv", "note /W/data.csv.md")]
     [InlineData("Makefile", "attachment /W/src/Makefile")]
     [InlineData("src/Makefile", "attachment /W/src/Makefile")]
-    // A name that looks like a file's is a note's where no file is stored at it.
+    // A name that looks like a file's is a note's where no file is stored at it, and where a note carries it.
     [InlineData("Project v1.2", "note /W/Project v1.2.md")]
     [InlineData("README", "note /W/README.md")]
     [InlineData("v1.2", "NotFound")]
@@ -98,6 +98,26 @@ public class AttachmentLinkTests
         var resolver = new LinkResolver("W",
             [P("/W/inbox.md"), P("/W/data.csv.md"), P("/W/Project v1.2.md"), P("/W/README.md"), P("/W/v1.2/notes.md")],
             [P("/W/data.csv"), P("/W/src/Makefile"), P("/W/v1.2/shot.png")]);
+
+        Assert.Equal(expected, Resolve(resolver, "/W/inbox.md", target));
+    }
+
+    [Theory]
+    // A note comes first: a file stored under a note's name (anyone in a shared vault may upload one) takes no link over.
+    [InlineData("Ideas", "note /W/Ideas.md")]
+    [InlineData("README", "note /W/README.md")]
+    [InlineData("Old name", "note /W/Ideas.md")]
+    // Only where no note matches does a stored file of that name answer; a format's extension names the format first.
+    [InlineData("data.csv", "attachment /W/data.csv")]
+    [InlineData("Makefile", "attachment /W/Makefile")]
+    [InlineData("shot.png", "attachment /W/shot.png")]
+    [InlineData("report.docx", "NotFound")]
+    public void A_note_wins_over_a_file_of_its_name(string target, string expected)
+    {
+        var resolver = new LinkResolver("W",
+            [P("/W/inbox.md"), P("/W/Ideas.md"), P("/W/README.md"), P("/W/shot.png.md")],
+            [P("/W/old/Ideas"), P("/W/a/README"), P("/W/b/README"), P("/W/Old name"), P("/W/data.csv"), P("/W/Makefile"), P("/W/shot.png")],
+            new Dictionary<VaultPath, IReadOnlyList<string>> { [P("/W/Ideas.md")] = ["Old name"] });
 
         Assert.Equal(expected, Resolve(resolver, "/W/inbox.md", target));
     }

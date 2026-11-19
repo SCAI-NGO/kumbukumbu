@@ -349,11 +349,11 @@ public class AttachmentCommandTests
     {
         await Upload("/Work/data.csv", "a;b\n"u8.ToArray());
         await Upload("/Work/src/Makefile", "all:\n"u8.ToArray());
-        await Note("/Work/data.csv.md", "a note\n");
-        await Note("/Work/links.md", "[[data.csv]] [[Makefile]] [[nowhere]]\n");
+        await Note("/Work/Makefile.md", "a note\n");
+        await Note("/Work/links.md", "[[data.csv]] [[src/Makefile]] [[nowhere]]\n");
 
-        Assert.Equal("1: [[data.csv]] → /Work/data.csv\n1: [[Makefile]] → /Work/src/Makefile\n1: [[nowhere]] → not found", (await Run("links /Work/links.md")).Output);
-        Assert.Equal("/Work/links.md:1:[[data.csv]] [[Makefile]] [[nowhere]]", (await Run("backlinks /Work/data.csv")).Output);
+        Assert.Equal("1: [[data.csv]] → /Work/data.csv\n1: [[src/Makefile]] → /Work/src/Makefile\n1: [[nowhere]] → not found", (await Run("links /Work/links.md")).Output);
+        Assert.Equal("/Work/links.md:1:[[data.csv]] [[src/Makefile]] [[nowhere]]", (await Run("backlinks /Work/data.csv")).Output);
     }
 
     [Fact]

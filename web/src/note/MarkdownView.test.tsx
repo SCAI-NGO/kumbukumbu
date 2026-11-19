@@ -429,6 +429,13 @@ describe("MarkdownView: attachments", () => {
     expect(onCreateMissing).not.toHaveBeenCalled();
   });
 
+  it("offers a note for a missing file of no known format, as the server can't tell it from a note's name", async () => {
+    const onCreateMissing = vi.fn();
+    showRouted("[[report.docx]]", [link(1, "[[report.docx]]", "not_found")], onCreateMissing);
+    await userEvent.click(screen.getByRole("button", { name: "Create the note “report.docx”" }));
+    expect(onCreateMissing).toHaveBeenCalledWith("report.docx");
+  });
+
   it("shows a file, embedded or linked, as a chip with a download, never as an image", async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     showRouted("![[data.xlsx]]\n\nSee [[Makefile]].", [link(1, "![[data.xlsx]]", "attachment", "/Work/data.xlsx"), link(3, "[[Makefile]]", "attachment", "/Work/Makefile")]);

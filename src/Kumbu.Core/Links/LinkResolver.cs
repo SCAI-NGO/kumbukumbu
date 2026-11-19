@@ -35,9 +35,10 @@ public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyL
 /// with a folder the one below the source's folder, then the one at that path from the vault's root, and for a bare
 /// name the source's own folder. A source outside the vault's archive prefers, after the folder preferences, what lies
 /// outside it over what lies in it; an archived source's links resolve without that preference. Never guesses beyond
-/// that. Attachments resolve by the same rules, by their whole name ("shot.png", "data.csv", "Makefile"), before notes:
-/// a name is a file's only where one is stored. Only when neither finds anything does a bare name (no "/", no ".md",
-/// no format's extension) lead to the notes whose aliases contain it, with the same archive and same-folder preferences.
+/// that. Attachments resolve by the same rules, by their whole name: one ending in a format's extension ("shot.png")
+/// before notes; any other ("data.csv", "Makefile") only when no note matches it, by name or alias. Only when no note
+/// or image of that name is found does a bare name (no "/", no ".md", no format's extension) lead to the notes whose
+/// aliases contain it, with the same archive and same-folder preferences.
 /// </summary>
 public sealed class LinkResolver
 {
@@ -120,20 +121,17 @@ public sealed class LinkResolver
 
         var full = text.TrimStart('/');
         var fileName = full[(full.LastIndexOf('/') + 1)..];
-        // A name ending in a format's extension (shot.png) names that format; any other name ending in no .md
-        // (data.csv, Makefile, Project v1.2) names a file only where one is stored, else a note as ever.
+        // A name ending in a format's extension (shot.png) names that format, so a stored one comes first. Any other
+        // name (Ideas, data.csv, Makefile) is a note's first, by name or alias, and a stored file's only where no note
+        // matches: a file uploaded under a note's name (in a shared vault, by anyone) takes none of its links over.
         var formatName = AttachmentFormat.ForName(fileName) is { } format && format != AttachmentFormat.File;
-        if (_attachmentsByName is not null
-            && Find(_attachmentsByName, LinkKind.Attachment, source, full, fileName, "/" + full, exact) is { } attachment)
-        {
-            return attachment;
-        }
+        if (formatName && FindAttachment(source, full, fileName, exact) is { } attachment) return attachment;
 
         var path = StripMd(full);
         var name = path[(path.LastIndexOf('/') + 1)..];
         if (Find(_byName, LinkKind.Note, source, path, name, "/" + path + ".md", exact) is { } note) return note;
 
-        // A bare name that no note or attachment carries may be a note's alias; "Kumbu.md" names a file, never an alias,
+        // A bare name that no note carries may be a note's alias; "Kumbu.md" names a file, never an alias,
         // and so does "shot.png": without the vault's attachments it may name one that exists.
         if (wikilink && !exact && !full.Contains('/') && !full.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
             && !formatName
@@ -143,11 +141,16 @@ public sealed class LinkResolver
             return byAlias with { ViaAlias = true };
         }
 
+        if (!formatName && FindAttachment(source, full, fileName, exact) is { } file) return file;
+
         // Without the vault's attachments, a name that looks like a file's may name one that exists; with them, a
         // missing file leads nowhere, as a missing note's link does.
         var looksLikeFile = name.LastIndexOf('.') is var dot and > 0 && dot < name.Length - 1 && !name[(dot + 1)..].Contains(' ');
         return new LinkResolution(looksLikeFile && _attachmentsByName is null ? LinkKind.Attachment : LinkKind.NotFound, null, []);
     }
+
+    private LinkResolution? FindAttachment(VaultPath source, string full, string fileName, bool exact) =>
+        _attachmentsByName is null ? null : Find(_attachmentsByName, LinkKind.Attachment, source, full, fileName, "/" + full, exact);
 
     /// <summary>The note or attachment (by <paramref name="kind"/>) that <paramref name="path"/> names, as the rules
     /// above say; null if none matches.</summary>
