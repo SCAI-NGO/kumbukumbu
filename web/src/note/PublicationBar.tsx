@@ -126,14 +126,14 @@ function BundledBar({ starts, enabled, lastWriteAt }: { starts: string[] | null;
     .filter((c): c is { start: string; at: string } => !!c.at && !!lastWriteAt && Date.parse(lastWriteAt) > Date.parse(c.at))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const older = stale.length > 0;
-  // Older, it says where the copy is updated: at its start note, which the bar names.
+  // Older, it says where the copy is updated: from its start note, which the bar names.
   const named = older ? stale.map((c) => c.start) : starts;
   return (
     <section aria-label="Publication" data-tone={older ? "yellow" : undefined} className={barClass}>
       {older && <span aria-hidden className="size-2 flex-none rounded-full bg-warning" />}
       {/* A status from the start, so the yellow is announced when the start's copy answers. */}
       <span role="status" className={older ? "min-w-0 flex-1 py-2 pl-1.5" : "py-2"}>
-        {older ? `Published copy is older than this note. ${olderText(stale[0].at, lastWriteAt!)}. Update it at ` : "Published with "}
+        {older ? `Published copy is older than this note. ${olderText(stale[0].at, lastWriteAt ?? null)}. Update ${stale.length > 1 ? "them" : "it"} from ` : "Published with "}
         {named.map((start, i) => (
           <span key={start}>
             {i > 0 && (i === named.length - 1 ? " and " : ", ")}

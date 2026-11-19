@@ -476,6 +476,6 @@ test("publish: a bundled note's bar turns yellow when the copy is older than the
   const bar = page.getByRole("region", { name: "Publication" });
   await expect(bar, "F-08: the bundled note's bar is yellow").toHaveAttribute("data-tone", "yellow", { timeout: 3_000 });
   await expect(bar.getByRole("status")).toContainText("Published copy is older than this note.");
-  await expect(bar.getByRole("status")).toContainText(`Update it at ${b.name("Start")}.`);
+  await expect(bar.getByRole("status")).toContainText(`Update it from ${b.name("Start")}.`);
   await expect(bar.getByRole("link", { name: b.name("Start"), exact: true })).toBeVisible();
 });
