@@ -29,6 +29,9 @@ describe("parseProperties", () => {
     expect(parseProperties("just text")).toBeNull();
     expect(parseProperties("ref: *anchor")).toBeNull();
     expect(parseProperties('tags: ["a, b", c]')).toBeNull();
+    // The quote before the comma is escaped: the comma is still inside them.
+    expect(parseProperties('tags: ["a\\", b"]')).toBeNull();
+    expect(parseProperties("tags: ['it''s, x']")).toBeNull();
     expect(parseProperties("status: draft # for now")).toBeNull();
     expect(parseProperties("tags:\n  - a # first")).toBeNull();
   });

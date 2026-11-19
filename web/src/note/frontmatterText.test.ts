@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { addProperty, findPropertyBlocks, frontmatterUnreadable, moveToProperties, yamlValue } from "./frontmatterText";
+import { addProperty, findPropertyBlocks, frontmatterUnreadable, mergeProperties, moveToProperties, yamlValue } from "./frontmatterText";
 
 describe("findPropertyBlocks", () => {
   it.each([
@@ -193,5 +193,34 @@ describe("frontmatterUnreadable", () => {
     ["one that doesn't, after a BOM", "\uFEFF---\nabout: |\n  more\n---\n", true],
   ])("%s", (_, content, unreadable) => {
     expect(frontmatterUnreadable(content)).toBe(unreadable);
+  });
+});
+
+describe("mergeProperties", () => {
+  it("keeps the note's own items as written when an inline list goes below its key", () => {
+    const note = `---\ntags: [2025, 'it''s', "a\\tb", yes]\n---\n`;
+    expect(mergeProperties(note, [{ key: "tags", value: ["Müller"] }])).toEqual({
+      content: `---\ntags:\n  - 2025\n  - 'it''s'\n  - "a\\tb"\n  - yes\n  - "Müller"\n---\n`,
+    });
+  });
+
+  it("keeps a block list's lines byte for byte, appending below them", () => {
+    const note = `---\ntags:\n-   2025\n  - 'it''s'   \n  - "a\\tb"\n---\n`;
+    expect(mergeProperties(note, [{ key: "tags", value: ["Müller", "new"] }])).toEqual({
+      content: `---\ntags:\n-   2025\n  - 'it''s'   \n  - "a\\tb"\n  - "Müller"\n  - new\n---\n`,
+    });
+  });
+
+  it("refuses a property that wouldn't read back with its value", () => {
+    expect(mergeProperties("---\nstatus: open\n---\n", [{ key: "title", value: "Bob", written: "'Alice'" }])).toEqual({ refused: "merge" });
+  });
+
+  it("refuses a second key the note has already, also where the note quotes it", () => {
+    expect(mergeProperties("---\nstatus: a\n---\n", [{ key: "type", value: "x" }, { key: "type", value: "y" }])).toEqual({ refused: "merge" });
+    expect(mergeProperties('---\n"status": a\n---\n', [{ key: "status", value: "b" }])).toEqual({ content: '---\n"status": a\n---\n' });
+  });
+
+  it("unites a list the note quotes the key of", () => {
+    expect(mergeProperties("---\n'tags': [a]\n---\n", [{ key: "tags", value: ["b"] }])).toEqual({ content: "---\n'tags': [a, b]\n---\n" });
   });
 });

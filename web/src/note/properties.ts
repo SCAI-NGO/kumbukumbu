@@ -16,8 +16,8 @@ const quoted = (v: string) => /^"(?:[^"\\]|\\.)*"$/.test(v) || /^'(?:[^']|'')*'$
 /** A trailing comment (` # …`, as YAML has it: after a space) is YAML syntax this reading doesn't take apart. */
 const commented = (v: string) => !quoted(v.trim()) && /(^|\s)#/.test(v);
 
-/** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`). */
-const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));
+/** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`, `["a\\", b"]`). */
+const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && !quoted(p);
 
 /** An inline list's items, or null where a comma sits inside quotes: splitting on it would be wrong. */
 function inlineItems(inner: string): string[] | null {
