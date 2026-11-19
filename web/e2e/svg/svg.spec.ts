@@ -9,18 +9,24 @@
 //    → "svg: ![[x.svg]] opens as an image …".
 // 2. A published page shows it the same way, through an `<img>` from an object URL (decision 3) → "svg: a published
 //    page shows the SVG …".
-// Left out: the upload sheet's and the import's formats and "never shrunk" (decision 8): the upload itself goes
-// through /api/files here, as the web app's upload does, and shrinking is the web app's own unit tests; the export
-// ZIP and WebDAV (decision 9): not shown by Kumbu²; the server's headers and the strip: e2e/mcp/svg.spec.ts.
-import type { Page } from "@playwright/test";
+// 3. The upload sheet takes an SVG as it is, never shrunk or converted: the bytes stored are the bytes picked, and one
+//    over 15 MB is skipped with the reason instead of offered for shrinking as a photo would be (decisions 1, 8)
+//    → "svg: the upload sheet takes an SVG as it is …".
+// Left out: the SPA export (decision 3): there is none in 0.6.0, the export in Settings → Data being a ZIP of the
+// files (decision 9), which Kumbu² doesn't show; the import dialog's formats: its own unit tests; WebDAV (decision 9):
+// not shown by Kumbu²; the server's headers and the strip: e2e/mcp/svg.spec.ts.
+import type { Page, TestInfo } from "@playwright/test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { Api, encodePath, Mcp } from "../support/api";
+import { baseURL } from "../support/env";
 import { reserveReaderRead } from "../support/session";
-import { expect, shot, test } from "../support/test";
+import { redact } from "../mcp/fixtures";
+import { expect, onPhone, shot, test } from "../support/test";
 
 test.use({ screenshot: "off" });
 
-const readerLink = /^http:\/\/localhost:8080\/s#\S+$/;
+const readerLink = new RegExp(`^${baseURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s#\\S+$`);
 
 /** A green drawing with a rect of its own id, and a script that would rename the page if it ever ran. */
 const drawing = (id: string) =>
@@ -100,7 +106,7 @@ test.describe("svg published", () => {
     const reader = await browser.newContext(projectContextOptions);
     try {
       const added = await key.sh(`publish add "${note}"`);
-      expect(added.isError, "publish add succeeded").toBe(false);
+      expect(added.isError, `publish add failed:\n${redact(added.text)}`).toBe(false);
       const link = /^link \(shown once\): (\S+)$/m.exec(added.text)?.[1] ?? "";
       expect(readerLink.test(link), "publish add printed a /s# link").toBe(true);
 
@@ -122,4 +128,48 @@ test.describe("svg published", () => {
     }
     expect((await key.sh(`publish ls /Work/${folder}`)).text).toBe(`no published notes below /Work/${folder}`);
   });
+});
+
+/** The file tree: docked on the desktop, a drawer on the phone. */
+async function openTree(page: Page, testInfo: TestInfo) {
+  if (!onPhone(testInfo)) return page.getByRole("complementary", { name: "File tree" });
+  await page.getByRole("button", { name: "Open file tree" }).click();
+  return page.getByRole("dialog", { name: "File tree" });
+}
+
+test("svg: the upload sheet takes an SVG as it is, and skips one over 15 MB instead of shrinking it @svg", async ({ page, aliceApi, folder }, testInfo) => {
+  const id = folder.slice(-6);
+  const note = `/Work/${folder}/Hub ${id}.md`;
+  // Large on screen (3000 px a side), small in bytes; and one a byte over 15 MB.
+  const small = testInfo.outputPath(`drawing ${id}.svg`);
+  const big = testInfo.outputPath(`big ${id}.svg`);
+  const head = `<svg xmlns="http://www.w3.org/2000/svg"><!--`;
+  const tail = `--></svg>`;
+  writeFileSync(small, `<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="3000"><!-- kept as written -->\n  <rect width="3000" height="3000" fill="#2a6"/>\n</svg>\n`);
+  writeFileSync(big, Buffer.concat([Buffer.from(head), Buffer.alloc(15 * 1024 * 1024 + 1 - head.length - tail.length, 0x61), Buffer.from(tail)]));
+  written.push(note, `/Work/${folder}/drawing ${id}.svg`);
+  await aliceApi.putNote(note, "# Hub\n");
+
+  await openNote(page, note);
+  const tree = await openTree(page, testInfo);
+  await tree.getByRole("button", { name: `Actions for ${folder}` }).click();
+  await page.getByRole("menuitem", { name: "Upload here" }).click();
+  const sheet = page.getByRole("dialog", { name: "Upload" });
+  await sheet.getByLabel("Choose files").setInputFiles([small, big]);
+  await expect(sheet.getByText("1 file to upload, 1 file skipped")).toBeVisible();
+  // Not offered for shrinking, as a photo over 15 MB would be: skipped, with the reason.
+  await expect(sheet.getByRole("list", { name: "Images over 15 MB" })).toHaveCount(0);
+  await sheet.getByText("1 file skipped", { exact: true }).click();
+  await expect(sheet.getByRole("list", { name: "Skipped files" }).getByRole("listitem")).toHaveText([
+    `big ${id}.svglarger than 15 MB; an SVG image is read whole to be checked, so it can have at most 15 MB`,
+  ]);
+  await sheet.getByRole("button", { name: "Upload", exact: true }).click();
+  await expect(sheet.getByRole("status")).toHaveText("0 notes and 1 file uploaded, 0 replaced, 1 file skipped");
+  await sheet.getByRole("button", { name: "Done" }).click();
+
+  const stored = await aliceApi.send("GET", `/api/files/${encodePath(`/Work/${folder}/drawing ${id}.svg`)}`);
+  expect(stored.status()).toBe(200);
+  expect(stored.headers()["content-type"]).toBe("image/svg+xml");
+  expect((await stored.body()).equals(readFileSync(small)), "the bytes stored are the bytes picked").toBe(true);
+  expect((await aliceApi.send("GET", `/api/files/${encodePath(`/Work/${folder}/big ${id}.svg`)}`)).status(), "the large one wasn't sent").toBe(404);
 });

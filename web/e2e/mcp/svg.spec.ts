@@ -13,16 +13,23 @@
 //    using an entity it declares is refused as not well-formed; the refusal says what is wrong (decisions 2, 6;
 //    "A file whose DTD declares entities") → "svg: write refuses what isn't an SVG …".
 // 5. `edit` and `replace` refuse with "replace it whole with write" (decision 6) → the same test.
-// 6. `rg` doesn't search it (decision 7) → "svg: write takes an SVG whole …".
+// 6. `rg` doesn't search it (decision 7) → "svg: write takes an SVG whole …" (a note with the same word is found).
+// 9. No size in the file: none is stored, and `img` draws it as a square (decision 5; "Without a stored size")
+//    → "svg: an SVG without a size …".
+// 10. Up to 15 MB like every attachment, refused above with the sentence why (decision 1; AttachmentFormat.cs:199)
+//    → "svg: an SVG over 15 MB is refused …".
+// 11. An SVG image isn't moved into a skill's folder, where `.svg` is a text file ("Decided while building")
+//    → "svg: an SVG image isn't moved into a skill's folder".
 // 7. A script in an SVG is kept as written, and the file comes with `sandbox; default-src 'none'` and `nosniff` from
 //    /api/files (decision 3) → "svg: a script is kept, and /api/files serves it under the sandbox policy".
 // 8. Publishing strips an SVG: comments, `metadata` and an editor's own namespaces go, the drawing stays; the reader's
 //    file comes under the same policy (decision 3; "Publishing strips an SVG") → "svg: a published SVG …".
 // Left out: the no-fetch of external references and the child process killed at its time limit (decision 4, "Changed
 // while building"): the sidecar's own tests (`pdf/test/`), and an SSRF probe needs a listener the stack can't reach;
-// `.svg` inside a skill's folder (decision 1, "isn't moved … into a skill's folder"): the agent's key has Work only;
-// /dav (decision 3): needs a WebDAV share and its password; the 15 MB limit: costly, covered by xUnit; the web app's
-// `<img>`: e2e/svg/svg.spec.ts.
+// `.svg` as a text file inside a skill's folder (decision 1): a folder below `_skills/` that holds any file is a skill
+// (SkillDirectory.cs:11-12), listed in every handshake's instructions while it exists, which would disturb @memory's
+// exact assertions on them; /dav (decision 3): needs a WebDAV share and its password; the web app's `<img>`:
+// e2e/svg/svg.spec.ts.
 import { request } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { Api, encodePath, guarded, Mcp } from "../support/api";
@@ -89,8 +96,10 @@ test("svg: write takes an SVG whole, cat prints its source, a version replaces i
   expect((await mcp.sh(`cat "${path}"`)).text.split("\n").slice(0, 2)).toEqual([`drawing ${id}.svg: image (SVG), 800×400, ${wide.length} B`, wide]);
   expect((await mcp.sh(`ls -l /Work/${folder}`)).text).toMatch(new RegExp(`^drawing ${id}\\.svg  image 800×400 ${wide.length} B  \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC$`));
 
-  // rg doesn't search it: SVG text is mostly coordinates.
-  expect(await mcp.sh(`rg circle /Work/${folder}`)).toEqual({ text: "", isError: false });
+  // rg doesn't search it, SVG text being mostly coordinates; a note with the same word it finds.
+  const note = `/Work/${folder}/Circle ${id}.md`;
+  await write(mcp, note, "# Circle\n\nA circle of friends.\n");
+  expect(await mcp.sh(`rg circle /Work/${folder}`)).toEqual({ text: `${note}:3:A circle of friends.`, isError: false });
 });
 
 test("svg: img draws it at the size step, enlarged too, and --crop counts in its stored size @svg", async ({ mcp, folder }) => {
@@ -136,7 +145,7 @@ test("svg: write refuses what isn't an SVG, and edit and replace point to write 
   expect(entity.isError).toBe(true);
   expect(entity.text).toMatch(new RegExp(`^write: entity ${id}\\.svg is not an SVG: it isn't well-formed XML \\(Reference to undeclared entity 'x'\\..*\\)$`));
   // An editor's export with a declaration, an external DTD and a comment: taken, sized from its viewBox.
-  const exported = `﻿<?xml version="1.0"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<!-- exported -->\n<svg viewBox="0 0 10 20"/>\n`;
+  const exported = `\uFEFF<?xml version="1.0"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<!-- exported -->\n<svg viewBox="0 0 10 20"/>\n`;
   expect((await write(mcp, at("export"), exported)).first).toBe(`created ${at("export")}`);
   expect((await mcp.sh(`cat "${at("export")}"`)).text.split("\n")[0]).toBe(`export ${id}.svg: image (SVG), 10×20, ${Buffer.byteLength(exported)} B`);
 
@@ -150,6 +159,45 @@ test("svg: write refuses what isn't an SVG, and edit and replace point to write 
       isError: true,
     });
   }
+});
+
+test("svg: an SVG without a size stores none, and img draws it as a square @svg", async ({ mcp, folder }) => {
+  const id = folder.slice(-6);
+  const path = `/Work/${folder}/sizeless ${id}.svg`;
+  const source = `<svg xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="3"/></svg>`;
+  const { version } = await write(mcp, path, source);
+  expect((await mcp.sh(`cat "${path}"`)).text.split("\n").slice(0, 2)).toEqual([`sizeless ${id}.svg: image (SVG), ${source.length} B`, source]);
+  const square = await img(mcp, `img "${path}" --size small`);
+  expect(square.text.split("\n")[0]).toMatch(new RegExp(`^${escape(path)} \\(version ${version}\\): image \\(SVG\\), original 300×300 px; small: 632×632 px PNG, \\d+ KB$`));
+  expect([square.width, square.height]).toEqual([632, 632]);
+});
+
+test("svg: an SVG over 15 MB is refused with the reason @svg", async ({ aliceApi, folder, mcp }) => {
+  const id = folder.slice(-6);
+  const path = `/Work/${folder}/big ${id}.svg`;
+  // Well-formed, one byte over 15 MB: a comment pads it.
+  const head = `<svg xmlns="http://www.w3.org/2000/svg"><!--`;
+  const tail = `--></svg>`;
+  const bytes = Buffer.concat([Buffer.from(head), Buffer.alloc(15 * 1024 * 1024 + 1 - head.length - tail.length, 0x61), Buffer.from(tail)]);
+  expect(bytes.length).toBe(15 * 1024 * 1024 + 1);
+  const put = await aliceApi.send("PUT", `/api/files/${encodePath(path)}`, { data: bytes, headers: { "Content-Type": "application/octet-stream" } });
+  expect(put.status()).toBe(413);
+  expect(await put.json()).toEqual({ error: `big ${id}.svg is larger than 15 MB; an SVG image is read whole to be checked, so it can have at most 15 MB.` });
+  expect(await mcp.sh(`cat "${path}"`)).toEqual({ text: `cat: ${path}: No such file or directory`, isError: true });
+});
+
+test("svg: an SVG image isn't moved into a skill's folder @svg", async ({ mcp, folder }) => {
+  const id = folder.slice(-6);
+  const path = `/Work/${folder}/icon ${id}.svg`;
+  const target = `/Work/_skills/e2e-${id}/icon.svg`;
+  await write(mcp, path, drawing(id));
+  expect(await mcp.sh(`mv "${path}" "${target}"`)).toEqual({
+    text: `mv: ${target}: icon ${id}.svg is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead`,
+    isError: true,
+  });
+  // Nothing moved: it stays where it was, and no skill's folder came into being.
+  expect((await mcp.sh(`cat "${path}"`)).text.split("\n")[0]).toBe(`icon ${id}.svg: image (SVG), 120×60, ${Buffer.byteLength(drawing(id))} B`);
+  expect(await mcp.sh(`ls /Work/_skills/e2e-${id}`)).toEqual({ text: `ls: cannot access '/Work/_skills/e2e-${id}': No such file or directory`, isError: true });
 });
 
 test("svg: a script is kept, and /api/files serves it under the sandbox policy @svg", async ({ mcp, folder, aliceApi }) => {
@@ -197,7 +245,10 @@ test.describe("svg published", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" ` +
       `xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="40" height="40" sodipodi:docname="e2e-docname-${id}.svg" ` +
       `inkscape:export-filename="/home/e2e-home-${id}/sketch.png"><metadata>e2e-metadata-${id}</metadata>` +
-      `<sodipodi:namedview id="e2e-view-${id}"/><rect id="e2e-${id}" width="40" height="40" fill="#2a6"/></svg>\n`;
+      `<sodipodi:namedview id="e2e-view-${id}"/><rect id="e2e-${id}" width="40" height="40" fill="#2a6"/>` +
+      // A reference within the file stays; a linked image on the author's disk and XHTML in a foreignObject go.
+      `<use href="#e2e-${id}" x="5"/><image href="file:///home/e2e-link-${id}/x.png" width="4" height="4"/>` +
+      `<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">e2e-xhtml-${id}</div></foreignObject></svg>\n`;
     written.push(svg, note);
     for (const [path, content] of [
       [svg, source],
@@ -210,7 +261,7 @@ test.describe("svg published", () => {
     const anon = await request.newContext({ baseURL, extraHTTPHeaders: { Origin: baseURL } });
     try {
       const added = await key.sh(`publish add "${note}"`);
-      expect(added.isError, redact(added.text)).toBe(false);
+      expect(added.isError, `publish add failed:\n${redact(added.text)}`).toBe(false);
       const link = /^link \(shown once\): (\S+)$/m.exec(added.text)?.[1];
       expect(link !== undefined, `publish add printed a link:\n${redact(added.text)}`).toBe(true);
 
@@ -232,8 +283,9 @@ test.describe("svg published", () => {
       });
       const copied = await file.text();
       expect(copied, "the drawing stays").toContain(`<rect id="e2e-${id}" width="40" height="40" fill="#2a6"`);
+      expect(copied, "a reference within the file stays").toContain(`href="#e2e-${id}"`);
       expect(
-        [`e2e-author-${id}`, `e2e-docname-${id}`, `e2e-home-${id}`, `e2e-metadata-${id}`, `e2e-view-${id}`, "sodipodi", "inkscape"].filter((t) => copied.includes(t)),
+        [`e2e-author-${id}`, `e2e-docname-${id}`, `e2e-home-${id}`, `e2e-metadata-${id}`, `e2e-view-${id}`, `e2e-link-${id}`, `e2e-xhtml-${id}`, "file:", "sodipodi", "inkscape"].filter((t) => copied.includes(t)),
         "an editor's names in the published copy",
       ).toEqual([]);
     } finally {

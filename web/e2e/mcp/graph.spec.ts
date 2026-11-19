@@ -18,16 +18,27 @@
 //    → "graph: the REST filter takes at most 50 paths and 50 tags".
 // 6. `links`, `backlinks` and the graph read one index: after `mv` they all name the new path at once (§3 decisions 4,
 //    anti-goals "two truths" and "a stale graph") → "graph: after mv, links, backlinks and the graph …".
-// 7. The creation time: set on creation, kept through a write and `mv`; shown as the node's `created` (§5; `sh` shows
-//    it nowhere, so `/api/graph/node`) → "graph: a note's creation time …".
+// 7. The creation time: set on creation, kept through a write, `mv`, `rm` and `restore`; shown as the node's `created`
+//    (§5; `sh` shows it nowhere, so `/api/graph/node`) → "graph: a note's creation time …"; kept through `archive`
+//    → "graph: archive keeps a note's creation time" (finding M-03).
+// 8. The filter on a local graph: `--no-days`, `--no-attachments`, `--no-ghosts`, `--archive` (archived notes hidden
+//    by default), `--tag`; the start note always shown; day notes a kind of their own (§6's filter, §4.3)
+//    → "graph: the filter flags on a local graph …".
+// 9. `(alias)` and `(ambiguous)`: a link found through an alias, and one edge to each of several notes that match
+//    (§4.3) → "graph: a link by an alias and an ambiguous link are marked".
+// 10. Ghost identity: a bare name is one ghost whatever its case, a name with a folder a ghost of its own, and once the
+//    note exists the ghost is gone and its edges lead to the note (§4.3) → "graph: links to a missing note …".
+// 11. Rights: a key without the vault sees nothing of it, answered as for a path that doesn't exist (§8)
+//    → "graph: a key without the vault is answered as if it weren't there".
 // Left out: the graph over several vaults and a hidden discreet vault (§8): needs `@serial` and a discreet session,
 // which this project has not; the ETag and `304` (§4.4, §7.2): xUnit covers it, and a vault others write to changes
-// its version between two calls; the budget with a hub of 400 backlinks (§10): costly to seed; the time-lapse and
+// its version between two calls; the budget with a hub of 400 backlinks (§10): `GraphCommandTests.Hub_at_depth_three_stays_in_budget`
+// (tests/Kumbu.Core.Tests/Sh/GraphCommandTests.cs:106); the time-lapse and
 // the "at the latest" fill for notes from before (§5): no such notes on a fresh stack; the bundle query (§6.7): not
 // exposed, Publish covers it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Mcp } from "../support/api";
+import type { Api, Mcp } from "../support/api";
 import { fixturesDir } from "../support/env";
 import { expect, test } from "./fixtures";
 
@@ -97,6 +108,8 @@ test("graph: a note's neighbourhood at depth 1 to 3, in both directions or one @
     ].join("\n"),
     isError: false,
   });
+  // B → Hub and Hub → B both show: the local graph returns the edges between the nodes it returned (§6.1), so the
+  // direction picks the walk, not the edges listed.
   expect(await mcp.sh(`graph "${p("Hub")}" --in`)).toEqual({
     text: [`${p("Hub")}, depth 1, incoming links only: 2 notes`, `1  ${p("Hub")} -> ${p("B")}`, `1  ${p("B")} -> ${p("Hub")}`].join("\n"),
     isError: false,
@@ -108,18 +121,18 @@ test("graph: a note's neighbourhood at depth 1 to 3, in both directions or one @
 test("graph: --cap shows the best-connected neighbours and the command that goes on @graph", async ({ mcp, folder }) => {
   const n = names(folder);
   const p = n.path;
-  // Hub → A, B, C, D; A → B: A and B have two links each, C and D one.
-  await write(mcp, p("Hub"), `# Hub\n\n${["A", "B", "C", "D"].map(n.link).join(" ")}\n`);
-  await write(mcp, p("A"), `# A\n\n${n.link("B")}\n`);
-  for (const title of ["B", "C", "D"]) await write(mcp, p(title), `# ${title}\n`);
+  // Hub → A, B, C, D, E; X → C, D, E: C, D and E have two links each, A and B one. The cap of 2 takes two of the
+  // better connected, not the first by path, and among the three tied ones C and D by path.
+  await write(mcp, p("Hub"), `# Hub\n\n${["A", "B", "C", "D", "E"].map(n.link).join(" ")}\n`);
+  await write(mcp, p("X"), `# X\n\n${["C", "D", "E"].map(n.link).join(" ")}\n`);
+  for (const title of ["A", "B", "C", "D", "E"]) await write(mcp, p(title), `# ${title}\n`);
 
   expect(await mcp.sh(`graph "${p("Hub")}" --cap 2`)).toEqual({
     text: [
       `${p("Hub")}, depth 1, both directions: 3 notes`,
-      `1  ${p("Hub")} -> ${p("A")}`,
-      `1  ${p("Hub")} -> ${p("B")}`,
-      `1  ${p("A")} -> ${p("B")}`,
-      `   +2 more linked from ${p("Hub")}: graph "${p("Hub")}" --out`,
+      `1  ${p("Hub")} -> ${p("C")}`,
+      `1  ${p("Hub")} -> ${p("D")}`,
+      `   +3 more linked from ${p("Hub")}: graph "${p("Hub")}" --out`,
     ].join("\n"),
     isError: false,
   });
@@ -279,12 +292,17 @@ test("graph: after mv, links, backlinks and the graph name the new path at once 
   expect((await mcp.sh(`graph --hubs /Work/${folder}`)).text).toBe([`3  ${p("Hub")}  (1 in, 2 out)`, `2  ${renamed}  (1 in, 1 out)`].join("\n"));
   const old = await mcp.sh(`graph "${p("A")}"`);
   expect(old.isError, old.text).toBe(true);
+  expect(old.text).toMatch(
+    new RegExp(`^graph: ${escape(p("A"))}: No such file or directory; it was moved to ${escape(renamed)} on \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC$`),
+  );
 });
 
-test("graph: a note's creation time is set when it is made and kept through a write and mv @graph", async ({ mcp, folder, aliceApi }) => {
+type Detail = { node: { path: string; kind: string; archived: boolean; in: number; out: number }; changed: string; created: string; createdAtLeast: boolean; firstParagraph: string | null };
+const nodeOf = (api: Api, path: string) => api.json<Detail>("GET", `/api/graph/node?path=${encodeURIComponent(path)}`);
+
+test("graph: a note's creation time is set when it is made and kept through a write, mv, rm and restore @graph", async ({ mcp, folder, aliceApi }) => {
   const n = names(folder);
-  type Detail = { node: { path: string; kind: string; in: number; out: number }; changed: string; created: string; createdAtLeast: boolean; firstParagraph: string | null };
-  const node = async (path: string) => aliceApi.json<Detail>("GET", `/api/graph/node?path=${encodeURIComponent(path)}`);
+  const node = (path: string) => nodeOf(aliceApi, path);
 
   const version = await write(mcp, n.path("Plan"), "# Plan\n\nThe first paragraph.\n");
   const made = await node(n.path("Plan"));
@@ -309,6 +327,147 @@ test("graph: a note's creation time is set when it is made and kept through a wr
   const there = await node(n.path("Moved"));
   expect(there.created, "mv keeps the creation time").toBe(made.created);
   expect(there.createdAtLeast).toBe(false);
+
+  for (const command of [`rm "${n.path("Moved")}"`, `restore "${n.path("Moved")}"`]) {
+    const done = await mcp.sh(command);
+    expect(done.isError, done.text).toBe(false);
+  }
+  const restored = await node(n.path("Moved"));
+  expect({ created: restored.created, createdAtLeast: restored.createdAtLeast }, "restore from the trash keeps it").toEqual({ created: made.created, createdAtLeast: false });
+});
+
+test("graph: archive keeps a note's creation time @graph", async ({ mcp, folder, aliceApi }) => {
+  test.fail(true, "M-03 (Medium, bug): archive keeps the creation time's value but marks it 'at the latest'");
+  const n = names(folder);
+  await write(mcp, n.path("Life"), "# Life\n");
+  const made = await nodeOf(aliceApi, n.path("Life"));
+  expect(made.createdAtLeast).toBe(false);
+
+  const archived = await mcp.sh(`archive "${n.path("Life")}"`);
+  expect(archived.isError, archived.text).toBe(false);
+  const to = /^moved .+ to (\/Work\/_archive\/.+\.md); no links needed rewriting$/m.exec(archived.text)?.[1];
+  expect(to, archived.text).toBeDefined();
+  written = [to!];
+  const there = await nodeOf(aliceApi, to!);
+  expect(there.node.archived).toBe(true);
+  expect(there.created, "archive keeps the creation time").toBe(made.created);
+  expect(there.createdAtLeast, "M-03: archive keeps the creation time as recorded, not as 'at the latest' (§5)").toBe(false);
+});
+
+test("graph: the filter flags on a local graph, the start note always shown, day notes their own kind @graph", async ({ mcp, folder, aliceApi }) => {
+  const n = names(folder);
+  const p = n.path;
+  const tag = `e2e-graph-${n.id}`;
+  const png = `/Work/${folder}/pixel ${n.id}.png`;
+  const day = `/Work/${folder}/2026-11-19.md`;
+  written.push(png);
+  await aliceApi.putFile(png, readFileSync(join(fixturesDir, "tags/smoke/pixel.png")));
+  // Start → Tagged, Plain, the image, a ghost, a day note (by its folder, as day notes share names) and Old; the day
+  // note links back.
+  await write(mcp, day, `# Day\n\n${n.link("Start")}\n`);
+  await write(mcp, p("Start"), `# Start\n\n${n.link("Tagged")} ${n.link("Plain")} ![[pixel ${n.id}.png]] ${n.link("Nobody")} [[${folder}/2026-11-19]] ${n.link("Old")}\n`);
+  await write(mcp, p("Tagged"), `# Tagged\n\n#${tag}\n`);
+  await write(mcp, p("Plain"), "# Plain\n");
+  await write(mcp, p("Old"), "# Old\n");
+
+  const line = (to: string, mark = "") => `1  ${p("Start")} -> ${to}${mark}`;
+  const back = `1  ${day} -> ${p("Start")}`;
+  const graph = (flags: string) => mcp.sh(`graph "${p("Start")}"${flags}`);
+  const all = [line(day), line(p("Old")), line(png, " (embed)"), line(p("Plain")), line(p("Tagged")), line(n.name("Nobody"), " (no note)"), back];
+  expect(await graph("")).toEqual({
+    text: [`${p("Start")}, depth 1, both directions: 5 notes, 1 attachment, 1 without a note`, ...all].join("\n"),
+    isError: false,
+  });
+  expect(await graph(" --no-days")).toEqual({
+    text: [`${p("Start")}, depth 1, both directions: 4 notes, 1 attachment, 1 without a note`, ...all.filter((l) => !l.includes(day))].join("\n"),
+    isError: false,
+  });
+  expect(await graph(" --no-attachments --no-ghosts")).toEqual({
+    text: [`${p("Start")}, depth 1, both directions: 5 notes`, line(day), line(p("Old")), line(p("Plain")), line(p("Tagged")), back].join("\n"),
+    isError: false,
+  });
+  // Only notes with the tag, the start note always: it hasn't the tag.
+  expect(await graph(` --tag ${tag}`)).toEqual({ text: [`${p("Start")}, depth 1, both directions: 2 notes`, line(p("Tagged"))].join("\n"), isError: false });
+  expect(await mcp.sh(`graph "${p("Plain")}" --tag ${tag}`)).toEqual({ text: `${p("Plain")}, depth 1, both directions: 1 note\n(no links shown)`, isError: false });
+
+  // The kinds, as the REST local graph gives them.
+  const local = await aliceApi.json<{ nodes: { path: string | null; title: string; kind: string }[] }>("GET", `/api/graph/local?path=${encodeURIComponent(p("Start"))}`);
+  expect(Object.fromEntries(local.nodes.map((x) => [x.path ?? x.title, x.kind]))).toEqual({
+    [p("Start")]: "note",
+    [day]: "day",
+    [p("Old")]: "note",
+    [png]: "attachment",
+    [p("Plain")]: "note",
+    [p("Tagged")]: "note",
+    [n.name("Nobody")]: "ghost",
+  });
+
+  // Archived, Old leaves the graph unless --archive asks for it; the link followed it into the archive.
+  const archived = await mcp.sh(`archive "${p("Old")}"`);
+  const old = /^moved .+ to (\/Work\/_archive\/.+\.md); rewrote 1 link in /m.exec(archived.text)?.[1];
+  expect(old, archived.text).toBeDefined();
+  written = written.map((w) => (w === p("Old") ? old! : w));
+  expect(await graph("")).toEqual({
+    text: [`${p("Start")}, depth 1, both directions: 4 notes, 1 attachment, 1 without a note`, ...all.filter((l) => !l.includes(p("Old")))].join("\n"),
+    isError: false,
+  });
+  expect(await graph(" --archive")).toEqual({
+    text: [`${p("Start")}, depth 1, both directions: 5 notes, 1 attachment, 1 without a note`, line(old!), ...all.filter((l) => !l.includes(p("Old")))].join("\n"),
+    isError: false,
+  });
+});
+
+test("graph: a link by an alias and an ambiguous link are marked @graph", async ({ mcp, folder }) => {
+  const n = names(folder);
+  const p = n.path;
+  await write(mcp, p("Nick"), `---\naliases: [${n.name("Nickname")}]\n---\n# Nick\n`);
+  // Two notes of one name in two folders, neither preferred from here: one edge to each.
+  await write(mcp, p("Twin", "S1/"), "# Twin\n");
+  await write(mcp, p("Twin", "S2/"), "# Twin\n");
+  await write(mcp, p("Marks"), `# Marks\n\n${n.link("Nickname")} and ${n.link("Twin")}\n`);
+  expect(await mcp.sh(`graph "${p("Marks")}"`)).toEqual({
+    text: [
+      `${p("Marks")}, depth 1, both directions: 4 notes`,
+      `1  ${p("Marks")} -> ${p("Nick")} (alias)`,
+      `1  ${p("Marks")} -> ${p("Twin", "S1/")} (ambiguous)`,
+      `1  ${p("Marks")} -> ${p("Twin", "S2/")} (ambiguous)`,
+    ].join("\n"),
+    isError: false,
+  });
+});
+
+test("graph: links to a missing note meet in one ghost whatever their case, and lead to the note once it exists @graph", async ({ mcp, folder }) => {
+  const n = names(folder);
+  const p = n.path;
+  const scope = `/Work/${folder}`;
+  // G1 → Anna, G2 → anna and Sub/Anna: one ghost "Anna" (its title from the first link in path order), and one for
+  // the name with a folder, which means something else.
+  await write(mcp, p("G1"), `# G1\n\n[[Anna ${n.id}]]\n`);
+  await write(mcp, p("G2"), `# G2\n\n[[anna ${n.id}]]\n\n[[Sub/Anna ${n.id}]]\n`);
+  const subAnna = [`Sub/Anna ${n.id}, linked from 1 note:`, `  ${p("G2")}:5`];
+  expect(await mcp.sh(`graph --unresolved ${scope}`)).toEqual({
+    text: [`Anna ${n.id}, linked from 2 notes:`, `  ${p("G1")}:3`, `  ${p("G2")}:3`, ...subAnna].join("\n"),
+    isError: false,
+  });
+
+  await write(mcp, p("Anna"), "# Anna\n");
+  expect(await mcp.sh(`graph --unresolved ${scope}`)).toEqual({ text: subAnna.join("\n"), isError: false });
+  expect(await mcp.sh(`graph "${p("Anna")}"`)).toEqual({
+    text: [`${p("Anna")}, depth 1, both directions: 3 notes`, `1  ${p("G1")} -> ${p("Anna")}`, `1  ${p("G2")} -> ${p("Anna")}`].join("\n"),
+    isError: false,
+  });
+});
+
+test("graph: a key without the vault is answered as if it weren't there @graph", async ({ mcp, aliceApi }) => {
+  // Alice reads Welcome in the web app; the agent's key has Work only.
+  const note = "/Welcome/Start here.md";
+  const hers = await aliceApi.console(`graph "${note}"`);
+  expect(hers.isError, hers.text).toBe(false);
+  expect(hers.text.split("\n")[0]).toMatch(new RegExp(`^${escape(note)}, depth 1, both directions: `));
+
+  expect(await mcp.sh(`graph "${note}"`)).toEqual({ text: `graph: ${note}: No such file or directory`, isError: true });
+  expect(await mcp.sh("graph --orphans /Welcome")).toEqual({ text: "graph: /Welcome: No such file or directory", isError: true });
+  expect(await mcp.sh(`graph --path "${note}" "/Welcome/Skills.md"`)).toEqual({ text: `graph: ${note}: No such file or directory`, isError: true });
 });
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
