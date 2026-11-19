@@ -26,8 +26,10 @@
 //   starting Write in the other pane saves first (hard: no text lost) ... gaps #4
 //   a failed save keeps Write where it was with its text: Vitest (editor.test.ts, web/src/shell/split.test.tsx); a
 //     save refused on purpose needs a server fault this stack can't make
-//   closing a writing pane saves first: the right ✕ while the left writes, split #8; the left ✕ while the right
-//     writes, the right taking its place ....................... gaps #5
+//   closing a writing pane saves first: the right ✕ on the writing right pane ... gaps #12; the left ✕ while the
+//     right writes, the right taking its place ................. gaps #5
+//   the text kept in the editor when the split ends while the left writes ... split #8
+//   the dock under the focused pane only (§3, "Which pane is focused"): Vitest (web/src/shell/split.test.tsx:126)
 // Where things open
 //   after focusing the right pane, a tree click opens there .... split #2
 //   a link opens in its own pane ............................... split #3
@@ -55,20 +57,23 @@
 //   below 1280 px only the focused pane shows: the left ........ split #9
 //   below 1280 px the focused right pane, and the split back once wide ... gaps #9
 // Discreet: hiding the discreet vaults closes a pane on one of their notes; ?beside= neutral: web/e2e/discreet/
-//   (another task, @serial)
+//   discreet-0-6-0.spec.ts, "discreet-0-6-0 split view" (another task, @serial)
 // Templates
-//   placeholders with formats and the time zone, properties merged, the template unchanged, one undo ... templates #1
+//   placeholders with formats and the time zone, missing keys added, lists united, the template unchanged, one
+//     undo ..................................................... templates #1
+//   a scalar the note has kept against the template's: Vitest (web/src/note/templates.test.ts:122)
 //   unknown placeholders kept, {{time}}, Insert template from the palette ... gaps #10
 //   unreadable frontmatter inserts only the body with the hint .............. gaps #10
-//   the empty state with New template: Vitest (web/src/note/MarkdownEditor.test.tsx); in the browser it needs a vault
-//     without a Templates folder, and a vault of the test's own changes Alice's vault list, which smoke #1 and #8
-//     assert exactly while this project runs
-// Left to the builder, also Vitest only: a deleted note's pane closes (split.test.tsx); the dock under the focused
-//   pane only (split.test.tsx).
+//   the empty state with New template ......................... gaps #13 (@serial: a vault of its own, which the
+//     vault lists of other tests must not see)
+// Left to the builder, Vitest only: a deleted note's pane closes (split.test.tsx).
 // The desktop project is 1280 px wide, the breakpoint.
 import type { Locator, Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
 import { dismissInstallHint } from "../calendar/helpers";
 import type { Api } from "../support/api";
+import { secrets } from "../support/env";
+import { reservePassword } from "../support/session";
 import { expect, onPhone, shot, test } from "../support/test";
 
 const encoded = (path: string) => path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
@@ -206,8 +211,8 @@ test("workspace gaps #3: [[# lists the open note's own headings from the unsaved
   await expect(area).toHaveValue(`${before}\n## Fresh heading\n\nBack to [[#Fresh heading]]`);
 
   // A note no path ends with: no headings to list, and no list.
-  await page.keyboard.type(` and [[Nobody ${folder}#`);
-  await expect(area).toHaveValue(new RegExp(`\\[\\[Nobody ${folder}#$`));
+  await page.keyboard.type(` and [[Nobody ${folder}#r`);
+  await expect(area).toHaveValue(new RegExp(`\\[\\[Nobody ${folder}#r$`));
   await expect(page.getByRole("listbox", { name: /to link$/ })).toHaveCount(0);
   await expect(page.getByText("Loading…")).toHaveCount(0);
 });
@@ -312,6 +317,7 @@ test("workspace gaps #8: a task box in the live preview ticks nothing: the note 
 
   const box = pane(page, "right").locator("article").getByRole("checkbox", { name: /a task of Alpha's/ });
   await expect(box).not.toBeChecked();
+  await expect(box).toBeDisabled();
   await box.click({ force: true });
   await expect(box).not.toBeChecked();
   await expect(source(pane(page, "left"))).toHaveValue(alphaText(n.beta));
@@ -339,7 +345,8 @@ test("workspace gaps #9: below 1280 px the focused right pane is the one shown, 
 
 test("workspace gaps #10: Insert template from the palette keeps unknown placeholders, fills {{time}}, and only the body goes into a note whose properties can't be read @workspace", async ({ page, aliceApi, folder }) => {
   const n = names(folder);
-  await aliceApi.putNote(n.templatePath, "---\ntags: [meeting]\n---\n## {{title}} at {{time}}\n\n{{weather}} and <% tp.file.title %> stay.\n");
+  const templateText = "---\ntags: [meeting]\n---\n## {{title}} at {{time}}\n\n{{weather}} and <% tp.file.title %> stay.\n";
+  await aliceApi.putNote(n.templatePath, templateText);
   const noteText = "---\nnested:\n  key: v\n---\n# Weekly\n";
   await aliceApi.putNote(n.alphaPath, noteText);
   await open(page, noteUrl(n.alphaPath));
@@ -363,7 +370,7 @@ test("workspace gaps #10: Insert template from the palette keeps unknown placeho
   const value = await area.inputValue();
   expect([`${noteText}${body(before)}`, `${noteText}${body(after)}`], "the body only, its unknown placeholders as written").toContain(value);
   await expect(page.getByRole("status", { name: "Template" })).toHaveText("The template's properties weren't added: this note's properties can't be read.");
-  expect((await aliceApi.getNote(n.templatePath)).content).toContain("{{time}}");
+  expect((await aliceApi.getNote(n.templatePath)).content, "the template unchanged").toBe(templateText);
 });
 
 test("workspace gaps #11: on a phone there is no side panel and no split; Linked from stays at the note's bottom @workspace @phone", async ({ page, aliceApi, folder }, testInfo) => {
@@ -381,4 +388,48 @@ test("workspace gaps #11: on a phone there is no side panel and no split; Linked
   const article = (await page.locator("article").first().boundingBox())!;
   expect((await linked.boundingBox())!.y, "below the note's text").toBeGreaterThan(article.y + article.height - 1);
   await shot(page, testInfo, "workspace");
+});
+
+test("workspace gaps #12: the right pane's ✕ while it writes saves its text first @workspace", async ({ page, aliceApi, folder }) => {
+  const n = await seed(aliceApi, folder);
+  await open(page, splitUrl(n.alphaPath, n.betaPath));
+  await clickOn(page, "right", "plain");
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("Typed before the right closed.\n");
+
+  await pane(page, "right").getByRole("button", { name: "Close this pane" }).click();
+  await expect(page.getByRole("region", { name: /^(Left|Right) pane/ })).toHaveCount(0);
+  await expect(page).toHaveURL(noteUrl(n.alphaPath));
+  await expect(page.getByRole("heading", { name: "Alpha" })).toBeVisible();
+  expect((await aliceApi.getNote(n.betaPath)).content, "saved as Done saves").toBe(`${betaText(n.alpha)}Typed before the right closed.\n`);
+});
+
+// A vault of its own, without a Templates folder: @serial, so no other test's vault list sees it meanwhile.
+let ownVault: string | null = null;
+
+test.afterEach(async ({ aliceApi }) => {
+  if (!ownVault) return;
+  const vault = ownVault;
+  ownVault = null;
+  await reservePassword("alice");
+  await aliceApi.json("POST", `/api/vaults/${encodeURIComponent(vault)}/delete`, { password: secrets().passwords.alice, confirm: vault });
+});
+
+test("workspace gaps #13: in a vault without templates the list says so, and New template makes Templates/Untitled.md and opens it @workspace @serial", async ({ page, aliceApi }) => {
+  const vault = `Plain-${randomBytes(3).toString("hex")}`;
+  await aliceApi.json("POST", "/api/vaults", { name: vault });
+  ownVault = vault;
+  const notePath = `/${vault}/Note.md`;
+  await aliceApi.putNote(notePath, "# Note\n");
+  await open(page, noteUrl(notePath));
+  await page.getByRole("button", { name: "Write" }).click();
+  await expect(source(page)).toBeVisible();
+
+  await page.getByRole("button", { name: "Insert template" }).click();
+  const list = page.getByRole("group", { name: "Insert template" });
+  await expect(list.getByText(/^No templates yet/)).toHaveText("No templates yet. Notes in a folder named Templates at the top of this vault show up here.");
+  await list.getByRole("button", { name: "New template" }).click();
+  await expect(page).toHaveURL(noteUrl(`/${vault}/Templates/Untitled.md`));
+  expect((await aliceApi.getNote(`/${vault}/Templates/Untitled.md`)).path).toBe(`/${vault}/Templates/Untitled.md`);
+  expect((await aliceApi.getNote(notePath)).content, "the note unchanged").toBe("# Note\n");
 });
