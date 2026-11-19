@@ -491,7 +491,7 @@ describe("the note's actions", () => {
     await userEvent.type(field(), "note");
     await waitFor(() => expect(noteGroup()).toBeInTheDocument());
     // Placed with the note's title.
-    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Rename or move, inbox"]));
+    expect(noteOptions()).toEqual(expect.arrayContaining(["Delete note, inbox", "Add to favourites, inbox", "History, inbox", "Who wrote what, inbox", "Rename or move, inbox"]));
   });
 
   it("no_star_and_ctrl_d_does_nothing", async () => {
