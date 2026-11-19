@@ -168,6 +168,13 @@ public class AttachmentCommandTests
     }
 
     [Fact]
+    public async Task Rm_says_that_one_link_now_leads_nowhere()
+    {
+        await Upload("/Work/Docs/report.pdf", Pdf(64));
+        Assert.EndsWith("; 1 link in /Work/plan.md now leads nowhere", (await Run("rm /Work/Docs/report.pdf")).Output);
+    }
+
+    [Fact]
     public async Task Rm_of_an_unlinked_attachment_reports_no_links()
     {
         await Upload("/Work/unused.png", Png(64), (1, 1));
