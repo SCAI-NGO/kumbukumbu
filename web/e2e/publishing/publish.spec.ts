@@ -474,6 +474,8 @@ test("publish: a bundled note's bar turns yellow when the copy is older than the
   await aliceApi.putNote(b.path("Alpha"), "# Alpha\n\nChanged after the copy.\n");
   await openNote(page, b.path("Alpha"));
   const bar = page.getByRole("region", { name: "Publication" });
-  await expect(bar).toContainText(`Published with ${b.name("Start")}`);
   await expect(bar, "F-08: the bundled note's bar is yellow").toHaveAttribute("data-tone", "yellow", { timeout: 3_000 });
+  await expect(bar.getByRole("status")).toContainText("Published copy is older than this note.");
+  await expect(bar.getByRole("status")).toContainText(`Update it at ${b.name("Start")}.`);
+  await expect(bar.getByRole("link", { name: b.name("Start"), exact: true })).toBeVisible();
 });

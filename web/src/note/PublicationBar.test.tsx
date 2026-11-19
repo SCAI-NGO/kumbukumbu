@@ -313,8 +313,8 @@ describe("PublicationBar", () => {
     renderBar(true, changedAt);
     const region = await bar();
     await waitFor(() => expect(region).toHaveAttribute("data-tone", "yellow"));
-    expect(within(region).getByRole("status")).toHaveTextContent("Published copy is older than this note. Published 5 Nov, 14:32 · changed 16:05");
-    expect(region).toHaveTextContent("Published with Plan");
+    // What to do, and where: the copy is updated at its start note.
+    expect(within(region).getByRole("status")).toHaveTextContent(/^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 16:05\. Update it at Plan\.$/);
     expect(within(region).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/notes/Work/Plan.md");
     expect(within(region).queryByRole("button", { name: "Update copy" })).not.toBeInTheDocument();
   });
@@ -339,8 +339,9 @@ describe("PublicationBar", () => {
     renderBar(true, new Date("2026-11-05T15:00:00").toISOString());
     const region = await bar();
     await waitFor(() => expect(region).toHaveAttribute("data-tone", "yellow"));
-    expect(within(region).getByRole("status")).toHaveTextContent("Published copy is older than this note. Published 5 Nov, 14:32 · changed 15:00");
-    expect(region).toHaveTextContent("Published with Plan and Roadmap");
+    // Only the older copy's start: Plan's copy is as new as the note.
+    expect(within(region).getByRole("status")).toHaveTextContent(/^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 15:00\. Update it at Roadmap\.$/);
+    expect(within(region).queryByRole("link", { name: "Plan" })).not.toBeInTheDocument();
   });
 
   it("a member's bar asks no start and stays 'Published by the vault's owner'", async () => {

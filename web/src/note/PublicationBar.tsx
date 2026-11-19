@@ -120,24 +120,29 @@ function BundledBar({ starts, enabled, lastWriteAt }: { starts: string[] | null;
       </section>
     );
   }
-  // Oldest first; a copy without a time is never older.
-  const copied = copies.filter((at): at is string => !!at).sort((a, b) => Date.parse(a) - Date.parse(b));
-  const older = !!lastWriteAt && copied.some((at) => Date.parse(lastWriteAt) > Date.parse(at));
+  // The starts whose copy is older than the note, oldest first; a copy without a time is never older.
+  const stale = starts
+    .map((start, i) => ({ start, at: copies[i] }))
+    .filter((c): c is { start: string; at: string } => !!c.at && !!lastWriteAt && Date.parse(lastWriteAt) > Date.parse(c.at))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const older = stale.length > 0;
+  // Older, it says where the copy is updated: at its start note, which the bar names.
+  const named = older ? stale.map((c) => c.start) : starts;
   return (
     <section aria-label="Publication" data-tone={older ? "yellow" : undefined} className={barClass}>
       {older && <span aria-hidden className="size-2 flex-none rounded-full bg-warning" />}
       {/* A status from the start, so the yellow is announced when the start's copy answers. */}
       <span role="status" className={older ? "min-w-0 flex-1 py-2 pl-1.5" : "py-2"}>
-        {older && `Published copy is older than this note. ${olderText(copied[0], lastWriteAt)}. `}
-        Published with{" "}
-        {starts.map((start, i) => (
+        {older ? `Published copy is older than this note. ${olderText(stale[0].at, lastWriteAt!)}. Update it at ` : "Published with "}
+        {named.map((start, i) => (
           <span key={start}>
-            {i > 0 && (i === starts.length - 1 ? " and " : ", ")}
+            {i > 0 && (i === named.length - 1 ? " and " : ", ")}
             <Link to={noteHref(start)} className="font-medium text-accent-text underline underline-offset-2">
               {titleOf(start)}
             </Link>
           </span>
         ))}
+        {older && "."}
       </span>
     </section>
   );
