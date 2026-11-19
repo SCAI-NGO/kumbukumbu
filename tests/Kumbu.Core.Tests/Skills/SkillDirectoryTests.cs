@@ -87,21 +87,27 @@ public class SkillDirectoryTests
     }
 
     /// <summary>A writer of a shared vault must not steer every reader's agent before its first answer: in Alice's Work the
-    /// mark counts for nothing, though Bob wrote the skill himself, and in his own Private once Carol last changed it.</summary>
+    /// mark counts for nothing, though Bob wrote the skill himself, and in his own Private once Carol last changed it,
+    /// shared with her still or no longer.</summary>
     [Theory]
-    [InlineData(InstructionsMode.ListAndHint, "/Work/_skills/steer", "w-bob")]
-    [InlineData(InstructionsMode.HintOnly, "/Work/_skills/steer", "w-bob")]
-    [InlineData(InstructionsMode.ListAndHint, "/Private/_skills/steer", "w-carol")]
-    [InlineData(InstructionsMode.HintOnly, "/Private/_skills/steer", "w-carol")]
-    public async Task A_marked_skill_another_user_can_change_is_an_ordinary_skill(InstructionsMode mode, string folder, string writer)
+    [InlineData(InstructionsMode.ListAndHint, "/Work/_skills/steer", "w-bob", true)]
+    [InlineData(InstructionsMode.HintOnly, "/Work/_skills/steer", "w-bob", true)]
+    [InlineData(InstructionsMode.ListAndHint, "/Private/_skills/steer", "w-carol", true)]
+    [InlineData(InstructionsMode.HintOnly, "/Private/_skills/steer", "w-carol", true)]
+    [InlineData(InstructionsMode.ListAndHint, "/Private/_skills/steer", "w-carol", false)]
+    [InlineData(InstructionsMode.HintOnly, "/Private/_skills/steer", "w-carol", false)]
+    public async Task A_marked_skill_another_user_can_change_is_an_ordinary_skill(InstructionsMode mode, string folder, string writer, bool shared)
     {
-        _store.Infos["Private"] = new VaultInfo(null, AccessLevel.Owner, true);
+        _store.Infos["Private"] = new VaultInfo(null, AccessLevel.Owner, shared);
         Put(folder + "/SKILL.md", Marked, WriterRef.ForMember(writer));
 
         var skills = SkillDirectory.Effective(await dir.ListAsync(null, Ct));
         var section = SkillInstructions.Section(mode, skills);
 
-        Assert.False(Assert.Single(skills, s => s.Name == "steer").AtStart);
+        var steer = Assert.Single(skills, s => s.Name == "steer");
+        Assert.False(steer.AtStart);
+        // Shown as another user's wherever Carol wrote it.
+        Assert.Equal(writer == "w-carol", steer.ByOther);
         Assert.DoesNotContain("steer", StartPart(section));
         if (mode == InstructionsMode.HintOnly) Assert.DoesNotContain("steer", section);
         else Assert.Contains($"\n- steer ({folder}, ", section[StartPart(section).Length..]);
