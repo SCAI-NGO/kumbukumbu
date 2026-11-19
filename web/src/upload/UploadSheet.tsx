@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilePlus, FolderPlus } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { shownPath } from "../api/paths";
+import { sessionQuery } from "../api/publications";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { collectFromDrop, collectFromInput, contentsOf, soleFolder, type Picked } from "./collectFiles";
 import ConflictList from "./ConflictList";
-import { MAX_ATTACHMENT_BYTES, planUpload, toBatches, TOO_LARGE_FILE, type Skipped, type UploadFile } from "./planUpload";
+import { boundSentence, boundText, DEFAULT_MAX_FILE_BYTES, MAX_ATTACHMENT_BYTES, planUpload, SVG_TOO_LARGE, toBatches, type Skipped, type UploadFile } from "./planUpload";
 import { putFile } from "./putFile";
 import { shrinkImage, ShrinkError, shrinkType, shrunkName, type ShrinkType } from "./shrinkImage";
 import { useHoldUpdates } from "../update/apply";
@@ -24,8 +25,9 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 export const summaryText = ({ written, files, replaced, skipped }: { written: number; files?: number; replaced: number; skipped: number }) =>
   `${count(written, "note", "notes")}${files === undefined ? "" : ` and ${count(files, "file", "files")}`} uploaded, ${replaced} replaced, ${count(skipped, "file", "files")} skipped`;
 
-/** The question for images over 15 MB (attachments spec, "Formats and limits"). */
-export const SHRINK_QUESTION = "Too large for Kumbu² (15 MB). Shrink it so it fits?";
+/** The question for images over 15 MB (attachments spec, "Formats and limits"; files spec, decision 12: a larger one is
+ * kept, but nothing in the server reads it, `img` included). */
+export const SHRINK_QUESTION = "Larger than 15 MB: Kumbu² keeps it as it is, but doesn't read it, so an AI can't look at it. Shrink it?";
 
 /** What shrinking does to an image beyond its size: a new extension, a GIF's animation lost. */
 export function shrinkNotices(path: string, type: ShrinkType): string[] {
@@ -154,6 +156,9 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
   const setOverlay = useEditor((s) => s.setOverlay);
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>({ kind: "pick" });
+  // A file over 15 MB on its way, and the share of it sent, in whole percent.
+  const [sending, setSending] = useState<{ path: string; percent: number } | null>(null);
+  const bound = useQuery({ ...sessionQuery, select: (s) => (s.maxFileBytes == null ? DEFAULT_MAX_FILE_BYTES : Number(s.maxFileBytes)) }).data ?? DEFAULT_MAX_FILE_BYTES;
   const run = useRef<Run>(emptyRun());
   const pending = useRef<Pending | null>(null);
   // A pick that lies in one folder, as it came: the review offers to upload only what is inside it.
@@ -188,7 +193,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
 
   async function take(picked: Picked[], start = false) {
     setView({ kind: "reading" });
-    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })));
+    const plan = planUpload(picked.map((p) => ({ ...p, size: p.file.size })), bound);
     let notes: UploadFile[];
     try {
       notes = await Promise.all(plan.notes.map(async (k) => ({ path: k.path, content: await k.file.text() })));
@@ -202,29 +207,32 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
       files: plan.files,
       markers: plan.markers,
       skipped: [...plan.skipped, ...skipped],
-      withFiles: plan.files.length + plan.tooLarge.length > 0 || plan.skipped.some((s) => s.reason === TOO_LARGE_FILE),
+      withFiles: plan.files.length + plan.tooLarge.length > 0 || plan.skipped.some((s) => s.reason === SVG_TOO_LARGE || s.reason === boundSentence(bound)),
       start,
     };
     if (plan.tooLarge.length) setView({ kind: "shrink", images: plan.tooLarge, type: shrinkType() });
     else ready();
   }
 
-  /** The images over 15 MB, shrunk one after the other on yes, or skipped. */
+  /** The images over 15 MB, shrunk one after the other on yes; kept as they are on no, or when they can't be shrunk,
+   * unless they are over the bound. */
   async function shrink(images: Picked[], yes: boolean) {
     const p = pending.current!;
     for (const image of images) {
-      if (!yes) {
-        p.skipped.push({ path: image.path, reason: TOO_LARGE_FILE });
-        continue;
+      let reason = boundSentence(bound);
+      if (yes) {
+        setView({ kind: "shrinking", path: image.path });
+        try {
+          const small = await shrinkImage(image.file, MAX_ATTACHMENT_BYTES);
+          const slash = image.path.lastIndexOf("/");
+          p.files.push({ path: image.path.slice(0, slash + 1) + shrunkName(image.path.slice(slash + 1), small.type as ShrinkType), file: small });
+          continue;
+        } catch (err) {
+          if (err instanceof ShrinkError) reason = err.message;
+        }
       }
-      setView({ kind: "shrinking", path: image.path });
-      try {
-        const small = await shrinkImage(image.file, MAX_ATTACHMENT_BYTES);
-        const slash = image.path.lastIndexOf("/");
-        p.files.push({ path: image.path.slice(0, slash + 1) + shrunkName(image.path.slice(slash + 1), small.type as ShrinkType), file: small });
-      } catch (err) {
-        p.skipped.push({ path: image.path, reason: err instanceof ShrinkError ? err.message : "this browser couldn't shrink it" });
-      }
+      if (image.file.size <= bound) p.files.push(image);
+      else p.skipped.push({ path: image.path, reason });
     }
     ready();
   }
@@ -263,8 +271,14 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
   async function sendFile(step: Extract<Step, { kind: "file" }>) {
     const r = run.current;
     let result;
+    // A file over 15 MB goes as the File itself, streamed from the disk rather than read into memory, its progress shown.
+    const large = step.file.size > MAX_ATTACHMENT_BYTES;
+    if (large) setSending({ path: step.path, percent: 0 });
     try {
-      result = await putFile(vault, inVault ? `${inVault}/${step.path}` : step.path, new Uint8Array(await step.file.arrayBuffer()), step.version);
+      const body = large ? step.file : new Uint8Array(await step.file.arrayBuffer());
+      result = await putFile(vault, inVault ? `${inVault}/${step.path}` : step.path, body, step.version, (sent) =>
+        setSending({ path: step.path, percent: Math.floor(sent * 100) }),
+      );
     } catch (err) {
       // A refusal of this file alone (its format, content or size; its path a folder or above a note, 409 without a
       // file state; replaced, it was deleted meanwhile): listed, and the rest goes on.
@@ -273,6 +287,8 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
       if (!alone) throw err;
       r.skipped.push({ path: step.path, reason: errorText(err) });
       return;
+    } finally {
+      setSending(null);
     }
     if (result.kind === "conflict") {
       if (step.version === undefined) r.fileConflicts.push({ path: step.path, file: step.file, version: result.current.version });
@@ -401,7 +417,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
         {view.kind === "pick" && (
           <>
             <p className="text-text-body">
-              Markdown files (.md, .markdown) become notes; every other file up to 15 MB is kept as it is (files whose name starts with a dot are skipped). A folder comes in with its own name, or only with what is inside
+              Markdown files (.md, .markdown) become notes; every other file is kept as it is, up to {boundText(bound)} (files whose name starts with a dot are skipped). A folder comes in with its own name, or only with what is inside
               it if you choose. Choose files picks files only: drop files and folders here to bring both. You can paste an image too.
             </p>
             {view.error && (
@@ -455,7 +471,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
         {view.kind === "shrink" && (
           <>
             <p className="text-text">{SHRINK_QUESTION}</p>
-            <ul aria-label="Images too large" className="flex flex-col gap-1.5">
+            <ul aria-label="Images over 15 MB" className="flex flex-col gap-1.5">
               {view.images.map((image) => (
                 <li key={image.path} className="flex flex-col">
                   <span className="truncate font-mono text-[12.5px] text-text">{image.path}</span>
@@ -469,7 +485,7 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
             </ul>
             <div className="flex gap-2.5">
               <button type="button" onClick={() => void shrink(view.images, false)} className={`${secondaryButtonClass} flex-1`}>
-                Skip {view.images.length === 1 ? "it" : "them"}
+                {view.images.length === 1 ? "Keep it as it is" : "Keep them as they are"}
               </button>
               <button type="button" data-autofocus onClick={() => void shrink(view.images, true)} className={`${primaryButtonClass} flex-1`}>
                 Shrink
@@ -509,6 +525,21 @@ export default function UploadSheet({ folder, dropped, start = false, onClose }:
             <div role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={steps} aria-valuenow={view.at} className="h-2 overflow-hidden rounded-full bg-surface-2">
               <div className="h-full bg-accent motion-safe:transition-[width]" style={{ width: `${(view.at / steps) * 100}%` }} />
             </div>
+            {sending && (
+              <>
+                <p className="truncate font-mono text-[12.5px] text-text-body">{`${sending.path}: ${sending.percent} %`}</p>
+                <div
+                  role="progressbar"
+                  aria-label={`${sending.path} sent`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={sending.percent}
+                  className="h-1.5 overflow-hidden rounded-full bg-surface-2"
+                >
+                  <div className="h-full bg-accent" style={{ width: `${sending.percent}%` }} />
+                </div>
+              </>
+            )}
           </div>
         )}
 

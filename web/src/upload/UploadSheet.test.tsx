@@ -9,8 +9,8 @@ import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { tryReload } from "../update/apply";
 import { useUpdate } from "../update/store";
-import { shrinkImage } from "./shrinkImage";
-import { summaryText } from "./UploadSheet";
+import { shrinkImage, ShrinkError } from "./shrinkImage";
+import { SHRINK_QUESTION, summaryText } from "./UploadSheet";
 
 // The browser's canvas isn't in jsdom: shrinking is shrinkImage.test.ts's; here it hands back a small WebP.
 vi.mock("./shrinkImage", async (original) => ({
@@ -58,14 +58,14 @@ const fileState = (path: string, version: string) => ({ path, mediaType: "image/
  */
 function uploadApi(
   existing: string[],
-  options: { fail?: (n: number) => boolean; gate?: Promise<void>; files?: Record<string, string>; refuse?: Record<string, [number, string]> } = {},
+  options: { fail?: (n: number) => boolean; gate?: Promise<void>; files?: Record<string, string>; refuse?: Record<string, [number, string]>; maxFileBytes?: number } = {},
 ) {
   const sent: Sent[] = [];
   const puts: Put[] = [];
   // Images and PDFs there already, by their path in the vault, with their versions.
   const files = { ...options.files };
   const fetch = fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, ...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }) }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2 }]),
     "GET /api/vaults/Work/tree": () => json(200, workTree),
     "GET /api/notes/*": (r) =>
@@ -298,6 +298,99 @@ async function pickFiles(sheet: HTMLElement, files: File[]) {
   await userEvent.upload(within(sheet).getByLabelText("Choose files"), files);
 }
 
+/** A PUT of a file over 15 MB, sent by XMLHttpRequest: the URL's path, `?version=`, the body as it was handed over. */
+interface StreamedPut {
+  url: string;
+  version: string | null;
+  contentType: string;
+  body: unknown;
+}
+
+/**
+ * XMLHttpRequest as putFile uses it for a file over 15 MB: it tells half the body sent, waits for `gate`, then answers
+ * as the server would (201 with the file's state), or with `refuse`'s status and sentence for a path.
+ */
+function streamingApi(options: { gate?: Promise<void>; refuse?: Record<string, [number, string]> } = {}) {
+  const sent: StreamedPut[] = [];
+  class FakeRequest {
+    upload: { onprogress: ((e: ProgressEvent) => void) | null } = { onprogress: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    status = 0;
+    responseText = "";
+    private url = "";
+    private headers: Record<string, string> = {};
+    open(_method: string, url: URL | string) {
+      this.url = String(url);
+    }
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value;
+    }
+    getAllResponseHeaders() {
+      return "content-type: application/json\r\n";
+    }
+    send(body: Blob) {
+      const url = new URL(this.url);
+      sent.push({ url: url.pathname, version: url.searchParams.get("version"), contentType: this.headers["Content-Type"], body });
+      const path = decodeURIComponent(url.pathname.slice("/api/files/Work/".length));
+      void (async () => {
+        this.upload.onprogress?.({ lengthComputable: true, loaded: body.size / 2, total: body.size } as ProgressEvent);
+        await options.gate;
+        const refusal = options.refuse?.[path];
+        this.status = refusal ? refusal[0] : 201;
+        this.responseText = JSON.stringify(refusal ? { error: refusal[1] } : { ...fileState(`/Work/${path}`, `n-${path}`), size: body.size });
+        this.onload?.();
+      })();
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", FakeRequest);
+  return sent;
+}
+
+describe("files over 15 MB", () => {
+  it("a 40 MB file goes as the File itself, never read into memory, with its progress shown", async () => {
+    let open!: () => void;
+    const { puts } = uploadApi([]);
+    const streamed = streamingApi({ gate: new Promise<void>((ok) => (open = ok)) });
+    const read = vi.spyOn(Blob.prototype, "arrayBuffer");
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    const big = sized("film.mkv", 40_000_000);
+    await pickFiles(sheet, [big]);
+    expect(await within(sheet).findByText("1 file to upload, 0 files skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+
+    const progress = await within(sheet).findByRole("progressbar", { name: "film.mkv sent" });
+    expect(progress).toHaveAttribute("aria-valuenow", "50");
+    expect(within(sheet).getByText("film.mkv: 50 %")).toBeInTheDocument();
+    open();
+    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(streamed).toEqual([{ url: "/api/files/Work/film.mkv", version: null, contentType: "application/octet-stream", body: big }]);
+    expect(streamed[0].body).toBe(big);
+    expect(puts).toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
+  });
+
+  it("one over the session's bound is refused before it is sent, naming the bound; the server's 413 is listed as it is", async () => {
+    const { puts } = uploadApi([], { maxFileBytes: 20 * 1024 * 1024 });
+    const streamed = streamingApi({ refuse: { "lowered.bin": [413, "A file can have at most 16 MiB."] } });
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await pickFiles(sheet, [sized("big.bin", 20 * 1024 * 1024 + 1), sized("lowered.bin", 17 * 1024 * 1024)]);
+
+    expect(await within(sheet).findByText("1 file to upload, 1 file skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByText("1 file skipped"));
+    expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent("big.binA file can have at most 20 MiB.");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+    expect(await within(sheet).findByText("0 notes and 0 files uploaded, 0 replaced, 2 files skipped")).toBeInTheDocument();
+    expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent("lowered.binA file can have at most 16 MiB.");
+    expect(streamed.map((p) => p.url)).toEqual(["/api/files/Work/lowered.bin"]);
+    expect(puts).toEqual([]);
+  });
+});
+
 describe("images and PDFs", () => {
   it("go with the notes of one pick, one PUT each, and are reported in one summary", async () => {
     const { sent, puts } = uploadApi([]);
@@ -405,43 +498,64 @@ describe("images and PDFs", () => {
     );
   });
 
-  it("offers to shrink an image over 15 MB and says when the extension changes", async () => {
+  it("offers to shrink an image over 15 MB and says when the extension changes; a PDF over 15 MB goes as it is", async () => {
     const { puts } = uploadApi([]);
+    const streamed = streamingApi();
     renderApp("/notes/Work/inbox.md");
     const sheet = await openFromDock();
     await pickFiles(sheet, [sized("huge.png", MAX_ATTACHMENT_BYTES + 1), sized("photo.webp", MAX_ATTACHMENT_BYTES + 1), sized("scan.pdf", MAX_ATTACHMENT_BYTES + 1)]);
 
-    expect(await within(sheet).findByText("Too large for Kumbu² (15 MB). Shrink it so it fits?")).toBeInTheDocument();
-    const images = within(sheet).getByRole("list", { name: "Images too large" });
+    expect(await within(sheet).findByText(SHRINK_QUESTION)).toBeInTheDocument();
+    expect(SHRINK_QUESTION).toBe("Larger than 15 MB: Kumbu² keeps it as it is, but doesn't read it, so an AI can't look at it. Shrink it?");
+    const images = within(sheet).getByRole("list", { name: "Images over 15 MB" });
     expect(within(images).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["huge.pngIt is uploaded as huge.webp.", "photo.webp"]);
     await userEvent.click(within(sheet).getByRole("button", { name: "Shrink" }));
 
-    expect(await within(sheet).findByText("2 files to upload, 1 file skipped")).toBeInTheDocument();
+    expect(await within(sheet).findByText("3 files to upload, 0 files skipped")).toBeInTheDocument();
     expect(shrinkImage).toHaveBeenCalledTimes(2);
     expect(vi.mocked(shrinkImage).mock.calls.map(([file, max]) => [file.name, max])).toEqual([
       ["huge.png", MAX_ATTACHMENT_BYTES],
       ["photo.webp", MAX_ATTACHMENT_BYTES],
     ]);
-    await userEvent.click(within(sheet).getByText("1 file skipped"));
-    expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent("scan.pdflarger than 15 MB, the limit for a file");
     await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
-    expect(await within(sheet).findByText("0 notes and 2 files uploaded, 0 replaced, 1 file skipped")).toBeInTheDocument();
+    expect(await within(sheet).findByText("0 notes and 3 files uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(streamed.map((p) => p.url)).toEqual(["/api/files/Work/scan.pdf"]);
     expect(puts.map((p) => p.url)).toEqual(["/api/files/Work/huge.webp", "/api/files/Work/photo.webp"]);
     vi.mocked(shrinkImage).mockClear();
   });
 
-  it("warns that a GIF loses its animation, and skips the image when told not to shrink", async () => {
+  it("warns that a GIF loses its animation, and keeps the image as it is when told not to shrink", async () => {
     const { puts } = uploadApi([]);
+    const streamed = streamingApi();
     renderApp("/notes/Work/inbox.md");
     const sheet = await openFromDock();
     await pickFiles(sheet, [sized("party.gif", MAX_ATTACHMENT_BYTES + 1)]);
 
-    const images = await within(sheet).findByRole("list", { name: "Images too large" });
+    const images = await within(sheet).findByRole("list", { name: "Images over 15 MB" });
     expect(images).toHaveTextContent("party.gifIt is uploaded as party.webp.An animated GIF loses its animation.");
-    await userEvent.click(within(sheet).getByRole("button", { name: "Skip it" }));
-    expect(await within(sheet).findByText("Nothing to upload, 1 file skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Keep it as it is" }));
+    expect(await within(sheet).findByText("1 file to upload, 0 files skipped")).toBeInTheDocument();
     expect(shrinkImage).not.toHaveBeenCalled();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(streamed.map((p) => p.url)).toEqual(["/api/files/Work/party.gif"]);
     expect(puts).toEqual([]);
+  });
+
+  it("an image the browser can't shrink goes as it is", async () => {
+    uploadApi([]);
+    const streamed = streamingApi();
+    vi.mocked(shrinkImage).mockRejectedValueOnce(new ShrinkError("too large to shrink: at most 50 megapixels"));
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await pickFiles(sheet, [sized("panorama.jpg", MAX_ATTACHMENT_BYTES + 1)]);
+    await userEvent.click(await within(sheet).findByRole("button", { name: "Shrink" }));
+
+    expect(await within(sheet).findByText("1 file to upload, 0 files skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(streamed.map((p) => p.url)).toEqual(["/api/files/Work/panorama.jpg"]);
+    vi.mocked(shrinkImage).mockClear();
   });
 
   it("a pasted image is named after the moment, and the name can be changed before it goes", async () => {
