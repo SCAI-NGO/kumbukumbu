@@ -47,6 +47,29 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Equal(["Kumbu:Vaults:ConcurrentFileReads must be 1 or more"], Validate(options).Failures);
     }
 
+    [Fact]
+    public void Rejects_no_concurrent_file_writes()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Vaults.ConcurrentFileWrites = 0;
+
+        Assert.Equal(["Kumbu:Vaults:ConcurrentFileWrites must be 1 or more"], Validate(options).Failures);
+        Assert.Equal(4, new VaultOptions().ConcurrentFileWrites);
+    }
+
+    [Fact]
+    public void Rejects_a_file_bound_below_15_MiB()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Vaults.MaxFileBytes = 15 * 1024 * 1024 - 1;
+
+        Assert.Equal(["Kumbu:Vaults:MaxFileBytes must be at least 15 MiB (15728640 bytes)"], Validate(options).Failures);
+
+        options.Vaults.MaxFileBytes = 15 * 1024 * 1024;
+        Assert.False(Validate(options).Failed);
+        Assert.Equal(1L << 30, new VaultOptions().MaxFileBytes);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("  ")]

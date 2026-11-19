@@ -137,3 +137,22 @@ describe("comparing two versions of a file", () => {
     expect(document.querySelector("svg.lucide-file-code")).toBeNull();
   });
 });
+
+describe("comparing two versions of a large file", () => {
+  it("fetches neither version's bytes over 15 MB, by the sizes its history gives", async () => {
+    const asked: string[] = [];
+    const entry = (version: string, size: number, current: boolean) => ({
+      version, size, current, writtenAt: "2026-11-18T09:00:00Z", writer: "liz", writerKind: "session", mediaType: "application/pdf", kind: "pdf",
+    });
+    fakeApi({
+      "GET /api/history/Work/big.pdf": () => json(200, [entry("v2", 40_000_000, true), entry("v1", 30_000_000, false)]),
+      "GET /api/files/Work/big.pdf": (r) => (asked.push(r.url), new Response(new Uint8Array([0x25]))),
+    });
+    show({ path: "/Work/big.pdf", version: "v2", before: "v1" });
+
+    expect(await screen.findByRole("img", { name: "big.pdf, Before" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "big.pdf, After this change" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(asked).toEqual([]);
+  });
+});

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import Thumbnail from "../attachments/Thumbnail";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useNoteVersion } from "../api/notes";
+import { useHistory, useNoteVersion } from "../api/notes";
 import { useNoteNow } from "../api/activity";
 import { fileKindOf, isAttachment, titleOf, vaultOf, type FileKind } from "../api/paths";
 import { noPreviewText } from "../components/fileKindIcon";
@@ -141,17 +141,27 @@ function CompareFileVersions({ path, version, before, trashed, beforeLost, initi
           { label: "Before", version: before, message: before === null ? (beforeLost ? "Earlier versions are no longer kept" : "Added in this change") : null },
           { label: versionLabel, version, message: version === null ? notKept : null },
         ];
+  // The versions' sizes, from the file's history: until it is in, nothing is fetched, as a side may be a large file.
+  const pictured = (kind ?? fileKindOf(path)) !== "file";
+  const history = useHistory(path, pictured);
+  const sized = sides.map((side) => {
+    const entry = history.data?.find((e) => (side.version === null ? e.current : e.version === side.version));
+    return entry ? { ...side, size: Number(entry.size) } : side;
+  });
   return (
     <>
       <ModeSwitch mode={mode} onMode={setMode} />
       {mode === "before" && before !== null && before === version && <p className="text-sm text-text-body">The file didn't change in this change.</p>}
-      <CompareFiles path={path} sides={sides} kind={kind} />
+      {pictured && history.isPending ? <p className="text-sm text-muted">Loading …</p> : <CompareFiles path={path} sides={sized} kind={kind} />}
     </>
   );
 }
 
-/** One side of a comparison of files: its version (null: the file as it is now), or why there is none to show. */
-export type FileSide = { label: string; version: string | null; message?: string | null };
+/**
+ * One side of a comparison of files: its version (null: the file as it is now), or why there is none to show; and its
+ * size, where known, so that one larger than 15 MB isn't fetched for its picture.
+ */
+export type FileSide = { label: string; version: string | null; message?: string | null; size?: number };
 
 /**
  * Versions of an image or PDF side by side (stacked on a phone), each whole in its box; a PDF shows its first page. A
@@ -168,7 +178,15 @@ export function CompareFiles({ path, sides, kind = fileKindOf(path) }: { path: s
             <p className="rounded-[10px] border border-dashed border-line px-3 py-2 text-sm text-muted">{side.message}</p>
           ) : (
             <div className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-line bg-bg">
-              <Thumbnail vault={vaultOf(path)} path={path} kind={kind} at={side.version === null ? {} : { version: side.version }} fit="contain" alt={`${titleOf(path)}, ${side.label}`} />
+              <Thumbnail
+                vault={vaultOf(path)}
+                path={path}
+                kind={kind}
+                at={side.version === null ? {} : { version: side.version }}
+                size={side.size}
+                fit="contain"
+                alt={`${titleOf(path)}, ${side.label}`}
+              />
             </div>
           )}
         </section>

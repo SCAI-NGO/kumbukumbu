@@ -41,9 +41,11 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             """,
         ["attachments"] = $"""
             attachments
-              Besides notes, a vault keeps every file type, up to 15 MB each: images (.png, .jpg, .jpeg, .gif,
-              .webp, .svg), PDFs, and any other file (a spreadsheet, a CSV, a script) as it is. A name ending in
-              an image's or PDF's extension must hold that format. A file and a folder never share a name.
+              Besides notes, a vault keeps every file type, up to the server's bound each (1 GiB unless its
+              admin set another): images (.png, .jpg, .jpeg, .gif, .webp, .svg), PDFs, and any other file (a
+              spreadsheet, a CSV, a script) as it is. A name ending in an image's or PDF's extension must hold
+              that format. A file and a folder never share a name. A file larger than 15 MB is kept and
+              downloaded, but not read: pdf, img, pdfimages and rg say so, and an SVG can't be that large.
               People upload them (the web app, Obsidian, the upload tool); the write, edit and replace tools
               refuse an attachment path, since they only write text.
               An SVG is the exception: write takes it whole, as for a note (no version creates it, the version

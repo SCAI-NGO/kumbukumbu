@@ -270,6 +270,18 @@ public sealed class VaultOptions
     /// is decrypted); a further read waits for one to finish. Serving the bytes afterwards holds no slot.</summary>
     public int ConcurrentFileReads { get; set; } = 4;
 
+    /// <summary>Files larger than 15 MB written at once, server-wide (each holds about 16 MiB while its chunks are read
+    /// and sealed, beside the start its way in read, up to 15 MB and a byte); a further upload of one waits for one to
+    /// finish. Smaller files don't take a slot.</summary>
+    public int ConcurrentFileWrites { get; set; } = 4;
+
+    /// <summary>1 GiB.</summary>
+    public const long DefaultMaxFileBytes = 1L << 30;
+
+    /// <summary>The largest file a vault keeps (files spec, decision 11), at least 15 MiB: up to 15 MiB a file is one
+    /// sealed document, above it chunks (<see cref="Vaults.EncryptedNoteStore.PutBlobAsync(string, Stream, long?, CancellationToken)"/>).</summary>
+    public long MaxFileBytes { get; set; } = DefaultMaxFileBytes;
+
     /// <summary>People a vault is shared with at most, pending invitations included (collab design §2.1).</summary>
     public int MemberLimit { get; set; } = 20;
 }

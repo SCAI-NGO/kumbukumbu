@@ -236,6 +236,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                     {
                         return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes and text files only");
                     }
+                    else if (AttachmentFormat.IsLarge(attachment.Current.Size))
+                    {
+                        return ShellResult.Error($"rg: {path.Value} is {AttachmentFormat.NotRead}");
+                    }
                     else
                     {
                         documents.TryAdd(path, attachment.Current);

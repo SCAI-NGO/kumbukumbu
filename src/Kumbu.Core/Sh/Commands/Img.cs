@@ -96,6 +96,8 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
             return Refused(ImgRefusal.Pdf, $"img: {path.Value} is a PDF; look at its pages with pdf {SectionLookup.Quote(path)} <pages> --images (see 'help pdf')");
         }
 
+        if (AttachmentFormat.IsLarge(state.Size)) return Refused(ImgRefusal.TooLarge, $"img: {path.Value} is {AttachmentFormat.NotRead}");
+
         if (frame is not null && state.MediaType != "image/gif")
         {
             return Refused(ImgRefusal.BadFrame, $"img: --frame is for GIFs; {path.Value} is a {AttachmentText.FormatName(state)}");

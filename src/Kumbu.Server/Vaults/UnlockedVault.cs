@@ -27,6 +27,7 @@ public sealed class UnlockedVault
     private readonly byte[] _pathKey;
     private readonly byte[] _textKey;
     private readonly byte[] _blobKey;
+    private readonly byte[] _largeBlobKey;
     private readonly IReadOnlyDictionary<string, byte[]> _membershipKeys;
     private long _lastUsed;
     private readonly Lock _graphLock = new();
@@ -50,6 +51,7 @@ public sealed class UnlockedVault
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
         _blobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/blob-id", []);
+        _largeBlobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/large-blob-id", []);
         var salt = System.Text.Encoding.UTF8.GetBytes(id);
         var membershipKeys = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var purpose in new[] { Sharing.Memberships.LabelPurpose, Sharing.Memberships.WritersPurpose, Sharing.Memberships.WriterIdsPurpose })
@@ -369,6 +371,56 @@ public sealed class UnlockedVault
 
     private string BlobContext(byte[] blobId) => $"blob:{Id}:{Convert.ToBase64String(blobId)}";
 
+    /// <summary>
+    /// The blob id of a file larger than 15 MB, from the SHA-256 of its bytes, computed while they stream in: equal
+    /// bytes still get equal ids within the vault. Under a key of its own, derived from the vault key beside the blob-id
+    /// key, not under that key with a prefix: a blob's id is the keyed hash of whatever bytes it holds, so a small file
+    /// holding exactly the prefix and a hash would get the id of the large file with that hash, and one upload could
+    /// stand in for the other. A re-keying computes it from the hash in the head, never reading a chunk.
+    /// </summary>
+    public byte[] LargeBlobId(ReadOnlySpan<byte> sha256) => VaultCrypto.Mac(_largeBlobKey, sha256);
+
+    /// <summary>A large file's head, sealed under the content key and bound to its blob id as a blob is
+    /// (<see cref="BlobContext"/>).</summary>
+    internal byte[] SealLargeBlobHead(byte[] blobId, LargeBlobHead head) => Seal(BlobContext(blobId), head);
+
+    /// <summary>
+    /// Opens a large file's head and checks it: its format, the chunk count against the one in the clear, a size the
+    /// count and chunk size can hold, and its id against the hash it names. A blob whose <c>chunks</c> field was added or
+    /// taken away doesn't open either way: a blob's bytes don't parse as a head whose id is their keyed hash, nor does a
+    /// head's id match the keyed hash of its sealed bytes (<see cref="OpenBlob"/>), the two ids being under different keys.
+    /// </summary>
+    internal LargeBlobHead OpenLargeBlobHead(BlobDocument doc)
+    {
+        var head = Checked(Open<LargeBlobHead>(BlobContext(doc.BlobId), doc.Blob), doc.Chunks);
+        if (!CryptographicOperations.FixedTimeEquals(LargeBlobId(head.Sha256), doc.BlobId)) throw new InvalidDataException($"Large blob {doc.Id} does not match its id");
+        return head;
+    }
+
+    /// <summary>A head that holds together: its format, and a size that <paramref name="chunks"/> chunks hold, as the clear
+    /// field gives their number.</summary>
+    private static LargeBlobHead Checked(LargeBlobHead head, int? chunks)
+    {
+        if (head.Format != LargeBlobHead.Marker || head.Key is not { Length: VaultCrypto.KeySize } || head.Sha256 is not { Length: 32 }
+            || head.ChunkSize <= 0 || head.Chunks < 1 || head.Chunks != chunks
+            || head.Size <= (long)(head.Chunks - 1) * head.ChunkSize || head.Size > (long)head.Chunks * head.ChunkSize)
+        {
+            throw new InvalidDataException("A large blob's head does not hold together");
+        }
+
+        return head;
+    }
+
+    /// <summary>A chunk of a large file, under its data key, bound to the vault, the head's document id, its number and
+    /// whether it is the last: swapped, moved to another file, renumbered or cut off, it doesn't open.</summary>
+    internal byte[] SealChunk(byte[] dataKey, ObjectId headId, int n, bool last, ReadOnlySpan<byte> bytes) =>
+        VaultCrypto.Seal(dataKey, bytes, ChunkContext(headId, n, last));
+
+    internal byte[] OpenChunk(byte[] dataKey, ObjectId headId, int n, bool last, byte[] sealedChunk) =>
+        VaultCrypto.Open(dataKey, sealedChunk, ChunkContext(headId, n, last));
+
+    private string ChunkContext(ObjectId headId, int n, bool last) => $"chunk:{Id}:{headId}:{n}:{(last ? "last" : "more")}";
+
     /// <summary>A part of a PDF's analysis, bound to its blob's id and its part number: moved to another blob or part,
     /// it doesn't open.</summary>
     internal byte[] SealPdfAnalysis<T>(byte[] blobId, int part, T payload) => Seal(PdfAnalysisContext(blobId, part), payload);
@@ -596,6 +648,16 @@ public sealed class UnlockedVault
                     return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
                 }
 
+                case "blobs" when doc.Revision > 0:
+                {
+                    // A large file's head, its chunk count standing in for the revision: its id comes from the hash it
+                    // seals, and only it is sealed again. The chunks stay as they are: under the file's own data key,
+                    // bound to the head's _id, which the update keeps.
+                    var head = Checked(Parse<LargeBlobHead>(plain), (int)doc.Revision);
+                    var pid = to.LargeBlobId(head.Sha256);
+                    return new Resealed(pid, LargeBlobId(head.Sha256), SealPlain(to.BlobContext(pid)), null, []) { Sha256 = seal ? null : head.Sha256 };
+                }
+
                 case "blobs":
                 {
                     var pid = to.BlobId(plain);
@@ -655,6 +717,10 @@ public sealed class UnlockedVault
         /// <summary>A blob's bytes when it was opened but not sealed (<c>seal: false</c>): its id under the old key is
         /// computed from them.</summary>
         public byte[]? Bytes { get; init; }
+
+        /// <summary>A large file's hash when its head was opened but not sealed: its id under the old key is computed
+        /// from it.</summary>
+        public byte[]? Sha256 { get; init; }
     }
 
     /// <summary>Every blob id an attachment record names, current and history, mapped to the new key's.</summary>

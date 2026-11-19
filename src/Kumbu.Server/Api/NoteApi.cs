@@ -794,7 +794,7 @@ public static class NoteApi
         }
 
         // A name that contradicts the file's bytes is the request's fault, not the vault's state.
-        if (!folder && file is not null && AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+        if (!folder && file is not null && AttachmentFormat.RenameProblem(source, file.Current.MediaType, file.Current.Size, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
         {
             throw ApiErrors.BadRequest(renameProblem + ".");
         }

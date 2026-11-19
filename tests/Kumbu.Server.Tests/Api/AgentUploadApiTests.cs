@@ -261,15 +261,16 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Too_large_chunked_body_is_413()
+    public async Task Chunked_body_over_the_bound_is_413_naming_it()
     {
-        var user = await RestClient.NewAsync(Api);
+        await using var bounded = LargeFiles.Bounded(app);
+        var user = await RestClient.NewAsync(bounded);
         var url = await UrlAsync(user, await user.KeyAsync("Claude", KeyRight.Write), "/Arbeit/big.pdf");
 
-        using var put = await PutAsync(url, new ChunkedPdf(AttachmentFormat.MaxBytes + 1));
+        using var put = await PutAsync(url, new ChunkedPdf(LargeFiles.Bound + 1), bounded);
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, put.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(put), StringComparison.Ordinal);
+        Assert.Equal("A file can have at most 20 MiB.", await RestClient.ErrorAsync(put));
         await AssertNoFileAsync(user, "big.pdf");
     }
 

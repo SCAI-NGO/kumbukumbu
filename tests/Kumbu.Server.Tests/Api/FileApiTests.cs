@@ -180,7 +180,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_16_MB_file_is_a_413_saying_15_MB()
+    public async Task A_16_MB_file_is_kept_as_a_large_one()
     {
         var user = await UserAsync();
         var bytes = new byte[16 * 1024 * 1024];
@@ -188,9 +188,9 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         using var response = await user.PutFileAsync("big.pdf", bytes);
 
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(response), StringComparison.Ordinal);
-        Assert.Equal(0, await BlobCountAsync(user));
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(bytes.Length, (await JsonAsync(response))["size"]!.GetValue<long>());
+        Assert.Equal(1, await BlobCountAsync(user));
     }
 
     /// <summary><paramref name="size"/> bytes of a PDF, sent in 64 KiB pieces, with or without a Content-Length.</summary>
@@ -219,7 +219,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_file_of_exactly_15_MB_is_stored_and_one_byte_more_is_a_413(bool declare)
+    public async Task A_file_of_exactly_15_MB_is_read_whole_and_one_byte_more_is_streamed(bool declare)
     {
         var user = await UserAsync();
 
@@ -228,11 +228,15 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
         Assert.True(limit.StatusCode == HttpStatusCode.Created, await limit.Content.ReadAsStringAsync(Ct));
         Assert.Equal(AttachmentFormat.MaxBytes, (await JsonAsync(limit))["size"]!.GetValue<long>());
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, over.StatusCode);
-        Assert.Contains("15 MB", await RestClient.ErrorAsync(over), StringComparison.Ordinal);
+        Assert.True(over.StatusCode == HttpStatusCode.Created, await over.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(AttachmentFormat.MaxBytes + 1, (await JsonAsync(over))["size"]!.GetValue<long>());
         using var get = await user.GetAsync(user.Url("over.pdf", "files"));
-        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
-        Assert.Equal(1, await BlobCountAsync(user));
+        Assert.Equal(AttachmentFormat.MaxBytes + 1, (await get.Content.ReadAsByteArrayAsync(Ct)).Length);
+        Assert.Equal(2, await BlobCountAsync(user));
+        // The one is a document, the other a head and its chunks.
+        Assert.Equal(4, await app.Database.GetCollection<BsonDocument>("blob_chunks").CountDocumentsAsync(
+            Builders<BsonDocument>.Filter.Eq("vault", (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault.Id),
+            cancellationToken: Ct));
     }
 
     [Fact]

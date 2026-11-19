@@ -323,6 +323,22 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         return Task.FromResult(id);
     }
 
+    /// <summary>In memory, whatever the size: fine for a fake.</summary>
+    public async Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct)
+    {
+        using var copy = new MemoryStream();
+        await content.CopyToAsync(copy, ct);
+        return await PutBlobAsync(vault, copy.ToArray(), ct);
+    }
+
+    public async Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct)
+    {
+        using var copy = new MemoryStream();
+        copy.Write(head.Span);
+        await rest.CopyToAsync(copy, ct);
+        return await PutBlobAsync(vault, copy.ToArray(), ct);
+    }
+
     public Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<TrashedAttachment>>(
         [

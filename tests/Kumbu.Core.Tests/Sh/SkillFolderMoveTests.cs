@@ -82,6 +82,35 @@ public sealed class SkillFolderMoveTests
             (await shell.RunAsync("mv /Work/blob.txt /Work/_skills/pdf/", Ct)).Output);
     }
 
+    [Theory]
+    [InlineData("big.pdf", "%PDF-1.7")]
+    [InlineData("big.png", "\x89PNG\r\n\x1a\n")]
+    public async Task A_pdf_or_image_over_15_MB_is_neither_moved_nor_copied_into_a_skill_folder(string name, string magic)
+    {
+        // Copying or sharing the skill would read it whole, and fail; the upload refuses it with the same sentence.
+        var (shell, store) = await SkillAsync();
+        var caller = new FixedCaller(Writers.Dev);
+        var files = new AttachmentWriter(store, store, Time, caller);
+        var bytes = new byte[AttachmentFormat.MaxBytes + 1];
+        System.Text.Encoding.Latin1.GetBytes(magic).CopyTo(bytes, 0);
+        var head = bytes.AsMemory(0, 64);
+        var blob = await files.PutLargeAsync("Work", head, new MemoryStream(bytes, 64, bytes.Length - 64), bytes.Length, Ct);
+        Assert.False((await files.WriteLargeAsync($"/Work/docs/{name}", blob, head, (10, 10), null, Ct)).Result.IsError);
+        var refusal = $"{name} is larger than 15 MB; a skill's folder keeps files up to 15 MB, as a skill is read whole when it is copied or shared";
+        Assert.Equal($"upload: {refusal}", (await files.WriteLargeAsync($"/Work/_skills/pdf/{name}", blob, head, (10, 10), null, Ct)).Result.Output);
+        var trees = new TreeWriter(store, Time, caller);
+
+        Assert.Equal($"mv: /Work/_skills/pdf/{name}: {refusal}", (await shell.RunAsync($"mv /Work/docs/{name} /Work/_skills/pdf/", Ct)).Output);
+        Assert.Equal($"mv: /Work/_skills/pdf/docs/{name}: {refusal}", (await shell.RunAsync("mv /Work/docs/ /Work/_skills/pdf/docs/", Ct)).Output);
+        Assert.Equal($"cp: /Work/_skills/pdf/{name}: {refusal}",
+            (await trees.CopyAsync(P($"/Work/docs/{name}"), P($"/Work/_skills/pdf/{name}"), deep: false, overwrite: false, Ct)).Result.Output);
+        Assert.Equal($"cp: /Work/_skills/pdf/docs/{name}: {refusal}",
+            (await trees.CopyAsync(P("/Work/docs"), P("/Work/_skills/pdf/docs"), deep: true, overwrite: false, Ct)).Result.Output);
+        Assert.Null(await store.GetAttachmentAsync(P($"/Work/_skills/pdf/{name}"), Ct));
+        // Outside a skill's folder it moves as any file does.
+        Assert.False((await shell.RunAsync($"mv /Work/docs/{name} /Work/{name}", Ct)).IsError);
+    }
+
     [Fact]
     public async Task A_skills_vault_of_another_name_keeps_no_binary_file()
     {

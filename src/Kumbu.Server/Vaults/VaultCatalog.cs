@@ -41,6 +41,59 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// a slot from before a blob is read until its bytes are open.</summary>
     internal SemaphoreSlim FileReads { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileReads));
 
+    /// <summary>The files larger than 15 MB written at once, server-wide (<see cref="VaultOptions.ConcurrentFileWrites"/>):
+    /// a slot from when an upload is known to be one until its head is in or it gave up.</summary>
+    internal SemaphoreSlim FileWrites { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileWrites));
+
+    /// <summary>The large uploads one account streams at once, of the server's <see cref="FileWrites"/>: each holds its
+    /// slot for as long as its body takes, so without this a few slow links of one person could take them all.</summary>
+    internal const int LargeWritesPerAccount = 2;
+
+    /// <summary>How long a large upload waits for its slots before it is refused (<see cref="TooManyUploadsException"/>):
+    /// a waiter holds its head (up to 15 MB and a byte) and its connection, so it may not wait without end; half a minute
+    /// covers an upload ahead of it finishing, and a client told to come back retries rather than hangs. Settable for tests.</summary>
+    internal TimeSpan FileWriteWait { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Per account (the caller's user id; "" for the dev token), its share of <see cref="FileWrites"/>. One per
+    /// account that has uploaded a large file, for the life of the process.</summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _accountWrites = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The slots of a large upload of <paramref name="account"/>'s: one of its own <see cref="LargeWritesPerAccount"/>,
+    /// then one of the server's <see cref="FileWrites"/>, waited for together no longer than <see cref="FileWriteWait"/>
+    /// (else <see cref="TooManyUploadsException"/>). Disposing the result gives both back.
+    /// </summary>
+    internal async Task<IDisposable> TakeFileWriteAsync(string account, CancellationToken ct)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var own = _accountWrites.GetOrAdd(account, _ => new SemaphoreSlim(LargeWritesPerAccount));
+        if (!await own.WaitAsync(FileWriteWait, ct)) throw new TooManyUploadsException();
+        try
+        {
+            var left = FileWriteWait - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            if (!await FileWrites.WaitAsync(left > TimeSpan.Zero ? left : TimeSpan.Zero, ct)) throw new TooManyUploadsException();
+        }
+        catch
+        {
+            own.Release();
+            throw;
+        }
+
+        return new FileWriteSlots(this, own);
+    }
+
+    private sealed class FileWriteSlots(VaultCatalog catalog, SemaphoreSlim own) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) != 0) return;
+            catalog.FileWrites.Release();
+            own.Release();
+        }
+    }
+
     /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();
@@ -135,6 +188,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary><see cref="Blobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
     private IMongoCollection<SealedDocument> BlobsByVault { get; } = db.GetCollection<SealedDocument>("blobs");
+
+    /// <summary>The chunks of files larger than 15 MB, under their head in <see cref="Blobs"/> (files spec, decision 9).</summary>
+    internal IMongoCollection<BlobChunkDocument> BlobChunks { get; } = db.GetCollection<BlobChunkDocument>("blob_chunks");
+
+    /// <summary><see cref="BlobChunks"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> BlobChunksByVault { get; } = db.GetCollection<SealedDocument>("blob_chunks");
+
+    /// <summary>The largest file a vault keeps (<see cref="VaultOptions.MaxFileBytes"/>).</summary>
+    internal long MaxFileBytes => options.Value.Vaults.MaxFileBytes;
 
     /// <summary>The analyses of PDFs, in parts under their blob's id (<see cref="Attachments.PdfAnalyses"/>); they go with the blob.</summary>
     internal IMongoCollection<PdfAnalysisDocument> PdfParts { get; } = db.GetCollection<PdfAnalysisDocument>("pdf_analyses");
@@ -759,13 +821,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
-        [Notes, Trash, Moves, Embeddings, Links, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
+        [Notes, Trash, Moves, Embeddings, Links, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, BlobChunksByVault, PdfPartsByVault, PdfJobsByVault, Publishing, PublicationsByVault, PublicationFilesByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', WebDAV shares',
     /// the dev token's, recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs, the publishing record and
-    /// the published copies with their files and AI links), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// the published copies with their files and AI links), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all;
+    /// the chunks of large files right after it.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -846,7 +909,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
                         revokedShares = await RevokeSharesWithoutVaultsAsync(s, shareIds, token);
                         revokedConnections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, ids, Now, token);
-                        foreach (var collection in ContentCollections)
+                        // The chunks of large files after the commit, below: gigabytes of them would weigh on one
+                        // transaction, and without their heads, which go here, nothing reads them.
+                        foreach (var collection in ContentCollections.Where(c => c != BlobChunksByVault))
                         {
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
                         }
@@ -875,6 +940,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 RaiseNotesChanged(id);
             }
 
+            // The chunks too; any an upload writes after this, the blob sweep takes (BlobSweep.ReleaseChunksOfDeletedVaultsAsync).
             foreach (var collection in ContentCollections)
             {
                 deleted += (await collection.DeleteManyAsync(Builders<SealedDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None)).DeletedCount;
@@ -1195,6 +1261,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                     log.LogError(e, "Sweeping the blobs of vault {VaultId} failed", vault.Id);
                 }
             }
+
+            try
+            {
+                await sweep.ReleaseChunksOfDeletedVaultsAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "Sweeping the chunks of deleted vaults failed");
+            }
         }
         finally
         {
@@ -1450,24 +1529,71 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// A blob's bytes, read from MongoDB and opened; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/>
     /// if it doesn't open (changed or damaged outside Kumbu²). The read and the decryption take one of the server's
     /// <see cref="FileReads"/> slots, waiting for one if all are taken; the slot goes back before the bytes are returned.
+    /// Whole bytes are for files up to 15 MB, which is what its callers are sized for: a larger file's head is checked,
+    /// then refused with <see cref="Kumbu.Core.Attachments.TooLargeToReadException"/> (files spec, decision 12).
     /// </summary>
     internal async Task<byte[]?> ReadBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
     {
         await FileReads.WaitAsync(ct);
         try
         {
-            var doc = await Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct);
+            var doc = await FindBlobAsync(vault, blobId, ct);
+            if (doc?.Chunks is not null)
+            {
+                vault.OpenLargeBlobHead(doc);
+                throw new Kumbu.Core.Attachments.TooLargeToReadException();
+            }
+
             return doc is null ? null : vault.OpenBlob(doc);
         }
-        catch (Exception e) when (e is CryptographicException or InvalidDataException)
+        catch (Exception e) when (e is CryptographicException or InvalidDataException or JsonException)
         {
-            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+            throw Damaged();
         }
         finally
         {
             FileReads.Release();
         }
     }
+
+    /// <summary>
+    /// A blob's bytes as a stream; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/> if it doesn't
+    /// open. Up to 15 MB, as <see cref="ReadBlobAsync"/> reads them; a larger file's head is opened and its chunks
+    /// counted here, and the chunks are read one at a time as the stream is (<see cref="LargeBlobStream"/>), each under a
+    /// slot of its own: a file cut off or added to fails here, before its first byte.
+    /// </summary>
+    internal async Task<Stream?> OpenBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
+    {
+        await FileReads.WaitAsync(ct);
+        try
+        {
+            if (await FindBlobAsync(vault, blobId, ct) is not { } doc) return null;
+            if (doc.Chunks is null) return new MemoryStream(vault.OpenBlob(doc), writable: false);
+            var head = vault.OpenLargeBlobHead(doc);
+            var c = Builders<BlobChunkDocument>.Filter;
+            if (await BlobChunks.CountDocumentsAsync(c.Eq(d => d.Vault, vault.Id) & c.Eq(d => d.Head, doc.Id), cancellationToken: ct) != head.Chunks)
+            {
+                throw new InvalidDataException($"Large blob {doc.Id} does not have its {head.Chunks} chunks");
+            }
+
+            return new LargeBlobStream(this, vault, doc.Id, head);
+        }
+        catch (Exception e) when (e is CryptographicException or InvalidDataException or JsonException)
+        {
+            throw Damaged();
+        }
+        finally
+        {
+            FileReads.Release();
+        }
+    }
+
+    private Task<BlobDocument?> FindBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct) =>
+        Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct)!;
+
+    /// <summary>What a blob, or a chunk of one, that doesn't open is.</summary>
+    internal static VaultUnavailableException Damaged() =>
+        new("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
 
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => UnlockedCount;
@@ -1970,6 +2096,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<BlobDocument>(BlobSweep.CandidateIndex),
                 // Whether blobs exist, and since when, without fetching them (EncryptedNoteStore.RequireBlobsAsync).
                 new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
+            ],
+            ct);
+        await BlobChunks.Indexes.CreateManyAsync(
+            [
+                // A file's chunks in order, each number once; counted from the index alone.
+                new CreateIndexModel<BlobChunkDocument>(
+                    Builders<BlobChunkDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.Head).Ascending(d => d.N), new CreateIndexOptions { Unique = true }),
+                // Chunks by age, for the sweep of uploads that stopped half way.
+                new CreateIndexModel<BlobChunkDocument>(Builders<BlobChunkDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.At)),
             ],
             ct);
         await PdfParts.Indexes.CreateOneAsync(

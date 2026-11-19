@@ -398,14 +398,22 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task A_sealed_blob_of_the_size_limit_fits_in_one_document()
+    public async Task A_sealed_blob_of_the_size_limit_fits_in_one_document_and_one_byte_more_is_chunked()
     {
-        var (_, _, store) = await WorldAsync();
+        var (world, _, store) = await WorldAsync();
         var bytes = Png((int)AttachmentFormat.MaxBytes);
+        var over = Png((int)AttachmentFormat.MaxBytes + 1);
 
         var attachment = await CreateAsync(store, "/Work/limit.png", bytes);
+        var streamed = await store.PutBlobAsync("Work", new MemoryStream(bytes), null, Ct);
+        var chunked = await store.PutBlobAsync("Work", new MemoryStream(over), null, Ct);
 
+        Assert.Equal(attachment.Current.BlobId, streamed);
         Assert.Equal(bytes, await ReadBlobAsync(store, attachment.Current.BlobId));
+        Assert.Equal(over, await ReadBlobAsync(store, chunked));
+        var blobs = Raw(world, "blobs");
+        Assert.False((await blobs.Find(Builders<BsonDocument>.Filter.Eq("bid", Convert.FromBase64String(streamed))).FirstAsync(Ct)).Contains("chunks"));
+        Assert.Equal(4, (await blobs.Find(Builders<BsonDocument>.Filter.Eq("bid", Convert.FromBase64String(chunked))).FirstAsync(Ct))["chunks"].AsInt32);
     }
 
     [Fact]

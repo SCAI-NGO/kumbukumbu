@@ -7220,7 +7220,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            /** @description The file's bytes, at most 15 MB; the Content-Type is ignored. */
+            /** @description The file's bytes, up to the server's bound per file (Kumbu:Vaults:MaxFileBytes, 1 GiB by default); the Content-Type is ignored. */
             requestBody: {
                 content: {
                     "application/octet-stream": string;
@@ -13227,6 +13227,8 @@ export interface components {
             passwordWindowOpen: boolean;
             publishEnabled: boolean;
             storageLimited: boolean;
+            /** Format: int64 */
+            maxFileBytes: number | string;
             discreet: components["schemas"]["DiscreetView"];
             skillsNotice?: null | components["schemas"]["SkillsNoticeView"];
         };

@@ -182,6 +182,7 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
         }
 
         if (!AttachmentText.IsPdf(attachment.Current)) return (null, Invalid($"pdfimages: {path.Value} is not a PDF"));
+        if (AttachmentFormat.IsLarge(attachment.Current.Size)) return (null, Invalid($"pdfimages: {path.Value} is {AttachmentFormat.NotRead}"));
         return ((path, attachment.Current), null);
     }
 
