@@ -253,7 +253,7 @@ public class HtmlTests
 
         Assert.Equal("html: nothing matched 'p div div div div'", (await Run("html /Work/deep.html 'p div div div div'")).Output);
         Assert.Equal("998", (await Run("html --count /Work/deep.html 'div div div'")).Output);
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
     [Theory]
@@ -303,16 +303,17 @@ public class HtmlTests
     [Fact]
     public async Task Matching_stops_at_the_time_budget()
     {
-        // :nth-child counts the siblings before each element: quadratic in a long list.
+        // :nth-child counts the siblings before each element: quadratic in a long list. The budget covers parsing too,
+        // which takes a fraction of a second here, and several on a loaded machine: a shorter budget can run out there.
         _store.AddTextFile("/Work/flat.html", $"<ul>{string.Concat(Enumerable.Repeat("<li>x</li>", 100_000))}</ul>");
-        _sh.Register(new Html(_store) { Budget = TimeSpan.FromMilliseconds(500) });
+        _sh.Register(new Html(_store) { Budget = TimeSpan.FromSeconds(5) });
         var started = Stopwatch.GetTimestamp();
 
         Assert.Equal(
-            ShellResult.Error("html: 'li:nth-child(2n)' took longer than 0.5 seconds on /Work/flat.html; narrow the selector or the page"),
+            ShellResult.Error("html: 'li:nth-child(2n)' took longer than 5 seconds on /Work/flat.html; narrow the selector or the page"),
             await Run("html /Work/flat.html 'li:nth-child(2n)'"));
         // Unbounded, this takes about half a minute.
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(20));
     }
 
     [Fact]

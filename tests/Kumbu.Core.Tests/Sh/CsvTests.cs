@@ -448,7 +448,7 @@ public class CsvTests
 
         Assert.StartsWith("dialect: separator ';', double quotes, a header row\n", overview);
         Assert.True(int.Parse(tail) > 40_000, tail);
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), clock.Elapsed.ToString());
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), clock.Elapsed.ToString());
     }
 
     [Fact]

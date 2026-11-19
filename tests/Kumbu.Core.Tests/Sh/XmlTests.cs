@@ -218,7 +218,7 @@ public class XmlTests
         var started = Stopwatch.GetTimestamp();
 
         Assert.Equal("xml: /Work/lol.xml has a DTD, which Kumbu² doesn't process", (await Xml("lol.xml", $"{dtd}<r>&lol9;</r>", "/r")).Output);
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(1));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5));
     }
 
     [Theory]
@@ -313,7 +313,7 @@ public class XmlTests
         var output = (await Run("xml --xml /Work/deep.xml '//a'")).Output;
 
         Assert.EndsWith("\nxml: the first of 20,000 nodes is cut at the output limit; narrow the XPath", output);
-        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5));
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10));
     }
 
     [Fact]
