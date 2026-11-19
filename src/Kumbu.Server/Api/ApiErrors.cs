@@ -199,7 +199,9 @@ public static class ApiErrors
                 {
                     StatusCodes.Status415UnsupportedMediaType => "Send the body as JSON (Content-Type: application/json).",
                     StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase) => UploadApi.Limits,
-                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase) => FileApi.TooLarge,
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase)
+                        || context.Request.Path.StartsWithSegments("/api/agent-upload", StringComparison.OrdinalIgnoreCase) =>
+                        new Kumbu.Core.Attachments.FileTooLargeException(context.RequestServices.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>().MaxFileBytes).Message,
                     StatusCodes.Status413PayloadTooLarge => "The request body is too large.",
                     _ => "The request body is missing, not JSON, or lacks a required field.",
                 }));

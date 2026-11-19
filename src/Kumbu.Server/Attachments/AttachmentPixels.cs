@@ -73,6 +73,8 @@ public sealed class AttachmentPixels(
     /// <summary>A recorded failure (password-protected, say) is a <see cref="PixelsUnavailableException"/> with its sentence.</summary>
     public async Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct)
     {
+        // Never analysed (PdfAnalysisRunner leaves it out): a PDF larger than 15 MB is kept, not read.
+        if (AttachmentFormat.IsLarge(state.Size)) throw new PixelsUnavailableException($"{path} is {AttachmentFormat.NotRead}", PixelsProblem.TooLarge);
         if (await VaultAsync(path, state, ct) is not var (vault, blobId)) return null;
         var stored = await analyses.ReadAsync(vault, blobId, ct);
         if (stored is { Current: true }) return stored.Failure is { } failure ? throw new PixelsUnavailableException(failure.Message) : stored.Analysis;
@@ -130,8 +132,11 @@ public sealed class AttachmentPixels(
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
         await store.VaultOfAsync(path, ct) is { } vault && EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId) ? (vault, blobId) : null;
 
+    /// <summary>A file's bytes whole, which the sidecar and the pixel code need; one larger than 15 MB is refused here, by
+    /// its record, before a byte is read (files spec, decision 12).</summary>
     private async Task<byte[]> BytesAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
-        await VaultAsync(path, state, ct) is var (vault, blobId) && await catalog.ReadBlobAsync(vault, blobId, ct) is { } bytes
+        AttachmentFormat.IsLarge(state.Size) ? throw new PixelsUnavailableException($"{path} is {AttachmentFormat.NotRead}", PixelsProblem.TooLarge)
+        : await VaultAsync(path, state, ct) is var (vault, blobId) && await catalog.ReadBlobAsync(vault, blobId, ct) is { } bytes
             ? bytes
             : throw new PixelsUnavailableException($"the content of {path} is no longer stored");
 

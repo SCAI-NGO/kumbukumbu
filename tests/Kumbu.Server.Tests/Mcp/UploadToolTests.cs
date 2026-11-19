@@ -68,7 +68,7 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         var text = Text(result);
         Assert.Matches(new Regex(@"/api/agent-upload/[A-Za-z0-9_-]{43}\b"), text);
         Assert.Contains("curl -sS -X PUT --data-binary @<local file> '", text, StringComparison.Ordinal);
-        Assert.Contains("15 MB", text, StringComparison.Ordinal);
+        Assert.Contains("at most 1 GiB", text, StringComparison.Ordinal);
         Assert.Contains("once", text, StringComparison.Ordinal);
         Assert.Matches(new Regex(@"^expires \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", RegexOptions.Multiline), text);
         Assert.Matches(new Regex(@"^https?://\S+/api/agent-upload/", RegexOptions.Multiline), text);
@@ -246,7 +246,7 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         Assert.Contains("curl", description, StringComparison.Ordinal);
         Assert.Contains("shell", description, StringComparison.Ordinal);
         Assert.Contains("once", description, StringComparison.Ordinal);
-        Assert.Contains("15 MB", description, StringComparison.Ordinal);
+        Assert.Contains("1 GiB unless its admin set another", description, StringComparison.Ordinal);
         Assert.Contains("call upload again", description, StringComparison.Ordinal);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.ReadOnlyHint);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.OpenWorldHint);

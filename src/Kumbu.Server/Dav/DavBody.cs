@@ -22,6 +22,27 @@ public static class DavBody
     }
 
     /// <summary>
+    /// A file's body, whole if it is at most <paramref name="whole"/> bytes (<c>Large</c> false); else the start of it
+    /// (<c>Large</c> true), which the caller streams on from: with a <c>Content-Length</c> above <paramref name="whole"/>,
+    /// its first <paramref name="head"/> bytes, and without one, the <paramref name="whole"/> bytes and more that told it
+    /// apart. A body shorter than it declared is the store's to refuse, by its length.
+    /// </summary>
+    public static async Task<(byte[] Bytes, bool Large)> ReadStartAsync(HttpRequest request, long whole, int head, CancellationToken ct)
+    {
+        var large = request.ContentLength > whole;
+        var limit = large ? head : whole + 1;
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while (buffer.Length < limit && (read = await request.Body.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, limit - buffer.Length)), ct)) > 0)
+        {
+            buffer.Write(chunk, 0, read);
+        }
+
+        return (buffer.ToArray(), large || buffer.Length > whole);
+    }
+
+    /// <summary>
     /// As <see cref="ReadLimitedAsync"/>, for a body whose room has been taken (<see cref="DavParkingBudget"/>): with a
     /// <c>Content-Length</c>, into an array of that length, so what is held is what was declared and is kept as it is;
     /// without one, into chunks that grow with the bytes received and are copied once into an array of their length at

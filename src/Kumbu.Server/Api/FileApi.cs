@@ -34,11 +34,13 @@ public sealed record FileConflictView(string Error, FileStateView Current);
 /// </summary>
 public static class FileApi
 {
-    /// <summary>The request body: the file's 15 MB and room for a little more, so the limit is the file's to say.</summary>
+    /// <summary>The request body, until the caller may upload: the 15 MB of a file read whole and room for a little more.
+    /// <see cref="StoreAsync"/> then lifts it to the server's bound (<see cref="LiftBodyLimit"/>).</summary>
     public const long MaxBody = AttachmentFormat.MaxBytes + 64 * 1024;
 
-    /// <summary>The refusal of a file over the limit.</summary>
-    public const string TooLarge = "A file can have at most 15 MB.";
+    /// <summary>How much of a file larger than 15 MB is read before it is streamed to the store: enough for a known
+    /// format's magic bytes and an image's header, which comes before its pixels.</summary>
+    internal const int HeadBytes = 1024 * 1024;
 
     private const string CutOff = "The upload ended before all of the file arrived; nothing was stored. Try again.";
 
@@ -66,7 +68,7 @@ public static class FileApi
                 operation.RequestBody = new OpenApiRequestBody
                 {
                     Required = true,
-                    Description = "The file's bytes, at most 15 MB; the Content-Type is ignored.",
+                    Description = "The file's bytes, up to the server's bound per file (Kumbu:Vaults:MaxFileBytes, 1 GiB by default); the Content-Type is ignored.",
                     Content = new Dictionary<string, OpenApiMediaType>
                     {
                         ["application/octet-stream"] = new() { Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "binary" } },
@@ -121,6 +123,8 @@ public static class FileApi
     {
         var bytes = await OpenAsync(files, path, state, ct);
         response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true" || OnlyAsDownload(path, state.MediaType));
+        // A large file's stream doesn't know its length; the record does. No ranges, as for every file here.
+        response.ContentLength = state.Size;
         return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
     }
 
@@ -161,7 +165,7 @@ public static class FileApi
     /// <summary>
     /// Stores the request's body as the file at the path: created without <c>version</c>, overwritten with the version
     /// the caller last read (409 with the file as it is now otherwise). The body is the file's bytes as they are; its
-    /// <c>Content-Type</c> is ignored. Nothing is stored before the whole body has arrived and passed the checks. The one
+    /// <c>Content-Type</c> is ignored. Nothing is recorded before the whole body has arrived and passed the checks. The one
     /// write path of both routes that upload a file, <c>PUT /api/files</c> (<see cref="WriteAsync"/>) and an agent's
     /// <c>PUT /api/agent-upload</c> (<see cref="AgentUploadApi"/>), so that both check, limit and record it alike.
     /// </summary>
@@ -175,28 +179,98 @@ public static class FileApi
         if (FolderMarker.Is(filePath) && filePath.Segments.Count == 2) throw ApiErrors.BadRequest($"{FolderMarker.InVaultRoot}.");
         var files = Files(store);
         var writer = notes.ForAttachments() ?? throw ApiErrors.NotFound("This server keeps no attachments.");
+        var bound = request.HttpContext.RequestServices.GetRequiredService<VaultCatalog>().MaxFileBytes;
         var declared = request.ContentLength;
-        if (declared > AttachmentFormat.MaxBytes) throw new ApiException(StatusCodes.Status413PayloadTooLarge, TooLarge);
+        if (declared > bound) throw new ApiException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
+        LiftBodyLimit(request.HttpContext, bound);
 
         using var body = new ReceivedBody();
-        await body.ReadAsync(request, declared, ct);
+        if (!await body.ReadAsync(request, declared, ct)) return await StoreLargeAsync(filePath, version, body.Bytes, request, declared, bound, files, writer, store, labels, ct);
         var bytes = body.Bytes;
         if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
 
         // The dimensions the writer stores are the ones read here from the bytes it stores, never a client's; an SVG's
         // the writer reads itself, and no pixel count limits it, as it is rendered at the size asked for.
-        (int, int)? dimensions = null;
-        if (AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } format && format != AttachmentFormat.Svg)
+        var dimensions = Dimensions(filePath, bytes);
+        return await RecordAsync(filePath, version, files, store, labels, v => writer.WriteAsync(filePath.Value, bytes, dimensions, v, ct), ct);
+    }
+
+    /// <summary>
+    /// A file larger than 15 MB (files spec, decision 11): checked from its first bytes (<paramref name="head"/>: a known
+    /// format's magic bytes, an image's header; an SVG must be read whole, so it can't be this large), asked for a
+    /// conflict, then the rest of the body streamed to the store, and its record written. Nothing is held but a chunk or
+    /// two at a time. A body that doesn't arrive whole, or runs past the bound, stores nothing.
+    /// </summary>
+    private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> StoreLargeAsync(
+        VaultPath filePath, string? version, ReadOnlyMemory<byte> head, HttpRequest request, long? declared, long bound, IAttachmentStore files, AttachmentWriter writer,
+        INoteStore store, WriterLabels labels, CancellationToken ct)
+    {
+        if (AttachmentFormat.TooLargeToCheck(filePath) is { } tooLarge) throw new ApiException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
+        if (AttachmentFormat.LargeProblem(filePath, head.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
+        var dimensions = Dimensions(filePath, head);
+        if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
+
+        LargeBlob blob;
+        try
         {
-            dimensions = ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
+            blob = await writer.PutLargeAsync(filePath.Segments[0], head, request.Body, declared, ct);
+        }
+        catch (FileTooLargeException e)
+        {
+            throw new ApiException(StatusCodes.Status413PayloadTooLarge, e.Message);
+        }
+        catch (BadHttpRequestException e) when (e.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            // Kestrel's own limit, which LiftBodyLimit set just above the bound.
+            throw new ApiException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException)
+        {
+            // The client went away mid-body, or it held another length than it declared.
+            throw ApiErrors.BadRequest(e is InvalidDataException ? e.Message : CutOff);
         }
 
-        // Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.
+        return await RecordAsync(filePath, version, files, store, labels, v => writer.WriteLargeAsync(filePath.Value, blob, head, dimensions, v, ct), ct);
+    }
+
+    /// <summary>
+    /// Lifts the request's body limit from <see cref="MaxBody"/>, which held it until the caller was known to upload, to
+    /// the server's bound and a little more, so that the bound is the store's to say (<see cref="FileTooLargeException"/>).
+    /// </summary>
+    internal static void LiftBodyLimit(HttpContext http, long bound)
+    {
+        if (http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
+        {
+            limit.MaxRequestBodySize = bound + 64 * 1024;
+        }
+    }
+
+    /// <summary>An image's displayed width and height from its header (400 if it doesn't read); null for anything else,
+    /// and for an SVG, whose the writer reads itself.</summary>
+    private static (int, int)? Dimensions(VaultPath filePath, ReadOnlyMemory<byte> bytes) =>
+        AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } format && format != AttachmentFormat.Svg
+            ? ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.")
+            : null;
+
+    /// <summary>Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.</summary>
+    private static async Task<Conflict<FileConflictView>?> ConflictBeforeAsync(
+        VaultPath filePath, string? version, IAttachmentStore files, INoteStore store, WriterLabels labels, CancellationToken ct)
+    {
         var existing = await files.GetAttachmentAsync(filePath, ct);
         if (existing is not null && existing.Version != version) return await ConflictAsync(existing, version, labels, ct);
         if (existing is null && version is not null) throw await NoteApi.MissingAsync(store, filePath, ct);
+        return null;
+    }
 
-        var (result, written) = await writer.WriteAsync(filePath.Value, bytes, dimensions, version, ct);
+    /// <summary>The writer's <paramref name="write"/> of the checked file, and its answer: 201 for a new file, 200 for
+    /// one overwritten, 409 with the file as it is now.</summary>
+    private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> RecordAsync(
+        VaultPath filePath, string? version, IAttachmentStore files, INoteStore store, WriterLabels labels, Func<string?, Task<WriteResult>> write, CancellationToken ct)
+    {
+        if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
+        var created = version is null;
+
+        var (result, written) = await write(version);
         if (result.IsError)
         {
             return result.Kind switch
@@ -210,7 +284,7 @@ public static class FileApi
         }
 
         var view = await FileStateView.OfAsync(written!, labels, ct);
-        return existing is null ? TypedResults.Created(ApiPaths.Url("files", filePath), view) : TypedResults.Ok(view);
+        return created ? TypedResults.Created(ApiPaths.Url("files", filePath), view) : TypedResults.Ok(view);
     }
 
     /// <summary>
@@ -227,12 +301,16 @@ public static class FileApi
 
         public ReadOnlyMemory<byte> Bytes => _buffer.AsMemory(0, _length);
 
-        /// <summary>The whole body; 413 past the limit, 400 for a body that ends before its <c>Content-Length</c> or
-        /// is cut off.</summary>
-        public async Task ReadAsync(HttpRequest request, long? declared, CancellationToken ct)
+        /// <summary>
+        /// The whole body, true, if it is at most 15 MB; otherwise the start of a larger one, false: with a declared length
+        /// above 15 MB, its first <see cref="HeadBytes"/>, and without one, the 15 MB and a byte that told it apart. 400
+        /// for a body that ends before its <c>Content-Length</c> or is cut off.
+        /// </summary>
+        public async Task<bool> ReadAsync(HttpRequest request, long? declared, CancellationToken ct)
         {
-            // One more byte than may come, to tell "exactly the limit" from "more".
-            var capacity = (int)Math.Min(declared ?? AttachmentFormat.MaxBytes, AttachmentFormat.MaxBytes) + 1;
+            var large = declared > AttachmentFormat.MaxBytes;
+            // One more byte than a whole body may have, to tell "exactly 15 MB" from "more".
+            var capacity = large ? HeadBytes : (int)Math.Min(declared ?? AttachmentFormat.MaxBytes, AttachmentFormat.MaxBytes) + 1;
             _buffer = ArrayPool<byte>.Shared.Rent(Math.Min(capacity, InitialSize));
             try
             {
@@ -250,14 +328,20 @@ public static class FileApi
                 throw ApiErrors.BadRequest(CutOff);
             }
 
+            if (large)
+            {
+                if (_length < capacity) throw ApiErrors.BadRequest(CutOff);
+                return false;
+            }
+
             if (_length == capacity)
             {
-                throw declared is null || declared > AttachmentFormat.MaxBytes - 1
-                    ? new ApiException(StatusCodes.Status413PayloadTooLarge, TooLarge)
-                    : ApiErrors.BadRequest("The body is longer than its Content-Length.");
+                if (declared is null) return false;
+                throw ApiErrors.BadRequest("The body is longer than its Content-Length.");
             }
 
             if (declared is { } expected && _length != expected) throw ApiErrors.BadRequest(CutOff);
+            return true;
         }
 
         private void Grow(int size)

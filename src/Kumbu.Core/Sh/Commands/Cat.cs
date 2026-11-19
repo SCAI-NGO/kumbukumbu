@@ -389,7 +389,7 @@ public sealed partial class Cat(INoteReader notes, IAttachmentPixels? pixels = n
     /// <summary>The one line cat prints for an image or a PDF; for an embedded text file too, whose content stays out.</summary>
     private async Task<string> AttachmentLineAsync(VaultPath path, AttachmentState state, CancellationToken ct)
     {
-        if (pixels is null || !AttachmentText.IsPdf(state)) return AttachmentText.Line(path.Name, state);
+        if (pixels is null || !AttachmentText.IsPdf(state) || AttachmentFormat.IsLarge(state.Size)) return AttachmentText.Line(path.Name, state);
 
         // Only a stored analysis: cat is the cheap look, running one is for pdf.
         try

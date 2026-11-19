@@ -421,15 +421,16 @@ public sealed class DavPutTests(KumbuAppFactory app) : IAsyncDisposable
     [Fact]
     public async Task The_413_messages_say_the_limits()
     {
-        var dav = await DavClient.NewAsync(Api);
+        await using var bounded = LargeFiles.Bounded(app);
+        var dav = (await DavClient.NewAsync(Api)).On(bounded);
 
         using var note = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.md", Bytes(new byte[NoteWriter.MaxBytes + 1]));
-        using var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", Bytes(new byte[AttachmentFormat.MaxBytes + 1]));
+        using var file = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", Bytes(new byte[LargeFiles.Bound + 1]));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, note.StatusCode);
         Assert.Equal("A note can have at most 1 MiB.", await BodyAsync(note));
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, file.StatusCode);
-        Assert.Equal("A file can have at most 15 MB.", await BodyAsync(file));
+        Assert.Equal("A file can have at most 20 MiB.", await BodyAsync(file));
     }
 
     [Fact]

@@ -230,6 +230,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             return (null, Invalid($"pdf: {path.Value} is an image; look at it with img {SectionLookup.Quote(path)} (see 'help img')"));
         }
 
+        if (AttachmentFormat.IsLarge(attachment.Current.Size)) return (null, Invalid($"pdf: {path.Value} is {AttachmentFormat.NotRead}"));
         return ((path, attachment.Current), null);
     }
 

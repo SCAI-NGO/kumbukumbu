@@ -95,5 +95,7 @@ internal static class AttachmentText
 
     /// <summary>The one line <c>cat</c> prints instead of bytes: "shot.png: image (PNG), 1440×3120, 412 KB", "report.docx: file, 2.1 MB".</summary>
     public static string Line(string name, AttachmentState state) =>
-        $"{name}: " + string.Join(", ", new[] { Kind(state) is "image" ? $"image ({FormatName(state)})" : Kind(state), Dimensions(state), Size(state.Size) }.OfType<string>());
+        $"{name}: " + string.Join(", ", new[] { Kind(state) is "image" ? $"image ({FormatName(state)})" : Kind(state), Dimensions(state), Size(state.Size) }.OfType<string>())
+        // What would read an image or a PDF doesn't read one this large (files spec, decision 12); a file nothing reads.
+        + (AttachmentFormat.IsLarge(state.Size) && Kind(state) is "image" or "PDF" ? $" — {AttachmentFormat.NotRead}" : "");
 }

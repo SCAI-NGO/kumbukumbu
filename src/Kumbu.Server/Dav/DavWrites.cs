@@ -564,9 +564,11 @@ internal sealed partial class DavWrites(
     }
 
     /// <summary>
-    /// An attachment's <c>PUT</c>: at most <see cref="AttachmentFormat.MaxBytes"/> (413), its preconditions (412), and
-    /// written through <see cref="AttachmentWriter"/>, whose check of the bytes against the format the name says is a
-    /// 415 with its reason. An empty body is the placeholder a file manager writes before the content (WebDAV design
+    /// An attachment's <c>PUT</c>: up to the server's bound per file (413 beyond it, before a byte is read when the body
+    /// declares its length), its preconditions (412), and written through <see cref="AttachmentWriter"/>, whose check of
+    /// the bytes against the format the name says is a 415 with its reason. A file larger than 15 MB is checked from its
+    /// first bytes and streamed to the store (files spec, decision 11); an SVG that large is refused, as it is read whole
+    /// to be checked (413). An empty body is the placeholder a file manager writes before the content (WebDAV design
     /// §3.5): parked, for this share, unless the store has the file, which then stays as it is until the content
     /// comes. The content goes to the store and takes the placeholder's place. <paramref name="copied"/>, and a file the
     /// share holds at the path, as for <see cref="PutNoteAsync"/>.
@@ -575,8 +577,17 @@ internal sealed partial class DavWrites(
     {
         var files = writer.ForAttachments() ?? throw NoAttachments();
         if (writer.Caller.Refuse("upload", path) is { } refused) throw Refusal(refused);
-        var bytes = (copied is null ? await DavBody.ReadLimitedAsync(Request, AttachmentFormat.MaxBytes, ct) : copied.Length <= AttachmentFormat.MaxBytes ? copied : null)
-            ?? throw new DavException(StatusCodes.Status413PayloadTooLarge, $"A file can have at most {AttachmentFormat.MaxBytes / 1024 / 1024} MB.");
+        var bound = http.RequestServices.GetRequiredService<Vaults.VaultCatalog>().MaxFileBytes;
+        byte[] bytes;
+        bool large;
+        if (copied is null)
+        {
+            if (Request.ContentLength > bound) throw new DavException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
+            // The 64 MiB of every other request under /dav, lifted for a file's.
+            Api.FileApi.LiftBodyLimit(http, bound);
+            (bytes, large) = await DavBody.ReadStartAsync(Request, AttachmentFormat.MaxBytes, Api.FileApi.HeadBytes, ct);
+        }
+        else (bytes, large) = (copied, AttachmentFormat.IsLarge(copied.Length));
 
         // An empty body leaves a held file held: the content that follows is its arrival.
         var arrived = bytes.Length > 0 && holds.TakeArrival(caller.ShareId, place.VaultId, place.Path) is not null;
@@ -598,19 +609,57 @@ internal sealed partial class DavWrites(
 
         // The dimensions stored are read here from the bytes stored, as on /api/files; bytes that aren't of the
         // format have none, and the writer refuses them. An SVG's the writer reads itself.
-        (int, int)? dimensions = null;
-        var matches = AttachmentFormat.Problem(path, bytes) is null;
-        if (matches && format.Kind == AttachmentKind.Image && format != AttachmentFormat.Svg)
+        bool matches;
+        Func<string?, Task<ShellResult>> write;
+        if (large)
         {
-            dimensions = ImageHeader.Read(bytes, out var headerProblem)
-                ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.");
+            if (AttachmentFormat.TooLargeToCheck(path) is { } tooLarge) throw new DavException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
+            if (AttachmentFormat.LargeProblem(path, bytes) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
+            matches = true;
+            var dimensions = Dimensions(path, format, bytes);
+            var blob = await PutLargeAsync(files, path, bytes, copied, bound, ct);
+            write = async v => (await files.WriteLargeAsync(path.Value, blob, bytes, dimensions, v, ct)).Result;
+        }
+        else
+        {
+            matches = AttachmentFormat.Problem(path, bytes) is null;
+            var dimensions = matches ? Dimensions(path, format, bytes) : null;
+            write = async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result;
         }
 
-        var (result, replaced) = await WriteOnceMoreIfLostAsync(
-            path, existing?.Version, async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result, ct);
+        var (result, replaced) = await WriteOnceMoreIfLostAsync(path, existing?.Version, write, ct);
         if (result.IsError) throw matches ? Refusal(result) : new DavException(StatusCodes.Status415UnsupportedMediaType, result.Output);
         if (placeholder is not null) parking.Remove(caller.ShareId, place.VaultId, place.Path);
         Written(result.Version!.Token, created: (!replaced || arrived) && placeholder is null);
+    }
+
+    /// <summary>An image's displayed width and height from its header, 415 if it doesn't read; null for anything else.</summary>
+    private static (int, int)? Dimensions(VaultPath path, AttachmentFormat format, byte[] bytes) =>
+        format.Kind == AttachmentKind.Image && format != AttachmentFormat.Svg
+            ? ImageHeader.Read(bytes, out var headerProblem) ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.")
+            : null;
+
+    /// <summary>A large file's bytes into the store (<see cref="AttachmentWriter.PutLargeAsync"/>): the start already read,
+    /// then the rest of the body, or a parked file's bytes whole. Past the bound 413, a body of another length than it
+    /// declared 400.</summary>
+    private async Task<LargeBlob> PutLargeAsync(AttachmentWriter files, VaultPath path, byte[] head, byte[]? copied, long bound, CancellationToken ct)
+    {
+        try
+        {
+            return await files.PutLargeAsync(path.Segments[0], head, copied is null ? Request.Body : Stream.Null, copied is null ? Request.ContentLength : copied.Length, ct);
+        }
+        catch (FileTooLargeException e)
+        {
+            throw new DavException(StatusCodes.Status413PayloadTooLarge, e.Message);
+        }
+        catch (BadHttpRequestException e) when (e.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            throw new DavException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
+        }
+        catch (InvalidDataException e)
+        {
+            throw new DavException(StatusCodes.Status400BadRequest, e.Message);
+        }
     }
 
     /// <summary>

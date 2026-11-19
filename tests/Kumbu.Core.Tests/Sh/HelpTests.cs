@@ -113,7 +113,8 @@ public class HelpTests
     {
         var topic = (await Run("help attachments")).Output;
         Assert.StartsWith("attachments", topic);
-        Assert.Contains("every file type, up to 15 MB each", topic);
+        Assert.Contains("every file type, up to the server's bound each (1 GiB unless its", topic);
+        Assert.Contains("larger than 15 MB is kept", topic);
         Assert.Contains("cat prints it and rg searches it", topic);
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
         Assert.Contains("semsearch  ranks the pages of PDFs (not scans) by meaning", topic);
