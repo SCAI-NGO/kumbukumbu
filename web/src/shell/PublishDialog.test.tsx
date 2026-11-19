@@ -260,6 +260,30 @@ describe("PublishDialog", () => {
       expect(screen.queryByText(/taken out by you/)).not.toBeInTheDocument();
     });
 
+    it("leaves the focus where the person put it when the list after a toggle never came", async () => {
+      base({
+        "GET /api/publication-previews/Work/Questions.md": (r) => {
+          const query = new URL(r.url).search;
+          // The list without Beta fails; at depth 2 it answers with Beta taken out.
+          if (query === "?depth=1&without=Beta.md") return json(500, { error: "The server failed." });
+          return json(
+            200,
+            query.includes("without")
+              ? preview([NOTE], { leftOut: [{ path: "/Work/Beta.md", reason: "without" }] })
+              : preview([NOTE, "/Work/Beta.md"]),
+          );
+        },
+      });
+      renderDialog();
+      const depth = await screen.findByLabelText("How many links deep");
+      await userEvent.type(depth, "{backspace}1");
+      await userEvent.click(await screen.findByRole("checkbox", { name: /Beta/ }));
+      await screen.findByRole("alert");
+      await userEvent.type(depth, "{backspace}2");
+      await behindItem("/Work/Beta.md: taken out by you");
+      expect(document.activeElement, "still in the depth field").toBe(depth);
+    });
+
     it("lists a note taken out that the preview doesn't name, so it can be taken back in", async () => {
       base({ "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE])) });
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

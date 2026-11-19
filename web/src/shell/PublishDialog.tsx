@@ -266,6 +266,8 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
                   value={depth}
                   onChange={(e) => {
                     setChanged(null);
+                    // The person is in this field now: a list after a toggle that never came takes no focus later.
+                    setFocus(null);
                     setDepth(Math.max(0, Math.min(maxDepth, Math.trunc(Number(e.target.value) || 0))));
                   }}
                   aria-describedby={`${id}-depth-hint`}
