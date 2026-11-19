@@ -6,7 +6,7 @@ import Thumbnail from "../attachments/Thumbnail";
 import { HttpError } from "../api/client";
 import { useErrorTextFor } from "../discreet/errorText";
 import { useRestoreNote } from "../api/history";
-import { useHistory, useMayChange, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
+import { fileKindOfEntry, useHistory, useMayChange, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
 import { isAttachment, titleOf, vaultOf, viewUrl, type LightboxState } from "../api/paths";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { Sheet, sizeText, timeText } from "../components/Sheet";
@@ -245,6 +245,7 @@ function FileHistory({ path, onClose, onRestored = onClose }: Props) {
         </p>
         <CompareFiles
           path={path}
+          kind={fileKindOfEntry(chosen)}
           sides={chosen.current ? [{ label: "This version", version: null }] : [{ label: "This version", version: chosen.version }, { label: "Now", version: null }]}
         />
         <RestoreBar
@@ -277,7 +278,7 @@ function FileHistory({ path, onClose, onRestored = onClose }: Props) {
                 onClick={() => show(v)}
                 className="relative size-16 flex-none overflow-hidden rounded-[8px] bg-surface focus-visible:outline-2 focus-visible:outline-accent"
               >
-                <Thumbnail vault={vaultOf(path)} path={path} at={v.current ? {} : { version: v.version }} />
+                <Thumbnail vault={vaultOf(path)} path={path} kind={fileKindOfEntry(v)} at={v.current ? {} : { version: v.version }} />
               </button>
               <button
                 type="button"
