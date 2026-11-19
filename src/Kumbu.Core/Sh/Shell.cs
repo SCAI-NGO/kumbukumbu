@@ -50,7 +50,7 @@ public sealed class Shell
         [
             .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks),
-            new Html(notes),
+            new Html(notes), new Xml(notes),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
             new History(notes, () => writer.Now, labels), new Blame(notes, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
