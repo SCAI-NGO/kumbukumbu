@@ -66,6 +66,49 @@ public sealed class PublishedFilesTests(KumbuAppFactory app)
 
     private static string Formatted(PublishedNote published) => published.Link[(published.Link.IndexOf('#') + 1)..];
 
+    /// <summary>Alice's vault named Skills that isn't marked (hers is marked under the name Tools), with <c>x/plan.svg</c>,
+    /// <c>x/Drawn.md</c> embedding it and <c>x/Plan.md</c> linking to that.</summary>
+    private async Task<(RestClient Alice, EncryptedNoteStore Notes, VaultAccess Access)> UnmarkedSkillsAsync()
+    {
+        var alice = await RestClient.MarkedUnderAnotherNameAsync(Api);
+        using (var put = await alice.SendContentAsync(HttpMethod.Put, "/api/files/Skills/x/plan.svg", new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg))))
+        {
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        }
+
+        foreach (var (name, content) in new[] { ("Drawn.md", "# Drawn\n\n![[plan.svg]]\n"), ("Plan.md", "# Plan\n\nSee [[Drawn]].\n") })
+        {
+            using var note = await alice.SendAsync(HttpMethod.Put, $"/api/notes/Skills/x/{name}", new { content });
+            Assert.Equal(HttpStatusCode.Created, note.StatusCode);
+        }
+
+        var notes = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
+        return (alice, notes, (await notes.UnlockedVaultsAsync(Ct)).Single(a => a.Name == "Skills"));
+    }
+
+    [Fact]
+    public async Task An_svg_in_a_vault_named_Skills_that_isnt_marked_goes_with_its_note()
+    {
+        var (alice, notes, access) = await UnmarkedSkillsAsync();
+
+        var published = await Publications.PublishAsync(access, notes, P("/Skills/x/Drawn.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct);
+
+        var copy = (await Store.OpenCopyAsync(ShareCode.Parse(Formatted(published))!, Ct))!.Value.Copy;
+        Assert.Equal(new PublishedCopyFile(0, "image/svg+xml"), Assert.Single(copy.Files));
+    }
+
+    [Fact]
+    public async Task An_svg_in_a_vault_named_Skills_that_isnt_marked_goes_with_its_note_in_a_publication_of_several()
+    {
+        var (alice, notes, access) = await UnmarkedSkillsAsync();
+
+        var published = await Publications.PublishAsync(access, notes, P("/Skills/x/Plan.md"), alice.User.Id, alice.Username, BySession, KumbuAppFactory.PublicUrl, Ct, 1);
+
+        var copy = (await Store.OpenCopyAsync(ShareCode.Parse(Formatted(published))!, Ct))!.Value.Copy;
+        Assert.Equal(new PublishedCopyFile(0, "image/svg+xml"), Assert.Single(copy.Files));
+        Assert.Equal([0], copy.Notes!.Single(n => n.Title == "Drawn").Files);
+    }
+
     [Fact]
     public async Task A_note_is_published_without_its_files_and_shows_their_names()
     {
