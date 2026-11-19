@@ -16,7 +16,8 @@ public sealed class Rm(NoteWriter writer, AttachmentWriter? files = null) : ICom
     public string Help => $"""
         rm <path> [<path>…]
           Move notes and attachments (any file: an image, a PDF, a text file …) to the trash, or folders
-          that hold nothing but their marker (see 'mkdir'). Each path is removed on its own and gets a line; one that fails doesn't stop the others.
+          that hold nothing but their marker (see 'mkdir'). Each path is removed on its own and gets a line;
+          one that fails doesn't stop the others.
           They stay there for {NoteWriter.TrashRetention.Days} days; 'restore <path>' brings one back.
           A folder with notes or files in it can't be removed, and there is no -r.
 

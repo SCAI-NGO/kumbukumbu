@@ -20,8 +20,8 @@ public sealed class Trash(INoteStore notes, IWriterLabels? labels = null) : ICom
         trash [path]
           List removed notes, attachments and folders at or below a path (default: every vault), most recently
           removed first: time removed (UTC), path, version, lines (an attachment: kind and size), who removed it. They stay for {NoteWriter.TrashRetention.Days} days.
-          A removed folder (rm takes one that holds nothing) lists as its path with a '/' and 'folder':
-          /Demo/Drafts/  folder  (by Alice).
+          A removed folder (rm takes one that holds nothing) has no version or lines:
+            2026-11-19 14:05 UTC  /Demo/Drafts/  folder  (by Alice)
           'restore <path>' brings back the most recently removed one; 'restore <path> <version>' a
           particular one, if a path was removed more than once.
 

@@ -56,7 +56,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     public string Summary => "search notes, text files and PDF text (prints path:line:text); --files lists what it searches";
 
-    public string Help => """
+    public string Help => $"""
         rg [options] <regex> [path...]
           Search the notes below each path (a directory or a note) for lines matching a regex.
           Without a path, search every vault. Prints path:line:text, sorted by path; context lines
@@ -71,8 +71,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
           searched in the current state only, not with --checkpoint; --files and --tag leave them out.
           With --regions a match in a PDF also says where on the page it lies.
-          Text files are searched as notes are (UTF-8 without NUL bytes, up to 15 MB: a CSV, a script), up to
-          64 MB of them a search (a notice says where rg stopped); --tag leaves them out.
+          Text files are searched as notes are (UTF-8 without NUL bytes, up to {AttachmentFormat.MaxBytes / (1024 * 1024)} MB: a CSV, a script), up to
+          {MaxTextBytes / (1024 * 1024)} MB of them a search (a notice says where rg stopped); --tag leaves them out.
           Images and other files are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes and text files below each path; with no path, of every one (with --tag, of notes).
@@ -96,11 +96,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      match= around the match itself where it is narrower, guessed from its share of
                                      the piece's characters. They show where the text lies, not that anyone can
                                      see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
-                                     Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
+                                     Regions come from the PDF itself each time, for up to {MaxRegionPdfs} PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
           --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
-          -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules, {a,b} too; repeatable)
+          -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules, {"{a,b}"} too; repeatable)
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
         never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.

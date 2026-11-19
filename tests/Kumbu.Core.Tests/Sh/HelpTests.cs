@@ -72,7 +72,7 @@ public class HelpTests
     [InlineData("wc", "[--version V]", true)]
     [InlineData("outline", "[--version V]", true)]
     [InlineData("links", "[--version V]", true)]
-    [InlineData("semsearch", "-n, --max N", false)]
+    [InlineData("semsearch", "-n N, --max N", false)]
     [InlineData("restore", "--checkpoint <name> [--plan <token>] <path>", true)]
     [InlineData("df", "-h, --human-readable", false)]
     [InlineData("du", "-h, --human-readable", false)]
@@ -374,7 +374,9 @@ public class HelpTests
     {
         var help = await Flat("help trash");
         Assert.StartsWith("trash [path] List removed notes, attachments and folders", help);
-        Assert.Contains("A removed folder (rm takes one that holds nothing) lists as its path with a '/' and 'folder': /Demo/Drafts/ folder (by Alice).", help);
+        Assert.Contains("A removed folder (rm takes one that holds nothing) has no version or lines: 2026-11-19 14:05 UTC /Demo/Drafts/ folder (by Alice)", help);
+        // The row as trash prints it: time, path, 'folder', who.
+        Assert.Contains("\n    2026-11-19 14:05 UTC  /Demo/Drafts/  folder  (by Alice)\n", (await Run("help trash")).Output);
     }
 
     [Fact]
@@ -411,6 +413,7 @@ public class HelpTests
     [Fact]
     public async Task Help_rm_and_mv_take_any_file_as_an_attachment()
     {
+        Assert.All((await Run("help rm")).Output.Split('\n'), l => Assert.True(l.Length <= 120, l));
         var rm = await Flat("help rm");
         Assert.Contains("Move notes and attachments (any file: an image, a PDF, a text file …) to the trash, or folders", rm);
 
@@ -423,5 +426,17 @@ public class HelpTests
         var restore = await Flat("help restore");
         Assert.Contains("An attachment (any file) comes back the same way", restore);
         Assert.DoesNotContain("An image or a PDF comes back", restore);
+    }
+
+    [Fact]
+    public async Task Help_calendar_and_rg_take_their_numbers_from_the_constants()
+    {
+        Assert.Contains($"give both, at most {Kumbu.Core.Sh.Commands.CalendarCommand.MaxRangeDays} days", await Flat("help calendar"));
+
+        var rg = await Flat("help rg");
+        Assert.Contains($"up to {Kumbu.Core.Attachments.AttachmentFormat.MaxBytes / (1024 * 1024)} MB: a CSV, a script), up to {Kumbu.Core.Sh.Commands.Rg.MaxTextBytes / (1024 * 1024)} MB of them a search", rg);
+        Assert.Contains($"for up to {Kumbu.Core.Sh.Commands.Rg.MaxRegionPdfs} PDFs a search", rg);
+        // The glob row's braces print as written, not as an interpolation.
+        Assert.Contains("(ripgrep's rules, {a,b} too; repeatable)", rg);
     }
 }
