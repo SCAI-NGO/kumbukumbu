@@ -6,6 +6,7 @@ using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
+using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tags;
@@ -128,16 +129,17 @@ public sealed record TreeFolder(
     IReadOnlyList<TreeNote> Notes,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
 
-/// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
-/// <c>pdf</c> (never <c>folder</c>: a folder marker keeps its folder in the tree and is no entry of it); <c>mediaType</c>
-/// <c>text/markdown</c> for a note, an attachment's from its checked format. <c>writtenAt</c>: its last write (the gallery
-/// orders by date); an attachment also has its <c>version</c> (the gallery trashes at the version it shows). A note has its
+/// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c>,
+/// <c>pdf</c>, <c>file</c> or a skill folder's <c>text</c> (never <c>folder</c>: a folder marker keeps its folder in the
+/// tree and is no entry of it); <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format
+/// or, for a file, its content. <c>writtenAt</c>: its last write (the gallery orders by date); an attachment also has its
+/// <c>version</c> (the gallery trashes at the version it shows). A note has its
 /// <c>flag</c> (<c>red</c>, <c>done</c>, …) when it carries one, in the frontmatter or the text. A checkpoint's tree has a
 /// note's entry without <c>writtenAt</c> and <c>flag</c>.</summary>
 public sealed record TreeNote(
     string Name,
     string Path,
-    int Size,
+    long Size,
     string Kind = "note",
     string MediaType = NoteApi.NoteMediaType,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Version = null,
@@ -195,8 +197,27 @@ public sealed record MentionMarkView(int Start, int Length);
 /// <c>kind</c> and <c>mediaType</c> as in the tree; an attachment has no <c>lines</c> (0), and its version's bytes
 /// come from <c>GET /api/files</c> with <c>?version=</c>.</summary>
 public sealed record HistoryEntryView(
-    string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null,
+    string Version, DateTime WrittenAt, string Writer, int Lines, long Size, bool Current, string? Changeset, string? WriterKind = null,
     string Kind = "note", string MediaType = NoteApi.NoteMediaType, string? Message = null);
+
+/// <summary>Who wrote what in a note (blame spec §7): its content and version, of the same state as the record, and its
+/// sections. <c>earlier</c>: the time the lines not recorded were last changed at or before; null when every line is
+/// recorded. <c>dropped</c>: the record outgrew its bound and started again at <c>earlier</c>.</summary>
+public sealed record BlameView(string Path, string Version, string Content, DateTime? Earlier, bool Dropped, BlameWriterView[] Writers, BlameSectionView[] Sections);
+
+/// <summary>A writer as the history shows her to the caller, without the tool's mark ("Chris", not "Chris (mv)"); <c>kind</c> as
+/// <c>writerKind</c> in the history.</summary>
+public sealed record BlameWriterView(string Display, string? Kind);
+
+/// <summary>The front matter ("Properties"), the lines before the first heading ("Top"), or a heading to the line before the
+/// next one of any level; lines 1-based and inclusive. <c>writer</c>: the index of the writer of most of its non-blank
+/// lines (a tie: the one with the newest), null for the lines before the record. <c>others</c>: some non-blank line is
+/// another writer's. <c>counts</c>: every writer of its non-blank lines, with the tool's mark, in the order they appear.</summary>
+public sealed record BlameSectionView(int Start, int End, string Title, int? Writer, bool Others, BlameCountView[] Counts);
+
+/// <summary>Non-blank lines of a section by one writer as shown, with the newest one's time; <c>writer</c> null and
+/// <c>at</c> the record's <c>earlier</c> for the lines before the record.</summary>
+public sealed record BlameCountView(int? Writer, string Display, int Lines, DateTime At);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -256,6 +277,7 @@ public static class NoteApi
         api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
         api.MapGet("/mentions/{vault}/{**path}", MentionsAsync).Errors(400, 401, 404, 503);
         api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/blame/{vault}/{**path}", BlameAsync).Errors(400, 401, 404, 503);
 
         api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
         api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
@@ -627,7 +649,7 @@ public static class NoteApi
             .Concat(attachments.Select(a => (a.Path, TreeFile(a)))), writtenAt);
 
     private static TreeNote TreeFile(StoredAttachment file) =>
-        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
+        new(file.Path.Name, file.Path.Value, file.Current.Size, AttachmentFormat.KindOf(file.Path.Value), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
     private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below, Func<VaultPath, DateTime?>? writtenAt)
     {
@@ -764,14 +786,18 @@ public static class NoteApi
         // The trailing '/' says "the folder", as in mv: a mistyped note name never moves a folder.
         var folder = body.From.EndsWith('/');
         if (!folder && body.To.EndsWith('/')) target = target.Child(source.Name);
-        if (await store.GetAsync(source, ct) is null && await StoreAttachments.GetAsync(store, source, ct) is null
+        var file = await StoreAttachments.GetAsync(store, source, ct);
+        if (await store.GetAsync(source, ct) is null && file is null
             && (await store.ListNotesUnderAsync(source, ct)).Count == 0 && (await StoreAttachments.UnderAsync(store, source, ct)).Count == 0)
         {
             throw await MissingAsync(store, source, ct);
         }
 
         // A name that contradicts the file's bytes is the request's fault, not the vault's state.
-        if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
+        if (!folder && file is not null && AttachmentFormat.RenameProblem(source, file.Current.MediaType, target, await store.SkillsVaultAsync(ct)) is { } renameProblem)
+        {
+            throw ApiErrors.BadRequest(renameProblem + ".");
+        }
 
         var result = folder
             ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, "mv", body.Exact, ct)
@@ -883,7 +909,7 @@ public static class NoteApi
             {
                 var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
                 versions.Add(new HistoryEntryView(
-                    v.Version, v.WrittenAt, writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, kind,
+                    v.Version, v.WrittenAt, writer, 0, v.State.Size, v.Current, v.Changeset?.Short, kind,
                     AttachmentFormat.KindOf(notePath.Value), v.State.MediaType));
             }
 
@@ -900,6 +926,63 @@ public static class NoteApi
         }
 
         return TypedResults.Ok(entries.ToArray());
+    }
+
+    /// <summary>Who wrote what (blame spec §7): whoever may read the note's history, with the writers it shows.</summary>
+    private static async Task<Ok<BlameView>> BlameAsync(string vault, string? path, INoteStore store, WriterLabels labels, CancellationToken ct)
+    {
+        var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
+        if (notePath.IsAttachment) throw ApiErrors.BadRequest($"{notePath.Value} is an attachment: only notes have lines.");
+        var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
+        var record = Authorship.Of(note);
+
+        // Writers by identity and kind as shown, so that two writers shown alike are one; each line's index and shown name.
+        // The identity is the label's without the tool's mark, rendered: a rendered name may hold brackets of its own.
+        var writers = new List<BlameWriterView>();
+        var shown = new (int Writer, string Display)[record.Writes.Count];
+        for (var i = 0; i < shown.Length; i++)
+        {
+            var (display, _) = await labels.RenderAsync(notePath.Segments[0], record.Writes[i].Label, record.Writes[i].Ref, ct);
+            var (identity, kind) = await labels.RenderAsync(notePath.Segments[0], Writers.Identity(record.Writes[i].Label), record.Writes[i].Ref, ct);
+            var writer = new BlameWriterView(identity, kind);
+            var index = writers.IndexOf(writer);
+            if (index < 0) writers.Add(writer);
+            shown[i] = (index < 0 ? writers.Count - 1 : index, display);
+        }
+
+        var lines = Lines.Split(note.Content);
+        var byLine = record.Runs.SelectMany(r => Enumerable.Repeat(r.Write, r.Lines)).ToArray();
+        var sections = new List<BlameSectionView>();
+        foreach (var (start, end, title) in BlameSections(lines))
+        {
+            var counts = new List<BlameCountView>();
+            for (var i = start; i < end; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i])) continue;
+                var write = byLine[i];
+                var (writer, display, at) = write < 0 ? ((int?)null, "earlier", record.Earlier!.Value) : (shown[write].Writer, shown[write].Display, record.Writes[write].At);
+                var found = counts.FindIndex(c => c.Writer == writer && c.Display == display);
+                if (found < 0) counts.Add(new BlameCountView(writer, display, 1, at));
+                else counts[found] = counts[found] with { Lines = counts[found].Lines + 1, At = at > counts[found].At ? at : counts[found].At };
+            }
+
+            var main = counts.GroupBy(c => c.Writer).OrderByDescending(g => g.Sum(c => c.Lines)).ThenByDescending(g => g.Max(c => c.At)).FirstOrDefault();
+            sections.Add(new BlameSectionView(start + 1, end, title, main?.Key, counts.Any(c => c.Writer != main?.Key), [.. counts]));
+        }
+
+        return TypedResults.Ok(new BlameView(notePath.Value, note.Version, note.Content, record.Earlier, record.Dropped, [.. writers], [.. sections]));
+    }
+
+    /// <summary>A note's sections for <c>/api/blame</c> (blame spec §7.1), flat so that no line counts twice: the front
+    /// matter, the lines before the first heading if one isn't blank, and each heading to the next of any level.</summary>
+    private static IEnumerable<(int Start, int End, string Title)> BlameSections(IReadOnlyList<string> lines)
+    {
+        var front = Outline.FrontmatterEnd(lines);
+        if (front > 0) yield return (0, front, "Properties");
+        var headings = Outline.Parse(lines);
+        var first = headings.Count > 0 ? headings[0].Line : lines.Count;
+        if (Enumerable.Range(front, first - front).Any(i => !string.IsNullOrWhiteSpace(lines[i]))) yield return (front, first, "Top");
+        for (var k = 0; k < headings.Count; k++) yield return (headings[k].Line, k + 1 < headings.Count ? headings[k + 1].Line : lines.Count, headings[k].Text);
     }
 
     /// <summary>
@@ -1119,9 +1202,6 @@ internal static class ApiPaths
         {
             PathKind.Note when !path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md."),
             PathKind.Attachment when path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is a note: /api/notes reads and writes it."),
-            PathKind.Attachment when !path.IsAttachment => throw ApiErrors.BadRequest($"{path.Value}: {AttachmentFormat.UnsupportedMessage}."),
-            PathKind.NoteOrAttachment when !path.IsNote && !path.IsAttachment =>
-                throw ApiErrors.BadRequest($"{path.Value} is neither a note (.md) nor a file Kumbu² keeps (PDF, PNG, JPEG, GIF, WebP, SVG)."),
             _ => path,
         };
     }

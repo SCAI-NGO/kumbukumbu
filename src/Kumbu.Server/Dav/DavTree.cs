@@ -79,7 +79,7 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
     {
         if (FolderMarker.Is(path)) return null;
         if (path.IsNote && await notes.GetAsync(path, ct) is { } note) return DavContent.Note(note);
-        if (path.IsAttachment && await attachments.GetAttachmentAsync(path, ct) is { } attachment) return DavContent.Attachment(attachments, attachment);
+        if (path.IsAttachment && await attachments.GetAttachmentAsync(path, ct) is { } attachment) return DavContent.Attachment(attachments, attachment, await notes.SkillsVaultAsync(ct));
         return null;
     }
 

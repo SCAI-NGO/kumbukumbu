@@ -173,7 +173,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         foreach (var path in (await store.ListNotesUnderAsync(root, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal))
         {
             var n = (await store.GetAsync(path, Ct))!;
-            notes.Add(new { Path = n.Path.Value, n.Content, n.Revision, n.LastWriter, n.LastWriteAt, History = n.History.Select(h => new { h.Content, h.WrittenBy, h.WrittenAt }) });
+            notes.Add(new { Path = n.Path.Value, n.Content, n.Revision, n.LastWriter, n.LastWriteAt, History = n.History.Select(h => new { h.Content, h.WrittenBy, h.WrittenAt }), n.Authorship });
         }
 
         var checkpoints = new List<object>();
@@ -187,7 +187,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         {
             Vaults = (await store.UnlockedVaultsAsync(Ct)).OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new { v.Name, v.Vault.EmbeddingProvider }),
             Notes = notes,
-            Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt }),
+            Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt, t.Note.Authorship }),
             Moves = (await store.ListMovesAsync(root, Ct)).Select(m => new { From = m.From.Value, To = m.To.Value, m.MovedBy }),
             Checkpoints = checkpoints,
             Search = new { search.State, search.Pending, Hits = search.Hits.Select(h => new { Path = h.Path.Value, h.StartLine, Score = Math.Round(h.Score, 5) }) },
@@ -391,8 +391,9 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(0, summary.Damaged);
         Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
         Assert.Equal(before, await SnapshotAsync(Store(a)));
-        // A second process loads it with the new key too.
+        // A second process loads it with the new key too, with who wrote which line.
         Assert.Equal(before, await SnapshotAsync(Store(a, NewCatalog())));
+        Assert.Equal([Now, Now, Now.AddMinutes(60)], (await Store(a, NewCatalog()).GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!.ByLine().Select(w => w!.At));
         // Nothing is embedded again: the resealed embeddings are current.
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(embedded, RemoteNotes);
@@ -401,6 +402,24 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(2, user["vaultsRekeyed"].ToInt64());
         Assert.False(await Raw("vaults").Find(new BsonDocument { ["_id"] = id, ["rekeyStartedAt"] = new BsonDocument("$exists", true) }).AnyAsync(Ct));
         Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Kind == SlotDocument.UserNext, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Who_wrote_which_line_survives_the_rekey()
+    {
+        var a = await FilledAsync();
+        var store = Store(a);
+        var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan by Ann\n\nalpha beta gamma, take 3\n", "ann", WriterRef.ForMember("w-1"), Now.AddHours(2)), Ct));
+        var before = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!;
+
+        await Catalog().RekeyAsync(a.Id("Arbeit"), a.User.Id, a.Key, Ct);
+
+        var after = (await Store(a, NewCatalog()).GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!;
+        Assert.Equal(before.Hash, after.Hash);
+        Assert.Equal(before.Writes, after.Writes);
+        Assert.Equal(before.Runs, after.Runs);
+        Assert.Equal(["ann", "lea", "lea"], after.ByLine().Select(w => w!.Label));
     }
 
     [Fact]

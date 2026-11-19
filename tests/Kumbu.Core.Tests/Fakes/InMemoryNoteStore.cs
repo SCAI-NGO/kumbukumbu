@@ -143,15 +143,17 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             _notes.Values.Where(n => n.Path.Vault == vault), _trash.Where(t => t.Note.Path.Vault == vault), _moves.Where(m => m.From.Vault == vault), changesetKey,
             _attachments.Values.Where(a => a.Path.Vault == vault), _attachmentTrash.Where(t => t.Attachment.Path.Vault == vault)));
 
+    // As the real store, it records who wrote which line from the state it replaces, never the caller's (blame spec §5.4).
     public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>
-        Task.FromResult(RequireRef(note.Ref) && _vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path) && _notes.TryAdd(note.Path, note));
+        Task.FromResult(RequireRef(note.Ref) && _vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path)
+            && _notes.TryAdd(note.Path, note with { Authorship = Authorship.After(null, note) }));
 
     public Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
     {
         WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
-        _notes[current.Path] = next;
+        _notes[current.Path] = next with { Authorship = Authorship.After(stored, next) };
         return Task.FromResult(true);
     }
 
@@ -202,18 +204,19 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         if (conflicts.Count > 0) return Task.FromResult<IReadOnlyList<VaultPath>>(conflicts);
 
         Commits++;
-        foreach (var (current, next) in batch.Replaces) _notes[current.Path] = next;
+        var replaced = existing.ToDictionary(c => c.Path, c => _notes[c.Path]);
+        foreach (var (current, next) in batch.Replaces) _notes[current.Path] = next with { Authorship = Authorship.After(replaced[current.Path], next) };
         foreach (var current in batch.Trashes)
         {
             _notes.Remove(current.Path);
-            _trash.Add(new TrashedNote(current, by, at, batch.Changeset, byRef));
+            _trash.Add(new TrashedNote(current with { Authorship = replaced[current.Path].Authorship }, by, at, batch.Changeset, byRef));
         }
 
         foreach (var (current, _) in batch.Moves) _notes.Remove(current.Path);
-        foreach (var created in batch.Creates) _notes[created.Path] = created;
+        foreach (var created in batch.Creates) _notes[created.Path] = created with { Authorship = Authorship.After(null, created) };
         foreach (var (current, target) in batch.Moves)
         {
-            _notes[target.Path] = target;
+            _notes[target.Path] = target with { Authorship = Authorship.After(replaced[current.Path], target) };
             _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset, byRef));
         }
 
@@ -287,6 +290,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         if (latest is null || _notes.ContainsKey(path)) return Task.FromResult<StoredNote?>(null);
 
         var restored = NoteWriter.Restored(latest.Note, writer, reference, at, changeset);
+        restored = restored with { Authorship = Authorship.After(latest.Note, restored) };
         _trash.Remove(latest);
         _notes[path] = restored;
         return Task.FromResult<StoredNote?>(restored);
@@ -298,8 +302,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<StoredAttachment>>([.. _attachments.Values.Where(a => IsBelow(a.Path, folder))]);
 
-    public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct) =>
-        Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    /// <summary>How often a blob was opened: what a test asserts to see that bytes were not read.</summary>
+    public int BlobOpens { get; private set; }
+
+    public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
+    {
+        BlobOpens++;
+        return Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    }
 
     /// <summary>The exception storing these bytes throws (a full vault's <see cref="QuotaExceededException"/>, say), or null to store them.</summary>
     public Func<ReadOnlyMemory<byte>, Exception?>? BlobFails { get; set; }

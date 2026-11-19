@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronLeft, ChevronRight, Download, Ellipsis, FolderInput, History, Info, Link2, Trash2, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Ellipsis, File as FileIcon, FolderInput, History, Info, Link2, Trash2, X, type LucideIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCheckpointTree } from "../api/history";
-import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
+import { fileKindOfEntry, findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
+import { noPreviewText } from "../components/fileKindIcon";
 import { Menu } from "../components/Menu";
 import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
@@ -70,7 +71,9 @@ export default function Lightbox() {
   const shownVersion = version ? history.data?.find((v) => v.version === version) : undefined;
   const checkpointRoot = checkpoint ? checkpointTree.data?.root : undefined;
   const checkpointFile = checkpointRoot && findFolder(checkpointRoot, folderOf(path))?.notes.find((n) => n.path === path);
-  const kind = fileKindOf(path, vault);
+  // The server's kind once it is known (it knows which vault holds skills), until then the path's.
+  const served = readOnly ? (shownVersion ?? checkpointFile) : info.data;
+  const kind = served ? fileKindOfEntry(served) : fileKindOf(path, vault);
   const name = titleOf(path);
 
   const [showInfo, setShowInfo] = useState(false);
@@ -128,10 +131,10 @@ export default function Lightbox() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [close, show, previous, next]);
 
-  // A link as a note would hold it: an image embedded, a PDF linked.
+  // A link as a note would hold it: an image embedded, a PDF or a file linked.
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(kind === "pdf" ? `[[${name}]]` : `![[${name}]]`);
+      await navigator.clipboard.writeText(kind === "image" ? `![[${name}]]` : `[[${name}]]`);
       setCopy("copied");
     } catch {
       setCopy("failed");
@@ -178,7 +181,9 @@ export default function Lightbox() {
 
   return (
     <main aria-label={name} className="fixed inset-0 z-50 overflow-hidden bg-black text-[#eceae4]">
-      {kind === "text" ? (
+      {kind === "file" ? (
+        <FileCard name={name} size={facts ? Number(facts.size) : undefined} onDownload={() => download(downloadUrl)} />
+      ) : kind === "text" ? (
         <TextFile key={stageKey} vault={vault} path={inVault(path)} at={source} />
       ) : kind === "pdf" ? (
         <PdfPages key={stageKey} vault={vault} path={inVault(path)} at={source} onStatus={setPdf} onSwipe={swipe} />
@@ -320,6 +325,26 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-[#a09d96]">{label}</dt>
       <dd className="min-w-0 break-words">{children}</dd>
     </>
+  );
+}
+
+/** A file of no kind Kumbu² shows (decision 5 of the files spec): its icon, name and size, and the download. */
+function FileCard({ name, size, onDownload }: { name: string; size?: number; onDownload(): void }) {
+  return (
+    <section aria-label={name} className="absolute inset-x-6 top-1/2 mx-auto flex max-w-xs -translate-y-1/2 flex-col items-center gap-2 text-center">
+      <FileIcon size={48} strokeWidth={1.5} aria-hidden className="text-[#a09d96]" />
+      <p className="max-w-full text-[15px] font-medium [overflow-wrap:anywhere]">{name}</p>
+      {size !== undefined && <p className="text-[13px] text-[#a09d96]">{sizeText(size)}</p>}
+      <p className="text-[13px] text-[#a09d96]">{noPreviewText}</p>
+      <button
+        type="button"
+        onClick={onDownload}
+        className="mt-1 flex min-h-11 items-center gap-2 rounded-[10px] bg-[#232328] px-4 text-[#d9d6cf] focus-visible:outline-2 focus-visible:outline-[#f0a848]"
+      >
+        <Download size={18} aria-hidden />
+        Download
+      </button>
+    </section>
   );
 }
 

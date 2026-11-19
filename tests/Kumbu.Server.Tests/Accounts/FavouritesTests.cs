@@ -278,6 +278,28 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_deleted_vaults_entries_are_dropped_on_the_next_write_a_hidden_ones_kept()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        await WriteAsync(w.Alice, In("board", "Tagebuch"), In("calendar", "Tagebuch"), In("board", "Familie"));
+        await w.HideAsync();
+        // Deleted while hidden: the discreet list still names it.
+        Assert.NotNull(await Api.Services.GetRequiredService<Deletion>().DeleteVaultAsync(
+            w.Alice.User, w.Alice.UserKey, "Tagebuch", RestClient.Password, "Tagebuch", null, Ct));
+        _time.Advance(TimeSpan.FromMinutes(1));
+        object[] commands = [.. Enumerable.Range(0, 199).Select(i => Command($"c{i}"))];
+
+        // Familie's one entry and 199 commands make 200: Tagebuch's two no longer count.
+        await WriteAsync(w.Alice, commands);
+
+        await w.RevealAsync();
+        var shown = await EntriesAsync(w.Alice);
+        Assert.Equal(200, shown.Length);
+        Assert.Equal("board Familie", shown[0]);
+        Assert.DoesNotContain(shown, e => e.Contains("Tagebuch", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task More_than_200_at_once_are_refused()
     {
         var alice = await NewAsync(Api, vault: "Work");
@@ -395,7 +417,7 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
             // Another device, which shows Tagebuch, writes between this write's read and its write.
             var (_, version) = await favourites.ReadAsync(w.Alice.User.Id, w.Alice.UserKey, Ct);
             await favourites.ReplaceVisibleAsync(
-                w.Alice.User.Id, w.Alice.UserKey, version, new HashSet<string> { w.TagebuchId },
+                w.Alice.User.Id, w.Alice.UserKey, version, new HashSet<string>(),
                 [new StoredFavourite("board", null, w.TagebuchId, null, _time.GetUtcNow())], Ct);
         };
         try

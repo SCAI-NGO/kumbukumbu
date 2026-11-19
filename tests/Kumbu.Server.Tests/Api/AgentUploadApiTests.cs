@@ -366,6 +366,10 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
         Assert.Equal("![rose (1).png](/My%20Shots/rose%20%281%29.png)", shot["markdown"]!.GetValue<string>());
         Assert.Equal($"{KumbuAppFactory.PublicUrl}/n/{vaultId}/My%20Shots/rose%20%281%29.png", shot["link"]!.GetValue<string>());
         Assert.Equal("[manual.pdf](/Docs/manual.pdf)", (await CreatedAsync(pdf))["markdown"]!.GetValue<string>());
+        using var sheet = await PutAsync(await UrlAsync(user, key, "/V/Docs/budget.xlsx"), Bytes([0x50, 0x4B, 0x03, 0x04, 0x00]));
+        var budget = await CreatedAsync(sheet);
+        Assert.Equal("[budget.xlsx](/Docs/budget.xlsx)", budget["markdown"]!.GetValue<string>());
+        Assert.Equal("application/octet-stream", budget["file"]!["mediaType"]!.GetValue<string>());
         // What the answer says to write leads to the file.
         var written = await user.ToolAsync("write", new() { ["path"] = "/V/Garden.md", ["content"] = $"# Garden\n\n{shot["markdown"]}\n" }, key);
         Assert.NotEqual(true, written.IsError);

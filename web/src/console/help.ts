@@ -11,6 +11,15 @@ export const helpBlock = `In this console:
 
 The manual agents get, unchanged:`;
 
+/** The console's own commands, offered by completion beside the shell's. */
+export const consoleCommands = ["cd", "pwd", "clear", "exit", "l", "la", "lsa", "p"];
+
+/** The shell's commands the console runs (the writing ones are refused here), for completion; `paths.ts` has the same names. */
+export const shCommands = [
+  "backlinks", "blame", "board", "calendar", "cat", "df", "diff", "du", "graph", "head", "help", "history", "img", "links",
+  "ls", "lscp", "outline", "pdf", "publish", "rg", "semsearch", "skills", "sort", "tags", "tail", "trash", "uname", "wc",
+];
+
 /** `help <name>` for the commands the console answers itself, in the shape of the shell's own. */
 export const localHelp: Record<string, string> = {
   cd: `cd [path]

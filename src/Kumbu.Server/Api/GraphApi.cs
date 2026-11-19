@@ -43,6 +43,10 @@ public sealed record GraphPathsView(
 /// versions (several vaults: in the order asked), which changes with a link or a rename and not with prose.</summary>
 public static class GraphApi
 {
+    /// <summary>How many <c>path</c> and how many <c>tag</c> a filter takes at most: a person picks a handful, and each costs a
+    /// pass over the notes, so a query that repeats them by the thousand is refused before the walk.</summary>
+    public const int MaxFilters = 50;
+
     public static void MapGraphApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api/graph").AddEndpointFilter(ApiErrors.Filter);
@@ -53,7 +57,7 @@ public static class GraphApi
     }
 
     /// <summary><c>vault</c>, repeated: the vaults to draw (default: all the caller has). <c>path</c> (repeated, folders or notes) and <c>tag</c>
-    /// (repeated, all of them) select notes; <c>days</c>, <c>attachments</c> and <c>ghosts</c> (default true) and <c>archive</c> (default false).</summary>
+    /// (repeated, all of them; at most <see cref="MaxFilters"/> of each) select notes; <c>days</c>, <c>attachments</c> and <c>ghosts</c> (default true) and <c>archive</c> (default false).</summary>
     private static async Task<Results<Ok<GraphView>, StatusCodeHttpResult>> GlobalAsync(
         string[]? vault, string[]? path, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
         HttpContext http, INoteStore store, CancellationToken ct)
@@ -243,8 +247,10 @@ public static class GraphApi
         return path;
     }
 
-    private static GraphFilter Filter(IEnumerable<string>? paths, string[]? tags, bool? days, bool? attachments, bool? ghosts, bool? archive, VaultPath? scope)
+    private static GraphFilter Filter(string[]? paths, string[]? tags, bool? days, bool? attachments, bool? ghosts, bool? archive, VaultPath? scope)
     {
+        if (paths?.Length > MaxFilters) throw ApiErrors.BadRequest($"The filter takes at most {MaxFilters} paths; this named {paths.Length}.");
+        if (tags?.Length > MaxFilters) throw ApiErrors.BadRequest($"The filter takes at most {MaxFilters} tags; this named {tags.Length}.");
         var under = (paths ?? []).Select(p => Parse(p, "path", PathKind.Folder)).ToList();
         var inArchive = under.Any(ArchiveFolder.Contains) || (scope is not null && ArchiveFolder.Contains(scope));
         return new GraphFilter(under, tags ?? [], days ?? true, attachments ?? true, ghosts ?? true, archive == true || inArchive);

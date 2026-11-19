@@ -2,7 +2,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
@@ -10,6 +10,13 @@ import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import fixture from "./console-fixture.json";
 import { useConsole } from "./store";
+
+// The phone's suggestions list folders as typing goes; outside the completion tests they stay out of `posted`.
+const listing = vi.hoisted(() => ({ on: false }));
+vi.mock("./entries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./entries")>();
+  return { ...actual, listFolder: (folder: string) => (listing.on ? actual.listFolder(folder) : Promise.resolve(null)) };
+});
 
 afterEach(() => {
   cleanup();
@@ -909,5 +916,270 @@ describe("peek", () => {
     peekApi();
     await peek("p plan.md");
     expect(peeked().style.getPropertyValue("--text")).toBe("");
+  });
+});
+
+describe("completion", () => {
+  beforeEach(() => (listing.on = true));
+  afterEach(() => (listing.on = false));
+  const desktop = () => vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(min-width: 64rem)", media: query, addEventListener() {}, removeEventListener() {} }));
+  const listings: Record<string, string> = {
+    ls: "Work/",
+    "ls -a /Work": "_archive/\nMeeting Notes.md\nMeeting Plan.md\nplan.md\nprojects/",
+    "ls /Work/projects": "alpha.md",
+  };
+  /** The shell answering `ls` from `listings`, anything else with `answer`. */
+  const shell = (answer: Answer = () => text("")) =>
+    consoleApi((body) => (body.call === "sh" && body.command! in listings ? text(listings[body.command!]) : answer(body)));
+  const listed = (posted: Body[]) => posted.filter((body) => body.command?.startsWith("ls"));
+  const tab = () => fireEvent.keyDown(input(), { key: "Tab" });
+
+  describe("Tab on the desktop", () => {
+    it("completes a unique match and puts the cursor after it, keeping the focus", async () => {
+      desktop();
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      await userEvent.keyboard("{Tab}");
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      expect(input()).toHaveFocus();
+      expect((input() as HTMLInputElement).selectionStart).toBe(12);
+    });
+
+    it("completes several matches to their common prefix, the cursor at its end with the rest kept", async () => {
+      desktop();
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat Mee | wc");
+      (input() as HTMLInputElement).setSelectionRange(7, 7);
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat Meeting\\  | wc"));
+      expect((input() as HTMLInputElement).selectionStart).toBe(13);
+    });
+
+    it("lists the matches as one line on a second Tab with nothing new, without running anything", async () => {
+      desktop();
+      const { posted } = shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat Meeting\\ ");
+      tab();
+      await waitFor(() => expect(listed(posted)).toHaveLength(1));
+      expect(lines()).toEqual([]);
+      tab();
+      await waitFor(() => expect(lines()).toEqual(["/Work", "> cat Meeting\\ ", "Meeting Notes.md  Meeting Plan.md"]));
+      expect(input()).toHaveValue("cat Meeting\\ ");
+      expect(posted.filter((body) => !body.command?.startsWith("ls"))).toEqual([]);
+      expect(useConsole.getState().history).toEqual([]);
+      // Listing ran nothing, so the folder's listing is still good.
+      tab();
+      await waitFor(() => expect(lines()).toHaveLength(5));
+      expect(listed(posted)).toHaveLength(1);
+    });
+
+    it("lists on the Tab after one that put in only a common prefix, as bash does", async () => {
+      desktop();
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat Mee");
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat Meeting\\ "));
+      tab();
+      await waitFor(() => expect(lines()).toEqual(["/Work", "> cat Meeting\\ ", "Meeting Notes.md  Meeting Plan.md"]));
+    });
+
+    it("doesn't list after a Tab that completed a unique match, or once the line changed", async () => {
+      desktop();
+      const { posted } = shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      tab();
+      await act(async () => {});
+      expect(lines()).toEqual([]);
+      await userEvent.clear(input());
+      await userEvent.type(input(), "cat Meeting\\ ");
+      tab();
+      await waitFor(() => expect(listed(posted).length).toBeGreaterThan(0));
+      await act(async () => {});
+      await userEvent.type(input(), "N{Backspace}");
+      tab();
+      await act(async () => {});
+      expect(lines()).toEqual([]);
+    });
+
+    it("flashes the command line for no match, briefly, with no output", async () => {
+      desktop();
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat zz");
+      tab();
+      await waitFor(() => expect(prompt()).toHaveClass("k-bell"));
+      await waitFor(() => expect(prompt()).not.toHaveClass("k-bell"), { timeout: 1000 });
+      expect(lines()).toEqual([]);
+      expect(input()).toHaveValue("cat zz");
+    });
+
+    it("keeps Tab in the input and leaves Shift+Tab to move the focus", async () => {
+      desktop();
+      const { posted } = shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      expect(fireEvent.keyDown(input(), { key: "Tab", shiftKey: true })).toBe(true);
+      expect(tab()).toBe(false);
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      expect(listed(posted)).toHaveLength(1);
+    });
+
+    it("does nothing on an empty line or stage, and while a command runs", async () => {
+      desktop();
+      const pending = later();
+      const { posted } = shell(() => pending.response);
+      await open("/Work");
+      tab();
+      tab();
+      await userEvent.type(input(), "cat plan.md | ");
+      tab();
+      tab();
+      await act(async () => {});
+      expect(posted).toEqual([]);
+      expect(lines()).toEqual([]);
+      expect(prompt()).not.toHaveClass("k-bell");
+
+      await userEvent.clear(input());
+      await userEvent.type(input(), "rg x{Enter}");
+      await waitFor(() => expect(input()).toBeDisabled());
+      tab();
+      tab();
+      await act(async () => {});
+      expect(listed(posted)).toEqual([]);
+      await act(async () => pending.answer(text("")));
+    });
+
+    it("lists a folder again after a command ran, clear included", async () => {
+      desktop();
+      const { posted } = shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      await userEvent.clear(input());
+      await run("clear");
+      await userEvent.type(input(), "cat pl");
+      tab();
+      await waitFor(() => expect(input()).toHaveValue("cat plan.md "));
+      expect(listed(posted)).toHaveLength(2);
+    });
+  });
+
+  describe("the phone's suggestion row", () => {
+    const row = () => screen.queryByRole("group", { name: "Suggestions" });
+    const chips = () => within(row()!).getAllByRole("button").map((chip) => chip.textContent);
+
+    it("offers the matches for a path word, folders with their slash, as 48 px targets", async () => {
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat p");
+      await waitFor(() => expect(chips()).toEqual(["plan.md", "projects/"]));
+      for (const chip of within(row()!).getAllByRole("button")) expect(chip).toHaveClass("min-h-12");
+      expect(row()).toHaveClass("overflow-x-auto");
+    });
+
+    it("completes on a tap, keeping the focus in the input, and offers the folder's entries next", async () => {
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pro");
+      const blurred = vi.fn();
+      input().addEventListener("blur", blurred);
+      await userEvent.click(await screen.findByRole("button", { name: "projects/" }));
+      expect(input()).toHaveValue("cat projects/");
+      expect(input()).toHaveFocus();
+      expect(blurred).not.toHaveBeenCalled();
+      expect((input() as HTMLInputElement).selectionStart).toBe(13);
+      await waitFor(() => expect(chips()).toEqual(["alpha.md"]));
+      await userEvent.click(screen.getByRole("button", { name: "alpha.md" }));
+      expect(input()).toHaveValue("cat projects/alpha.md ");
+      expect(blurred).not.toHaveBeenCalled();
+      await waitFor(() => expect(chips()).toEqual(["Meeting Notes.md", "Meeting Plan.md", "plan.md", "projects/"]));
+    });
+
+    it("offers the working folder's entries for an empty word after a command, folders only for cd, and nothing for an empty first word", async () => {
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat ");
+      await waitFor(() => expect(chips()).toEqual(["Meeting Notes.md", "Meeting Plan.md", "plan.md", "projects/"]));
+      await userEvent.clear(input());
+      await userEvent.type(input(), "cd ");
+      await waitFor(() => expect(chips()).toEqual(["projects/"]));
+      await userEvent.clear(input());
+      await userEvent.type(input(), " ");
+      await act(async () => {});
+      expect(row()).toBeNull();
+    });
+
+    it("drops the chips when the console resets, as a discreet vault hides", async () => {
+      let hidden = false;
+      // Once hidden, the vault is gone from the listing too.
+      consoleApi((body) => text(body.command === "ls" && !hidden ? "Work/" : ""));
+      await open("/");
+      await userEvent.type(input(), "ls Wo");
+      await waitFor(() => expect(chips()).toEqual(["Work/"]));
+      hidden = true;
+      act(() => useConsole.getState().reset());
+      expect(row()).toBeNull();
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(row()).toBeNull();
+    });
+
+    it("offers commands for the first word", async () => {
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "pw");
+      await waitFor(() => expect(chips()).toEqual(["pwd"]));
+      await userEvent.click(screen.getByRole("button", { name: "pwd" }));
+      expect(input()).toHaveValue("pwd ");
+    });
+
+    it("hides when the input is empty, nothing matches, or a command runs", async () => {
+      const pending = later();
+      shell(() => pending.response);
+      await open("/Work");
+      expect(row()).toBeNull();
+      await userEvent.type(input(), "cat zz");
+      await act(async () => {});
+      expect(row()).toBeNull();
+      await userEvent.clear(input());
+      await userEvent.type(input(), "cat pl");
+      await waitFor(() => expect(row()).not.toBeNull());
+      await userEvent.clear(input());
+      await waitFor(() => expect(row()).toBeNull());
+      await userEvent.type(input(), "rg pl");
+      await waitFor(() => expect(row()).not.toBeNull());
+      fireEvent.submit(prompt());
+      await waitFor(() => expect(input()).toBeDisabled());
+      expect(row()).toBeNull();
+      await act(async () => pending.answer(text("")));
+    });
+
+    it("grows the output's bottom padding with the row, so it never covers the last line", async () => {
+      shell();
+      await open("/Work");
+      expect(log()).not.toHaveClass("pb-16");
+      await userEvent.type(input(), "cat pl");
+      await waitFor(() => expect(row()).not.toBeNull());
+      expect(log()).toHaveClass("pb-16");
+      await userEvent.clear(input());
+      await waitFor(() => expect(log()).not.toHaveClass("pb-16"));
+    });
+
+    it("outlines the chips in phosphor in Green", async () => {
+      localStorage.setItem("kumbu.consoleScheme", "green");
+      shell();
+      await open("/Work");
+      await userEvent.type(input(), "cat pl");
+      const chip = await screen.findByRole("button", { name: "plan.md" });
+      expect(chip).toHaveClass("border-(--crt-fg)");
+      localStorage.clear();
+    });
   });
 });

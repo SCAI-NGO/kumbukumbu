@@ -119,3 +119,21 @@ describe("comparing two versions of a note", () => {
     expect(await screen.findByText("This version couldn't be read")).toBeInTheDocument();
   });
 });
+
+describe("comparing two versions of a file", () => {
+  it("says there is no preview instead of showing two icons", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    show({ path: "/Work/data.xlsx" });
+
+    expect(screen.getByText("No preview for this file")).toBeInTheDocument();
+    expect(document.querySelector("svg.lucide-file")).toBeNull();
+  });
+
+  it("goes by the server's kind where it has one", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    show({ path: "/Skills/x/data.csv", kind: "file" });
+
+    expect(screen.getByText("No preview for this file")).toBeInTheDocument();
+    expect(document.querySelector("svg.lucide-file-code")).toBeNull();
+  });
+});

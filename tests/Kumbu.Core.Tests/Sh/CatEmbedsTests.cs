@@ -88,6 +88,30 @@ public class CatEmbedsTests
     }
 
     [Fact]
+    public async Task A_section_embed_finds_its_heading_as_obsidian_links_it()
+    {
+        const string content = "# Plan\n\n![[Notes#C notes x]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Notes.md", "# Notes\n\n## C# notes | x\n\nsharp\n"));
+        Assert.Equal("\n" + Header + "\n[line 3: ![[Notes#C notes x]] → /Work/Pump/Notes.md#C notes x]\n## C# notes | x\n\nsharp", Appendix(result, content));
+    }
+
+    [Fact]
+    public async Task A_section_embed_finds_an_escaped_heading_without_its_escape()
+    {
+        const string content = "# Plan\n\n![[Notes#C tips]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Notes.md", "# Notes\n\n## C\\# tips\n\ntip\n"));
+        Assert.Equal("\n" + Header + "\n[line 3: ![[Notes#C tips]] → /Work/Pump/Notes.md#C tips]\n## C\\# tips\n\ntip", Appendix(result, content));
+    }
+
+    [Fact]
+    public async Task A_section_embed_finds_a_heading_by_its_text_as_shown()
+    {
+        const string content = "# Plan\n\n![[Notes#The roadmap]]\n";
+        var result = await Cat(content, "cat /Work/Pump/Plan.md", ("/Work/Pump/Notes.md", "# Notes\n\n## The **road**map\n\nroad\n"));
+        Assert.Equal("\n" + Header + "\n[line 3: ![[Notes#The roadmap]] → /Work/Pump/Notes.md#The roadmap]\n## The **road**map\n\nroad", Appendix(result, content));
+    }
+
+    [Fact]
     public async Task An_attachment_embed_gets_its_description()
     {
         const string content = "# Plan\n\n![[shot.png]]\n";

@@ -263,6 +263,38 @@ describe("Lightbox", () => {
     expect(renders.map((r) => r.page)).toEqual([1, 2, 2]);
   });
 
+  it("shows a file as a card with its name, size and a download, never as an image, and pages past it", async () => {
+    const fetch = api({ "GET /api/version/*": () => json(200, { ...fileInfo("/W/shots/data.xlsx"), kind: "file", mediaType: "application/octet-stream", width: undefined, height: undefined }) });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute("href") ?? "");
+    });
+    renderApp(opened("/W/shots/data.xlsx", ["/W/shots/a.png", "/W/shots/data.xlsx"]));
+    expect(await screen.findByRole("heading", { name: "data.xlsx" })).toBeInTheDocument();
+    expect(screen.queryByTestId("image-stage")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+    const card = screen.getByRole("region", { name: "data.xlsx" });
+    expect(card).toHaveTextContent("No preview for this file");
+    expect(await within(card).findByText("412.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("File 2 of 2")).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Download" }));
+    expect(clicked).toEqual(["/api/files/W/shots/data.xlsx?download=1"]);
+    // Its bytes are fetched only by the download, never to be shown.
+    expect(fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname)).not.toContain("/api/files/W/shots/data.xlsx");
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    expect(writeText).toHaveBeenCalledWith("[[data.xlsx]]");
+  });
+
+  it("goes by the server's kind: a .csv of bytes in an ordinary vault named Skills is a file", async () => {
+    api({ "GET /api/version/*": () => json(200, { ...fileInfo("/Skills/x/data.csv"), kind: "file", mediaType: "application/octet-stream", width: undefined, height: undefined }) });
+    renderApp(opened("/Skills/x/data.csv", ["/Skills/x/data.csv"]));
+    expect(await screen.findByText("No preview for this file")).toBeInTheDocument();
+  });
+
   it("downloads by a button, from the bar and the menu, with no link that names the vault", async () => {
     api();
     renderApp(opened("/W/shots/b.png"));

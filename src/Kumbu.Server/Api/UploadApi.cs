@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Auth;
@@ -166,7 +167,10 @@ public static class UploadApi
         for (var parent = VaultPath.Root.Child(target.Segments[0]); parent.Segments.Count < target.Segments.Count - 1;)
         {
             parent = parent.Child(target.Segments[parent.Segments.Count]);
-            if (others.Contains(parent) || await store.ReadAsync(parent, ct) is not null) return $"{parent.Value} is a note, not a folder";
+            if (others.Contains(parent) || await store.ReadAsync(parent, ct) is not null || await StoreAttachments.GetAsync(store, parent, ct) is not null)
+            {
+                return FileOrFolder.NotFolder(parent);
+            }
         }
 
         return null;

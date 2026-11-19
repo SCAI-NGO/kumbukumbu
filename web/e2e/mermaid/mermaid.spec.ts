@@ -81,14 +81,14 @@ test("mermaid #2: Show source toggles the code with aria-expanded @mermaid", asy
   await expect(code).toBeHidden();
 });
 
-test("mermaid #3: the diagram is an img from a blob, no svg in the page @mermaid", async ({ page, seedAs, folder }) => {
+test("mermaid #3: the diagram is an img from a data URL, no svg in the page @mermaid", async ({ page, seedAs, folder }) => {
   const { plan } = await seedExample(seedAs, folder);
   await openNote(page, plan);
 
   const image = diagram(article(page));
   await expectLoaded(image);
   expect(await image.evaluate((i) => i.tagName)).toBe("IMG");
-  await expect(image).toHaveAttribute("src", /^blob:/);
+  await expect(image).toHaveAttribute("src", /^data:image\/svg\+xml;/);
   await expect(image).toHaveAttribute("alt", "Diagram (flowchart)");
   // No SVG of the diagram anywhere in the document, and nothing Mermaid measured in left behind.
   await expect(page.locator("svg", { hasText: "Sensor" })).toHaveCount(0);

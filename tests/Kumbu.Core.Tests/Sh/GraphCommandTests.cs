@@ -187,6 +187,30 @@ public class GraphCommandTests
         Assert.Equal(paths.Split('|'), result.Output.Split('\n').Skip(1).Order(StringComparer.Ordinal));
     }
 
+    // Four notes without links (one tagged, a day note, an archived one, a plain one), two notes that link a name nobody has
+    // (one tagged), and a day note linking both.
+    [Theory]
+    [InlineData("--orphans", "/W/2026-11-12.md|/W/alone.md|/W/plain.md")]
+    [InlineData("--orphans --no-days", "/W/alone.md|/W/plain.md")]
+    [InlineData("--orphans --archive", "/W/_archive/Old.md|/W/2026-11-12.md|/W/alone.md|/W/plain.md")]
+    [InlineData("--orphans --tag t", "/W/alone.md")]
+    [InlineData("--hubs -n 2", "2  /W/2026-11-14.md  (0 in, 2 out)|2  /W/t.md  (1 in, 1 out)")]
+    [InlineData("--hubs -n 2 --no-days", "2  /W/t.md  (1 in, 1 out)|2  /W/u.md  (1 in, 1 out)")]
+    [InlineData("--hubs -n 2 --tag t", "2  /W/t.md  (1 in, 1 out)|0  /W/alone.md  (0 in, 0 out)")]
+    [InlineData("--unresolved", "Ghost T, linked from 1 note:|  /W/t.md:2|Ghost U, linked from 1 note:|  /W/u.md:1")]
+    [InlineData("--unresolved --tag t", "Ghost T, linked from 1 note:|  /W/t.md:2")]
+    public async Task Lists_take_the_filters(string flags, string lines)
+    {
+        var sh = TestShell.Of(
+            ("/W/alone.md", "#t\n"), ("/W/plain.md", "x\n"), ("/W/2026-11-12.md", "x\n"), ("/W/_archive/Old.md", "x\n"),
+            ("/W/t.md", "#t\n[[Ghost T]]\n"), ("/W/u.md", "[[Ghost U]]\n"), ("/W/2026-11-14.md", "[[t]] [[u]]\n"));
+
+        var result = await Run(sh, $"graph {flags}");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(lines.Replace('|', '\n'), result.Output);
+    }
+
     [Fact]
     public async Task Hubs_and_unresolved_name_their_own_way_to_narrow()
     {

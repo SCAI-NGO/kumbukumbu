@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using Kumbu.Core.Links;
 using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 
@@ -23,10 +25,22 @@ public sealed record BoardDefinition(IReadOnlyList<BoardColumn> Columns, Archive
     public BoardColumn? Find(string name) =>
         Columns.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Reads a <c>Board.md</c>; exactly one of the results is null, and nothing is guessed.</summary>
-    public static (BoardDefinition? Definition, string? Problem) Parse(string content)
+    // Keyed by the content string, as EntryReader's: every calendar read and every board read read Board.md, and readers at
+    // the same time share one read.
+    private static readonly ConditionalWeakTable<string, Lazy<(BoardDefinition?, string?)>> Cache = new();
+
+    /// <summary>Reads a <c>Board.md</c>; exactly one of the results is null, and nothing is guessed. Remembered for as long
+    /// as that text is held.</summary>
+    public static (BoardDefinition? Definition, string? Problem) Parse(string content) =>
+        Cache.GetValue(content, c => new Lazy<(BoardDefinition?, string?)>(() => Read(c), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    private static (BoardDefinition? Definition, string? Problem) Read(string content)
     {
-        var read = Frontmatter.Read(content);
+        var lines = Lines.Split(content);
+        // Frontmatter longer than aliases are read from is too large for the board too.
+        var read = lines.Take(Outline.FrontmatterEnd(lines)).Sum(l => l.Length + 1) > NoteAliases.MaxFrontmatterLength
+            ? new FrontmatterValues(new Dictionary<string, object?>(), Frontmatter.TooLargeProblem)
+            : Frontmatter.Read(content);
         if (read.Problem is not null) return (null, $"Board.md: the frontmatter does not parse: {read.Problem}");
 
         if (!read.Values.TryGetValue("kumbu-board", out var version))
@@ -40,7 +54,6 @@ public sealed record BoardDefinition(IReadOnlyList<BoardColumn> Columns, Archive
         var (archive, archiveProblem) = ParseArchive(read.Values.GetValueOrDefault("archive"));
         if (archive is null) return (null, archiveProblem);
 
-        var lines = Lines.Split(content);
         var title = Outline.Parse(lines).FirstOrDefault(h => h.Level == 1)?.Text;
         return (new BoardDefinition(columns, archive, title, InstructionsOf(lines)), null);
     }

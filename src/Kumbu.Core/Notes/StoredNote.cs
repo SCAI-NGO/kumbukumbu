@@ -106,7 +106,8 @@ public sealed record StoredNote(
     bool Restored = false,
     string? Message = null,
     DateTime? CreatedAt = null,
-    bool CreatedAtLeast = false)
+    bool CreatedAtLeast = false,
+    Authorship? Authorship = null)
 {
     public string Version => VersionToken.Of(Content);
 }

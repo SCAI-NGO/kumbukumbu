@@ -33,6 +33,13 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// <summary>The time a search spends on regions before it asks for no further PDFs; a call under way runs to its own limit.</summary>
     internal TimeSpan RegionBudget { get; init; } = TimeSpan.FromSeconds(20);
 
+    /// <summary>The bytes of text files one search reads: each is decrypted and held as a string while it is searched,
+    /// one at a time, so this bounds the work of a search over a folder of large CSVs, not its memory; notes, which the
+    /// store holds anyway, don't count.</summary>
+    public const long MaxTextBytes = 64 * 1024 * 1024;
+
+    internal long TextBytesBudget { get; init; } = MaxTextBytes;
+
     private static readonly Option[] Spec =
     [
         new('i', "ignore-case"), new('F', "fixed-strings"), new('w', "word-regexp"), new('v', "invert-match"),
@@ -47,7 +54,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     public string Usage => "rg [options] <regex> [path...]";
 
-    public string Summary => "search notes and PDF text (prints path:line:text); --files lists note paths";
+    public string Summary => "search notes, text files and PDF text (prints path:line:text); --files lists what it searches";
 
     public string Help => """
         rg [options] <regex> [path...]
@@ -64,9 +71,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
           searched in the current state only, not with --checkpoint; --files and --tag leave them out.
           With --regions a match in a PDF also says where on the page it lies.
-          Images are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
+          Text files are searched as notes are (UTF-8 without NUL bytes, up to 15 MB: a CSV, a script), up to
+          64 MB of them a search (a notice says where rg stopped); --tag leaves them out.
+          Images and other files are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
-          List the paths of all notes below each path; with no path, of every note.
+          List the paths of all notes and text files below each path; with no path, of every one (with --tag, of notes).
 
           -i, --ignore-case          case-insensitive
           -F, --fixed-strings        the pattern is a literal string, not a regex
@@ -82,9 +91,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
                                      repeat for notes with all of them
           --regions                  for matches in PDFs, also where they lie on the page, ready for pdf's --crop:
-                                     /Work/paper.pdf:p7:crop=72,298,214,17: text. In points of the page as displayed,
-                                     around the piece of text that holds the match. It shows where the text box lies,
-                                     not that anyone can see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
+                                     /Work/paper.pdf:p7:crop=72,298,214,17:match=131,298,58,17: text. In points of
+                                     the page as displayed: crop= around the piece of text that holds the match,
+                                     match= around the match itself where it is narrower, guessed from its share of
+                                     the piece's characters. They show where the text lies, not that anyone can
+                                     see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
                                      Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
@@ -193,6 +204,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     {
         var found = new Dictionary<VaultPath, Note>();
         var archived = new Dictionary<VaultPath, Note>();
+        var texts = new Dictionary<VaultPath, StoredAttachment>();
+        var archivedTexts = new Dictionary<VaultPath, StoredAttachment>();
         var documents = new Dictionary<VaultPath, AttachmentState>();
         var scope = VaultPath.Root;
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)
@@ -206,28 +219,36 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             if (operands.Count == 1) scope = path;
 
             var below = await notes.ReadNotesUnderAsync(path, ct);
-            var pdfs = pixels is null ? [] : (await StoreAttachments.UnderAsync(notes, path, ct)).Where(a => AttachmentText.IsPdf(a.Current)).ToList();
-            if (below.Count == 0 && pdfs.Count == 0 && !path.IsRoot)
+            var files = await StoreAttachments.UnderAsync(notes, path, ct);
+            var pdfs = pixels is null ? [] : files.Where(a => AttachmentText.IsPdf(a.Current)).ToList();
+            // A text file is searched as a note is: its lines (spec 2026-11-18, decision 3), read only once it is searched.
+            var textFiles = files.Where(a => a.Current.MediaType == AttachmentFormat.TextMediaType).ToList();
+            if (below.Count == 0 && pdfs.Count == 0 && textFiles.Count == 0 && !path.IsRoot)
             {
                 var content = await notes.ReadAsync(path, ct);
                 if (content is null && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
                 {
-                    if (pixels is null || !AttachmentText.IsPdf(attachment.Current))
+                    if (attachment.Current.MediaType == AttachmentFormat.TextMediaType)
                     {
-                        return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes only");
+                        textFiles = [attachment];
                     }
-
-                    documents.TryAdd(path, attachment.Current);
-                    continue;
+                    else if (pixels is null || !AttachmentText.IsPdf(attachment.Current))
+                    {
+                        return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes and text files only");
+                    }
+                    else
+                    {
+                        documents.TryAdd(path, attachment.Current);
+                        continue;
+                    }
                 }
 
-                if (content is null)
+                else if (content is null)
                 {
                     if (await HasNothingToSearchAsync(path, ct)) continue;
                     return ShellResult.Error($"rg: {path.Value}: No such file or directory");
                 }
-
-                below = [new Note(path, content)];
+                else below = [new Note(path, content)];
             }
 
             // After the checks above, so that a vault holding nothing but its archive has nothing to find, not nothing there.
@@ -236,6 +257,13 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             {
                 if (shown || !ArchiveFolder.Contains(note.Path)) found.TryAdd(note.Path, note);
                 else archived.TryAdd(note.Path, note);
+            }
+
+            // --tag chooses among notes, as it leaves PDFs out: what a text file would carry can't be known unread.
+            foreach (var text in textFiles.Where(t => tags.Count == 0 && Glob.Keeps(globs, t.Path, path)))
+            {
+                if (shown || !ArchiveFolder.Contains(text.Path)) texts.TryAdd(text.Path, text);
+                else archivedTexts.TryAdd(text.Path, text);
             }
 
             foreach (var pdf in pdfs.Where(p => (shown || !ArchiveFolder.Contains(p.Path)) && Glob.Keeps(globs, p.Path, path))) documents.TryAdd(pdf.Path, pdf.Current);
@@ -252,32 +280,43 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         }
 
         var matched = new List<VaultPath>();
-        var lines = NoteLines(search, options, searched, matched);
+        var reader = new TextReading(notes, TextBytesBudget);
+        var lines = await NoteLinesAsync(search, options, searched, [.. texts.Values], reader, matched, ct);
         var pictured = new List<(VaultPath Path, int Scans, int WithImages)>();
         var notices = new List<string>();
         if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, pictured, notices, ct);
         var result = ShellResult.Ok(Lines.Join(lines));
         if (marks is not null && !options.Has("invert-match") && await marks.NoticeAsync(matched, ct) is { } written) notices.Insert(0, written);
-        if (notices.Count > 0) result = result with { Notice = string.Join('\n', notices) };
-        if (result.Output.Length > 0 || options.Has("invert-match")) return result;
+        if (result.Output.Length > 0 || options.Has("invert-match")) return Noticed(result);
 
         // Only the first line says that nothing matched; the ones below it add where else to look.
-        var archivedHint = ArchivedHint(hidden, n => search.Matches(Lines.Split(n.Content), 1).Count > 0, Archived(options, operands), ct);
-        var nameHint = NameHint(search, options, searched.Select(n => n.Path), lead: archivedHint is null);
+        IReadOnlyList<StoredAttachment> hiddenTexts = [.. archivedTexts.Values.Where(t => !texts.ContainsKey(t.Path))];
+        var archivedHint = await ArchivedHintAsync(hidden, hiddenTexts, reader.ReadAsync, n => search.Matches(Lines.Split(n.Content), 1).Count > 0, Archived(options, operands), ct);
+        var nameHint = NameHint(search, options, [.. searched.Select(n => n.Path), .. texts.Keys], lead: archivedHint is null);
         string?[] hints = [archivedHint, nameHint, PictureHint(pictured, lead: archivedHint is null && nameHint is null)];
-        return result with { NoMatchHint = hints.Any(h => h is not null) ? string.Join('\n', hints.OfType<string>()) : null };
+        return Noticed(result) with { NoMatchHint = hints.Any(h => h is not null) ? string.Join('\n', hints.OfType<string>()) : null };
+
+        // rg reports the limit it hit as it reports the others: in the notice, after the search's own.
+        ShellResult Noticed(ShellResult searchResult)
+        {
+            if (reader.Stopped) notices.Add($"rg: stopped reading text files after {AttachmentText.Size(TextBytesBudget)}; narrow the path");
+            return notices.Count > 0 ? searchResult with { Notice = string.Join('\n', notices) } : searchResult;
+        }
     }
 
     /// <summary>
-    /// For a search that found nothing in the text: whether archived notes it left out would have matched, so that
-    /// nothing found isn't taken for nothing there, with <paramref name="command"/>, the search with --archive. It
-    /// counts no further than one past the paths a hint names, stops on cancellation, and is null when a match took
-    /// too long: the hint is no reason to fail the search. Archived PDFs aren't read. It runs left of a pipe too,
-    /// where the shell drops it, as a command can't tell; the notes are in memory, and the count stops early.
+    /// For a search that found nothing in the text: whether archived notes and text files it left out would have
+    /// matched, so that nothing found isn't taken for nothing there, with <paramref name="command"/>, the search with
+    /// --archive. It counts no further than one past the paths a hint names, reads text files within the search's
+    /// bound, stops on cancellation, and is null when a match took too long: the hint is no reason to fail the search.
+    /// Archived PDFs aren't read. It runs left of a pipe too, where the shell drops it, as a command can't tell; the
+    /// notes are in memory, and the count stops early.
     /// </summary>
-    internal static string? ArchivedHint(IReadOnlyList<Note> hidden, Func<Note, bool> matches, string command, CancellationToken ct)
+    internal static async Task<string?> ArchivedHintAsync(
+        IReadOnlyList<Note> hidden, IReadOnlyList<StoredAttachment> hiddenTexts, Func<StoredAttachment, CancellationToken, Task<Note?>> read,
+        Func<Note, bool> matches, string command, CancellationToken ct)
     {
-        var count = 0;
+        var (count, files) = (0, 0);
         try
         {
             foreach (var note in hidden)
@@ -285,18 +324,27 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 ct.ThrowIfCancellationRequested();
                 if (matches(note) && ++count > HintedPaths) break;
             }
+
+            foreach (var text in hiddenTexts.OrderBy(t => t.Path.Value, TextOrder.Default))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (count > HintedPaths) break;
+                if (await read(text, ct) is { } note && matches(note) && ++files > 0) count++;
+            }
         }
         catch (RegexMatchTimeoutException)
         {
             return null;
         }
 
+        var noun = files == 0 ? "note" : files == count ? "file" : "notes and files";
+        var nouns = noun == "notes and files" ? noun : noun + "s";
         var matching = count switch
         {
             0 => null,
-            1 => "1 archived note matches",
-            > HintedPaths => $"more than {HintedPaths} archived notes match",
-            _ => $"{count} archived notes match",
+            1 => $"1 archived {noun} matches",
+            > HintedPaths => $"more than {HintedPaths} archived {nouns} match",
+            _ => $"{count} archived {nouns} match",
         };
         return matching is null ? null : $"no match outside the archive; {matching} ({command} searches {(count == 1 ? "it" : "them")})";
     }
@@ -380,29 +428,69 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found) =>
         ShellResult.Ok(Lines.Join(NoteLines(search, options, found)));
 
-    private static List<string> NoteLines(Search search, Options options, IEnumerable<Note> found, List<VaultPath>? matched = null)
+    private static List<string> NoteLines(Search search, Options options, IEnumerable<Note> found)
     {
-        var lineNumbers = !options.Has("no-line-number");
         var output = new List<string>();
-        foreach (var note in found.OrderBy(n => n.Path.Value, TextOrder.Default))
-        {
-            var lines = Lines.Split(note.Content);
-            var matches = search.Matches(lines);
-            if (matches.Count == 0) continue;
+        foreach (var note in found.OrderBy(n => n.Path.Value, TextOrder.Default)) AddLines(search, options, note, output, null);
+        return output;
+    }
 
-            matched?.Add(note.Path);
-            var path = note.Path.Value;
-            if (options.Has("files-with-matches")) output.Add(path);
-            else if (options.Has("count")) output.Add($"{path}:{matches.Count}");
-            else
-            {
-                if (search.HasContext && output.Count > 0) output.Add("--");
-                output.AddRange(search.Render(lines, matches, (n, sep, text) =>
-                    lineNumbers ? $"{path}{sep}{n}{sep}{text}" : $"{path}{sep}{text}"));
-            }
+    /// <summary>The lines of the notes and text files in path order; each text file is read when its turn comes and
+    /// dropped once searched, so a search holds one at a time.</summary>
+    private static async Task<List<string>> NoteLinesAsync(
+        Search search, Options options, IReadOnlyList<Note> found, IReadOnlyList<StoredAttachment> texts, TextReading reader, List<VaultPath> matched, CancellationToken ct)
+    {
+        var output = new List<string>();
+        var entries = found.Select(n => (n.Path, Note: (Note?)n, Text: (StoredAttachment?)null))
+            .Concat(texts.Select(t => (t.Path, Note: (Note?)null, Text: (StoredAttachment?)t)))
+            .OrderBy(e => e.Path.Value, TextOrder.Default);
+        foreach (var (_, note, text) in entries)
+        {
+            if ((note ?? await reader.ReadAsync(text!, ct)) is { } searched) AddLines(search, options, searched, output, matched);
         }
 
         return output;
+    }
+
+    private static void AddLines(Search search, Options options, Note note, List<string> output, List<VaultPath>? matched)
+    {
+        var lines = Lines.Split(note.Content);
+        var matches = search.Matches(lines);
+        if (matches.Count == 0) return;
+
+        matched?.Add(note.Path);
+        var path = note.Path.Value;
+        if (options.Has("files-with-matches")) output.Add(path);
+        else if (options.Has("count")) output.Add($"{path}:{matches.Count}");
+        else
+        {
+            if (search.HasContext && output.Count > 0) output.Add("--");
+            var lineNumbers = !options.Has("no-line-number");
+            output.AddRange(search.Render(lines, matches, (n, sep, text) =>
+                lineNumbers ? $"{path}{sep}{n}{sep}{text}" : $"{path}{sep}{text}"));
+        }
+    }
+
+    /// <summary>Reads text files for one search, one at a time, until their sizes pass <paramref name="budget"/>
+    /// (<see cref="MaxTextBytes"/>); from then on it reads none and says it stopped.</summary>
+    private sealed class TextReading(INoteReader notes, long budget)
+    {
+        private long _left = budget;
+
+        public bool Stopped { get; private set; }
+
+        /// <summary>The file's lines as a note to search; null once the bound is reached, or if its content is gone.</summary>
+        public async Task<Note?> ReadAsync(StoredAttachment file, CancellationToken ct)
+        {
+            if (Stopped || file.Current.Size > _left)
+            {
+                Stopped = true;
+                return null;
+            }
+
+            _left -= file.Current.Size;
+            return await StoreAttachments.ReadBytesAsync(notes, file.Path, file.Current, ct) is { } bytes ? new Note(file.Path, StoreAttachments.Text(bytes)) : null;
+        }
     }
 
     private const int PagesAtATime = 100;
@@ -594,32 +682,68 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// <summary>
     /// The regions of the matches in one line that starts at <paramref name="offset"/> of the page's text: for each match
     /// the box around the items it touches, grown by max(2, 0.3 × its short side), as a text box leaves out descenders,
-    /// and whole by <see cref="Crop.Enclosing"/>. Equal ones once, at most three and how many more; null for none.
+    /// and whole by <see cref="Crop.Enclosing"/>. Beside it the box of the match itself, grown alike: a run of text has
+    /// no box per character, so its part is guessed by its share of the run's characters, and only in a run that reads
+    /// left to right. "crop=…" alone where the two are the same; in each, equal ones once, at most three and how many
+    /// more; null for none.
     /// </summary>
     private static string? Region(Search search, PageTextBoxes page, int offset, string line)
     {
-        var crops = new List<Crop>();
+        var (crops, exact) = (new List<Crop>(), new List<Crop>());
         foreach (var (start, length) in search.Spans(line))
         {
             var (from, to) = (offset + start, offset + start + length);
-            var (left, top, right, bottom) = (double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
+            var (run, part) = (new Bounds(), new Bounds());
             for (var i = FirstEndingAfter(page.Items, from); i < page.Items.Count; i++)
             {
                 var item = page.Items[i];
                 if (item.At >= to) break;
-                (left, top) = (Math.Min(left, item.X), Math.Min(top, item.Y));
-                (right, bottom) = (Math.Max(right, item.X + item.Width), Math.Max(bottom, item.Y + item.Height));
+                run.Add(item.X, item.Y, item.X + item.Width, item.Y + item.Height);
+                var (first, last) = (Math.Max(from, item.At), Math.Min(to, item.End));
+                if (item.Width < item.Height || page.Text.AsSpan(item.At, item.End - item.At).ContainsAnyInRange('֐', 'ࣿ'))
+                {
+                    part.Add(item.X, item.Y, item.X + item.Width, item.Y + item.Height);
+                }
+                else
+                {
+                    var share = item.Width / (item.End - item.At);
+                    part.Add(item.X + share * (first - item.At), item.Y, item.X + share * (last - item.At), item.Y + item.Height);
+                }
             }
 
-            if (right < left) continue;
-            var (width, height) = (right - left, bottom - top);
-            var grow = Math.Max(2, 0.3 * Math.Min(width, height));
-            if (Crop.Enclosing(left - grow, top - grow, width + 2 * grow, height + 2 * grow, page.Width, page.Height) is { } crop && !crops.Contains(crop)) crops.Add(crop);
+            if (run.Right < run.Left) continue;
+            var grow = Math.Max(2, 0.3 * Math.Min(run.Right - run.Left, run.Bottom - run.Top));
+            if (run.Grown(grow, page) is not { } crop) continue;
+            if (!crops.Contains(crop)) crops.Add(crop);
+            if (part.Grown(grow, page) is { } match && !exact.Contains(match)) exact.Add(match);
         }
 
         if (crops.Count == 0) return null;
-        var shown = string.Join(';', crops.Take(MaxRegionsPerLine));
-        return crops.Count > MaxRegionsPerLine ? $"{shown};+{crops.Count - MaxRegionsPerLine} more" : shown;
+        return exact.SequenceEqual(crops) ? Shown(crops) : $"{Shown(crops)}:match={Shown(exact)}";
+
+        static string Shown(List<Crop> boxes)
+        {
+            var shown = string.Join(';', boxes.Take(MaxRegionsPerLine));
+            return boxes.Count > MaxRegionsPerLine ? $"{shown};+{boxes.Count - MaxRegionsPerLine} more" : shown;
+        }
+    }
+
+    /// <summary>The box around what was added to it, in points of the page; empty while <see cref="Right"/> is below <see cref="Left"/>.</summary>
+    private sealed class Bounds
+    {
+        public double Left { get; private set; } = double.MaxValue;
+
+        public double Top { get; private set; } = double.MaxValue;
+
+        public double Right { get; private set; } = double.MinValue;
+
+        public double Bottom { get; private set; } = double.MinValue;
+
+        public void Add(double left, double top, double right, double bottom) =>
+            (Left, Top, Right, Bottom) = (Math.Min(Left, left), Math.Min(Top, top), Math.Max(Right, right), Math.Max(Bottom, bottom));
+
+        public Crop? Grown(double by, PageTextBoxes page) =>
+            Crop.Enclosing(Left - by, Top - by, Right - Left + 2 * by, Bottom - Top + 2 * by, page.Width, page.Height);
     }
 
     /// <summary>The index of the first item that ends after <paramref name="from"/>; the items ascend, so their ends do too.</summary>
@@ -676,10 +800,13 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         {
             if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
 
-            var below = await notes.ListNotesUnderAsync(path, ct);
+            // The text files rg searches are listed with the notes.
+            var texts = (await StoreAttachments.UnderAsync(notes, path, ct)).Where(a => a.Current.MediaType == AttachmentFormat.TextMediaType).Select(a => a.Path);
+            IReadOnlyList<VaultPath> below = [.. await notes.ListNotesUnderAsync(path, ct), .. texts];
             if (below.Count == 0 && !path.IsRoot)
             {
                 if (await notes.ReadAsync(path, ct) is not null) below = [path];
+                else if (await StoreAttachments.GetAsync(notes, path, ct) is { Current.MediaType: AttachmentFormat.TextMediaType }) below = [path];
                 else if (!await HasNothingToSearchAsync(path, ct)) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
             }
 

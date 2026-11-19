@@ -177,10 +177,12 @@ public sealed class EncryptedNoteStore(
         if (await VaultAsync(note.Path, ct) is not { } a) return false;
         var vault = a.Vault;
         note = Stored(a, note);
+        note = note with { Authorship = Authorship.After(null, note) };
         return await WriteAsync(vault, [note.Path], async session =>
         {
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(note.Ref);
+            if (Clash(vault, [], [note.Path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, note, ct)) return null;
             return () => vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
         }, ct, adding: Bytes(note.Content));
@@ -190,6 +192,8 @@ public sealed class EncryptedNoteStore(
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, next.LastWriter, next.Ref ?? WriterRef.Unknown, next.LastWriteAt, ct)).Count == 0;
 
     /// <summary>
+    /// Who wrote which line is recorded here for every note the batch writes (blame spec §5.4), from the working set's
+    /// state the compare-and-swap replaces, never from the caller's: whatever record a caller's state carries is ignored.
     /// One transaction: replaces (compare-and-swap on the revision), notes and attachments to the trash, restored
     /// attachments out of it, then the sources of all moves (notes' and attachments') are deleted (same check) before
     /// created notes and attachments, restored attachments and move targets are inserted, so a note may move to where
@@ -207,13 +211,13 @@ public sealed class EncryptedNoteStore(
         batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
 
-        // The last check of the one rule text files stand under: only strictly inside a skill's folder.
+        // The last check of the rule a skill's folder stands under: it keeps text, PDFs and images, never other bytes.
         var skillsVault = vault.Kind == VaultKinds.Skills ? access.Vault.Name : null;
-        var texts = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+        var files = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
             .Concat(batch.AttachmentMoves.Select(m => m.Target)).Concat(batch.AttachmentRestores.Select(r => r.Restored));
-        if (texts.Any(a => a.Current.MediaType == AttachmentFormat.TextMediaType && !SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
+        if (files.Any(a => a.Current.MediaType == AttachmentFormat.OctetStream && !FolderMarker.Is(a.Path) && SkillPaths.IsInSkillFolder(a.Path, skillsVault)))
         {
-            throw new InvalidOperationException("A text file outside a skill's folder; nothing was written.");
+            throw new InvalidOperationException("A binary file inside a skill's folder; nothing was written.");
         }
 
         VaultPath? conflict = null;
@@ -222,11 +226,13 @@ public sealed class EncryptedNoteStore(
         {
             withdrawn = [];
             var apply = new List<Action>();
-            foreach (var (current, next) in batch.Replaces)
+            foreach (var (current, given) in batch.Replaces)
             {
-                WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)
-                    || !await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
+                WriterRef.RequireStorable(given.Ref, kept: WriterRef.Keeps(current, given));
+                // At another revision than the working set's, the record would be computed from a state it doesn't replace.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
+                var next = given with { Authorship = Authorship.After(entry.Note, given) };
+                if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
                 {
                     return Refuse(current.Path);
                 }
@@ -284,7 +290,8 @@ public sealed class EncryptedNoteStore(
 
             foreach (var (current, _) in batch.Moves)
             {
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                // As for replaces: the target's record is computed from this entry.
+                if (!vault.Notes.TryGetValue(current.Path, out var entry) || entry.Note.Revision != current.Revision) return Refuse(current.Path);
                 var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
@@ -298,8 +305,9 @@ public sealed class EncryptedNoteStore(
                 apply.Add(() => vault.Attachments = vault.Attachments.Remove(current.Path));
             }
 
-            foreach (var created in batch.Creates)
+            foreach (var given in batch.Creates)
             {
+                var created = given with { Authorship = Authorship.After(null, given) };
                 var id = ObjectId.GenerateNewId();
                 WriterRef.RequireStorable(created.Ref);
                 if (!await InsertNoteAsync(session, vault, id, created, ct)) return Refuse(created.Path);
@@ -314,8 +322,10 @@ public sealed class EncryptedNoteStore(
                 apply.Add(() => vault.Attachments = vault.Attachments.SetItem(created.Path, (id, created)));
             }
 
-            foreach (var (current, target) in batch.Moves)
+            foreach (var (current, given) in batch.Moves)
             {
+                // The source is still in the working set: it leaves it only once the transaction stands.
+                var target = given with { Authorship = Authorship.After(vault.Notes[current.Path].Note, given) };
                 var id = ObjectId.GenerateNewId();
                 WriterRef.RequireStorable(target.Ref, kept: WriterRef.Keeps(current, target));
                 if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
@@ -339,6 +349,13 @@ public sealed class EncryptedNoteStore(
                     vault.Moves = vault.Moves.Add(move);
                 });
             }
+
+            var placed = batch.Creates.Select(c => c.Path).Concat(batch.AttachmentCreates.Select(c => c.Path))
+                .Concat(batch.AttachmentRestores.Select(r => r.Restored.Path))
+                .Concat(batch.Moves.Select(m => m.Target.Path)).Concat(batch.AttachmentMoves.Select(m => m.Target.Path)).ToList();
+            var leaving = batch.Trashes.Select(t => t.Path).Concat(batch.AttachmentTrashes.Select(t => t.Path))
+                .Concat(batch.Moves.Select(m => m.Current.Path)).Concat(batch.AttachmentMoves.Select(m => m.Current.Path));
+            if (Clash(vault, leaving, placed) is { } clash) return Refuse(clash);
 
             await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
             withdrawn = await FollowAsync(session, access, batch, by, byRef, at, ct);
@@ -375,6 +392,31 @@ public sealed class EncryptedNoteStore(
                 cancellationToken: ct);
             return move;
         }
+    }
+
+    /// <summary>Up to this many placed paths, <see cref="Clash"/> scans the vault's paths once per placed path instead of
+    /// building their folders: a few scans of some thousand keys cost less than a set of them all.</summary>
+    private const int FewPlaced = 64;
+
+    /// <summary>
+    /// The file and folder rule (<see cref="FileOrFolder"/>) once more, under the vault's gate in the write's transaction,
+    /// so two writes racing can't break it: the path in the way when <paramref name="placed"/> are stored and
+    /// <paramref name="leaving"/> are gone, or null. The writers checked it before, with their sentences.
+    /// </summary>
+    private static VaultPath? Clash(UnlockedVault vault, IEnumerable<VaultPath> leaving, IReadOnlyCollection<VaultPath> placed)
+    {
+        if (placed.Count == 0) return null;
+        // Most writes place a path or a few: look those up, rather than build a set of the whole vault under its gate.
+        if (placed.Count <= FewPlaced)
+        {
+            return FileOrFolder.Clash(
+                placed, leaving.ToHashSet(), p => vault.Notes.ContainsKey(p) || vault.Attachments.ContainsKey(p), vault.Notes.Keys.Concat(vault.Attachments.Keys));
+        }
+
+        var stored = vault.Notes.Keys.Concat(vault.Attachments.Keys).ToHashSet();
+        stored.ExceptWith(leaving);
+        stored.UnionWith(placed);
+        return FileOrFolder.Clash(placed, stored);
     }
 
     /// <summary>
@@ -885,7 +927,8 @@ public sealed class EncryptedNoteStore(
         var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
         if (deleted.DeletedCount == 0) return null;
 
-        var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset, deletedByRef);
+        // The record the trash keeps is the stored one, not one the caller's state carries.
+        var trashed = new TrashedNote(current with { Authorship = entry.Note.Authorship }, deletedBy, deletedAt, changeset, deletedByRef);
         WriterRef.RequireStorable(trashed.Ref);
         var trashId = ObjectId.GenerateNewId();
         await catalog.Trash.InsertOneAsync(
@@ -928,8 +971,10 @@ public sealed class EncryptedNoteStore(
 
             var note = latest.Trashed.Note;
             restored = NoteWriter.Restored(note, writer, reference, at, changeset);
+            restored = restored with { Authorship = Authorship.After(note, restored) };
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(restored.Ref);
+            if (Clash(vault, [], [path]) is not null) return null;
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
             var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id) & F.Eq(d => d.PathId, vault.PathId(path)), cancellationToken: ct);
             if (removed.DeletedCount == 0) return null;

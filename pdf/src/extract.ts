@@ -2,20 +2,21 @@
 
 // A page's embedded images for storing as attachments: listed in painting order, each as pdf.js
 // decoded it, turned and mirrored as the page shows it (in quarter turns), scaled to fit 8 MP and
-// encoded anew; and regions rendered at 300 dpi. analyse.ts measures the same operators, but its
-// walk stays its own so the analysis cannot change through this one. Images in hidden optional
-// content and masks under a transparent fill are listed and stored too, as measureDrawing counts
-// them: kept on purpose, so an ingest loses nothing.
+// encoded anew; and the resolution of the image a region of a page shows. analyse.ts measures the
+// same operators, but its walk stays its own so the analysis cannot change through this one.
+// Images in hidden optional content and masks under a transparent fill are listed and stored too,
+// as measureDrawing counts them: kept on purpose, so an ingest loses nothing.
 
 import { createHash } from "node:crypto";
 import { type Canvas, ImageData, createCanvas } from "@napi-rs/canvas";
 import { AnnotationMode, OPS, Util, type PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { PageViewport } from "pdfjs-dist/types/src/display/page_viewport.js";
+import { itemBox, pageText } from "./boxes.js";
 import { type Box, MIN_FIGURE, clip } from "./classify.js";
 import { type Rendered, encodeStored } from "./encode.js";
 import { MAX_SIDE } from "./image.js";
 import { PdfError, openPdf } from "./pdfjs.js";
-import { type RenderedPage, renderWith } from "./render.js";
-import { type Crop, pixels } from "./steps.js";
+import { pixels } from "./steps.js";
 
 export const MAX_STORED_PIXELS = 8_000_000;
 export const STORED_DPI = 300;
@@ -102,9 +103,8 @@ type Placement = { source: Source; turn: Turn; box: Box };
 const HEX = /^#[0-9a-f]{6}$/i;
 
 // Walks the operator list keeping the current transformation matrix and fill as pdf.js's canvas
-// does, and gives each image placement on the page, in painting order.
-function walk(fns: ArrayLike<number>, args: ArrayLike<unknown[] | null>, page: PDFPageProxy): Placement[] {
-  const viewport = page.getViewport({ scale: 1 });
+// does, and gives each image placement on the page, in painting order, in the viewport's points.
+function walk(fns: ArrayLike<number>, args: ArrayLike<unknown[] | null>, page: PDFPageProxy, viewport = page.getViewport({ scale: 1 })): Placement[] {
   const out: Placement[] = [];
   let ctm = IDENTITY;
   let fill = "#000000";
@@ -499,16 +499,58 @@ export function extractImage(pdf: Uint8Array, page: number, n: number): Promise<
   );
 }
 
-/** A region at 300 dpi, at most 8 MP and 16,384 px on a side, encoded only as asked. */
-export function renderRegion(pdf: Uint8Array, page: number, crop: Crop, rotate: number, format: "png" | "jpeg"): Promise<RenderedPage> {
-  return quietly(() =>
-    renderWith(
-      pdf,
-      page,
-      crop,
-      rotate,
-      (w, h) => Math.min(STORED_DPI / 72, Math.sqrt(MAX_STORED_PIXELS / (w * h)), MAX_SIDE / Math.max(w, h)),
-      (canvas) => encodeStored(canvas, MAX_BODY_STORED, format),
-    ),
-  );
+// The text render modes that paint nothing: invisible (3) and clipping only (7), as an OCR layer is written.
+const UNSEEN_TEXT = new Set([3, 7]);
+
+// Whether the page shows any text: a show operator under a render mode that paints. The mode belongs
+// to the graphics state, so it is saved and restored with it.
+function showsText(fns: ArrayLike<number>, args: ArrayLike<unknown[] | null>): boolean {
+  let mode = 0;
+  const stack: number[] = [];
+  for (let i = 0; i < fns.length; i++) {
+    switch (fns[i]) {
+      case OPS.save:
+        stack.push(mode);
+        break;
+      case OPS.restore:
+        mode = stack.pop() ?? mode;
+        break;
+      case OPS.setTextRenderingMode:
+        mode = Number(args[i]?.[0] ?? 0);
+        break;
+      case OPS.showText:
+      case OPS.showSpacedText:
+      case OPS.nextLineShowText:
+      case OPS.nextLineSetSpacingShowText:
+        if (!UNSEEN_TEXT.has(mode)) return true;
+    }
+  }
+  return false;
+}
+
+const holds = (outer: Box, inner: Box, slack = 0.5) =>
+  inner.x >= outer.x - slack && inner.y >= outer.y - slack && inner.x + inner.w <= outer.x + outer.w + slack && inner.y + inner.h <= outer.y + outer.h + slack;
+
+const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/**
+ * The pixels per point of the image a region of the page (in the viewport's points) lies within,
+ * the finest where several do: rendering it finer only enlarges the image's own pixels. Null where
+ * the region reaches beyond every image, or holds text of a page that shows text, as text and
+ * vector drawings stay sharp at any scale; the text of a page that shows none is an OCR layer.
+ */
+export async function nativeScale(p: PDFPageProxy, viewport: PageViewport, region: Box): Promise<number | null> {
+  const ops = await p.getOperatorList();
+  let finest: number | null = null;
+  for (const { source, box } of walk(ops.fnArray, ops.argsArray, p, viewport)) {
+    const { width, height } = declared(source);
+    if (width > 0 && height > 0 && holds(box, region)) finest = Math.max(finest ?? 0, Math.sqrt((width * height) / (box.w * box.h)));
+  }
+  if (finest === null || !showsText(ops.fnArray, ops.argsArray)) return finest;
+  const { items } = await p.getTextContent();
+  for (const { item } of pageText(items).spans) {
+    const box = itemBox(item, viewport);
+    if (box && meets(box, region)) return null;
+  }
+  return finest;
 }
