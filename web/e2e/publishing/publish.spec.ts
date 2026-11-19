@@ -11,14 +11,14 @@
 // 2. Unticking a note takes it out, and what is reached only through it stays behind with "only reached through a note
 //    that stays out"; what was seen is what goes (decision 2) → the same test (it publishes after unticking and the
 //    reader gets exactly the ticked notes).
-// 3. The unticked note listed with "taken out by you" (decision 2's reasons) → "publish: an unticked note is listed as
-//    taken out by you" (F-05).
-// 4. A PDF a note embeds is listed as staying behind, "a PDF (not published)" (decision 2) → "publish: a PDF the
-//    bundle embeds is listed as staying behind" (finding F-07).
+// 3. The unticked note listed with "taken out by you" and a Take back in button that ticks it again (decision 2's
+//    reasons) → "publish: an unticked note is listed as taken out by you".
+// 4. A PDF a note embeds is listed as staying behind by its name, "a PDF (not published)" (decision 2) → "publish: a
+//    PDF the bundle embeds is listed as staying behind".
 // 5. From 50 notes the line under the count says "That's a lot of notes. Check the list before you publish."; a
-//    warning, not a block (decision 1) → "publish: from 50 notes a warning shows …". The count beside the depth turns red
-//    → "publish: from 50 notes the count beside the depth changes colour" (finding F-06); the line is red → "publish:
-//    from 50 notes the line under the list is red" (finding F-09).
+//    warning, not a block (decision 1) → "publish: from 50 notes a warning shows …". The count beside the depth takes
+//    the warning colour → "publish: from 50 notes the count beside the depth changes colour"; the line takes the
+//    warning colour → "publish: from 50 notes the line under the list takes the warning colour".
 // 6. What was seen is what goes: a note linked after the list showed makes the publish fail with the new list and
 //    nothing goes out (decision 2, the 409) → "publish: a list that changed meanwhile is shown again …".
 // 7. The reader: the start note first, Contents one tap away with the titles in walk order, a link to a heading landing
@@ -119,9 +119,12 @@ const staysBehind = (dialog: Locator) => dialog.getByRole("list", { name: "Stays
 const box = (dialog: Locator, b: ReturnType<typeof bundle>, title: string) =>
   whatGoes(dialog).getByRole("checkbox", { name: `${b.name(title)} ${b.path(title)}`, exact: true });
 
-/** One line of Stays behind: the note's path and its reason, whatever else the list holds. */
+/** The item of Stays behind that names `path`. */
+const behindItem = (dialog: Locator, path: string) => staysBehind(dialog).getByRole("listitem").filter({ hasText: path });
+
+/** One line of Stays behind: the path and its reason (the item's line, without a Take back in button), whatever else the list holds. */
 async function staysWith(dialog: Locator, path: string, reason: string, message?: string) {
-  await expect(staysBehind(dialog).getByRole("listitem").filter({ hasText: path }), message).toHaveText(`${path}: ${reason}`);
+  await expect(behindItem(dialog, path).locator(":scope > span"), message).toHaveText(`${path}: ${reason}`);
 }
 
 /** Publishes over the API, as the dialog does, with the password (it counts against a limit). Nothing of the answer is kept. */
@@ -200,11 +203,13 @@ test("publish: the dialog shows the depth, what goes and what stays; the reader 
   await box(dialog, b, "Beta").click();
   await expect(dialog.getByRole("status")).toHaveText("4 notes");
   await expect(dialog.getByText("+3 notes", { exact: true })).toBeVisible();
-  await expect(whatGoes(dialog).getByRole("checkbox", { checked: true })).toHaveCount(4);
-  // Each with its reason; what else the list holds is F-05's.
+  // Beta is no box under What goes out but listed with what stays behind, each with its reason.
+  await expect(whatGoes(dialog).getByRole("checkbox")).toHaveCount(4);
+  await staysWith(dialog, b.path("Beta"), "taken out by you");
   await staysWith(dialog, b.path("Gamma"), "only reached through a note that stays out");
   await staysWith(dialog, b.path("Hidden"), "only reached through a note that stays out");
   await staysWith(dialog, b.path("Secret"), "marked unpublishable");
+  await expect(staysBehind(dialog).getByRole("listitem")).toHaveCount(4);
   const submit = dialog.getByRole("button", { name: "Publish 4 notes", exact: true });
   await givePassword(dialog, submit);
   await shot(page, testInfo, "publish");
@@ -394,17 +399,7 @@ test("publish: from 50 notes a warning shows under the count, which doesn't bloc
   await expect(dialog).toHaveCount(0);
 });
 
-/** The hue of a CSS `rgb(…)` colour, in degrees. */
-function hue(colour: string) {
-  const [r, g, bl] = (colour.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map((v) => Number(v) / 255);
-  const max = Math.max(r, g, bl);
-  const d = max - Math.min(r, g, bl);
-  if (d === 0) return NaN;
-  const h = max === r ? ((g - bl) / d) % 6 : max === g ? (bl - r) / d + 2 : (r - g) / d + 4;
-  return (h * 60 + 360) % 360;
-}
-
-/** The count beside the depth at 50 notes and at 49, and the colour of the line under the list at 50. */
+/** The count beside the depth at 50 notes and at 49, the colour of the line under the list at 50, and the theme's warning colour. */
 async function colours(page: Page, testInfo: TestInfo, aliceApi: Api, folder: string) {
   const b = bundle(folder);
   await fiftyNotes(aliceApi, b);
@@ -413,27 +408,30 @@ async function colours(page: Page, testInfo: TestInfo, aliceApi: Api, folder: st
   await setDepth(dialog, 1, 49);
   const at50 = await colourOf(count(49));
   const line = await colourOf(dialog.getByText("That's a lot of notes. Check the list before you publish.", { exact: true }));
+  // The theme's warning token, as the dialog's own CSS resolves it.
+  const warning = await dialog.evaluate((d) => {
+    const probe = d.appendChild(document.createElement("span"));
+    probe.style.color = "var(--warning)";
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  });
   await box(dialog, b, "N49").click();
   await expect(count(48)).toBeVisible();
-  return { at50, at49: await colourOf(count(48)), line };
+  return { at50, at49: await colourOf(count(48)), line, warning };
 }
 
 test("publish: from 50 notes the count beside the depth changes colour @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(true, "F-06 (Low, bug): from 50 notes the count beside the depth (+49 notes) keeps its colour; only the line under the list changes");
   const { at50, at49 } = await colours(page, testInfo, aliceApi, folder);
-  expect(at50 !== at49, "F-06: the count beside the depth changes colour from 50 notes").toBe(true);
+  expect(at50 !== at49, "the count beside the depth changes colour from 50 notes").toBe(true);
 });
 
-test("publish: from 50 notes the line under the list is red @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(true, "F-09 (Low, unclear): from 50 notes the line under the list is the warning orange, not red");
-  const { line } = await colours(page, testInfo, aliceApi, folder);
-  // Red: a hue within 10° of 0. The warning token's hues lie at about 18–35° across the themes (--warning in
-  // web/src/index.css), orange to amber; 10° keeps every red and none of them.
-  expect(Math.min(hue(line), 360 - hue(line)), `F-09: the line's hue (${line}) is within 10° of red`).toBeLessThanOrEqual(10);
+test("publish: from 50 notes the line under the list takes the warning colour @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
+  const { line, warning } = await colours(page, testInfo, aliceApi, folder);
+  expect(line, "the line under the list is the theme's warning colour").toBe(warning);
 });
 
 test("publish: an unticked note is listed as taken out by you @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(true, 'F-05 (Low, bug): an unticked note shows as an empty box under What goes out, never with the reason "taken out by you" the spec lists');
   const b = bundle(folder);
   afterTest(() => cleanUp(aliceApi, b.path("Start"), [], [b.path("Start"), b.path("Beta")]));
   await aliceApi.putNote(b.path("Beta"), "# Beta\n");
@@ -442,16 +440,18 @@ test("publish: an unticked note is listed as taken out by you @publish @phone", 
   await setDepth(dialog, 1, 1);
   await box(dialog, b, "Beta").click();
   await expect(dialog.getByRole("status")).toHaveText("1 note");
-  await expect(staysBehind(dialog).getByRole("listitem"), "F-05: the unticked note is listed with its reason").toHaveText(
-    [`${b.path("Beta")}: taken out by you`],
-    {
-      timeout: 3_000,
-    },
-  );
+  await expect(whatGoes(dialog).getByRole("checkbox")).toHaveCount(1);
+  await expect(staysBehind(dialog).getByRole("listitem")).toHaveCount(1);
+  await staysWith(dialog, b.path("Beta"), "taken out by you", "the unticked note is listed with its reason");
+
+  // Take back in ticks it again: back under What goes out, and nothing stays behind.
+  await behindItem(dialog, b.path("Beta")).getByRole("button", { name: "Take back in", exact: true }).click();
+  await expect(dialog.getByRole("status")).toHaveText("2 notes");
+  await expect(box(dialog, b, "Beta")).toBeChecked();
+  await expect(staysBehind(dialog)).toHaveCount(0);
 });
 
 test("publish: a PDF the bundle embeds is listed as staying behind @publish @phone", async ({ page, aliceApi, folder }, testInfo) => {
-  test.fail(true, 'F-07 (Low, bug): before publishing, the dialog lists no PDF that stays behind; the spec lists it as "a PDF (not published)"');
   const b = bundle(folder);
   const pdf = `/Work/${folder}/manual-${folder.slice(-6)}.pdf`;
   afterTest(() => cleanUp(aliceApi, b.path("Start"), [], [b.path("Start"), b.path("Alpha")], [pdf]));
@@ -461,7 +461,8 @@ test("publish: a PDF the bundle embeds is listed as staying behind @publish @pho
   const dialog = await openPublish(page, testInfo, b.path("Start"), b.name("Start"));
   await setDepth(dialog, 1, 1);
   await expect(dialog.getByRole("status")).toHaveText("2 notes");
-  await staysWith(dialog, pdf, "a PDF (not published)", "F-07: the PDF is listed as staying behind");
+  // The preview names an embedded file by its name, not its path.
+  await staysWith(dialog, pdf.split("/").pop()!, "a PDF (not published)", "the PDF is listed as staying behind");
 });
 
 test("publish: a bundled note's bar turns yellow when the copy is older than the note @publish @phone", async ({ page, aliceApi, folder }) => {

@@ -26,11 +26,15 @@ const reasons: Record<string, string> = {
 
 const notesText = (n: number) => (n === 1 ? "1 note" : `${n} notes`);
 
+// The Take back in button: the secondary button, 48 px tall as a touch target in a list.
+const takeBackClass = secondaryButtonClass.replace("min-h-11", "min-h-12");
+
 const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 
 /**
  * The list a publication takes (Publish 2.0 decision 2): every note with a box to take it out (the start note stays),
- * then what stays behind and why. Nothing is published before this list was on screen.
+ * then what stays behind and why: the notes left out, an unticked one with a button to take it back in, and the PDFs the
+ * notes embed. Nothing is published before this list was on screen.
  */
 function BundleList({
   preview,
@@ -46,7 +50,12 @@ function BundleList({
   const id = useId();
   const count = preview.notes.length;
   const many = count >= manyNotes;
-  const behind = preview.leftOut.filter((l) => l.reason !== "without");
+  // A path taken out that the preview doesn't name is listed too, so that it can be taken back in.
+  const behind = [
+    ...preview.leftOut,
+    ...without.filter((w) => !preview.notes.some((n) => n.path === w) && !preview.leftOut.some((l) => l.path === w)).map((path) => ({ path, reason: "without" })),
+  ];
+  const pdfs = preview.plain.filter((p) => p !== pdfsNotYet && p.toLowerCase().endsWith(".pdf"));
   return (
     <div className="flex flex-col gap-3">
       <p role="status" className={`text-sm ${many ? "font-semibold text-warning" : "text-text-body"}`}>
@@ -64,24 +73,30 @@ function BundleList({
             </span>
           </label>
         ))}
-        {without
-          .filter((w) => !preview.notes.some((n) => n.path === w))
-          .map((w) => (
-            <label key={w} className="flex min-h-9 items-center gap-2 text-sm text-muted">
-              <input type="checkbox" checked={false} onChange={() => onToggle(w)} />
-              <span className="min-w-0 font-mono text-[12px] break-words">{w}</span>
-            </label>
-          ))}
       </fieldset>
-      {behind.length > 0 && (
+      {behind.length + pdfs.length > 0 && (
         <div>
           <h3 id={`${id}-left`} className="text-sm font-semibold text-text">
             Stays behind
           </h3>
           <ul aria-labelledby={`${id}-left`} className="text-sm text-text-body">
             {behind.map((l) => (
-              <li key={l.path} className="break-words">
-                <span className="font-mono text-[12px]">{l.path}</span>: {reasons[l.reason] ?? l.reason}
+              <li key={l.path} className="flex flex-wrap items-center gap-x-2 break-words">
+                <span className="min-w-0">
+                  <span className="font-mono text-[12px]">{l.path}</span>: {reasons[l.reason] ?? l.reason}
+                </span>
+                {l.reason === "without" && (
+                  <button type="button" onClick={() => onToggle(l.path)} className={takeBackClass}>
+                    Take back in
+                  </button>
+                )}
+              </li>
+            ))}
+            {pdfs.map((name) => (
+              <li key={`pdf:${name}`} className="break-words">
+                <span>
+                  <span className="font-mono text-[12px]">{name}</span>: a PDF (not published)
+                </span>
               </li>
             ))}
           </ul>
@@ -229,7 +244,7 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
                   aria-describedby={`${id}-depth-hint`}
                   className={`${inputClass} w-20`}
                 />
-                <span id={`${id}-depth-hint`} className="text-sm text-text-body">
+                <span id={`${id}-depth-hint`} className={`text-sm ${bundle && preview && preview.notes.length >= manyNotes ? "font-semibold text-warning" : "text-text-body"}`}>
                   {!bundle ? "This note only" : preview ? `+${notesText(preview.notes.length - 1)}` : "Counting …"}
                 </span>
               </div>

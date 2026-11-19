@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json, user } from "../test/app";
+import { pdfsNotYet } from "../api/publications";
 import PublishDialog from "./PublishDialog";
 
 afterEach(() => {
@@ -162,6 +163,16 @@ describe("PublishDialog", () => {
       ...extra,
     });
 
+    /** The item of Stays behind whose line (the path and the reason, not its button) reads `text`. */
+    const behindItem = (text: string) =>
+      vi.waitFor(() => {
+        const item = within(screen.getByRole("list", { name: "Stays behind" }))
+          .getAllByRole("listitem")
+          .find((li) => li.firstElementChild?.textContent === text);
+        expect(item, text).toBeDefined();
+        return item!;
+      });
+
     const base = (handlers: Parameters<typeof fakeApi>[0]) =>
       fakeApi({
         "GET /api/session": session(true),
@@ -213,6 +224,75 @@ describe("PublishDialog", () => {
       await vi.waitFor(() => expect(asked.at(-1)).toBe("?depth=1&without=Plan.md"));
       expect(await screen.findByRole("button", { name: "Publish 1 note" })).toBeInTheDocument();
       expect(screen.getByRole("checkbox", { name: /Questions/ })).toBeDisabled();
+    });
+
+    it("lists an unticked note as taken out by you, and takes it back in", async () => {
+      const asked: string[] = [];
+      base({
+        "GET /api/publication-previews/Work/Questions.md": (r) => {
+          const query = new URL(r.url).search;
+          asked.push(query);
+          // As the server answers: the unticked note is left out with the reason "without".
+          return json(
+            200,
+            query.includes("without")
+              ? preview([NOTE], { leftOut: [{ path: "/Work/Salaries.md", reason: "unpublishable" }, { path: "/Work/Beta.md", reason: "without" }] })
+              : preview([NOTE, "/Work/Beta.md"]),
+          );
+        },
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}1");
+      await userEvent.click(await screen.findByRole("checkbox", { name: /Beta/ }));
+      await vi.waitFor(() => expect(asked.at(-1)).toBe("?depth=1&without=Beta.md"));
+      const item = await behindItem("/Work/Beta.md: taken out by you");
+      expect(within(screen.getByRole("group", { name: "What goes out" })).queryByRole("checkbox", { name: /Beta/ })).not.toBeInTheDocument();
+      const back = within(item).getByRole("button", { name: "Take back in" });
+      expect(back).toHaveClass("min-h-12");
+      await userEvent.click(back);
+      await vi.waitFor(() => expect(asked.at(-1)).toBe("?depth=1"));
+      expect(await within(screen.getByRole("group", { name: "What goes out" })).findByRole("checkbox", { name: /Beta/ })).toBeChecked();
+      expect(screen.queryByText(/taken out by you/)).not.toBeInTheDocument();
+    });
+
+    it("lists a note taken out that the preview doesn't name, so it can be taken back in", async () => {
+      base({ "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE])) });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PublishDialog path={NOTE} onClose={vi.fn()} update={{ depth: 1, without: ["/Work/Gone.md"] }} />
+        </QueryClientProvider>,
+      );
+      const item = await behindItem("/Work/Gone.md: taken out by you");
+      expect(within(item).getByRole("button", { name: "Take back in" })).toBeInTheDocument();
+    });
+
+    it("lists the PDFs that stay behind, by name", async () => {
+      base({
+        "GET /api/publication-previews/Work/Questions.md": () =>
+          json(200, preview([NOTE, "/Work/Plan.md"], { leftOut: [], plain: ["manual.pdf", "photo.png", "Scan.PDF", pdfsNotYet] })),
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}1");
+      const list = await screen.findByRole("list", { name: "Stays behind" });
+      expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["manual.pdf: a PDF (not published)", "Scan.PDF: a PDF (not published)"]);
+      expect(screen.queryByText(/photo\.png/)).not.toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(pdfsNotYet))).not.toBeInTheDocument();
+    });
+
+    it("warns beside the depth from 50 notes on, not at 49", async () => {
+      let notes = 50;
+      base({
+        "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE, ...Array.from({ length: notes - 1 }, (_, i) => `/Work/n${i}.md`)])),
+      });
+      renderDialog();
+      await userEvent.type(await screen.findByLabelText("How many links deep"), "{backspace}1");
+      expect(await screen.findByText("+49 notes")).toHaveClass("font-semibold", "text-warning");
+      notes = 49;
+      await userEvent.type(screen.getByLabelText("How many links deep"), "{backspace}2");
+      const hint = await screen.findByText("+48 notes");
+      expect(hint).toHaveClass("text-text-body");
+      expect(hint).not.toHaveClass("text-warning");
     });
 
     it("warns from 50 notes on", async () => {

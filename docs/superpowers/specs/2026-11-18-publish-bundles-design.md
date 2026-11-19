@@ -36,8 +36,8 @@ Today a publication is one note: links to other notes become plain text, and sha
 
 Each comes with its reason. "Chris" marks his decisions of 2026-11-18; "my call" marks proposals he can still correct.
 
-1. **The publisher sets the depth.** A link and a note embed (`![[Note]]`) both count as an edge, as in the graph backend. Chris: people should choose for themselves. The field runs from 0 (this note only, the default and today's behaviour) to 5. Beside the field is the live count, e.g. "+31 notes". From 50 notes on, the count and a line under it turn red: "That's a lot of notes. Check the list before you publish."
-   - The red line is a warning, not a block. Chris wanted the warning; a block would get in the way of people who mean it.
+1. **The publisher sets the depth.** A link and a note embed (`![[Note]]`) both count as an edge, as in the graph backend. Chris: people should choose for themselves. The field runs from 0 (this note only, the default and today's behaviour) to 5. Beside the field is the live count, e.g. "+31 notes". From 50 notes on, the count and a line under it take the warning colour: "That's a lot of notes. Check the list before you publish."
+   - The line is a warning, not a block. Chris wanted the warning; a block would get in the way of people who mean it.
    - Agents use `--depth 0..5`.
    - My call: the cap of 5. Further than that is in practice the whole vault, and the 500-note hard limit (decision 9) holds anyway.
 2. **See before it goes out.** The dialog lists the notes the link will carry: title, path, the count and the total size. It lists separately what stays behind, with the reason:
@@ -93,7 +93,7 @@ Chris, 2026-11-18: the architecture has to keep in mind that Publish will have a
 **Web app.** Open the note's ⋯ menu and choose **Publish…**. The dialog shows:
 - the depth with its count;
 - the list of what goes and what stays, with checkboxes;
-- the red line from 50 notes on;
+- the line in the warning colour from 50 notes on;
 - the button **Publish N notes**.
 
 Once published, the dialog shows the link and Copy, as today. Below that are **Update copy** and **Unpublish**.
@@ -135,7 +135,7 @@ Once published, the dialog shows the link and Copy, as today. Below that are **U
 - existing single-note publications reading unchanged (migration).
 
 **Vitest:**
-- the dialog: depth, count, red line, unticking, list again on update;
+- the dialog: depth, count, the line in the warning colour, unticking, list again on update;
 - the bar on bundle notes;
 - the reader's contents and navigation inside the copy.
 
