@@ -27,7 +27,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
 
     public string Usage => "skills ls|find|cat|copy|check";
 
-    public string Summary => "find, read and check the user's skills";
+    public string Summary => "find, read, check and copy skills";
 
     public string Help => """
         skills ls [/<vault>]                 every skill you can see: name, where it is, who last changed it, its description
@@ -43,8 +43,9 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         start of every session: read it and follow it before your first answer. Elsewhere the mark counts
         for nothing: a vault shared with the user, or another user's change, makes it an ordinary skill.
         A skill last changed by another user is theirs: check that it fits before you follow it.
-        skills only reads and finds: bringing skills in, sharing them, moving them between vaults and taking
-        updates are the user's, in Kumbu²'s Skills screen. Change a skill's files with write and edit.
+        skills reads, finds and copies a built-in skill; it changes no skill: bringing skills in, sharing them,
+        moving them between vaults and taking updates are the user's, in Kumbu²'s Skills screen.
+        write and edit change SKILL.md and a skill's other notes; its other text files are replaced whole with write.
 
         skills find "write a release post"
         skills cat write-as-alice
@@ -73,7 +74,7 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
             "copy" when operands.Count is 1 or 2 => await CopyAsync(operands[0], operands.ElementAtOrDefault(1), ct),
             "ls" or "check" => Invalid($"{command}: too many arguments{CommandArgs.QuoteHint}"),
             "cat" or "copy" => Invalid(operands.Count == 0 ? $"{command}: missing operand (help skills)" : $"{command}: too many arguments{CommandArgs.QuoteHint}"),
-            _ => Invalid($"skills: no subcommand '{args[0]}'; skills reads and finds ({Subcommands}). Bringing skills in, sharing and updates are the user's, in the Skills screen"),
+            _ => Invalid($"skills: no subcommand '{args[0]}'; skills reads, finds and copies a built-in skill ({Subcommands}). Bringing skills in, sharing and updates are the user's, in the Skills screen"),
         };
     }
 

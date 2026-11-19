@@ -48,7 +48,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
 
     public string Summary => "read an XML file: its root and elements, or the nodes an XPath picks";
 
-    public string Help => """
+    public string Help => $"""
         xml [--xml|--count] [--ns prefix=uri]… <path> [xpath]
           Read an XML file (a text file, whatever its name). Without an XPath: the root element, its
           namespaces, and the names of the elements two levels below it, with how often each occurs.
@@ -60,8 +60,9 @@ public sealed partial class Xml(INoteReader notes) : ICommand
                              element declares work as they are, and the document's default namespace is the prefix d:
                              in an Atom feed, //d:entry/d:title. XPath names an element without a prefix only in no namespace.
           A document with a DTD (<!DOCTYPE …>) is refused: Kumbu² neither expands its entities nor reads anything
-          outside the file. A call stops after 10 seconds. An XPath is at most 1,000 characters long, and its
-          concat() calls take at most 8 arguments in all.
+          outside the file. Reading the file and the overview have no time limit; an XPath and its printing
+          stop after {Seconds} seconds. An XPath is at most {MaxLength.ToString("N0", CultureInfo.InvariantCulture)} characters long, and its concat() calls take
+          at most {MaxConcatArguments} arguments in all.
 
           xml /Work/feed.xml
           xml /Work/feed.xml '//item/title'
@@ -72,6 +73,8 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         """;
 
     public bool ReadsInput => false;
+
+    private string Seconds => Budget.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
@@ -135,7 +138,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return ShellResult.Error($"xml: '{xpath}' took longer than {Budget.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} seconds on {Shown(path)}; narrow the XPath");
+            return ShellResult.Error($"xml: '{xpath}' took longer than {Seconds} seconds on {Shown(path)}; narrow the XPath");
         }
     }
 

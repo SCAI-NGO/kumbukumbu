@@ -27,19 +27,20 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
 
     public string Name => "pdfimages";
 
-    public string Usage => "pdfimages <pdf> [pages] <dir>/";
+    public string Usage => Forms;
 
     public string Summary => "store a PDF's pictures as images, to place in notes";
 
-    public string Help => """
+    public string Help => $"""
         pdfimages <pdf> [pages] <folder>/
         pdfimages <pdf> <page> --crop x,y,w,h <file.png>
         pdfimages --list <pdf> [pages]
           Store the pictures of a PDF as image attachments, to place in notes. pages is N, N-M or N- (to the end),
           all pages if omitted.
-          <folder>/         the images the pages paint, each as <pdf name>-p<page>-<n>.png, n counting the images
-                            of its page from 1 in painting order; the folder is made if it is missing
-          --crop x,y,w,h    one region of one page, rendered anew at 300 dpi (within 8 megapixels), into a .png,
+          <folder>/         the images the pages paint, each as <pdf name>-p<page>-<n>.png (.jpg where it is stored
+                            as a JPEG), n counting the images of its page from 1 in painting order; the folder is
+                            made if it is missing
+          --crop x,y,w,h    one region of one page, rendered anew at {StoredDpi} dpi (within 8 megapixels), into a .png,
                             .jpg or .jpeg file: a PNG unless the target is .jpg or .jpeg. x,y,w,h in points, as 'pdf
                             info' gives the regions. Only drawings need it (charts, diagrams, schematics): the images
                             of a page come whole and sharper from the folder form
@@ -51,11 +52,14 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
           An image is stored at 8 megapixels at most (a larger one is scaled down, and the output says from what), as
           a PNG, or a JPEG where the PNG would pass 15 MB. An image painted on several pages is stored once, its line
           naming every page; duplicates are found within one call, so a later call stores a repeated image again.
-          It stores at most 500 images in one call; for more, it stores nothing and names a page range that fits.
+          It stores at most {MaxImages} images in one call; for more, it stores nothing and names a page range that fits;
+          when the first page alone has more than {MaxImages}, it suggests storing its pictures in regions with --crop.
           pdfimages never overwrites: if a target exists, nothing is written. Images of more than 50 megapixels
-          can't be read: the output names their pages, to look at with pdf --crop. A long PDF stops after about
-          20 seconds, the last line naming the pages to go on with. A call stopped within a page says which of its
-          files are stored. A writing command: it needs write access to the folder.
+          can't be read: the output names their pages, to look at with pdf --crop. A long PDF stops early, the last
+          line naming the pages to go on with: --list stops after about {Seconds(Budget / 2)} seconds; storing stops at the first
+          page boundary after {Seconds(Budget)} seconds; after {Seconds(Ceiling)} it stops even within a page, and names that page as
+          partly stored. A call stopped within a page says which of its files are stored. A writing command: it
+          needs write access to the folder.
 
           pdfimages --list "/Work/Pump manual.pdf" 1-10
           pdfimages "/Work/Pump manual.pdf" 1-10 "/Work/Pump manual/images/"
@@ -64,8 +68,10 @@ public sealed class PdfImages(INoteReader notes, IAttachmentPixels pixels, Attac
 
     public bool ReadsInput => false;
 
+    private static string Seconds(TimeSpan time) => time.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+
     /// <summary>At most this many images are stored in one call, counted after the small ones and duplicates are left out.</summary>
-    private const int MaxImages = 500;
+    internal const int MaxImages = 500;
 
     private sealed record Call(VaultPath Path, AttachmentState State, PageRange Range, bool All, long Started);
 
