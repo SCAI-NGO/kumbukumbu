@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { flowMap, parseProperties, splitFrontmatter } from "./properties";
+import { flowMap, parseProperties, splitFrontmatter, type Property } from "./properties";
 
 /** A block in a note's body that looks like frontmatter: 0-based lines of its opening and closing `---`. */
 export type PropertyBlock = { start: number; end: number; keys: string[] };
@@ -15,7 +15,7 @@ const withoutBom = (content: string) =>
   content.startsWith(BOM) ? { bom: BOM, text: content.slice(1) } : { bom: "", text: content };
 
 /** The frontmatter's closing line as `splitFrontmatter` finds it, or -1 where there is none. */
-function frontmatterEnd(lines: string[]): number {
+export function frontmatterEnd(lines: string[]): number {
   if (lines[0]?.trimEnd() !== "---") return -1;
   return lines.findIndex((l, i) => i > 0 && (l.trimEnd() === "---" || l.trimEnd() === "..."));
 }
@@ -185,6 +185,71 @@ export function addProperty(
   // Written only when it reads back as given, so the box never turns into raw text.
   if (propertiesOf(added)?.find((p) => p.key === name)?.value !== value) return { refused: "unreadable" };
   return { content: bom + added };
+}
+
+/** A property to merge into a note's, and for a text the YAML it is written as (`yamlValue` of it where not given). */
+export type Merged = Property & { written?: string };
+
+/** The lines a property the note lacks is added as: a list one `- item` per line below its key. */
+const propertyLines = ({ key, value, written }: Merged): string[] => {
+  if (Array.isArray(value)) return value.length ? [`${key}:`, ...value.map((v) => `  - ${yamlValue(v)}`)] : [`${key}: []`];
+  const text = written ?? yamlValue(value);
+  return [text === "" ? `${key}:` : `${key}: ${text}`];
+};
+
+/** The frontmatter's lines with `items` after the list at `key` (`own` its items): in its brackets where they read there, else below the key. */
+function withItems(lines: string[], key: string, own: string[], items: string[]): string[] {
+  const end = frontmatterEnd(lines);
+  const at = lines.findIndex((l, i) => i > 0 && i < end && /^[^\s:#][^:]*:/.test(l) && l.slice(0, l.indexOf(":")).trim() === key);
+  const cr = lines[at].endsWith("\r") ? "\r" : "";
+  const line = lines[at].replace(/\r$/, "");
+  const colon = line.indexOf(":");
+  if (line.slice(colon + 1).trim().startsWith("[")) {
+    // Plain items only: a quoted one may hold a comma, which an inline list can't be read back with (properties.ts).
+    if (items.every((i) => yamlValue(i) === i)) {
+      const close = line.lastIndexOf("]");
+      const before = line.slice(0, close).trimEnd();
+      const inline = `${before}${before.endsWith("[") ? "" : ", "}${items.join(", ")}${line.slice(close)}${cr}`;
+      return [...lines.slice(0, at), inline, ...lines.slice(at + 1)];
+    }
+    const below = [line.slice(0, colon + 1), ...[...own, ...items].map((i) => `  - ${yamlValue(i)}`)].map((l) => l + cr);
+    return [...lines.slice(0, at), ...below, ...lines.slice(at + 1)];
+  }
+  let last = at;
+  while (last + 1 < end && /^\s+-(\s|$)|^-\s/.test(lines[last + 1])) last++;
+  const mark = last > at ? `${/^\s*-/.exec(lines[last])![0]} ` : "  - ";
+  return [...lines.slice(0, last + 1), ...items.map((i) => `${mark}${yamlValue(i)}${cr}`), ...lines.slice(last + 1)];
+}
+
+/**
+ * The note's text with properties merged in, as Obsidian merges a template's: a key the note lacks is added as the
+ * frontmatter's last line (created at the top when there is none); a list the note has, or a key it has without a
+ * value, takes the items it lacks after its own; a text it has stays. Every other byte as it was. Refused for an
+ * unreadable frontmatter, or one that wouldn't read back.
+ */
+export function mergeProperties(content: string, add: Merged[]): { content: string } | { refused: "unreadable" } {
+  const { bom, text } = withoutBom(content);
+  const { frontmatter } = splitFrontmatter(text);
+  const props = frontmatter === null ? [] : parseProperties(frontmatter);
+  if (!props) return { refused: "unreadable" };
+  let lines = text.split("\n");
+  const added: string[] = [];
+  for (const p of add) {
+    const has = props.find((n) => n.key === p.key);
+    if (!has) {
+      added.push(...propertyLines(p));
+      continue;
+    }
+    // A text stays, and so does a key without a value where the template has a text too.
+    if (!Array.isArray(has.value) && (has.value !== "" || !Array.isArray(p.value))) continue;
+    const own = Array.isArray(has.value) ? has.value : [];
+    const items = [...new Set(Array.isArray(p.value) ? p.value : [p.value])].filter((i) => i !== "" && !own.includes(i));
+    if (items.length) lines = withItems(lines, p.key, own, items);
+  }
+  const merged = added.length ? withProperties(lines.join("\n"), added) : lines.join("\n");
+  // Written only when it reads back, so the box never turns into raw text.
+  if (merged !== text && !propertiesOf(merged)) return { refused: "unreadable" };
+  return { content: bom + merged };
 }
 
 /**

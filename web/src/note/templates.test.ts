@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { fillPlaceholders, formatMoment } from "./templates";
+import { fillPlaceholders, formatMoment, templateEdit } from "./templates";
 
 // Thursday 2026-11-19, 14:05:09 in Vienna (UTC+1).
 const thursday = new Date("2026-11-19T13:05:09Z");
@@ -81,5 +81,102 @@ describe("formatMoment", () => {
 
   it("names days and months in English whatever the browser's language", () => {
     expect(formatMoment(new Date("2026-09-01T10:00:00Z"), "Europe/Vienna", "ddd dddd MMM MMMM")).toBe("Tue Tuesday Sep September");
+  });
+});
+
+/** The note's text after the edit, and where the caret is. */
+function inserted(note: string, template: string, start = note.length, end = start) {
+  const { edit, hint } = templateEdit(note, start, end, template, at);
+  const text = note.slice(0, edit.start) + edit.text + note.slice(edit.end);
+  return { text, caret: [edit.selStart, edit.selEnd], hint, edit };
+}
+
+describe("templateEdit", () => {
+  it("puts the body at the caret, replacing a selection, the caret after it", () => {
+    const { text, caret, hint } = inserted("# Notes\n\nold\n", "## {{title}} on {{date}}\n", 9, 12);
+    expect(text).toBe("# Notes\n\n## Weekly on 2026-11-19\n\n");
+    expect(caret).toEqual([9 + "## Weekly on 2026-11-19\n".length, 9 + "## Weekly on 2026-11-19\n".length]);
+    expect(hint).toBeNull();
+  });
+
+  it("adds the keys the note lacks and keeps a scalar it has", () => {
+    const note = "---\nstatus: open\n---\n# Notes\n";
+    const { text } = inserted(note, "---\nstatus: draft\ntype: meeting\n---\n## Agenda\n");
+    expect(text).toBe("---\nstatus: open\ntype: meeting\n---\n# Notes\n## Agenda\n");
+  });
+
+  it("unites lists in the note's order, appending what is new, inline and below the key", () => {
+    const note = "---\ntags: [work, b]\naliases:\n  - Weekly\n---\n";
+    const { text } = inserted(note, "---\ntags:\n  - b\n  - meeting\naliases: [Weekly, Jour fixe]\n---\n");
+    expect(text).toBe("---\ntags: [work, b, meeting]\naliases:\n  - Weekly\n  - Jour fixe\n---\n");
+  });
+
+  it("unites any list, and takes a scalar of the template into the note's list", () => {
+    const note = "---\nattendees: [Ada]\nprojects: []\n---\n";
+    const { text } = inserted(note, "---\nattendees: [Ada, Liz]\nprojects: Kumbu\n---\n");
+    expect(text).toBe("---\nattendees: [Ada, Liz]\nprojects: [Kumbu]\n---\n");
+  });
+
+  it("gives a key without a value the template's list", () => {
+    const { text } = inserted("---\ntags:\n---\n", "---\ntags: [meeting]\n---\n");
+    expect(text).toBe("---\ntags:\n  - meeting\n---\n");
+  });
+
+  it("writes a list below its key where a new item wouldn't read inline", () => {
+    const { text } = inserted("---\ntags: [work]\n---\n", '---\ntags:\n  - "#x"\n---\n');
+    expect(text).toBe('---\ntags:\n  - work\n  - "#x"\n---\n');
+  });
+
+  it("gives a note without properties the template's, at the top", () => {
+    const { text, caret } = inserted("# Notes\n", "---\ntags: [meeting]\ncreated: {{date}}\n---\n## Agenda\n");
+    expect(text).toBe("---\ntags:\n  - meeting\ncreated: 2026-11-19\n---\n# Notes\n## Agenda\n");
+    expect(caret[0]).toBe(text.length);
+  });
+
+  it("fills placeholders in values, keeping how the template writes them where they still read", () => {
+    const { text } = inserted("---\nstatus: open\n---\n", '---\nwhen: {{date}} {{time}}\ntopic: "{{title}}: notes"\nday: {{date:dddd}}\nkind: {{title}}\n---\n');
+    expect(text).toBe('---\nstatus: open\nwhen: 2026-11-19 14:05\ntopic: "Weekly: notes"\nday: Thursday\nkind: Weekly\n---\n');
+  });
+
+  it("quotes a filled value that wouldn't read back as written", () => {
+    const { edit } = templateEdit("", 0, 0, "---\nsubject: {{title}}\n---\n", { ...at, title: "a # b" });
+    expect(edit.text).toBe('---\nsubject: "a # b"\n---\n');
+  });
+
+  it("inserts only the body, with a hint, where the template's properties can't be read", () => {
+    const { text, hint } = inserted("---\nstatus: open\n---\n", "---\nlabel: x # a comment\n---\n## Agenda\n");
+    expect(text).toBe("---\nstatus: open\n---\n## Agenda\n");
+    expect(hint).toBe("The template's properties weren't added: the template's properties can't be read.");
+  });
+
+  it("inserts only the body, with a hint, where the note's properties can't be read", () => {
+    const note = "---\nnested:\n  key: v\n---\n# Notes\n";
+    const { text, hint } = inserted(note, "---\ntags: [meeting]\n---\n## Agenda\n");
+    expect(text).toBe(`${note}## Agenda\n`);
+    expect(hint).toBe("The template's properties weren't added: this note's properties can't be read.");
+  });
+
+  it("puts the body below the properties when the caret is in them", () => {
+    const note = "---\nstatus: open\n---\n# Notes\n";
+    const { text } = inserted(note, "---\ntype: meeting\n---\n## Agenda\n", 6, 8);
+    expect(text).toBe("---\nstatus: open\ntype: meeting\n---\n## Agenda\n# Notes\n");
+  });
+
+  it("changes nothing above the caret for a template without properties: one edit of the selection", () => {
+    const note = "---\nstatus: open\n---\n# Notes\n";
+    const { edit } = inserted(note, "## Agenda\n");
+    expect(edit).toMatchObject({ start: note.length, end: note.length, text: "## Agenda\n" });
+  });
+
+  it("is one edit from the first change in the properties to the caret", () => {
+    const note = "---\nstatus: open\n---\n# Notes\n\nend";
+    const { edit } = inserted(note, "---\ntype: meeting\n---\nbody", note.indexOf("end"));
+    expect(edit.start).toBe("---\nstatus: open\n".length);
+    expect(edit.end).toBe(note.indexOf("end"));
+  });
+
+  it("keeps a note's BOM and CRLF line endings", () => {
+    const { text } = inserted("﻿---\r\nstatus: open\r\n---\r\n", "---\ntype: meeting\n---\n");
+    expect(text).toBe("﻿---\r\nstatus: open\r\ntype: meeting\r\n---\r\n");
   });
 });
