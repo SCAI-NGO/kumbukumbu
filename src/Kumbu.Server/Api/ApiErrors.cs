@@ -142,6 +142,12 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status500InternalServerError, e.Message);
         }
+        // A file larger than 15 MB asked for whole, which Kumbu² keeps but doesn't read (files spec, decision 12): the
+        // request asked for what this server doesn't do, not a fault of it.
+        catch (Kumbu.Core.Attachments.TooLargeToReadException e)
+        {
+            return Result(StatusCodes.Status400BadRequest, e.Message);
+        }
         // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
         catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
         {
