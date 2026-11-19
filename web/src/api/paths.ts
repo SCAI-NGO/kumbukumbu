@@ -7,6 +7,18 @@ import type { VaultView } from "./notes";
 /** The app's URL of a note, each segment encoded: vault and note names are content, not URL syntax. */
 export const noteUrl = (path: string) => `/notes/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
 
+/** The app's URL of the split view: the left pane's note, and the right one's (`/Work/b.md`) as `?beside=Work/b.md`. */
+export const paneUrl = (left: string, right: string | null) =>
+  noteUrl(left) + (right ? `?beside=${right.split("/").slice(1).map(encodeURIComponent).join("/")}` : "");
+
+/** The right pane's note (`/Work/b.md`) a URL's search names with `beside=`, or null when it names none. */
+export function besideOf(search: string): string | null {
+  const value = new URLSearchParams(search).get("beside");
+  // A vault and a note in it, no segment empty.
+  if (!value || value.split("/").length < 2 || value.split("/").includes("")) return null;
+  return `/${value}`;
+}
+
 /** The note path of `/notes/:vault/*`, from React Router's (decoded) params. */
 export const pathFromRoute = (vault: string, rest: string) => `/${vault}/${rest}`;
 

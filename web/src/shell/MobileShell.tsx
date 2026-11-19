@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useNote, useNoteLoaded, useNoteMissing, useTree, useVaults, type VaultView } from "../api/notes";
-import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
+import { besideOf, folderOf, noteUrl, paneUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PointMenu } from "../components/PointMenu";
@@ -46,6 +46,7 @@ import { useNoteMenuKey } from "./useNoteMenuKey";
 import DateDialog from "../calendar/DateDialog";
 import { useFlagging } from "../flags/FlagMenu";
 import { ShellRedirect } from "../windows/context";
+import { useWindows } from "../windows/store";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -164,6 +165,9 @@ function NoteSidePanel({ path, hidden }: { path: string; hidden: boolean }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
+  const location = useLocation();
+  // The right pane's note in the split view; nothing is shown of it here yet.
+  const beside = path ? besideOf(location.search) : null;
   // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
   const gone = useGoneWithVaults(path);
   // A missing note whose vault the list doesn't name (a hidden one's bookmark after a reload): its path isn't shown either.
@@ -190,7 +194,7 @@ export default function MobileShell() {
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
-  const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
+  const overview = (location.state as { overview?: boolean } | null)?.overview === true;
   const userId = useSession((s) => s.user?.id ?? null);
   const discreetNames = useDiscreet((s) => s.names);
   // The last note of an ordinary vault is kept for the next start, once it has loaded; a discreet one never is, and
@@ -326,12 +330,26 @@ export default function MobileShell() {
 
   usePaletteShortcut();
 
-  // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
-  // Only then: after signing out, the store is empty while this URL is still shown for a moment.
-  // Nor while the discreet vaults are being hidden: the note's URL is on its way out.
+  // The URL says which notes are open, the left pane's and the right one's (`beside`); the store follows it when it
+  // changes (a link, back and forward, a reload). Only then: after signing out, the store is empty while this URL is
+  // still shown for a moment. Nor while the discreet vaults are being hidden: the note's URL is on its way out.
   useEffect(() => {
-    if (path && path !== useEditor.getState().currentPath && !useDiscreet.getState().hiding) useEditor.getState().openNote(path);
-  }, [path]);
+    if (!path || useDiscreet.getState().hiding) return;
+    const { panes, openNote, closePane } = useEditor.getState();
+    if (path !== panes.left.path) openNote(path, "read", "left");
+    if (beside === (panes.right?.path ?? null)) return;
+    if (beside) openNote(beside, "read", "right");
+    else void closePane("right");
+  }, [path, beside]);
+  // The other way round for the right pane, as a new entry: the store opens a note there, or closes a pane. Not from
+  // under a window, whose address the router's is.
+  const besidePane = useEditor((s) => s.panes.right?.path ?? null);
+  useEffect(() => {
+    if (!path || hiding || useWindows.getState().open) return;
+    const { panes } = useEditor.getState();
+    const right = panes.right?.path ?? null;
+    if (right !== beside) navigate(paneUrl(panes.left.path ?? path, right));
+  }, [besidePane, hiding]);
 
   // A note named from its heading: the URL goes along, unless the user has gone on to another note meanwhile.
   const shownPath = useRef(path);

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { besideOf, vaultOf } from "../api/paths";
 import { useSession } from "../state/session";
 import { useDiscreet } from "./state";
 
@@ -19,10 +20,19 @@ export function vaultOfRoute(pathname: string): string | null {
   }
 }
 
-/** Whether a URL of the app (a path, or a full URL) shows a vault that is discreet now. */
+/** The vault of the split view's right pane a note's URL (`/notes/Work/a.md?beside=Tagebuch/b.md`) shows, if any. */
+export function besideVaultOf(url: string): string | null {
+  if (!url.startsWith("/notes/")) return null;
+  const query = url.indexOf("?");
+  const beside = query < 0 ? null : besideOf(url.slice(query).split("#")[0]);
+  return beside && vaultOf(beside).normalize("NFC");
+}
+
+/** Whether a URL of the app (a path, or a full URL) shows a vault that is discreet now, in either pane of the split view. */
 export function discreetUrl(url: string): boolean {
-  const vault = vaultOfRoute(pathOf(url));
-  return vault !== null && useDiscreet.getState().names.has(vault);
+  const path = pathOf(url);
+  const names = useDiscreet.getState().names;
+  return [vaultOfRoute(path), besideVaultOf(path)].some((vault) => vault !== null && names.has(vault));
 }
 
 function pathOf(url: string | URL): string {
