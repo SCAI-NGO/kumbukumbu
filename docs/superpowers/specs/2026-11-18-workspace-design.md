@@ -66,7 +66,7 @@ The editor store (`web/src/state/editor.ts`) gets two panes, `left` and `right`,
 
 **One editor at a time** (decided by the maintainer: "göttlich interaktiv", it gives the feeling of really switching; better than Obsidian and Ghostwriter offer, and the caret's place is never in doubt). At most one pane is in Write mode. Starting Write mode in one pane first ends it in the other with the same save as Done (`endWrite`); if that save fails, the switch doesn't happen and the failure shows where it shows today. So `beforeRead`, `unsaved` and `draft` stay single, and with `beforeRead` the note actions' save before a copy (`beforeRead({ reread: false })`, `web/src/shell/useNoteActions.tsx:111`): they belong to the one editor there is. Claude's reason: everything around saving stays as proven since 0.4.0, and the pane model shrinks to a path and a mode per pane.
 
-Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doesn't end Write mode in the other: you can scroll and read on the right while the left still holds your caret and text. Only starting Write mode moves it.
+Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →, Tab into it) doesn't end Write mode in the other: you can scroll and read on the right while the left still holds your caret and text. Only starting Write mode moves it.
 
 ### Turning it on and off
 
@@ -78,7 +78,7 @@ Focusing a pane (a click on its note bar or its margins, Ctrl+Alt+← / →) doe
 
 ### Where a note opens
 
-One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL. Every opener goes through one function, `useOpenNote` (`web/src/shell/openInPane.ts`), and every link to a note through `useNoteHref`: the URL keeps the other pane, so no opener ends the split by the way. A pointer down in a pane focuses it, so the pane a link is clicked in is the focused one once it opens there.
+One rule (anti-goal 1): **the tree, the palette, search, Recent and What's on open in the focused pane; a link opens in the pane it was clicked in.** Back and forward follow the URL. Every opener goes through one function, `useOpenNote` (`web/src/shell/openInPane.ts`), and every link to a note through `useNoteHref`: the URL keeps the other pane, so no opener ends the split by the way. A pointer down in a pane focuses it, and so does the keyboard's focus moving into it (Tab to one of its links), so the pane a link is clicked or opened with Enter in is the focused one once it opens there.
 
 A note opened in the pane that isn't focused (back or forward on the right pane's note, a note opened beside) joins Recent too, as one opened in the focused pane does (decided by the builder: it is what the person opened).
 
@@ -109,6 +109,8 @@ The maintainer's rule: **the pane that isn't writing, on the same note as the wr
 
 `/notes/<vault>/<path>?beside=<vault path of the right pane>`, encoded as paths are. The left pane is the path, the right `beside`. Reload, back, forward and a shared link keep the split; which pane is focused is not in the URL (the left after a reload). Opening in the right pane pushes a history entry, as opening in the left does. A `beside` note that doesn't exist or can't be read shows in its pane as a missing note does today. Either pane may be in another vault; the active vault (the tree's) follows the focused pane.
 
+Below 1280 px the pane that isn't focused is hidden, not unmounted, and the panes keep their place as the split starts and ends (decided by the builder: a writing pane's editor mounted afresh would lose its caret and what it holds unsaved; hidden, it keeps both until the window is wide again or its pane is focused).
+
 ### Each pane
 
 Its own note bar (its note's title, rename, delete, split, ✕, the preview's mark; the title only in the split, where the top bar names the focused pane's note alone), its own properties box, banners (agent change, changed elsewhere, presence) and Read/Write; the top bar's Read/Write acts on the focused pane. The Write toolbar is the writing pane's. Find in note acts on the focused pane in Read mode.
@@ -133,11 +135,15 @@ A discreet vault named in `?beside=` makes the address bar and history neutral (
 | Keys | What |
 |---|---|
 | Ctrl+Shift+\ | side panel shown or hidden |
-| Ctrl+Alt+← / → | focus the left or right pane |
-| Ctrl+Alt+click on a link | open it in the right pane |
+| Ctrl+Alt+← / → | focus the left or right pane (Ctrl+Option on a Mac too, never Cmd) |
+| Ctrl+Alt+click on a link | open it in the right pane (Cmd+Option+click on a Mac) |
 | Ctrl+Enter on a palette note row | open it in the right pane |
 
-Cmd for Ctrl on a Mac. Split view and Insert template have no key of their own (palette and their buttons). No Ctrl+Space for completion: it switches the input method under fcitx/ibus and on a Mac, the reason note actions didn't take it. None of these clash with the browser, Ctrl+S, Ctrl+\, Ctrl+P or Shift+F10.
+Cmd for Ctrl on a Mac, except for Ctrl+Alt+← / →.
+
+Decided by Claude (2026-11-19), to be confirmed by the maintainer: Ctrl+Alt on every platform, because Cmd+Option+←/→ switches tabs in browsers on macOS; Ctrl+Alt+←/→ may switch workspaces on some Linux desktops (GNOME), where the note bar click chooses the pane. With VoiceOver on, Ctrl+Option+←/→ are VoiceOver's own; there, as anywhere, moving the keyboard's focus into a pane (Tab) focuses it. Ctrl+Alt+click on a link stays, with Cmd+Option+click on a Mac: there Ctrl+click is the secondary click, and the click is the page's (its default prevented) either way.
+
+Split view and Insert template have no key of their own (palette and their buttons). No Ctrl+Space for completion: it switches the input method under fcitx/ibus and on a Mac, the reason note actions didn't take it. None of these clash with the browser, Ctrl+S, Ctrl+\, Ctrl+P or Shift+F10.
 
 ## Pull requests
 

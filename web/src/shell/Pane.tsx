@@ -35,7 +35,8 @@ function linkOf(target: EventTarget): { path: string; at?: NoteAt } | null {
  * One pane: the note bar and the note, in `side`'s pane for what is in it (its links, its mode, its editor's guard).
  * With `split`, the split view's pane: its focus marked plainly (workspace spec §3), a pointer down or the focus in it
  * focusing it without starting Write mode, and `children` (the dock and what goes with it) under it when it is focused. From 1280
- * px on (`wide`), Ctrl+Alt+click (Cmd+Alt on a Mac) on a link opens it in the right pane, the split started if need be.
+ * px on (`wide`), Ctrl+Alt+click on a link opens it in the right pane, the split started if need be; Cmd+Option+click on a
+ * Mac, where Ctrl+click is the secondary click.
  */
 export default function Pane({
   side,
@@ -116,6 +117,7 @@ export default function Pane({
         role={split ? "region" : undefined}
         aria-label={split ? (focused ? `${name}, focused` : name) : undefined}
         aria-current={split && focused ? "true" : undefined}
+        aria-keyshortcuts={split ? (side === "left" ? "Control+Alt+ArrowLeft" : "Control+Alt+ArrowRight") : undefined}
         data-pane={split ? side : undefined}
         tabIndex={split ? -1 : undefined}
         hidden={hidden}

@@ -164,12 +164,19 @@ describe("the focused pane", () => {
     expect(pane("right")).toHaveAccessibleName("Right pane, focused");
   });
 
-  it("moves with Ctrl+Alt+← and →, and Cmd+Alt on a Mac, but not over a dialog", async () => {
+  it("moves with Ctrl+Alt+← and → on every platform, never with Cmd, and not over a dialog", async () => {
     const { u } = await split();
+    expect(pane("left")).toHaveAttribute("aria-keyshortcuts", "Control+Alt+ArrowLeft");
+    expect(pane("right")).toHaveAttribute("aria-keyshortcuts", "Control+Alt+ArrowRight");
     fireEvent.keyDown(document, { key: "ArrowRight", ctrlKey: true, altKey: true });
     expect(useEditor.getState().focused).toBe("right");
     expect(pane("right")).toHaveFocus();
+    // Cmd+Option+← / → switch the browser's tabs on a Mac.
     fireEvent.keyDown(document, { key: "ArrowLeft", metaKey: true, altKey: true });
+    expect(useEditor.getState().focused).toBe("right");
+    fireEvent.keyDown(document, { key: "ArrowLeft", ctrlKey: true, metaKey: true, altKey: true });
+    expect(useEditor.getState().focused).toBe("right");
+    fireEvent.keyDown(document, { key: "ArrowLeft", ctrlKey: true, altKey: true });
     expect(useEditor.getState().focused).toBe("left");
 
     await u.keyboard("{Control>}p{/Control}");

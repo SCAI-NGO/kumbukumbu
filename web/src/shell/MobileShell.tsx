@@ -408,12 +408,12 @@ export default function MobileShell() {
     if (!leftAccess.readOnly && !leftRenaming && mode !== "write") startWrite();
   };
 
-  // Ctrl+Alt+← / → (Cmd+Alt on a Mac) focus the left or the right pane, and the focus goes into it: its editor where it
-  // writes. Not over a dialog (the palette's too).
+  // Ctrl+Alt+← / → focus the left or the right pane, and the focus goes into it: its editor where it writes. Ctrl on a
+  // Mac too, never Cmd: Cmd+Option+← / → switch the browser's tabs there. Not over a dialog (the palette's too).
   useEffect(() => {
     if (!split) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || !e.altKey || e.shiftKey || e.defaultPrevented) return;
+      if (!e.ctrlKey || e.metaKey || !e.altKey || e.shiftKey || e.defaultPrevented) return;
       const side: Side | null = e.key === "ArrowLeft" ? "left" : e.key === "ArrowRight" ? "right" : null;
       if (!side || topDialog()) return;
       e.preventDefault();
