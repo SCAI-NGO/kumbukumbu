@@ -6,23 +6,37 @@
 // - Tab: one match completes fully, a file with a trailing space, a folder with `/` → "console #1"
 // - Tab: several complete to their common prefix, the next Tab lists them in one line → "console #1"
 // - Tab: no match flashes the command line once (a class, removed again), no line in the output → "console #2"
-// - Tab on an empty line does nothing → "console #2"
-// - names with spaces are put in with backslash escapes, and the line runs as completed → "console #1"
+// - Tab on an empty line, or on an empty command word after |, does nothing; a note followed by / completes nothing
+//   → "console #2"
+// - Tab never leaves the input; Shift+Tab moves the focus on → "console #2"
+// - names with spaces and other characters (it's.md) are put in with backslash escapes, and the line runs as completed
+//   → "console #1"
+// - a word that opened a quote completes inside it, closing it only on a unique file → "console #1"
+// - a vault's `_archive/` is offered once its `_` is typed → "console #8"
 // - relative paths (`..`), `cd` completes folders only, commands as the first word and after a pipe → "console #3"
 // - phone: a row of chips for a path word, 48 px targets, a tap completes and keeps the focus; an empty word after a
-//   command offers the working folder's entries; hidden when empty or nothing matches → "console #4" (@phone)
+//   command offers the working folder's entries, for `cd ` its folders only; an empty first word offers nothing;
+//   hidden when empty or nothing matches → "console #4" (@phone)
 // - `l`, `la`, `lsa` are rewritten to `ls -l`, `ls -a`, `ls -la`, the → line shows what was sent; `ls -l` gives a
 //   note's size and time → "console #5"
+// - only as the first word of the first stage: `ls … | l` goes to the shell as typed → "console #5"
 // - help names l, la, lsa and p; `help p` explains peek → "console #5"
 // - `p <note>` renders the note under its path: headings, a working link (opens the note, closes the console), a
-//   missing link marked without a create button, task boxes disabled; `#Section` renders that section only → "console #6"
-// - `p` without an argument, on a folder, on a missing note: an error in words → "console #6"
+//   missing link marked without a create button, task boxes disabled; `#Section` and `#^block` render that part only
+//   → "console #6"
+// - `p` without an argument, on a folder, an attachment or a missing note: an error in words → "console #6"
 // - Plain · Green · Amber, kept per device across a reload; errors say "Error:" in every scheme → "console #7" (@phone)
-// Left out: `_archive/` offered only once `_` is typed (needs an archive in Work, which only `archive` makes, and the
-// console can't write; covered by Vitest); the cache's 10 s refresh (timing, Vitest); a peeked discreet note
-// collapsing on hide (discreet task, @serial); Mermaid as code and images in peek (the renderer's own tests).
+// Left out: `_archive/` not offered while a vault has none (the mcp project fills /Work/_archive/ already, and no
+// other vault the console reaches is ours to write); the cache's 10 s refresh (timing, Vitest); the row hiding while
+// a command runs (a read-only command answers in milliseconds, so no step can hold one running; Vitest); the chips'
+// phosphor colours and peek's brighter headings in Green and Amber (style without a promise a structural assertion can
+// read, beyond console #7's phosphor text colour); a peeked discreet note collapsing on hide (discreet task, @serial);
+// Mermaid as code and images in peek (the renderer's own tests).
 import type { Locator, Page } from "@playwright/test";
-import type { Api } from "../support/api";
+import { encodePath, type Api } from "../support/api";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fixturesDir } from "../support/env";
 import { cleanFolder } from "../calendar/helpers";
 import { expect, onPhone, shot, test } from "../support/test";
 
@@ -54,6 +68,8 @@ async function seed(api: Api, folder: string) {
       "## Later",
       "",
       "Later text here.",
+      "",
+      "A blocked line. ^goal",
       "",
     ].join("\n"),
   );
@@ -93,8 +109,17 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("kumbu.installHint", "dismissed"));
 });
 
+/** Attachments a test uploaded: cleanFolder takes notes only. Emptied in afterEach, which runs after a timeout too. */
+let files: string[] = [];
+test.beforeEach(() => {
+  files = [];
+});
+
+// The test's folder, and what console #8 archived of it (below /Work/_archive/<folder>/; nothing there otherwise).
 test.afterEach(async ({ aliceApi, folder }) => {
+  for (const path of files) expect([204, 404], `delete ${path}`).toContain((await aliceApi.send("DELETE", `/api/files/${encodePath(path)}`)).status());
   await cleanFolder(aliceApi, folder);
+  await cleanFolder(aliceApi, `_archive/${folder}`);
 });
 
 test("console #1: Tab completes a unique match fully, several to their common start, and the next Tab lists them @console", async ({ page, aliceApi, folder }, testInfo) => {
@@ -118,8 +143,25 @@ test("console #1: Tab completes a unique match fully, several to their common st
   await input.fill(`cat ${base}/Al`);
   await tabTo(input, `cat ${base}/Alp`);
   await input.press("Tab");
-  await expect(output(page)).toContainText(/Alpha\.md\s+Alpine\.md/);
+  const last = output(page).locator("[data-line]").last();
+  await expect(last).toHaveText(/^Alpha\.md\s+Alpine\.md$/);
+  expect(await last.textContent(), "one line, two spaces apart").toBe("Alpha.md  Alpine.md");
   await expect(input, "listing runs nothing").toHaveValue(`cat ${base}/Alp`);
+
+  // Inside a quote the word opened: a partial completion and a folder leave it open, a unique file closes it.
+  await input.fill(`cat '${base}/Al`);
+  await tabTo(input, `cat '${base}/Alp`);
+  await input.fill(`ls '${base}/Sub`);
+  await tabTo(input, `ls '${base}/Sub/`);
+  await input.fill(`cat "${base}/Mee`);
+  await tabTo(input, `cat "${base}/Meeting Notes.md" `);
+
+  // Any other character the tokeniser wouldn't read as itself is escaped too, and the line runs.
+  await aliceApi.putNote(`${base}/it's.md`, "# Apostrophe\n\nIt is here.\n");
+  await input.fill(`cat ${base}/it`);
+  await tabTo(input, `cat ${base}/it\\'s.md `);
+  await input.press("Enter");
+  await expect(output(page)).toContainText("It is here.");
 
   // A name with a space: escaped, and the completed line runs.
   await input.fill(`cat ${base}/Mee`);
@@ -166,6 +208,21 @@ test("console #2: Tab with no match flashes the command line once and writes not
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("");
   expect(await rang(), "an empty line doesn't flash").toBe(0);
+
+  // An empty command word after a pipe, and a note followed by /: nothing, and no flash either.
+  await input.fill("ls | ");
+  await input.press("Tab");
+  await expect(input).toHaveValue("ls | ");
+  await input.fill(`cat ${base}/Alpha.md/`);
+  await input.press("Tab");
+  await expect(input).toHaveValue(`cat ${base}/Alpha.md/`);
+  expect(await rang(), "neither flashes").toBe(0);
+  expect(await output(page).locator("[data-line]").count(), "nor writes a line").toBe(lines);
+
+  // Tab stays in the input; Shift+Tab moves the focus on.
+  await expect(input).toBeFocused();
+  await input.press("Shift+Tab");
+  await expect(input).not.toBeFocused();
 });
 
 test("console #3: relative paths with .., cd folders only, commands first and after a pipe @console", async ({ page, aliceApi, folder }) => {
@@ -219,6 +276,14 @@ test("console #4: on the phone a row of suggestions completes on a tap and keeps
   await expect(input).toHaveValue("cat Sub/");
   await expect(chips.getByRole("button")).toHaveText(["Inner.md"]);
 
+  // cd offers folders only; an empty first word, on the line or after a pipe, offers nothing.
+  await input.fill("cd ");
+  await expect(chips.getByRole("button")).toHaveText(["Sub/"]);
+  for (const line of [" ", "ls | "]) {
+    await input.fill(line);
+    await expect(chips, `no row for ${JSON.stringify(line)}`).toHaveCount(0);
+  }
+
   // Nothing matches, or nothing typed: no row.
   await input.fill("cat Zz");
   await expect(chips).toHaveCount(0);
@@ -251,7 +316,8 @@ test("console #5: l, la and lsa are written out as ls -l, ls -a and ls -la, and 
   // Only the first word: in a later stage `l` stays as typed, for the shell to refuse.
   await runLine(page, "clear");
   await runLine(page, `ls ${base} | l`);
-  await expect(log).not.toContainText("ls -l");
+  await expect(log.locator("[data-line]").filter({ hasText: /^→/ })).toHaveText(`→ ls ${base} | l`);
+  await expect(log.locator("[data-line]").last()).toHaveText("! Error: command not found: l — try 'help'");
 
   await runLine(page, "clear");
   await runLine(page, "help");
@@ -287,6 +353,14 @@ test("console #6: p renders a note with working links, a section on its own, and
   await expect(log).not.toContainText("Later text here.");
   await expect(log.getByRole("heading", { name: "Peek heading" })).toHaveCount(0);
 
+  // A block: that paragraph alone.
+  await runLine(page, "clear");
+  await runLine(page, "p Peek.md#^goal");
+  await expect(log).toContainText(`${base}/Peek.md#^goal`);
+  await expect(log).toContainText("A blocked line.");
+  await expect(log).not.toContainText("Goal text here.");
+  await expect(log.getByRole("heading")).toHaveCount(0);
+
   // Errors in words.
   await runLine(page, "clear");
   await runLine(page, "p");
@@ -294,7 +368,11 @@ test("console #6: p renders a note with working links, a section on its own, and
   await runLine(page, "p Sub");
   await expect(log).toContainText(`Error: p: ${base}/Sub: not a note`);
   await runLine(page, "p Absent.md");
-  await expect(log.locator("[data-line]").last()).toHaveText(/^! Error: p: \S/);
+  await expect(log.locator("[data-line]").last()).toHaveText(`! Error: p: There is no note at ${base}/Absent.md (if it was removed, it is in the trash).`);
+  files.push(`${base}/pixel.png`);
+  await aliceApi.putFile(`${base}/pixel.png`, readFileSync(join(fixturesDir, "tags/smoke/pixel.png")));
+  await runLine(page, "p pixel.png");
+  await expect(log.locator("[data-line]").last()).toHaveText(`! Error: p: ${base}/pixel.png: not a note`);
 
   // A link opens the note and closes the console.
   await runLine(page, "clear");
@@ -351,4 +429,22 @@ test("console #7: Plain, Green and Amber, kept on this device across a reload, a
   await page.reload();
   await expect(command(page)).toBeEnabled();
   await shows("Plain");
+});
+
+test("console #8: a vault's _archive/ is offered once its _ is typed @console", async ({ page, aliceApi, folder, mcp }) => {
+  const base = await seed(aliceApi, folder);
+  // The console never writes: the archive comes from an agent with write on Work.
+  const archived = await mcp.sh(`archive ${base}/Alpine.md`);
+  expect(archived.isError, archived.text).toBe(false);
+  await openConsole(page);
+  const input = command(page);
+
+  await input.fill("ls /Work/_");
+  await tabTo(input, "ls /Work/_archive/");
+  await input.fill(`ls /Work/_archive/${folder}/Alp`);
+  // Named with the time it was archived: "Alpine 2026-11-19 213005.md", escaped.
+  await expect(async () => {
+    await input.press("Tab");
+    await expect(input).toHaveValue(new RegExp(`^ls /Work/_archive/${folder}/Alpine\\\\ \\d{4}-\\d{2}-\\d{2}\\\\ \\d{6}\\.md $`), { timeout: 1_000 });
+  }).toPass();
 });
