@@ -174,7 +174,6 @@ export default function MobileShell() {
   const wide = useWide();
   const focusedSide = useEditor((s) => s.focused);
   const split = wide && !!beside;
-  const rightAlone = !split && !!beside && focusedSide === "right";
   // The focused pane's note: what the top bar, the dock, the palette's Note group and the side panel are about.
   const focusedPath = beside && focusedSide === "right" ? beside : path;
   // The discreet note on its way out: the route still names it until the navigation is in, and nothing shows it.
@@ -502,28 +501,32 @@ export default function MobileShell() {
           <div className="pt-2 empty:hidden">
             <SharedBanner vault={focusedPath && !gone ? vaultOf(focusedPath) : activeVault} refusal={refusal} />
           </div>
-          {split ? (
-            <main className="flex min-h-0 flex-1">
-              {(["left", "right"] as const).map((side) => (
-                <Pane key={side} side={side} path={side === "left" ? path! : beside!} split wide panel={sidePanel} {...paneProps(side)}>
-                  {footer}
+          {/* One element and a pane by its key, whether split or not: the editor in a pane stays mounted as the split
+              starts or ends and as the window crosses 1280 px, with its caret and what it holds unsaved. Below 1280 px
+              the other pane is hidden, not gone: where it writes, its text stays with it. */}
+          <main className={`flex min-h-0 flex-1 ${split ? "" : "flex-col"}`}>
+            {path ? (
+              (beside ? (["left", "right"] as const) : (["left"] as const)).map((side) => (
+                <Pane
+                  key={side}
+                  side={side}
+                  path={side === "left" ? path : beside!}
+                  split={split}
+                  hidden={!split && !!beside && side !== focusedSide}
+                  wide={wide}
+                  panel={sidePanel}
+                  {...paneProps(side)}
+                >
+                  {split && footer}
                 </Pane>
-              ))}
-            </main>
-          ) : (
-            <>
-              <main className="flex min-h-0 flex-1 flex-col">
-                {path ? (
-                  <Pane key={rightAlone ? "right" : "left"} side={rightAlone ? "right" : "left"} path={rightAlone ? beside! : path} split={false} wide={wide} panel={sidePanel} {...paneProps(rightAlone ? "right" : "left")} />
-                ) : keptPending ? (
-                  <div className="flex-1" />
-                ) : (
-                  <VaultOverview onNewVault={() => setVaultDialog(true)} />
-                )}
-              </main>
-              {footer}
-            </>
-          )}
+              ))
+            ) : keptPending ? (
+              <div className="flex-1" />
+            ) : (
+              <VaultOverview onNewVault={() => setVaultDialog(true)} />
+            )}
+          </main>
+          {!split && footer}
         </div>
         {sidePanel && <NoteSidePanel path={shownNote!} hidden={panelCollapsed} />}
       </div>

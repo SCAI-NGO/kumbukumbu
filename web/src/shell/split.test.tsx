@@ -373,3 +373,74 @@ describe("the URL after a change to a pane's note", () => {
     expect(panes()).toEqual(["/Work/a.md", null]);
   });
 });
+
+describe("the writing editor, unsaved text and all", () => {
+  const source = () => screen.getByRole("textbox", { name: "Markdown source" }) as HTMLTextAreaElement;
+  const typed = (name: string, text: string) => `# Note ${name}\n\nSee [[next ${name}]].\n${text}`;
+
+  it("stays the same element when Split view starts while the left pane writes", async () => {
+    const { router, u } = await split("/notes/Work/a.md");
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const before = await screen.findByRole("textbox", { name: "Markdown source" });
+    await u.type(before, " y");
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/a.md"));
+    await within(pane("right")).findByRole("heading", { name: "Note a" });
+    expect(within(pane("left")).getByRole("textbox", { name: "Markdown source" })).toBe(before);
+    expect(before).toHaveValue(typed("a", " y"));
+  });
+
+  it("stays the same element when the right pane's ✕ or the button ends the split while the left pane writes", async () => {
+    const { router, u } = await split();
+    await u.click(within(within(pane("left")).getByRole("group", { name: "This note" })).getByText("a"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const before = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(before, " x");
+    await u.click(within(pane("right")).getByRole("button", { name: "Close this pane" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+    expect(source()).toBe(before);
+    expect(before).toHaveValue(typed("a", " x"));
+
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/a.md"));
+    await u.type(before, "z");
+    await u.click(within(pane("left")).getByRole("button", { name: "Split view" }));
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md"));
+    expect(source()).toBe(before);
+    expect(before).toHaveValue(typed("a", " xz"));
+  });
+
+  it("stays the same element as the window narrows below 1280 px and widens again, in either pane", async () => {
+    const { u } = await split();
+    await u.click(within(within(pane("left")).getByRole("group", { name: "This note" })).getByText("a"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(left, " l");
+    await resize("desktop");
+    expect(source()).toBe(left);
+    await resize("wide");
+    expect(source()).toBe(left);
+    expect(left).toHaveValue(typed("a", " l"));
+  });
+
+  it("stays the same element as the window narrows while the right pane writes, focused or not", async () => {
+    const { u } = await split(undefined, { "PUT /api/notes/*": () => json(500, { title: "boom" }) });
+    await u.click(within(within(pane("right")).getByRole("group", { name: "This note" })).getByText("b"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const right = await within(pane("right")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(right, " r");
+    await resize("desktop");
+    expect(source()).toBe(right);
+    await resize("wide");
+    expect(within(pane("right")).getByRole("textbox", { name: "Markdown source" })).toBe(right);
+
+    // The left pane focused, the right one still writing: narrowed, it is out of sight but keeps its text.
+    await u.click(within(within(pane("left")).getByRole("group", { name: "This note" })).getByText("a"));
+    await resize("desktop");
+    expect(screen.getByRole("heading", { name: "Note a" })).toBeInTheDocument();
+    expect(right).toBeInTheDocument();
+    await resize("wide");
+    expect(within(pane("right")).getByRole("textbox", { name: "Markdown source" })).toBe(right);
+    expect(right).toHaveValue(typed("b", " r"));
+  });
+});

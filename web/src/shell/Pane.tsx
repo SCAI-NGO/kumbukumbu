@@ -41,6 +41,7 @@ export default function Pane({
   side,
   path,
   split,
+  hidden = false,
   wide,
   panel,
   onMove,
@@ -52,6 +53,8 @@ export default function Pane({
   side: Side;
   path: string;
   split: boolean;
+  /** Out of sight below 1280 px, the split's other pane: mounted still, so a writing one keeps its editor and text. */
+  hidden?: boolean;
   wide: boolean;
   panel: boolean;
   onMove(path: string): void;
@@ -104,30 +107,29 @@ export default function Pane({
     </>
   );
 
-  if (!split) {
-    return (
-      <PaneSide.Provider value={side}>
-        <div className="contents" onClickCapture={openRight}>
-          {content}
-        </div>
-      </PaneSide.Provider>
-    );
-  }
+  // The same element split or not, only its attributes change: the editor in it stays mounted as the split starts or
+  // ends (MobileShell). Alone, it lays out as if it weren't there; hidden, it is the other pane below 1280 px.
   const name = side === "left" ? "Left pane" : "Right pane";
   return (
     <PaneSide.Provider value={side}>
-      <section
-        aria-label={focused ? `${name}, focused` : name}
-        aria-current={focused ? "true" : undefined}
-        data-pane={side}
-        tabIndex={-1}
-        onPointerDown={() => useEditor.getState().focus(side)}
+      <div
+        role={split ? "region" : undefined}
+        aria-label={split ? (focused ? `${name}, focused` : name) : undefined}
+        aria-current={split && focused ? "true" : undefined}
+        data-pane={split ? side : undefined}
+        tabIndex={split ? -1 : undefined}
+        hidden={hidden}
+        onPointerDown={split ? () => useEditor.getState().focus(side) : undefined}
         onClickCapture={openRight}
-        className={`flex min-w-0 flex-1 basis-0 flex-col border-t-[3px] outline-none ${focused ? "border-t-accent" : "border-t-transparent"} ${side === "right" ? "border-l border-l-line" : ""}`}
+        className={
+          split
+            ? `flex min-w-0 flex-1 basis-0 flex-col border-t-[3px] outline-none ${focused ? "border-t-accent" : "border-t-transparent"} ${side === "right" ? "border-l border-l-line" : ""}`
+            : "contents"
+        }
       >
         {content}
-        {focused && children}
-      </section>
+        {split && focused && children}
+      </div>
     </PaneSide.Provider>
   );
 }
