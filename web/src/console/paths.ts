@@ -92,6 +92,8 @@ export const commandTable: Record<string, CommandEntry> = {
     },
   },
   history: { values: ["--since"], find: (o) => ({ paths: first(o), missing: "cwd" }) },
+  // Blame.cs: --lines takes no value; without a path, the working directory is the folder.
+  blame: { values: [], find: (o) => ({ paths: first(o), missing: "cwd" }) },
   board: { values: ["--column", "--tag"], find: (o) => ({ paths: first(o), missing: "vault" }) },
   // The console runs only the reading forms: a vault's week, month or days, or what's on (with an optional vault).
   calendar: {

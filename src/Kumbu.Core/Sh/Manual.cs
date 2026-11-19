@@ -27,6 +27,7 @@ public static class Manual
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
           history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
+          blame [--lines] <path>          who wrote what: the last writer of each run of lines of a note (#section works); on a folder: lines per writer per note
           diff <path> [from [to]]         what changed between versions (default: last change); --word
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
