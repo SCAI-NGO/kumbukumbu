@@ -86,6 +86,8 @@ interface EditorState {
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
+  /** The list of the vault's templates is open over the editor (Insert template, workspace spec §4). */
+  templates: boolean;
   /** Untitled notes being named from their headings (`/Home/Garden/Untitled.md`), or queued to be: no Write mode for them until then. */
   renaming: string[];
   /** Why naming the note at `path` from its heading failed; shown with that note until Write mode starts on it again. */
@@ -133,6 +135,7 @@ interface EditorState {
   searchByTag(tag: string): void;
   setShowAgentHighlights(show: boolean): void;
   setNoteTool(tool: NoteTool): void;
+  setTemplates(open: boolean): void;
   setRenaming(path: string, on: boolean): void;
   setRenameProblem(problem: { path: string; text: string } | null): void;
   setFollow(follow: ((from: string, to: string) => void) | null): void;
@@ -181,6 +184,7 @@ const initial = {
   scrollTarget: null,
   upload: null,
   noteTool: null as NoteTool,
+  templates: false,
   renaming: [] as string[],
   renameProblem: null as { path: string; text: string } | null,
   follow: null as ((from: string, to: string) => void) | null,
@@ -326,6 +330,7 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
   searchByTag: (searchTag) => set({ searchTag, searchQuery: "", overlay: "search" }),
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
   setNoteTool: (noteTool) => set({ noteTool }),
+  setTemplates: (templates) => set({ templates }),
   setRenaming: (path, on) => set((s) => ({ renaming: on ? [...s.renaming.filter((p) => p !== path), path] : s.renaming.filter((p) => p !== path) })),
   setRenameProblem: (renameProblem) => set({ renameProblem }),
   setFollow: (follow) => set({ follow }),

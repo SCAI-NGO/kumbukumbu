@@ -15,6 +15,7 @@ import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
 import { cancelRename, scheduleRename } from "./nameFromHeading";
+import TemplateList from "./TemplateList";
 import { useAutosave } from "./useAutosave";
 
 /** Where the line below a note's heading starts, when the note (after its frontmatter) is that heading alone; else null. */
@@ -157,6 +158,15 @@ export default function MarkdownEditor({
     if (fresh && offer({ content: fresh.content, version: fresh.version })) setDiff(true);
   };
   const completion = useLinkCompletion(path, textarea, change);
+  const templates = useEditor((s) => s.templates);
+  // Why a template's properties weren't added, until the list is opened again.
+  const [templateHint, setTemplateHint] = useState<string | null>(null);
+  useEffect(() => () => useEditor.getState().setTemplates(false), []);
+  const toggleTemplates = () => {
+    setTemplateHint(null);
+    useEditor.getState().setTemplates(!templates);
+    if (templates) textarea.current?.focus({ preventScroll: true });
+  };
 
   // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
   useLayoutEffect(() => {
@@ -374,7 +384,13 @@ export default function MarkdownEditor({
       {conflict && <ConflictToast onReload={chooseReload} onKeepMine={chooseKeepMine} onViewDiff={() => setDiff(true)} />}
       {diff && conflict && <ConflictDiff theirs={conflict.content} mine={value} onReload={chooseReload} onKeepMine={chooseKeepMine} onClose={() => setDiff(false)} />}
       {completion.list}
-      <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} />
+      {templateHint && (
+        <p role="status" aria-label="Template" className="mx-3 mb-2 flex-none rounded-[12px] border border-line bg-surface-2 px-3.5 py-2 text-sm text-text">
+          {templateHint}
+        </p>
+      )}
+      {templates && <TemplateList path={path} textarea={textarea} onChange={change} onHint={setTemplateHint} />}
+      <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} onTemplates={toggleTemplates} />
     </>
   );
 }

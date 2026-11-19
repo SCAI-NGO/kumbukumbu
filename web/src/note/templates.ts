@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { fileKindOfEntry, findFolder, type TreeFolder } from "../api/notes";
+import { folderOf, titleOf } from "../api/paths";
+import { wordMatch } from "../palette/filter";
 import { frontmatterEnd, mergeProperties, yamlValue, type Merged } from "./frontmatterText";
 import { parseProperties } from "./properties";
 import type { Edit } from "./textEdit";
@@ -118,4 +121,31 @@ export function templateEdit(value: string, start: number, end: number, template
   while (first < from && value[first] === next[first]) first++;
   const caret = from + shift + body.length;
   return { edit: { start: first, end: to, text: next.slice(first, next.length - (value.length - to)), selStart: caret, selEnd: caret }, hint };
+}
+
+/** The folder a vault's templates are in, by convention as `Board` is a board's: `Templates` at its top, this spelling. */
+export const templatesFolder = (vault: string) => `/${vault}/Templates`;
+
+/** The notes in the vault's templates folder and below it, not its attachments. */
+export function templatePaths(root: TreeFolder, vault: string): string[] {
+  const folder = findFolder(root, templatesFolder(vault));
+  const walk = (f: TreeFolder): string[] => [...f.notes.filter((n) => fileKindOfEntry(n) === "note").map((n) => n.path), ...f.folders.flatMap(walk)];
+  return folder ? walk(folder) : [];
+}
+
+/** A template as the list shows it: its name, and its sub-folder below the templates folder (`Daily / Work`, or none). */
+export type Template = { path: string; name: string; folder: string };
+
+/** The templates holding every word of the query in their sub-folder or name, those where each starts a word first, then by name. */
+export function findTemplates(paths: string[], vault: string, query: string): Template[] {
+  const match = wordMatch(query);
+  const top = templatesFolder(vault);
+  return paths
+    .flatMap((path) => {
+      const template = { path, name: titleOf(path), folder: folderOf(path).slice(top.length + 1).split("/").join(" / ") };
+      const rank = match(`${template.folder} ${template.name}`);
+      return rank === null ? [] : [{ template, rank }];
+    })
+    .sort((a, b) => a.rank - b.rank || a.template.name.localeCompare(b.template.name) || a.template.path.localeCompare(b.template.path))
+    .map(({ template }) => template);
 }
