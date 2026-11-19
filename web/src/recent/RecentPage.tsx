@@ -43,13 +43,15 @@ export default function RecentPage() {
     }, TYPING_MS);
     return () => clearTimeout(timer);
   }, [typed, words]);
-  // Hiding or showing the discreet vaults starts the filters again: the words or a vault switched off may name one hidden
-  // now, and the page stays mounted. What was answered before goes too: the rows kept for the filters as they were
-  // before would be shown again, for as long as the page asks.
+  // Hiding the discreet vaults starts the filters again: the words or a vault switched off may name one hidden now, and
+  // the page stays mounted. What was answered before goes too: the rows kept for the filters as they were before would
+  // be shown again, for as long as the page asks. Showing them leaves the filters be: after a reload the session and
+  // the vault list answer after the page is up, and what was typed meanwhile names nothing hidden.
   useEffect(
     () =>
       useDiscreet.subscribe((s, previous) => {
-        if (s.names === previous.names && s.revealed === previous.revealed) return;
+        const hidden = (previous.revealed && !s.revealed) || [...previous.names].some((name) => !s.names.has(name));
+        if (!hidden) return;
         setTyped("");
         setWords("");
         setFlag(null);
