@@ -339,4 +339,72 @@ public class HelpTests
         Assert.DoesNotContain("A text file in a skill's folder", flat);
         Assert.DoesNotContain("An attachment (an image or a PDF) prints one line", flat);
     }
+
+    private static async Task<string> Flat(string line) =>
+        System.Text.RegularExpressions.Regex.Replace((await Run(line)).Output, @"\s+", " ");
+
+    [Fact]
+    public async Task Help_calendar_names_the_vault_of_notifications_and_the_write_forms()
+    {
+        var row = (await Run("help")).Output.Split('\n').Single(l => l.StartsWith("  calendar ", StringComparison.Ordinal));
+        Assert.StartsWith("  calendar <vault> [--week W|--month M|--from D --to D] [--tag T] | notifications [--tag T] [vault] | set|move|… <note>  ", row);
+        Assert.Contains("\ncalendar notifications [--tag <tag>] [vault]\n", (await Run("help calendar")).Output);
+    }
+
+    [Fact]
+    public async Task Help_calendar_names_today_before_a_time_and_the_year_of_a_week_number()
+    {
+        var help = await Flat("help calendar");
+        Assert.Contains("'upcoming', 'ongoing' or 'overdue' with a span, or 'today · 14:00' for a time later today", help);
+        Assert.Contains("--week W that week: 46 of the current week's ISO year, or 2026-W46", help);
+        Assert.DoesNotContain("46 of the current year", help);
+    }
+
+    [Fact]
+    public async Task Help_rg_names_text_files_in_l_and_c_and_that_l_needs_paths()
+    {
+        var help = (await Run("help rg")).Output;
+        Assert.Contains("\n  -l, --files-with-matches   print only the paths of notes, text files and PDFs with a match (not piped)\n", help);
+        Assert.Contains("\n  -c, --count                print path:count per note, text file or PDF (piped: one total)\n", help);
+        Assert.Contains("\n  -m, --max-count N          at most N matching lines per note, text file or PDF\n", help);
+    }
+
+    [Fact]
+    public async Task Help_trash_names_a_folders_row()
+    {
+        var help = await Flat("help trash");
+        Assert.StartsWith("trash [path] List removed notes, attachments and folders", help);
+        Assert.Contains("A removed folder (rm takes one that holds nothing) lists as its path with a '/' and 'folder': /Demo/Drafts/ folder (by Alice).", help);
+    }
+
+    [Fact]
+    public async Task Help_history_says_any_attachment_and_how_a_notes_row_ends()
+    {
+        var help = await Flat("help history");
+        Assert.Contains("version, time written (UTC), writer, lines, then '— message' if the write gave one; the current version ends in (current)", help);
+        Assert.Contains("An attachment (any file: an image, a PDF, a text file …) lists the same way, with its kind and size instead of lines and no message.", help);
+        Assert.DoesNotContain("(an image or a PDF)", help);
+    }
+
+    [Fact]
+    public async Task Help_lscp_says_any_path_but_the_root_tells_how_many_the_vault_can_keep()
+    {
+        var help = await Flat("help lscp");
+        Assert.Contains("Any path but / ends with how many checkpoints its vault has of the most it can keep: <n> of <limit> checkpoints in <vault>.", help);
+        Assert.DoesNotContain("With a vault, that vault's checkpoints and how many more it can keep", help);
+    }
+
+    [Fact]
+    public async Task Help_ls_l_says_it_changes_nothing_in_the_list_of_vaults()
+    {
+        var help = await Flat("help ls");
+        Assert.Contains("an attachment its summary; columns aligned; the list of vaults stays as it is", help);
+    }
+
+    [Fact]
+    public async Task Help_history_and_checkpoints_take_the_history_limit_from_its_constant()
+    {
+        Assert.Contains($"({Kumbu.Core.Notes.NoteWriter.HistoryLimit} versions per note", await Flat("help history"));
+        Assert.Contains($"({Kumbu.Core.Notes.NoteWriter.HistoryLimit} versions per note", await Flat("help mkcp"));
+    }
 }

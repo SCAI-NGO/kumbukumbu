@@ -81,11 +81,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           -F, --fixed-strings        the pattern is a literal string, not a regex
           -w, --word-regexp          match whole words only
           -v, --invert-match         select lines that do not match
-          -l, --files-with-matches   print only the paths of notes and PDFs with a match
-          -c, --count                print path:count per note or PDF (piped: one total)
+          -l, --files-with-matches   print only the paths of notes, text files and PDFs with a match (not piped)
+          -c, --count                print path:count per note, text file or PDF (piped: one total)
           -n, --line-number          show line numbers (default for notes; piped: off; PDFs: off)
           -N, --no-line-number       hide line numbers
-          -m, --max-count N          at most N matching lines per note or PDF
+          -m, --max-count N          at most N matching lines per note, text file or PDF
           -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
           --version V                search an earlier version (from 'history') of the one note given
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
@@ -771,7 +771,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             return ShellResult.Error($"rg: reads from the pipe, so it takes no path (got '{operands[0]}')");
         }
 
-        if (options.Has("files-with-matches")) return ShellResult.Error("rg: -l lists notes, so it needs paths, not piped input");
+        if (options.Has("files-with-matches")) return ShellResult.Error("rg: -l lists notes, text files and PDFs, so it needs paths, not piped input");
 
         var lines = Lines.Split(input);
         var matches = search.Matches(lines);

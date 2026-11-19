@@ -506,7 +506,7 @@ public class CalendarCommandTests
         Assert.StartsWith("calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11 | --from 2026-11-20 --to 2026-12-06] [--tag <tag>]\n", help);
         foreach (var form in new[]
                  {
-                     "calendar notifications [--tag <tag>]",
+                     "calendar notifications [--tag <tag>] [vault]",
                      "calendar set <note> --when <value> [--until <value>] [--task | --no-task] [--upcoming 7d] [--tz <zone>] [--reason <text>]",
                      "calendar move <note> <when>",
                      "calendar close <note> [--reason <text>]",
