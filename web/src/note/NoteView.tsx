@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { lazy, Suspense, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -15,7 +15,7 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useErrorTextFor, useUnnamedVault } from "../discreet/errorText";
-import { useEditor, writingSide } from "../state/editor";
+import { previewSide, useEditor, writingSide } from "../state/editor";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import PresenceLine, { useEditingPresence } from "./PresenceLine";
@@ -24,6 +24,7 @@ import AgentBanner, { ago, shownWriter, useAgentChange, useAgentHighlight } from
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
+import { clickToSource } from "./clickToSource";
 import BacklinksList from "./BacklinksList";
 import { findBlock } from "./blocks";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -70,6 +71,12 @@ function EditorLoadFailed() {
   // Ends Write mode where it is, which may be the pane that isn't focused.
   return <LoadFailedSheet onClose={() => void useEditor.getState().endWrite()} />;
 }
+
+/** Links, task boxes, buttons, the properties box and what else answers a click of its own: no Write mode from these. */
+const OWN_CLICK = "a, button, input, label, select, summary, textarea, [role=button], [role=checkbox], [aria-label=Properties]";
+
+/** How long the typing pauses before the live preview shows what was typed. */
+const PREVIEW_PAUSE_MS = 250;
 
 /** Find in the note, as the pane that isn't focused has it: nothing looked for. */
 const idleFind = { query: "", index: 0, count: 0 };
@@ -121,9 +128,11 @@ function keepCentred(article: HTMLElement, target: HTMLElement): () => void {
  * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it, unless the side
  * panel beside it shows them (`panel`). Write mode: the editor with its toolbar, in place of the dock. In its pane
  * (`PaneSide`, the left without one) with that pane's mode; the note's tools are the focused pane's only. `dim`: the
- * title dimmed, in the split view's pane that isn't focused.
+ * title dimmed, in the split view's pane that isn't focused. `clickToWrite`, in the split view: a plain click on the
+ * note's text starts Write mode here, the caret where it was clicked (workspace spec §3). Beside the editor's pane on
+ * the same note, it is that note's live preview: the editor's text as it stands, the caret's block kept in view.
  */
-export default function NoteView({ path, panel = false, dim = false }: { path: string; panel?: boolean; dim?: boolean }) {
+export default function NoteView({ path, panel = false, dim = false, clickToWrite = false }: { path: string; panel?: boolean; dim?: boolean; clickToWrite?: boolean }) {
   const note = useNote(path);
   const side = useContext(PaneSide) ?? "left";
   const focusedHere = useEditor((s) => s.focused === side);
@@ -151,7 +160,19 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
   const location = useLocation();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [dropping, setDropping] = useState(false);
-  const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  // The live preview renders the editor's text, unsaved included: once the typing pauses, and then when React has
+  // time, so typing never waits for it (a long note's render takes longer than the time between two keys).
+  const liveNow = useEditor((s) => (previewSide(s) === side && s.live?.path === path ? s.live : null));
+  const [settled, setSettled] = useState(liveNow);
+  useEffect(() => {
+    // Starting and ending at once: only the text as it is typed waits.
+    if (!liveNow || !settled) return setSettled(liveNow);
+    const timer = setTimeout(() => setSettled(liveNow), PREVIEW_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [liveNow]);
+  const live = useDeferredValue(settled);
+  const content = live?.text ?? note.data?.content ?? "";
+  const parts = useMemo(() => splitFrontmatter(content), [content]);
   const props = useMemo(() => (parts.frontmatter === null ? null : parseProperties(parts.frontmatter)), [parts.frontmatter]);
   const card = boardCard(path, props);
   // Where the header says it in words (a calendar line, one of the flags as the flag line reads them, a board card), the box folds away. The entry is the
@@ -159,7 +180,7 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
   const entry = useNoteEntry(path, !!note.data).data?.entry;
   const flagged = !!props?.some((p) => p.key === "tags" && frontmatterTags(p.value).some((t) => t.toLowerCase().startsWith("flag/") && isFlag(t.slice(5).toLowerCase())));
   const foldable = !!props && props.length > 0 && (!!entry || flagged || card !== null);
-  const shown = useMemo(() => maskedBody(note.data?.content ?? ""), [note.data?.content]);
+  const shown = useMemo(() => maskedBody(content), [content]);
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
   const elsewhere = useChangedElsewhere(path, note.data);
@@ -385,6 +406,38 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
     [path],
   );
 
+  // The live preview follows the caret: the block at or above its line comes into view where it is out of it. Only as
+  // the text or the caret moves, so a scroll by hand stays until the next keystroke.
+  useEffect(() => {
+    if (!live || !scroller.current || !article.current) return;
+    let target: HTMLElement | undefined;
+    for (const e of article.current.querySelectorAll<HTMLElement>("[data-line]")) {
+      const n = Number(e.dataset.line);
+      if (n <= live.caretLine && (!target || n > Number(target.dataset.line)) && !e.closest(".k-embed")) target = e;
+    }
+    if (!target) return;
+    const box = scroller.current.getBoundingClientRect();
+    const at = target.getBoundingClientRect();
+    if (at.top >= box.top && at.top < box.bottom - 48) return;
+    scroller.current.scrollTop += at.top - box.top - box.height / 3;
+  }, [live]);
+
+  // Write follows the click: a plain one (no move between down and up, nothing selected) on the note's text, not on
+  // what has a click of its own; a drag selects, as in Read mode, and starts nothing.
+  const down = useRef<{ x: number; y: number } | null>(null);
+  const editorDirect = useRef<boolean | null>(null);
+  const writeHere = (e: MouseEvent) => {
+    const from = down.current;
+    down.current = null;
+    if (!clickToWrite || !writeOn || !note.data || !article.current || !from || e.button !== 0 || e.defaultPrevented) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return;
+    if (window.getSelection()?.isCollapsed === false || (e.target instanceof Element && e.target.closest(OWN_CLICK))) return;
+    const offset = clickToSource(content, article.current, e.clientX, e.clientY);
+    if (offset === null) return;
+    useEditor.getState().focus(side);
+    void useEditor.getState().writeHere({ path, offset, y: e.clientY });
+  };
+
   const jump = (line: number) => {
     useEditor.getState().setNoteTool(null);
     [...(article.current?.querySelectorAll<HTMLElement>(headingLines) ?? [])].find((h) => Number(h.dataset.line) === line)?.scrollIntoView({ block: "start" });
@@ -502,6 +555,12 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
     [path, createNote, openNote, side, errorFor],
   );
 
+  // Rendered directly once loaded, but as it was mounted until Write mode ends: the editor loading meanwhile would
+  // otherwise swap the lazy one for it, a new editor, losing its caret and what it holds unsaved.
+  if (mode !== "write") editorDirect.current = null;
+  else editorDirect.current ??= !!LoadedEditor;
+  const Direct = editorDirect.current ? LoadedEditor : null;
+
   if (mode === "write") {
     if (note.data) {
       return (
@@ -511,8 +570,8 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
           <EntryLine key="entry-line" path={path} version={note.data.version} />
           <PresenceLine path={path} />
           <LoadBoundary fallback={<EditorLoadFailed />}>
-            {LoadedEditor ? (
-              <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
+            {Direct ? (
+              <Direct path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
             ) : (
               <Suspense fallback={<div className="flex-1" />}>
                 <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
@@ -595,7 +654,13 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
           </p>
         )
       )}
-      <div ref={scroller} {...dropTarget} onScroll={panel ? readAt : undefined} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      <div
+        ref={scroller}
+        {...dropTarget}
+        onScroll={panel ? readAt : undefined}
+        onMouseDown={clickToWrite ? (e) => void (down.current = { x: e.clientX, y: e.clientY }) : undefined}
+        onClick={clickToWrite ? writeHere : undefined}
+        className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {/* Nor one made from the path of a missing note whose vault the list doesn't name (a hidden one's bookmark). */}
         {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className={`text-[28px] leading-tight font-bold focus:outline-none ${dim ? "text-dim" : "text-text"}`}>{titleOf(path)}</h1>}
@@ -621,14 +686,15 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
                 yaml={parts.frontmatter}
                 changed={frontmatterChanged ? highlight!.writer : null}
                 foldable={foldable}
-                onAdd={mayWrite ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
+                onAdd={mayWrite && !live ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
               />
             )}
             <MarkdownView
               source={shown.body}
               mask={shown.mask}
               links={links.data}
-              tasksDisabled={save.isPending || !changes}
+              // In the live preview a tick would be written under the editor's text: it is ticked there.
+              tasksDisabled={save.isPending || !changes || !!live}
               onToggleTask={toggleTask}
               onCreateMissing={createMissing}
               highlight={highlight}

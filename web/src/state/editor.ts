@@ -81,6 +81,11 @@ interface EditorState {
   live: Live | null;
   /** Set by the open editor: puts the caret at the start of a line (1-based), the focus in the editor, the line in view. */
   goToLine: ((line: number) => void) | null;
+  /**
+   * Where Write mode, started by a click into a pane's text, puts the caret in the note at `path` (workspace spec §3):
+   * at `offset` in its text, the caret's line at `y` on screen, where the click was. Taken by the editor as it mounts.
+   */
+  writeAt: { path: string; offset: number; y: number } | null;
   /** Where the reader of the note at `path` is in Read mode: the line of the last heading above the top of the visible text, 0 above the first. */
   reading: { path: string; line: number } | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
@@ -118,6 +123,9 @@ interface EditorState {
   setCaretAt(caretAt: CaretAt | null): void;
   setLive(live: Live | null): void;
   setGoToLine(goToLine: ((line: number) => void) | null): void;
+  /** Write mode in the focused pane, its caret at `at` (a click into its text); not if the other pane's save fails. */
+  writeHere(at: { path: string; offset: number; y: number }): Promise<void>;
+  setWriteAt(writeAt: { path: string; offset: number; y: number } | null): void;
   setReading(reading: { path: string; line: number } | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
@@ -180,6 +188,7 @@ const initial = {
   caretAt: null as CaretAt | null,
   live: null as Live | null,
   goToLine: null as ((line: number) => void) | null,
+  writeAt: null as { path: string; offset: number; y: number } | null,
   reading: null as { path: string; line: number } | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
@@ -351,6 +360,13 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
   setCaretAt: (caretAt) => set({ caretAt }),
   setLive: (live) => set({ live }),
   setGoToLine: (goToLine) => set({ goToLine }),
+  setWriteAt: (writeAt) => set({ writeAt }),
+  writeHere: async (at) => {
+    set({ writeAt: at });
+    await get().setMode("write");
+    // Not started (the other pane's save failed, the note being named): nothing is left for a later editor to take.
+    if (get().writeAt === at && get().mode !== "write") set({ writeAt: null });
+  },
   setReading: (reading) => set({ reading }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
@@ -426,6 +442,7 @@ function forgotten(s: EditorState, vault: string, keepDraft: boolean): Partial<E
     refused: outside(s.refused?.path) ? s.refused : null,
     scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
     live: outside(s.live?.path) ? s.live : null,
+    writeAt: outside(s.writeAt?.path) ? s.writeAt : null,
     reading: outside(s.reading?.path) ? s.reading : null,
     renaming: s.renaming.filter(outside),
     renameProblem: outside(s.renameProblem?.path) ? s.renameProblem : null,

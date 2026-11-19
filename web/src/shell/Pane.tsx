@@ -5,7 +5,7 @@ import { titleOf, vaultOf, type NoteAt } from "../api/paths";
 import { NO_SUCH_NOTE } from "../discreet/errorText";
 import { useDiscreet, useGoneWithVaults } from "../discreet/state";
 import NoteView from "../note/NoteView";
-import { useEditor, type Side } from "../state/editor";
+import { previewSide, useEditor, type Side } from "../state/editor";
 import NoteBar from "./NoteBar";
 import { PaneSide, useOpenNote } from "./openInPane";
 
@@ -68,6 +68,7 @@ export default function Pane({
   const gone = useGoneWithVaults(path);
   const hiding = useDiscreet((s) => s.hiding);
   const focused = useEditor((s) => s.focused === side);
+  const preview = useEditor((s) => previewSide(s) === side);
   const { readOnly, changes } = useNoteAccess(path);
   const renaming = useEditor((s) => s.renaming.includes(path));
   const openNote = useOpenNote();
@@ -98,13 +99,14 @@ export default function Pane({
         <NoteBar
           title={split ? titleOf(path) : null}
           dim={dim}
+          preview={preview}
           onRename={changes && !renaming ? () => onMove(path) : null}
           onDelete={changes ? () => onDelete(path) : null}
           split={onSplit}
           onClose={split ? onClose : null}
         />
       )}
-      <NoteView key={path} path={path} panel={panel} dim={dim} />
+      <NoteView key={path} path={path} panel={panel} dim={dim} clickToWrite={split} />
     </>
   );
 

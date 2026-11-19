@@ -225,6 +225,21 @@ describe("where a note opens", () => {
     await within(pane("right")).findByRole("heading", { name: "Note d" });
   });
 
+  it("leaves the focus in the right pane after Ctrl+Enter from the left one, not back on the palette's opener there", async () => {
+    const { router, u } = await split();
+    within(pane("left")).getByRole("heading", { name: "Note a" }).focus();
+    await waitFor(() => expect(useEditor.getState().focused).toBe("left"));
+    await u.keyboard("{Control>}p{/Control}");
+    await u.type(await screen.findByRole("combobox"), "Work d");
+    await u.hover(await screen.findByRole("option", { name: "d, Work" }));
+    await u.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/d.md"));
+    await within(pane("right")).findByRole("heading", { name: "Note d" });
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(useEditor.getState().focused).toBe("right");
+    expect(pane("right")).toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("is the link's own pane for a link, which takes the focus", async () => {
     const { router, u } = await split();
     await u.click(await within(pane("right")).findByRole("link", { name: "next b" }));
@@ -638,5 +653,157 @@ describe("a vault going from under a pane", () => {
     // Straight there, not by the vaults.
     expect(seen).not.toContain("/");
     await waitFor(() => expect(screen.getByRole("heading", { name: "Note b" })).toBeInTheDocument(), { timeout: 5000 });
+  });
+});
+
+describe("write follows the click", () => {
+  const source = (side: "left" | "right") => within(pane(side)).queryByRole("textbox", { name: "Markdown source" }) as HTMLTextAreaElement | null;
+  /** The text node of the pane's "See " (`See [[next x]].` on line 3), which the click lands on, 2 characters in. */
+  const see = (side: "left" | "right" | null) => {
+    // Without a side, the first pane's: the one shown alone.
+    const [p] = (side ? within(pane(side)) : screen).getAllByText((_, e) => e?.tagName === "P" && e.textContent!.startsWith("See "));
+    vi.stubGlobal("document", Object.assign(document, { caretPositionFromPoint: () => ({ offsetNode: p.firstChild!, offset: 2 }) }));
+    return p;
+  };
+  /** A click on `target`, the pointer moved by `moved` px between down and up. */
+  const click = (target: Element, moved = 0) => {
+    fireEvent.mouseDown(target, { clientX: 40, clientY: 200 });
+    fireEvent.click(target, { clientX: 40 + moved, clientY: 200 });
+  };
+  // `# Note x\n\n` is ten characters: the caret two into "See".
+  const SEE = 12;
+
+  afterEach(() => {
+    delete (document as { caretPositionFromPoint?: unknown }).caretPositionFromPoint;
+  });
+
+  it("starts Write mode in the reading pane, the caret where the click was", async () => {
+    await split();
+    click(see("right"));
+    await waitFor(() => expect(source("right")).toBeInTheDocument());
+    expect(source("right")!.selectionStart).toBe(SEE);
+    expect(source("right")!.selectionEnd).toBe(SEE);
+    expect(useEditor.getState()).toMatchObject({ focused: "right", panes: { left: { mode: "read" }, right: { mode: "write" } }, writeAt: null });
+  });
+
+  it("saves the writing pane first, which then reads; a failed save switches nothing and keeps its text", async () => {
+    let fail = true;
+    const { u, puts } = await split(undefined, { "PUT /api/notes/*": () => (fail ? json(500, { title: "boom" }) : json(200, { path: "/Work/a.md", version: "v2", lastWriteAt: "2026-10-25T09:01:00Z" })) });
+    await u.click(within(within(pane("left")).getByRole("group", { name: "This note" })).getByText("a"));
+    await u.click(screen.getByRole("button", { name: "Write" }));
+    const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(left, " kept");
+    click(see("right"));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(source("left")).toBe(left);
+    expect(left).toHaveValue("# Note a\n\nSee [[next a]].\n kept");
+    expect(source("right")).toBeNull();
+    expect(useEditor.getState().writeAt).toBeNull();
+
+    fail = false;
+    click(see("right"));
+    await waitFor(() => expect(source("right")).toBeInTheDocument());
+    expect(source("left")).toBeNull();
+    expect(puts).toEqual([]);
+  });
+
+  it("switches nothing for a drag, nor with text selected", async () => {
+    await split();
+    click(see("right"), 30);
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(source("right")).toBeNull();
+    const p = see("right");
+    window.getSelection()!.setBaseAndExtent(p.firstChild!, 0, p.firstChild!, 3);
+    click(p);
+    window.getSelection()!.removeAllRanges();
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(source("right")).toBeNull();
+    expect(useEditor.getState().panes).toMatchObject({ left: { mode: "read" }, right: { mode: "read" } });
+  });
+
+  it("leaves a link its own click", async () => {
+    const { router } = await split();
+    see("right");
+    const link = within(pane("right")).getByRole("link", { name: "next b" });
+    fireEvent.mouseDown(link, { clientX: 40, clientY: 200 });
+    fireEvent.click(link, { clientX: 40, clientY: 200 });
+    await waitFor(() => expect(at(router)).toBe("/notes/Work/a.md?beside=Work/c.md"));
+    expect(source("right")).toBeNull();
+  });
+
+  it("starts nothing in a single pane, nor below 1280 px", async () => {
+    await split("/notes/Work/a.md");
+    click(see(null));
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(screen.queryByRole("textbox", { name: "Markdown source" })).toBeNull();
+    cleanup();
+    useEditor.getState().reset();
+
+    await split();
+    await resize("desktop");
+    click(see(null));
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(screen.queryByRole("textbox", { name: "Markdown source" })).toBeNull();
+  });
+});
+
+describe("the live preview", () => {
+  it("is the pane beside the editor on its note: marked by the glasses, showing the text as it is typed", async () => {
+    const { u } = await split("/notes/Work/a.md");
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    expect(await within(pane("right")).findByRole("img", { name: "Live preview of a" })).toBeInTheDocument();
+    expect(within(pane("left")).queryByRole("img", { name: /^Live preview/ })).toBeNull();
+    await u.type(left, "\n\nFresh words");
+    expect(await within(pane("right")).findByText("Fresh words")).toBeInTheDocument();
+  });
+
+  it("swaps the roles on a click into its text: the caret where clicked, the other pane the preview", async () => {
+    // The server as it is: the note read again after its save is the text saved.
+    const saved = new Map<string, string>();
+    const { u } = await split("/notes/Work/a.md", {
+      "GET /api/notes/*": (r) => {
+        const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+        const content = saved.get(path) ?? `# Note ${path.slice(6, -3)}\n\nSee [[next ${path.slice(6, -3)}]].\n`;
+        return json(200, { path, content, version: saved.has(path) ? "v2" : "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" });
+      },
+      "PUT /api/notes/*": async (r) => {
+        const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+        saved.set(path, ((await r.json()) as { content: string }).content);
+        return json(200, { path, version: "v2", lastWriteAt: "2026-10-25T09:01:00Z" });
+      },
+    });
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await u.type(left, "\n\nFresh words");
+    const fresh = await within(pane("right")).findByText("Fresh words");
+    vi.stubGlobal("document", Object.assign(document, { caretPositionFromPoint: () => ({ offsetNode: fresh.firstChild!, offset: 6 }) }));
+    fireEvent.mouseDown(fresh, { clientX: 40, clientY: 200 });
+    fireEvent.click(fresh, { clientX: 40, clientY: 200 });
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    const right = (await within(pane("right")).findByRole("textbox", { name: "Markdown source" })) as HTMLTextAreaElement;
+    const text = "# Note a\n\nSee [[next a]].\n\n\nFresh words";
+    expect(right).toHaveValue(text);
+    expect(right.selectionStart).toBe(text.indexOf("words"));
+    expect(await within(pane("left")).findByRole("img", { name: "Live preview of a" })).toBeInTheDocument();
+    expect(await within(pane("left")).findByText("Fresh words")).toBeInTheDocument();
+    delete (document as { caretPositionFromPoint?: unknown }).caretPositionFromPoint;
+  });
+
+  it("ticks no task: the box is the editor's to tick", async () => {
+    signedIn({
+      extra: {
+        "GET /api/notes/*": (r) => {
+          const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+          return json(200, { path, content: "# Tasks\n\n- [ ] one\n", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" });
+        },
+      },
+    });
+    renderApp("/notes/Work/a.md");
+    const u = userEvent.setup();
+    await screen.findByRole("heading", { name: "Tasks" });
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    expect(await within(pane("right")).findByRole("checkbox", { name: "one" })).toBeDisabled();
   });
 });

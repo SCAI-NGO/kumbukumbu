@@ -11,6 +11,7 @@ import { PaneSide, useOpenNote } from "../shell/openInPane";
 import { useEditor, type Pane, type Side } from "../state/editor";
 import { useSession } from "../state/session";
 import { isWindowLocation, useWindows } from "../windows/store";
+import { lineStart } from "./clickToSource";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
@@ -22,17 +23,6 @@ import { useAutosave } from "./useAutosave";
 function belowOnlyHeading(text: string): number | null {
   const heading = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?# [^\r\n]*\r?\n/.exec(text);
   return heading && text.slice(heading[0].length).trim() === "" ? heading[0].length : null;
-}
-
-/** Where line `line` (1-based) of `text` starts; past its end, the text's end. */
-function lineStart(text: string, line: number) {
-  let at = 0;
-  for (let n = 1; n < line; n++) {
-    const next = text.indexOf("\n", at);
-    if (next < 0) return text.length;
-    at = next + 1;
-  }
-  return at;
 }
 
 /**
@@ -176,6 +166,14 @@ export default function MarkdownEditor({
     // A note that is only its heading (a day note, an entry made on a day): the caret on the line below, to write there.
     const below = area ? belowOnlyHeading(area.value) : null;
     if (below !== null) area!.setSelectionRange(below, below);
+    // Started by a click into the pane's text: the caret where it was clicked, its line where the click was on screen.
+    const at = useEditor.getState().writeAt;
+    if (!area || at?.path !== path) return;
+    useEditor.getState().setWriteAt(null);
+    const offset = Math.min(at.offset, area.value.length);
+    area.setSelectionRange(offset, offset);
+    const caret = caretOf(area);
+    area.scrollTop += caret.top - (at.y - (caret.bottom - caret.top) / 2);
   }, []);
 
   useEffect(() => {
