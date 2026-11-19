@@ -62,6 +62,18 @@ public class ArchiveCommandTests
     }
 
     [Fact]
+    public async Task A_note_written_once_keeps_its_creation_time_in_the_archive_and_back_from_the_trash()
+    {
+        const string archived = "/Work/_archive/Inbox/v1.2 notes 2026-11-08 213005.md";
+        Assert.False((await Run("archive \"/Work/Inbox/v1.2 notes.md\"")).IsError);
+        Assert.Equal((InMemoryNoteStore.Seeded, false), NoteCreation.Of((await _store.GetAsync(P(archived), Ct))!));
+
+        Assert.False((await Run($"rm \"{archived}\"")).IsError);
+        Assert.False((await Run($"restore \"{archived}\"")).IsError);
+        Assert.Equal((InMemoryNoteStore.Seeded, false), NoteCreation.Of((await _store.GetAsync(P(archived), Ct))!));
+    }
+
+    [Fact]
     public async Task A_jpeg_stays_jpeg()
     {
         Assert.False((await Run("archive /Work/Inbox/photo.jpeg")).IsError);

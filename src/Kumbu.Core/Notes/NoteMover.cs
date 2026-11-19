@@ -256,7 +256,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
                 continue;
             }
 
-            var moved = current with { Path = to, Revision = current.Revision + 1 };
+            // A note written once takes its creation from revision 1; the move raises the revision, so it records the creation, as a write does.
+            var (createdAt, createdAtLeast) = NoteCreation.Of(current);
+            var moved = current with { Path = to, Revision = current.Revision + 1, CreatedAt = createdAt, CreatedAtLeast = createdAtLeast };
             if (rewrites.TryGetValue(to, out var own))
             {
                 if (Apply(current.Content, own) is not { } content) return Changed(command, from);

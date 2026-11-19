@@ -21,7 +21,7 @@
 // 7. The creation time: set on creation, kept through a write, `mv`, `rm`, `restore` from the trash and the restore of
 //    a version; shown as the node's `created` (§5; `sh` shows it nowhere, so `/api/graph/node`) → "graph: a note's
 //    creation time …"; kept through `mv` and `archive` of a note not written since its creation → "graph: mv and
-//    archive keep the creation time of a note not written since" (finding M-03).
+//    archive keep the creation time of a note not written since".
 // 8. The filter on a local graph: `--no-days`, `--no-attachments`, `--no-ghosts`, `--archive` (archived notes hidden
 //    by default), `--tag`; the start note always shown; day notes a kind of their own (§6's filter, §4.3)
 //    → "graph: the filter flags on a local graph …".
@@ -347,7 +347,6 @@ test("graph: a note's creation time is set when it is made and kept through a wr
 });
 
 test("graph: mv and archive keep the creation time of a note not written since @graph", async ({ mcp, folder, aliceApi }) => {
-  test.fail(true, "M-03 (Medium, bug): mv or archive of a note not written since its creation marks its creation time 'at the latest'");
   const n = names(folder);
   // Soft: both cases are seen, whichever fails first.
   await write(mcp, n.path("Fresh"), "# Fresh\n");
