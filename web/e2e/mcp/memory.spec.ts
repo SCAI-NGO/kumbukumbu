@@ -79,6 +79,8 @@ test.describe("memory", () => {
   let bobKey: Mcp;
 
   test.beforeAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     share = await shareWithBob("Team", "write");
     alice = await Api.as("alice");
     bob = await Api.as("bob");
@@ -87,6 +89,8 @@ test.describe("memory", () => {
   });
 
   test.afterAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     await aliceKey?.dispose();
     await bobKey?.dispose();
     await alice?.dispose();
@@ -222,6 +226,8 @@ test.describe("memory", () => {
 });
 
 test("memory: a start-up skill a former member wrote stays another user's @memory", async ({ folder }) => {
+  // Its keys, shares and deletions wait on the 5-a-minute password ledger, shared with other workers.
+  test.setTimeout(4 * 60_000);
   // A share of its own: Bob leaves it, which the describe's shared vault must not see.
   const former = await shareWithBob("Former", "write");
   const name = folder;

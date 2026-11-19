@@ -177,6 +177,8 @@ test.describe("publish", () => {
   let key: Mcp;
 
   test.beforeAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     alice = await Api.as("alice");
     key = await Mcp.create(alice, `e2e publish ${randomBytes(3).toString("hex")}`, { Work: "write" }, ["Work"]);
   });
@@ -190,6 +192,8 @@ test.describe("publish", () => {
   });
 
   test.afterAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     await key?.dispose();
     await alice?.dispose();
   });
@@ -512,6 +516,8 @@ test.describe("publish", () => {
   });
 
   test("publish: over HTTP a bundle needs the list it was checked against, and the walk's own notes @publish", async ({ folder }) => {
+    // Its keys, shares and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     const b = bundle(folder);
     afterTest(() =>
       cleanUp(
@@ -592,6 +598,8 @@ test.describe("publish in a vault Bob writes in", () => {
   let bobKey: Mcp;
 
   test.beforeAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     share = await shareWithBob("Team", "write");
     alice = await Api.as("alice");
     bob = await Api.as("bob");
@@ -600,6 +608,8 @@ test.describe("publish in a vault Bob writes in", () => {
   });
 
   test.afterAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     await aliceKey?.dispose();
     await bobKey?.dispose();
     await alice?.dispose();

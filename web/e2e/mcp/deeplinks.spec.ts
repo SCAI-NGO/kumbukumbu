@@ -188,6 +188,8 @@ test.describe("deeplinks in a shared vault", () => {
   let aliceKey: Mcp;
 
   test.beforeAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     share = await shareWithBob("Team", "write");
     alice = await Api.as("alice");
     bob = await Api.as("bob");
@@ -195,6 +197,8 @@ test.describe("deeplinks in a shared vault", () => {
   });
 
   test.afterAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     await aliceKey?.dispose();
     await alice?.dispose();
     await bob?.dispose();

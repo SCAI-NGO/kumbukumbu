@@ -226,11 +226,15 @@ test.describe("svg published", () => {
   let key: Mcp;
 
   test.beforeAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     alice = await Api.as("alice");
     key = await Mcp.create(alice, `e2e svg ${randomBytes(3).toString("hex")}`, { Work: "write" }, ["Work"]);
   });
 
   test.afterAll(async () => {
+    // Keys, invitations and deletions wait on the 5-a-minute password ledger, shared with other workers.
+    test.setTimeout(4 * 60_000);
     await key?.dispose();
     await alice?.dispose();
   });
