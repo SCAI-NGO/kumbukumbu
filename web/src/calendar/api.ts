@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call, HttpError } from "../api/client";
 import { vaultOf } from "../api/paths";
-import { useEditor } from "../state/editor";
+import { editedPath, useEditor, writingSide } from "../state/editor";
 
 // The calendar's JSON, as `CalendarApi` answers it. Kept here, in one place, until the generated schema has them:
 // then each becomes `components["schemas"][…]` and `untyped` below goes.
@@ -132,14 +132,15 @@ export class UnsavedError extends HttpError {
 
 /**
  * The editor's text is saved before the calendar writes the note. In Write mode on the note, Write mode ends (its
- * autosave keeps its own base version, so a write under an open editor would make its next save conflict); otherwise
- * any pending save is flushed. False when the save failed.
+ * autosave keeps its own base version, so a write under an open editor would make its next save conflict), also where
+ * the pane writing it isn't the focused one (the split view's live preview beside it); otherwise any pending save is
+ * flushed. False when the save failed.
  */
 export async function editorSettled(path: string): Promise<boolean> {
   const editor = useEditor.getState();
-  if (editor.mode === "write" && editor.currentPath === path) {
+  if (editedPath(editor) === path && writingSide(editor) !== null) {
     await editor.endWrite();
-    return useEditor.getState().mode === "read";
+    return writingSide(useEditor.getState()) === null;
   }
   return editor.beforeRead ? editor.beforeRead({ reread: false }) : true;
 }

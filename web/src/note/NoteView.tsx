@@ -192,6 +192,9 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
     };
   }, [side, path]);
   const live = settled;
+  // The live preview writes nothing of the note: its text is the editor's beside it, whose next save a write from here
+  // would conflict with. Known before the editor's text comes in.
+  const preview = useEditor((s) => previewSide(s) === side);
   const content = live?.text ?? note.data?.content ?? "";
   const parts = useMemo(() => splitFrontmatter(content), [content]);
   const props = useMemo(() => (parts.frontmatter === null ? null : parseProperties(parts.frontmatter)), [parts.frontmatter]);
@@ -516,7 +519,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
 
   // Blocks below the title that look like frontmatter, and what the last tap on Move to properties came to: for the
   // block at that line, in the version it speaks of.
-  const blocks = useMemo(() => findPropertyBlocks(note.data?.content ?? ""), [note.data?.content]);
+  const blocks = useMemo(() => findPropertyBlocks(content), [content]);
   const [moveSaid, setMoveSaid] = useState<{ start: number; version: string; said: MoveSaid } | null>(null);
   const moveBlock = useCallback(
     async (block: PropertyBlock) => {
@@ -559,9 +562,9 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
       const block = blocks.find((b) => b.start === line - 1);
       if (!block) return null;
       const said = moveSaid && moveSaid.start === block.start && moveSaid.version === note.data?.version ? moveSaid.said : null;
-      return <PropertyHint path={path} onMove={mayWrite ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
+      return <PropertyHint path={path} onMove={mayWrite && !preview ? () => void moveBlock(block) : undefined} onWrite={writeOn ? startWrite : undefined} said={said} />;
     },
-    [blocks, moveSaid, note.data?.version, path, mayWrite, writeOn, moveBlock],
+    [blocks, moveSaid, note.data?.version, path, mayWrite, preview, writeOn, moveBlock],
   );
 
   const createMissing = useCallback(
@@ -707,7 +710,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
                 yaml={parts.frontmatter}
                 changed={frontmatterChanged ? highlight!.writer : null}
                 foldable={foldable}
-                onAdd={mayWrite && !live ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
+                onAdd={mayWrite && !preview ? () => useEditor.getState().setNoteTool("addProperty") : undefined}
               />
             )}
             <MarkdownView
@@ -715,7 +718,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
               mask={shown.mask}
               links={links.data}
               // In the live preview a tick would be written under the editor's text: it is ticked there.
-              tasksDisabled={save.isPending || !changes || !!live}
+              tasksDisabled={save.isPending || !changes || preview}
               onToggleTask={toggleTask}
               onCreateMissing={createMissing}
               highlight={highlight}
@@ -728,7 +731,7 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
         {note.data && !panel && <BacklinksList path={path} />}
       </div>
       {noteTool === "outline" && note.data && !panel && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
-      {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
+      {noteTool === "addProperty" && note.data && mayWrite && !preview && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );
 }

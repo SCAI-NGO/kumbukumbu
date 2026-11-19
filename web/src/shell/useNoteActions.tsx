@@ -16,7 +16,7 @@ import { flaggable } from "../flags/FlagMenu";
 import DuplicateNotice from "../note/DuplicateNotice";
 import { parseProperties, splitFrontmatter } from "../note/properties";
 import { staleNotes } from "../palette/rows";
-import { useEditor } from "../state/editor";
+import { previewSide, useEditor } from "../state/editor";
 import { useMarking } from "./ConfirmMark";
 import { copyItems, noteNames } from "./copyItems";
 import type { MoveSubject } from "./MoveDialog";
@@ -43,6 +43,9 @@ export interface NoteActionsShell {
  */
 export function useNoteActions(path: string | null, shell: NoteActionsShell): { items: MenuItem[]; notices: ReactNode; dialogs: ReactNode } {
   const mode = useEditor((s) => s.mode);
+  // The split view's live preview focused (workspace spec §3): its text is the editor's beside it, so nothing here
+  // writes the note but what saves the editor's text first (Duplicate) or follows it (Rename or move, Delete).
+  const preview = useEditor((s) => previewSide(s) === s.focused);
   const noteLevel = useLevel(path && vaultOf(path));
   const vaults = useVaults();
   // The note's vault's tree, which says whether its bare name is unique for Copy link. The drawer reads the same
@@ -86,6 +89,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   // Not in Write mode: publishing, as History's restore and Add property, acts on the saved text while unsaved text is on screen.
   const mayPublish =
     mode === "read" &&
+    !preview &&
     ownNote && publishEnabled === true && publications !== undefined && !publications.publications.some((p) => p.path === path) && publishableAsNote(noteVault, path ?? "");
   const marking = useMarking(publications?.publications.map((p) => p.path));
   const publishingActions =
@@ -120,7 +124,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
         ...(mode === "read"
           ? [
               { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
-              { label: "History", icon: History, onSelect: () => setHistory(path) },
+              // Not in the preview: a version restored would go under the editor's text.
+              ...(preview ? [] : [{ label: "History", icon: History, onSelect: () => setHistory(path) }]),
             ]
           : []),
         ...copyItems(path, noteNamesInVault, true, copied.copy),
@@ -143,9 +148,13 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
               ...(renaming || inVault(path).startsWith("_archive/") ? [] : [{ label: "Duplicate", icon: CopyPlus, onSelect: () => void duplicate(path) }]),
               ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => shell.onMove({ kind: "note", path }) }]),
               { label: "Delete note", icon: Trash2, onSelect: () => shell.onDelete({ kind: "note", path }) },
-              ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path) }] : []),
-              ...calendarItems(path, dated, shell.onDate, removeDate, switchTask),
-              ...(boxless && mode === "read" ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
+              ...(preview
+                ? []
+                : [
+                    ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path) }] : []),
+                    ...calendarItems(path, dated, shell.onDate, removeDate, switchTask),
+                  ]),
+              ...(boxless && mode === "read" && !preview ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
             ]
           : []),
       ]

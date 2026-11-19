@@ -792,6 +792,69 @@ describe("the live preview", () => {
     delete (document as { caretPositionFromPoint?: unknown }).caretPositionFromPoint;
   });
 
+  const entry = { "GET /api/vaults/Work/calendar/entry": () => json(200, { entry: null, couldntRead: null, canWrite: true }) };
+
+  it("offers no write of the note in the dock's ⋯: its text is the editor's", async () => {
+    const { u } = await split("/notes/Work/a.md", entry);
+    await u.click(screen.getByRole("button", { name: "Note actions" }));
+    // In a reading pane of its own.
+    expect(await screen.findByRole("menuitem", { name: "Flag" })).toBeInTheDocument();
+    await u.keyboard("{Escape}");
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await within(pane("right")).findByRole("img", { name: "Live preview of a" });
+    act(() => useEditor.getState().focus("right"));
+    await u.click(within(pane("right")).getByRole("button", { name: "Note actions" }));
+    const labels = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(labels).toContain("Find in note");
+    expect(labels).toContain("Duplicate");
+    for (const write of ["Add property…", "Flag", "Add to calendar…", "History"]) expect(labels).not.toContain(write);
+  });
+
+  it("writes nothing from the preview, not even with Add property asked for", async () => {
+    const { u, puts } = await split("/notes/Work/a.md", entry);
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await within(pane("right")).findByRole("img", { name: "Live preview of a" });
+    act(() => useEditor.getState().focus("right"));
+    act(() => useEditor.getState().setNoteTool("addProperty"));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(screen.queryByRole("dialog", { name: /property/i })).toBeNull();
+    expect(puts).toEqual([]);
+  });
+
+  it("offers no Move to properties: the block is moved in the editor", async () => {
+    const { u } = await split("/notes/Work/a.md", {
+      ...entry,
+      "GET /api/notes/*": (r) => {
+        const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+        return json(200, { path, content: "# Note a\n---\naliases: [kumbu]\n---\n", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" });
+      },
+    });
+    expect(await screen.findByRole("button", { name: "Move to properties" })).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await within(pane("right")).findByRole("img", { name: "Live preview of a" });
+    expect(await within(pane("right")).findByText("Properties go at the very top of a note.")).toBeInTheDocument();
+    expect(within(pane("right")).queryByRole("button", { name: "Move to properties" })).toBeNull();
+  });
+
+  it("hints from the text it shows: lines typed above the block", async () => {
+    const { u } = await split("/notes/Work/a.md", {
+      ...entry,
+      "GET /api/notes/*": (r) => {
+        const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+        return json(200, { path, content: "# Note a\n---\naliases: [kumbu]\n---\n", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" });
+      },
+    });
+    await u.click(screen.getByRole("button", { name: "Split view" }));
+    const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
+    await within(pane("right")).findByText("Properties go at the very top of a note.");
+    await u.type(left, "Intro\n\n", { initialSelectionStart: 0, initialSelectionEnd: 0 });
+    expect(await within(pane("right")).findByText("Intro")).toBeInTheDocument();
+    expect(within(pane("right")).getByText("Properties go at the very top of a note.")).toBeInTheDocument();
+  });
+
   it("ticks no task: the box is the editor's to tick", async () => {
     signedIn({
       extra: {
