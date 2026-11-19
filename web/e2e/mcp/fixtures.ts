@@ -64,7 +64,7 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
   mcpFinding: [
     async ({}, use, testInfo) => {
       await use();
-      const finding = testInfo.annotations.find((a) => a.type === "finding")?.description?.match(/^M-(?:\d+|xx)/)?.[0];
+      const finding = testInfo.annotations.find((a) => a.type === "finding" || a.type === "fail")?.description?.match(/^M-(?:\d+|xx)/)?.[0];
       if (!finding || testInfo.expectedStatus !== "failed" || testInfo.status !== "failed") return;
       if (!testInfo.errors.some((e) => (e.message ?? "").includes(`${finding}:`))) testInfo.expectedStatus = "passed";
     },
