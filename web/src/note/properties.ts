@@ -3,11 +3,11 @@
 /** One property of a note's front matter: a text, or a list (`tags: [a, b]` or one `- item` per line). */
 export type Property = { key: string; value: string | string[] };
 
-/** A value without its quotes; inside double quotes, YAML's `\\` and `\"` escapes undone. */
+/** A value without its quotes; inside double quotes, YAML's `\\` and `\"` escapes undone, inside single ones its `''`. */
 const unquote = (v: string) => {
   const t = v.trim();
   if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).replace(/\\(["\\])/g, "$1");
-  return t.startsWith("'") && t.endsWith("'") ? t.slice(1, -1) : t;
+  return t.startsWith("'") && t.endsWith("'") ? t.slice(1, -1).replace(/''/g, "'") : t;
 };
 
 /** One whole quoted scalar (`"…"` with its escapes, `'…'` with `''`), where a `#` is text. */
@@ -19,10 +19,20 @@ const commented = (v: string) => !quoted(v.trim()) && /(^|\s)#/.test(v);
 /** A part split off at a comma that opens a quote it doesn't close: the comma sat inside quotes (`["a, b"]`, `["a\\", b"]`). */
 const unclosed = (p: string) => (p.startsWith('"') || p.startsWith("'")) && !quoted(p);
 
-/** An inline list's items, or null where a comma sits inside quotes: splitting on it would be wrong. */
+/**
+ * A part that is, or is split off, a nested flow list or map (`[[a, b], x]`, `[{a: b, c: d}]`); not a template's
+ * placeholder (`[daily, {{date}}]`), which Obsidian fills before the YAML is read.
+ */
+const nested = (p: string) => /^[[{]|[\]}]$/.test(p) && !/^\{\{[^{}]*\}\}$/.test(p);
+
+/**
+ * An inline list's items, one trailing comma dropped as YAML drops it (`[a,]`); null where splitting at the commas
+ * would be wrong: a comma inside quotes or inside a nested list or map, or an item left empty (`[a,,b]`).
+ */
 function inlineItems(inner: string): string[] | null {
   const parts = inner.split(",").map((p) => p.trim());
-  return parts.some(unclosed) ? null : parts.map(unquote);
+  if (parts.length > 1 && parts[parts.length - 1] === "") parts.pop();
+  return parts.some((p) => p === "" || unclosed(p) || nested(p)) ? null : parts.map(unquote);
 }
 
 /**
@@ -48,7 +58,7 @@ export function flowMap(value: string): Record<string, string> | null {
 
 /**
  * The flat key/value properties of a YAML front matter, as Obsidian shows them; null for anything flatter
- * reading can't take apart faithfully (nested maps, block text, comments, anchors, commas in quoted list items),
+ * reading can't take apart faithfully (nested maps and lists, block text, comments, anchors, commas in quoted list items),
  * which is then shown as written.
  * No YAML library: the subset is small, and nothing here is ever executed or resolved.
  */

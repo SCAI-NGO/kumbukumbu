@@ -223,4 +223,39 @@ describe("mergeProperties", () => {
   it("unites a list the note quotes the key of", () => {
     expect(mergeProperties("---\n'tags': [a]\n---\n", [{ key: "tags", value: ["b"] }])).toEqual({ content: "---\n'tags': [a, b]\n---\n" });
   });
+
+  it.each([
+    ["---\ntags: [{a: b, c: d}, x]\n---\n", [{ key: "tags", value: ["q: r"] }]],
+    ["---\ntags: [[a, b], x]\n---\n", [{ key: "tags", value: ["2025"] }]],
+  ])("refuses a flow list with nested brackets, %j, leaving the note as it was", (note, add) => {
+    expect(mergeProperties(note, add)).toEqual({ refused: "unreadable" });
+  });
+
+  it("appends after a trailing comma, inline for plain items", () => {
+    expect(mergeProperties("---\ntags: [a,]\n---\n", [{ key: "tags", value: ["q r"] }])).toEqual({ content: "---\ntags: [a, q r]\n---\n" });
+    expect(mergeProperties("---\ntags: [a , ]\n---\n", [{ key: "tags", value: ["q r"] }])).toEqual({ content: "---\ntags: [a, q r]\n---\n" });
+  });
+
+  it("appends after a trailing comma below the key for a quoted item, with no empty item", () => {
+    expect(mergeProperties("---\ntags: [a,]\n---\n", [{ key: "tags", value: ["q: r"] }])).toEqual({ content: '---\ntags:\n  - a\n  - "q: r"\n---\n' });
+  });
+
+  it("refuses a flow list with an empty item in the middle", () => {
+    expect(mergeProperties("---\ntags: [a,,b]\n---\n", [{ key: "tags", value: ["q"] }])).toEqual({ refused: "unreadable" });
+  });
+
+  it("unites a list where the template quotes the key, and adds a new key as the template writes it", () => {
+    expect(mergeProperties("---\ntags: [a]\n---\n", [{ key: '"tags"', value: ["b"] }])).toEqual({ content: "---\ntags: [a, b]\n---\n" });
+    expect(mergeProperties("---\nstatus: a\n---\n", [{ key: '"tags"', value: ["b"] }])).toEqual({ content: '---\nstatus: a\n"tags":\n  - b\n---\n' });
+  });
+
+  it("takes an item the note has in single quotes as present", () => {
+    const note = "---\ntags: ['it''s']\naliases:\n  - 'it''s'\n---\n";
+    expect(mergeProperties(note, [{ key: "tags", value: ["it's"] }, { key: "aliases", value: ["it's"] }])).toEqual({ content: note });
+  });
+
+  it("writes an item with a single quote so that it reads back", () => {
+    expect(mergeProperties("---\ntags:\n  - a\n---\n", [{ key: "tags", value: ["it's"] }])).toEqual({ content: '---\ntags:\n  - a\n  - "it\'s"\n---\n' });
+    expect(addProperty("---\n---\n", "title", "it's")).toEqual({ content: '---\ntitle: "it\'s"\n---\n' });
+  });
 });

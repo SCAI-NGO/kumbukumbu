@@ -80,8 +80,11 @@ export const noteUnreadable = "The template's properties weren't added: this not
 export const templateUnreadable = "The template's properties weren't added: the template's properties can't be read.";
 export const notMerged = "The template's properties weren't added: they couldn't be merged safely into this note's.";
 
-/** A filled value that is a date, a time or a number, which YAML (and Obsidian) read as such where written plain. */
-const dateLike = /^\d[\d :.T+-]*$/;
+/**
+ * A filled value that is a date, a time or a number, which YAML (and Obsidian) read as such where written plain; a
+ * colon before a space or the end (`10 : 30`, `10:`) would make it a key, which YAML refuses there.
+ */
+const dateLike = (v: string) => /^\d[\d :.T+-]*$/.test(v) && !/:(\s|$)/.test(v);
 
 /** A template's properties and body, its placeholders filled; null for properties it has that can't be read. */
 function readTemplate(template: string, at: Context): { props: Merged[] | null; body: string } {
@@ -102,7 +105,7 @@ function readTemplate(template: string, at: Context): { props: Merged[] | null; 
       const raw = fillPlaceholders(line.slice(line.indexOf(":") + 1).trim(), at);
       // As the template writes it only where that is how it would be written anyway, or where it is a date, a time or
       // a number that reads back as written: parseProperties is too lenient to vouch for other quoting (`'Bob's plan'`).
-      const keep = raw === yamlValue(filled) || (dateLike.test(filled) && parseProperties(`k: ${raw}`)?.[0]?.value === filled);
+      const keep = raw === yamlValue(filled) || (dateLike(filled) && parseProperties(`k: ${raw}`)?.[0]?.value === filled);
       return { key, value: filled, written: keep ? raw : yamlValue(filled) };
     }),
   };

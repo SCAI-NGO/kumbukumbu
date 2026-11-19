@@ -239,6 +239,38 @@ describe("templateEdit", () => {
     expect(edit.text).toBe("---\ncreated: 2026-11-19\nyear: 2026\nat: '14:05'\n---\n");
   });
 
+  it("quotes a filled time with a colon before a space or the end, which YAML wouldn't read plain", () => {
+    const { edit } = templateEdit("", 0, 0, "---\nat: {{time:HH : mm}}\nend: {{time:HH:}}\n---\n", at);
+    expect(edit.text).toBe('---\nat: "14 : 05"\nend: "14:"\n---\n');
+  });
+
+  it.each([
+    ["---\ntags: [{a: b, c: d}, x]\n---\n", '---\ntags: ["q: r"]\n---\nbody'],
+    ["---\ntags: [[a, b], x]\n---\n", '---\ntags: ["2025"]\n---\nbody'],
+  ])("leaves a flow list with nested brackets, %j, as it was", (note, template) => {
+    const { text, hint } = inserted(note, template);
+    expect(text).toBe(`${note}body`);
+    expect(hint).toBe("The template's properties weren't added: this note's properties can't be read.");
+  });
+
+  it("still reads a placeholder as an item of an inline list", () => {
+    const { edit, hint } = templateEdit("", 0, 0, "---\ntags: [daily, {{date}}]\n---\n", at);
+    expect(edit.text).toBe('---\ntags:\n  - daily\n  - "2026-11-19"\n---\n');
+    expect(hint).toBeNull();
+  });
+
+  it("takes the note's 'it''s' for the template's it's", () => {
+    const note = "---\ntags: ['it''s']\n---\n";
+    const { text, hint } = inserted(note, "---\ntags: [\"it's\", 'it''s']\n---\nbody");
+    expect(text).toBe(`${note}body`);
+    expect(hint).toBeNull();
+  });
+
+  it("merges into the note's tags where the template quotes the key", () => {
+    const { text } = inserted("---\ntags: [a]\n---\n", '---\n"tags": [b]\n---\n');
+    expect(text).toBe("---\ntags: [a, b]\n---\n");
+  });
+
   it("keeps a key the note writes in quotes, adding no second one", () => {
     const note = '---\n"status": a\n---\n';
     const { text, hint } = inserted(note, "---\nstatus: b\n---\nbody");

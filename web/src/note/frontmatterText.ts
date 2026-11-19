@@ -207,15 +207,16 @@ function withItems(lines: string[], key: string, items: string[]): string[] {
   const value = line.slice(colon + 1).trim();
   if (value.startsWith("[")) {
     // Plain items only: a quoted one may hold a comma, which an inline list can't be read back with (properties.ts).
+    // A trailing comma (`[a,]`) goes, so that the items follow the last one.
     if (items.every((i) => yamlValue(i) === i)) {
       const close = line.lastIndexOf("]");
-      const before = line.slice(0, close).trimEnd();
+      const before = line.slice(0, close).trimEnd().replace(/,$/, "").trimEnd();
       const inline = `${before}${before.endsWith("[") ? "" : ", "}${items.join(", ")}${line.slice(close)}${cr}`;
       return [...lines.slice(0, at), inline, ...lines.slice(at + 1)];
     }
     // The note's items as it writes them (`2025`, `'it''s'`), split at the commas as parseProperties splits them: it
-    // reads no inline list with a comma inside quotes.
-    const inner = value.slice(1, -1).trim();
+    // reads no inline list with a comma inside quotes or nested brackets, and drops one trailing comma.
+    const inner = value.slice(1, -1).trim().replace(/,$/, "").trimEnd();
     const own = inner ? inner.split(",").map((i) => i.trim()) : [];
     const below = [line.slice(0, colon + 1), ...own.map((i) => `  - ${i}`), ...items.map((i) => `  - ${yamlValue(i)}`)].map((l) => l + cr);
     return [...lines.slice(0, at), ...below, ...lines.slice(at + 1)];
@@ -246,7 +247,7 @@ export function mergeProperties(content: string, add: Merged[]): { content: stri
   // What the frontmatter is to read back as.
   const expected: Property[] = [...props];
   for (const p of add) {
-    const at = props.findIndex((n) => nameOf(n.key) === p.key);
+    const at = props.findIndex((n) => nameOf(n.key) === nameOf(p.key));
     if (at < 0) {
       added.push(...propertyLines(p));
       expected.push({ key: p.key, value: p.value });
