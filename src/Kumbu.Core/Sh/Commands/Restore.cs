@@ -19,7 +19,7 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints, Attachme
           If the note was removed: bring it back from the trash, the most recently removed one at that
           path, or the one with a version from 'trash'. If the note exists: make a version from
           'history <path>' current again. The version it replaces stays in the history, so a restore
-          can be undone the same way. An image or a PDF comes back the same way, and so does an empty
+          can be undone the same way. An attachment (any file) comes back the same way, and so does an empty
           folder removed with 'rm' (restore /Demo/Drafts/).
 
         restore --checkpoint <name> [--plan <token>] <path>

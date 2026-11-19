@@ -407,4 +407,21 @@ public class HelpTests
         Assert.Contains($"({Kumbu.Core.Notes.NoteWriter.HistoryLimit} versions per note", await Flat("help history"));
         Assert.Contains($"({Kumbu.Core.Notes.NoteWriter.HistoryLimit} versions per note", await Flat("help mkcp"));
     }
+
+    [Fact]
+    public async Task Help_rm_and_mv_take_any_file_as_an_attachment()
+    {
+        var rm = await Flat("help rm");
+        Assert.Contains("Move notes and attachments (any file: an image, a PDF, a text file …) to the trash, or folders", rm);
+
+        var mv = await Flat("help mv");
+        Assert.Contains("An attachment (any file: an image, a PDF, a text file …) moves the same way", mv);
+        Assert.Contains("an image's, a PDF's or an SVG's new name keeps the extension of its format (shot.jpg may become shot.jpeg, never shot.png: a new name doesn't change the bytes); no other file's may end in .md or in one of theirs.", mv);
+        Assert.DoesNotContain("images or PDFs", rm);
+        Assert.DoesNotContain("(an image or a PDF)", mv);
+
+        var restore = await Flat("help restore");
+        Assert.Contains("An attachment (any file) comes back the same way", restore);
+        Assert.DoesNotContain("An image or a PDF comes back", restore);
+    }
 }
