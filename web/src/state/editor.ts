@@ -289,6 +289,8 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
         revealing: false,
         // While the note is being named, a save would make it again at its old path.
         mode: s.renaming.includes(path) ? "read" : writes(s.draft?.path === path ? "write" : mode),
+        // A click's place in this pane is for the note it was on, as a change of mode forgets it too.
+        writeAt: s.writeAt?.side === s.focused ? null : s.writeAt,
         overlay: "none",
         noteTool: s.currentPath === path ? s.noteTool : null,
         find: s.currentPath === path ? s.find : initial.find,

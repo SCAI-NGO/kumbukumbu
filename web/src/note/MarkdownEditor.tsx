@@ -168,7 +168,7 @@ export default function MarkdownEditor({
     if (below !== null) area!.setSelectionRange(below, below);
     // Started by a click into the pane's text: the caret where it was clicked, its line where the click was on screen.
     const at = useEditor.getState().writeAt;
-    if (!area || at?.path !== path) return;
+    if (!area || at?.path !== path || at.side !== side) return;
     useEditor.getState().setWriteAt(null);
     const offset = Math.min(at.offset, area.value.length);
     area.setSelectionRange(offset, offset);

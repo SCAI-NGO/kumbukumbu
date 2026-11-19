@@ -199,6 +199,18 @@ describe("the panes", () => {
     });
   });
 
+  it("forget where a click was in the focused pane as another note opens there, and keep the other pane's", () => {
+    writingLeft();
+    const at = { path: "/Work/b.md", offset: 4, y: 200 };
+    useEditor.getState().setWriteAt({ ...at, side: "right" });
+    useEditor.getState().openNote("/Work/c.md");
+    expect(useEditor.getState().writeAt).toBeNull();
+
+    useEditor.getState().setWriteAt({ ...at, side: "left" });
+    useEditor.getState().openNote("/Work/d.md");
+    expect(useEditor.getState().writeAt).toEqual({ ...at, side: "left" });
+  });
+
   it("open a note in Read mode while the other pane writes", () => {
     writingLeft();
     useEditor.getState().openNote("/Work/c.md", "write");

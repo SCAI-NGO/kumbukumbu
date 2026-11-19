@@ -682,6 +682,8 @@ describe("write follows the click", () => {
   };
   /** A click on `target`, the pointer moved by `moved` px between down and up; `detail` counts it in a double click. */
   const click = (target: Element, moved = 0, detail = 1) => {
+    // As a browser has it: the pointer down first, which focuses the pane.
+    fireEvent.pointerDown(target, { clientX: 40, clientY: 200, detail });
     fireEvent.mouseDown(target, { clientX: 40, clientY: 200, detail });
     fireEvent.click(target, { clientX: 40 + moved, clientY: 200, detail });
   };
@@ -766,9 +768,31 @@ describe("write follows the click", () => {
       fireEvent.dblClick(p, { clientX: 40, clientY: 200, detail: 2 });
       await pause();
       expect(source("right")).toBeNull();
-      expect(useEditor.getState()).toMatchObject({ focused: "left", panes: { left: { mode: "read" }, right: { mode: "read" } }, writeAt: null });
+      // Focused by the pointer down, but reading.
+      expect(useEditor.getState()).toMatchObject({ focused: "right", panes: { left: { mode: "read" }, right: { mode: "read" } }, writeAt: null });
     });
   }
+
+  it("switches nothing where the other pane is pressed while it waits: that pane keeps the focus", async () => {
+    await split();
+    click(see("right"));
+    const rename = within(pane("left")).getByRole("button", { name: "Rename or move" });
+    fireEvent.pointerDown(rename);
+    fireEvent.mouseDown(rename);
+    fireEvent.click(rename);
+    await pause();
+    expect(source("right")).toBeNull();
+    expect(useEditor.getState()).toMatchObject({ focused: "left", panes: { left: { mode: "read" }, right: { mode: "read" } }, writeAt: null });
+  });
+
+  it("leaves where another pane's click was to that pane's editor", async () => {
+    await split();
+    act(() => useEditor.getState().setWriteAt({ path: "/Work/b.md", offset: SEE, y: 200, side: "left" }));
+    act(() => useEditor.getState().focus("right"));
+    act(() => void useEditor.getState().setMode("write"));
+    expect(await within(pane("right")).findByRole("textbox", { name: "Markdown source" })).not.toHaveProperty("selectionStart", SEE);
+    expect(useEditor.getState().writeAt).toMatchObject({ side: "left" });
+  });
 
   it("switches nothing where text is selected while it waits", async () => {
     await split();
@@ -838,6 +862,7 @@ describe("the live preview", () => {
     await u.type(left, "\n\nFresh words");
     const fresh = await within(pane("right")).findByText("Fresh words");
     vi.stubGlobal("document", Object.assign(document, { caretPositionFromPoint: () => ({ offsetNode: fresh.firstChild!, offset: 6 }) }));
+    fireEvent.pointerDown(fresh, { clientX: 40, clientY: 200 });
     fireEvent.mouseDown(fresh, { clientX: 40, clientY: 200 });
     fireEvent.click(fresh, { clientX: 40, clientY: 200 });
     await act(() => new Promise((r) => setTimeout(r, 300)));

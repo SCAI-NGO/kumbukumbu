@@ -472,8 +472,8 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
     if (offset === null) return;
     const y = e.clientY;
     waiting.current = setTimeout(() => {
-      if (window.getSelection()?.isCollapsed === false) return;
-      useEditor.getState().focus(side);
+      // The pointer down focused this pane; one in the other pane meanwhile (its note bar, say) keeps the focus there.
+      if (window.getSelection()?.isCollapsed === false || useEditor.getState().focused !== side) return;
       void useEditor.getState().writeHere({ path, offset, y });
     }, DOUBLE_CLICK_MS);
   };
