@@ -579,7 +579,17 @@ public sealed class EncryptedNoteStore(
     /// (<see cref="PutLargeBlobAsync"/>). What tells the two apart is reading past 15 MB, so up to that much is held
     /// while it is read, unless the declared length is larger.
     /// </summary>
-    public async Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct)
+    public Task<string> PutBlobAsync(string vault, Stream content, long? declaredLength, CancellationToken ct) =>
+        PutBlobAsync(vault, ReadOnlyMemory<byte>.Empty, content, declaredLength, ct);
+
+    /// <summary>
+    /// As the stream's overload, for a body whose start, <paramref name="head"/>, the caller read already. A body known to
+    /// be larger than 15 MB (a head longer than that, or a declared length above it) takes its write slots
+    /// (<see cref="VaultCatalog.FileWrites"/>) holding only that head, and is streamed on from it as it is: copied, a head
+    /// of 15 MB and a byte, read to tell the body from a small one, would be held twice while it waits for a slot. Any
+    /// other is read on after the head, as the stream's overload reads it.
+    /// </summary>
+    public async Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(declaredLength ?? 0, nameof(declaredLength));
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v }) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
@@ -589,26 +599,27 @@ public sealed class EncryptedNoteStore(
         // A check only: each chunk holds its own space as it is written.
         if (declaredLength is { } declared) _quota?.Release(RequireSpace(v, declared));
 
-        var start = new MemoryStream();
-        if (declaredLength is not > AttachmentFormat.MaxBytes)
+        if (head.Length <= AttachmentFormat.MaxBytes && declaredLength is not > AttachmentFormat.MaxBytes)
         {
+            var start = new MemoryStream();
+            start.Write(head.Span);
             var buffer = new byte[81920];
             int read;
-            while (start.Length <= AttachmentFormat.MaxBytes && (read = await content.ReadAsync(buffer, ct)) > 0) start.Write(buffer, 0, read);
+            while (start.Length <= AttachmentFormat.MaxBytes && (read = await rest.ReadAsync(buffer, ct)) > 0) start.Write(buffer, 0, read);
             if (start.Length <= AttachmentFormat.MaxBytes)
             {
                 CheckLength(start.Length, declaredLength);
                 return await PutBlobAsync(vault, start.GetBuffer().AsMemory(0, (int)start.Length), ct);
             }
 
-            start.Position = 0;
+            head = start.GetBuffer().AsMemory(0, (int)start.Length);
         }
 
         // A slot for the whole upload: each holds two chunks' bytes while it streams, whatever its link's speed.
         await catalog.FileWrites.WaitAsync(ct);
         try
         {
-            return await PutLargeBlobAsync(v, start, content, bound, declaredLength, ct);
+            return await PutLargeBlobAsync(v, head, rest, bound, declaredLength, ct);
         }
         finally
         {
@@ -636,7 +647,7 @@ public sealed class EncryptedNoteStore(
     /// takes what it leaves once it is older than <see cref="BlobSweep.Grace"/>); one whose head finds the same bytes
     /// stored makes that blob young again and deletes its own chunks.
     /// </summary>
-    private async Task<string> PutLargeBlobAsync(UnlockedVault v, MemoryStream start, Stream content, long bound, long? declaredLength, CancellationToken ct)
+    private async Task<string> PutLargeBlobAsync(UnlockedVault v, ReadOnlyMemory<byte> head, Stream content, long bound, long? declaredLength, CancellationToken ct)
     {
         var headId = ObjectId.GenerateNewId();
         var key = Kumbu.Core.Crypto.VaultCrypto.NewKey();
@@ -648,12 +659,14 @@ public sealed class EncryptedNoteStore(
         {
             var chunk = new byte[LargeBlobHead.ChunkBytes];
             var next = new byte[LargeBlobHead.ChunkBytes];
-            var length = await FillAsync(start, content, chunk, ct);
+            int length;
+            (length, head) = await FillAsync(head, content, chunk, ct);
             var (size, n) = (0L, 0);
             while (true)
             {
                 // The next chunk is read before this one is sealed: only then is it known whether this is the last.
-                var nextLength = length == chunk.Length ? await FillAsync(start, content, next, ct) : 0;
+                var nextLength = 0;
+                if (length == chunk.Length) (nextLength, head) = await FillAsync(head, content, next, ct);
                 size += length;
                 if (size > bound) throw new FileTooLargeException(bound);
                 if (size > declaredLength || nextLength == 0) CheckLength(size, declaredLength);
@@ -766,26 +779,22 @@ public sealed class EncryptedNoteStore(
         }
     }
 
-    /// <summary>Fills <paramref name="buffer"/> from what was read already, then from <paramref name="content"/>; less
-    /// only at the end. What was read already is let go once it is used up.</summary>
-    private static async Task<int> FillAsync(MemoryStream start, Stream content, byte[] buffer, CancellationToken ct)
+    /// <summary>Fills <paramref name="buffer"/> from what was read already, <paramref name="head"/>, then from
+    /// <paramref name="content"/>; less only at the end. Returns how much it filled, and what is left of the head.</summary>
+    private static async Task<(int Filled, ReadOnlyMemory<byte> Head)> FillAsync(ReadOnlyMemory<byte> head, Stream content, byte[] buffer, CancellationToken ct)
     {
-        var filled = 0;
+        var filled = Math.Min(head.Length, buffer.Length);
+        head[..filled].CopyTo(buffer);
+        // Used up, let go of: of a start the store read itself, nothing else holds it.
+        head = filled == head.Length ? ReadOnlyMemory<byte>.Empty : head[filled..];
         while (filled < buffer.Length)
         {
-            var read = await start.ReadAsync(buffer.AsMemory(filled), ct);
-            if (read == 0 && start.Capacity > 0)
-            {
-                start.SetLength(0);
-                start.Capacity = 0;
-            }
-
-            if (read == 0) read = await content.ReadAsync(buffer.AsMemory(filled), ct);
+            var read = await content.ReadAsync(buffer.AsMemory(filled), ct);
             if (read == 0) break;
             filled += read;
         }
 
-        return filled;
+        return (filled, head);
     }
 
     internal static bool TryParseBlobId(string blobId, out byte[] id)

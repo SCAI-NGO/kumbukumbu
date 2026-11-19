@@ -270,8 +270,9 @@ public sealed class VaultOptions
     /// is decrypted); a further read waits for one to finish. Serving the bytes afterwards holds no slot.</summary>
     public int ConcurrentFileReads { get; set; } = 4;
 
-    /// <summary>Files larger than 15 MB written at once, server-wide (each holds about 32 MiB while its chunks are read
-    /// and sealed); a further upload of one waits for one to finish. Smaller files don't take a slot.</summary>
+    /// <summary>Files larger than 15 MB written at once, server-wide (each holds about 16 MiB while its chunks are read
+    /// and sealed, beside the start its way in read, up to 15 MB and a byte); a further upload of one waits for one to
+    /// finish. Smaller files don't take a slot.</summary>
     public int ConcurrentFileWrites { get; set; } = 4;
 
     /// <summary>1 GiB.</summary>

@@ -81,8 +81,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     /// </summary>
     public async Task<LargeBlob> PutLargeAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct)
     {
+        // The head goes to the store as it is: copied, a body read to 15 MB to tell it from a small one would be held twice.
         await using var read = new CountedStream(head, rest);
-        var id = await store.PutBlobAsync(vault, read, declaredLength, ct);
+        var id = await store.PutBlobAsync(vault, head, read, declaredLength, ct);
         return new LargeBlob(id, read.Position, read.Version);
     }
 
@@ -166,14 +167,23 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         return Written($"wrote {Shown(path)}", next);
     }
 
-    /// <summary>The bytes of <see cref="PutLargeAsync"/>, read once: the head, then the rest, hashed and counted as the
-    /// store reads them.</summary>
-    private sealed class CountedStream(ReadOnlyMemory<byte> head, Stream rest) : Stream
+    /// <summary>The bytes of <see cref="PutLargeAsync"/>, read once: the head, hashed and counted from the start, then the
+    /// rest, hashed and counted as the store reads them.</summary>
+    private sealed class CountedStream : Stream
     {
         private readonly System.Security.Cryptography.IncrementalHash _hash =
             System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
 
+        private readonly Stream _rest;
+
         private long _position;
+
+        public CountedStream(ReadOnlyMemory<byte> head, Stream rest)
+        {
+            _hash.AppendData(head.Span);
+            _position = head.Length;
+            _rest = rest;
+        }
 
         /// <summary>The token of the bytes read, once they all are.</summary>
         public string Version => Convert.ToHexStringLower(_hash.GetCurrentHash())[..VersionToken.Length];
@@ -190,14 +200,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            int n;
-            if (_position < head.Length)
-            {
-                n = Math.Min(buffer.Length, head.Length - (int)_position);
-                head.Slice((int)_position, n).CopyTo(buffer);
-            }
-            else n = await rest.ReadAsync(buffer, cancellationToken);
-
+            var n = await _rest.ReadAsync(buffer, cancellationToken);
             _hash.AppendData(buffer.Span[..n]);
             _position += n;
             return n;

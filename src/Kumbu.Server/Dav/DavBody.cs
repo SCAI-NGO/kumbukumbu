@@ -25,21 +25,32 @@ public static class DavBody
     /// A file's body, whole if it is at most <paramref name="whole"/> bytes (<c>Large</c> false); else the start of it
     /// (<c>Large</c> true), which the caller streams on from: with a <c>Content-Length</c> above <paramref name="whole"/>,
     /// its first <paramref name="head"/> bytes, and without one, the <paramref name="whole"/> bytes and more that told it
-    /// apart. A body shorter than it declared is the store's to refuse, by its length.
+    /// apart. A body shorter than it declared is the store's to refuse, by its length. Read into one array that grows with
+    /// the bytes received (doubling, up to the declared length or <paramref name="whole"/> and a byte), never with the
+    /// length declared, and handed out as it is, not copied: at its largest step it holds the half it had and the new
+    /// array, about 23 MB for 15 MB, and then the bytes once.
     /// </summary>
-    public static async Task<(byte[] Bytes, bool Large)> ReadStartAsync(HttpRequest request, long whole, int head, CancellationToken ct)
+    public static async Task<(ReadOnlyMemory<byte> Bytes, bool Large)> ReadStartAsync(HttpRequest request, long whole, int head, CancellationToken ct)
     {
         var large = request.ContentLength > whole;
-        var limit = large ? head : whole + 1;
-        using var buffer = new MemoryStream();
-        var chunk = new byte[81920];
+        var limit = (int)(large ? head : Math.Min(request.ContentLength ?? whole + 1, whole + 1));
+        var buffer = new byte[Math.Min(limit, 81920)];
+        var length = 0;
         int read;
-        while (buffer.Length < limit && (read = await request.Body.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, limit - buffer.Length)), ct)) > 0)
+        while (length < limit)
         {
-            buffer.Write(chunk, 0, read);
+            if (length == buffer.Length)
+            {
+                var grown = new byte[Math.Min(limit, buffer.Length * 2)];
+                buffer.AsSpan(0, length).CopyTo(grown);
+                buffer = grown;
+            }
+
+            if ((read = await request.Body.ReadAsync(buffer.AsMemory(length), ct)) == 0) break;
+            length += read;
         }
 
-        return (buffer.ToArray(), large || buffer.Length > whole);
+        return (buffer.AsMemory(0, length), large || length > whole);
     }
 
     /// <summary>

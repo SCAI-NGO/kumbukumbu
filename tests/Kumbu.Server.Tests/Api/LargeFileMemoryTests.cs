@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using Kumbu.Server.Auth;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -20,7 +21,7 @@ public sealed class LargeFileMemoryTests(KumbuAppFactory app)
     private WebApplicationFactory<Program> Api => app.PublicApi;
 
     /// <summary><see cref="Size"/> bytes of noise, made as they are sent, and hashed: no array of the file on this side either.</summary>
-    private sealed class Generated : HttpContent
+    private sealed class Generated(long size = Size, bool declare = true) : HttpContent
     {
         private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
@@ -30,7 +31,7 @@ public sealed class LargeFileMemoryTests(KumbuAppFactory app)
         {
             var random = new Random(42);
             var piece = new byte[64 * 1024];
-            for (var sent = 0L; sent < Size; sent += piece.Length)
+            for (var sent = 0L; sent < size; sent += piece.Length)
             {
                 random.NextBytes(piece);
                 _hash.AppendData(piece);
@@ -40,8 +41,8 @@ public sealed class LargeFileMemoryTests(KumbuAppFactory app)
 
         protected override bool TryComputeLength(out long length)
         {
-            length = Size;
-            return true;
+            length = size;
+            return declare;
         }
     }
 
@@ -79,7 +80,7 @@ public sealed class LargeFileMemoryTests(KumbuAppFactory app)
         return peak;
     }
 
-    private HttpRequestMessage Request(HttpMethod method, RestClient user, string path, HttpContent? content = null)
+    private static HttpRequestMessage Request(HttpMethod method, RestClient user, string path, HttpContent? content = null)
     {
         var request = new HttpRequestMessage(method, user.Url(path, "files")) { Content = content };
         request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={user.Session}");
@@ -124,6 +125,58 @@ public sealed class LargeFileMemoryTests(KumbuAppFactory app)
         // and the one before it being sealed, the pipes, the driver's buffers: tens of MiB; half the file means it is held.
         Assert.True(uploadPeak < 100 * Mib, $"the upload of 200 MB held {uploadPeak / Mib} MiB");
         Assert.True(downloadPeak < 100 * Mib, $"the download of 200 MB held {downloadPeak / Mib} MiB");
+    }
+
+    /// <summary>
+    /// An upload without a <c>Content-Length</c> is known to be large only once 15 MB and a byte of it arrived; what it
+    /// read to know that is all it holds while it waits for a write slot (here all taken): not a second copy of it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_large_upload_without_a_length_holds_its_head_once_while_it_waits(bool dav)
+    {
+        var user = await RestClient.NewAsync(Api, vault: "Work");
+        var share = dav ? await Dav.DavClient.NewAsync(Api, user) : null;
+        using var client = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        var held = catalog.FileWrites.CurrentCount;
+        for (var i = 0; i < held; i++) await catalog.FileWrites.WaitAsync(Ct);
+        var baseline = GC.GetTotalMemory(forceFullCollection: true);
+        Task<HttpResponseMessage> put;
+        long waiting;
+        try
+        {
+            var content = new Generated(40 * Mib, declare: false);
+            HttpRequestMessage request;
+            if (share is null) request = Request(HttpMethod.Put, user, "big.bin", content);
+            else
+            {
+                request = new HttpRequestMessage(HttpMethod.Put, "/dav/Work/big.bin") { Content = content };
+                request.Headers.TryAddWithoutValidation("Authorization", share.Authorization);
+                request.Headers.Add("X-Forwarded-Proto", "https");
+                request.Headers.Add("X-Forwarded-For", Dav.DavClient.NewIp());
+            }
+
+            put = client.SendAsync(request, Ct);
+            // Long enough for the head to arrive and the upload to wait; well within the bound on its wait.
+            await Task.Delay(TimeSpan.FromSeconds(3), Ct);
+            Assert.False(put.IsCompleted);
+            waiting = GC.GetTotalMemory(forceFullCollection: true) - baseline;
+        }
+        finally
+        {
+            catalog.FileWrites.Release(held);
+        }
+
+        using var answer = await put;
+        Assert.True(answer.StatusCode == HttpStatusCode.Created, await answer.Content.ReadAsStringAsync(Ct));
+        TestContext.Current.SendDiagnosticMessage($"{(dav ? "WebDAV" : "/api/files")}: held {waiting / Mib} MiB while waiting");
+        // Its head is 15 MB and a byte, once: WebDAV's in an array of its own (15 MiB when measured, 35 with the store's
+        // copy); /api/files' in the 16 MiB array it rents, beside the smaller ones it grew through, which the pool keeps for
+        // the next request (32 MiB when measured, 52 with the store's copy).
+        var most = (dav ? 24 : 40) * Mib;
+        Assert.True(waiting < most, $"a waiting upload held {waiting / Mib} MiB");
     }
 }
 

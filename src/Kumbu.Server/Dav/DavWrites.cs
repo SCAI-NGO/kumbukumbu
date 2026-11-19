@@ -578,7 +578,7 @@ internal sealed partial class DavWrites(
         var files = writer.ForAttachments() ?? throw NoAttachments();
         if (writer.Caller.Refuse("upload", path) is { } refused) throw Refusal(refused);
         var bound = http.RequestServices.GetRequiredService<Vaults.VaultCatalog>().MaxFileBytes;
-        byte[] bytes;
+        ReadOnlyMemory<byte> bytes;
         bool large;
         if (copied is null)
         {
@@ -609,7 +609,7 @@ internal sealed partial class DavWrites(
                 return;
             }
 
-            var (item, created) = parking.Put(caller.ShareId, place.VaultId, place.Path, bytes);
+            var (item, created) = parking.Put(caller.ShareId, place.VaultId, place.Path, []);
             Written(item.Version, created);
             return;
         }
@@ -621,16 +621,16 @@ internal sealed partial class DavWrites(
         if (large)
         {
             if (AttachmentFormat.TooLargeToCheck(path) is { } tooLarge) throw new DavException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
-            if (AttachmentFormat.LargeProblem(path, bytes) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
+            if (AttachmentFormat.LargeProblem(path, bytes.Span) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
             matches = true;
             // Its size where the header reads, without the pixel limit: nothing decodes a large image (files spec, decision 12).
-            var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes) : null;
+            var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes.Span) : null;
             var blob = await PutLargeAsync(files, path, bytes, copied, bound, ct);
             write = async v => (await files.WriteLargeAsync(path.Value, blob, bytes, dimensions, v, ct)).Result;
         }
         else
         {
-            matches = AttachmentFormat.Problem(path, bytes) is null;
+            matches = AttachmentFormat.Problem(path, bytes.Span) is null;
             var dimensions = matches ? Dimensions(path, format, bytes) : null;
             write = async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result;
         }
@@ -642,15 +642,15 @@ internal sealed partial class DavWrites(
     }
 
     /// <summary>An image's displayed width and height from its header, 415 if it doesn't read; null for anything else.</summary>
-    private static (int, int)? Dimensions(VaultPath path, AttachmentFormat format, byte[] bytes) =>
+    private static (int, int)? Dimensions(VaultPath path, AttachmentFormat format, ReadOnlyMemory<byte> bytes) =>
         format.Kind == AttachmentKind.Image && format != AttachmentFormat.Svg
-            ? ImageHeader.Read(bytes, out var headerProblem) ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.")
+            ? ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw new DavException(StatusCodes.Status415UnsupportedMediaType, headerProblem ?? "The image's header doesn't read.")
             : null;
 
     /// <summary>A large file's bytes into the store (<see cref="AttachmentWriter.PutLargeAsync"/>): the start already read,
     /// then the rest of the body, or a parked file's bytes whole. Past the bound 413, a body of another length than it
     /// declared or cut off 400.</summary>
-    private async Task<LargeBlob> PutLargeAsync(AttachmentWriter files, VaultPath path, byte[] head, byte[]? copied, long bound, CancellationToken ct)
+    private async Task<LargeBlob> PutLargeAsync(AttachmentWriter files, VaultPath path, ReadOnlyMemory<byte> head, byte[]? copied, long bound, CancellationToken ct)
     {
         try
         {
