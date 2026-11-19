@@ -110,8 +110,13 @@ export const tagOf = (folder: string) => `t${folder.replace(/[^a-z0-9]/g, "")}`;
 /** The week view of Work at a given week, named in the address so that the remembered view (week or month) can't change it. */
 export const weekUrl = (vault: string, day: Day, tag?: string) => `/calendar/${vault}?week=${weekId(day)}${tag ? `&tag=${tag}` : ""}`;
 
-/** On the phone, the install hint may sit over controls: dismissed with Not now, as a person would, whenever it shows. */
+/**
+ * On the phone, the install hint may sit over controls: dismissed with Not now, as a person would, whenever it shows.
+ * Since 0.6.0 a window (What's on, Settings) can open over it, and the shell behind a window is inert, so Not now
+ * can't be clicked there: the next pages start with the hint dismissed, as Not now leaves it (InstallHint.tsx).
+ */
 export async function dismissInstallHint(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("kumbu.installHint", "dismissed"));
   const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
   await page.addLocatorHandler(hint, async () => {
     await hint.getByRole("button", { name: "Not now" }).click();
