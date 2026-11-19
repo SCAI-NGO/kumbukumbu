@@ -466,6 +466,32 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Versions_with_attachments_give_each_attachment_its_size()
+    {
+        // The Obsidian plugin reads a file whole: the size lets it leave one over its limit in Kumbu² instead.
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        var pdf = "%PDF-1.4\n"u8.ToArray();
+        var png = FileApiTests.Png(4, 4);
+        await user.CreateFileAsync("report.pdf", pdf);
+        await user.CreateFileAsync("data.csv", "a,b\n"u8.ToArray());
+        var cursor = Cursor(await JsonAsync(await user.GetAsync(AttachmentsUrl(user))));
+        _time.Advance(TimeSpan.FromMinutes(10));
+        await user.CreateFileAsync("shot.png", png);
+
+        var full = (await JsonAsync(await user.GetAsync(AttachmentsUrl(user))))["notes"]!.AsArray();
+        var since = (await JsonAsync(await user.GetAsync(AttachmentsUrl(user, cursor))))["notes"]!.AsArray();
+
+        // A note has no size here: an older answer stays as it was, and a note's limit is the server's own.
+        Assert.Null(full.Single(n => n!["kind"]!.GetValue<string>() == "note")!["size"]);
+        long SizeOf(JsonArray list, string path) => list.Single(n => n!["path"]!.GetValue<string>() == path)!["size"]!.GetValue<long>();
+        Assert.Equal(pdf.Length, SizeOf(full, "/Arbeit/report.pdf"));
+        Assert.Equal(4, SizeOf(full, "/Arbeit/data.csv"));
+        Assert.Equal(png.Length, SizeOf(full, "/Arbeit/shot.png"));
+        Assert.Equal(png.Length, SizeOf(since, "/Arbeit/shot.png"));
+    }
+
+    [Fact]
     public async Task Old_clients_never_see_text_files()
     {
         var user = await NewAsync(Api);
