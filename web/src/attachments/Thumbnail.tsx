@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type RefObject 
 import { fetchFile, useAttachmentUrl } from "../api/notes";
 import { fileKindOf, inVault, type FileAt, type FileKind } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import { MAX_ATTACHMENT_BYTES } from "../upload/planUpload";
 import { openPdf } from "./pdf";
 
 /**
@@ -33,8 +34,11 @@ export function useNear(element: RefObject<HTMLElement | null>) {
 /** How a thumbnail fills its box: cropped to it (a tile), or whole inside it (a comparison). */
 export type Fit = "cover" | "contain";
 
-/** `kind`: the server's, where the caller has it (a tree entry, a version), over the one the path suggests. */
-type Props = { vault: string; path: string; at?: FileAt; fit?: Fit; alt?: string; kind?: FileKind };
+/**
+ * `kind`: the server's, where the caller has it (a tree entry, a version), over the one the path suggests. `size`: the
+ * file's (at `at`), where the caller has it: one larger than 15 MB is never fetched for its picture.
+ */
+type Props = { vault: string; path: string; at?: FileAt; fit?: Fit; alt?: string; kind?: FileKind; size?: number };
 
 /**
  * An attachment's picture in a box of the caller's (positioned, sized): an image scaled by the browser, a PDF's
@@ -52,12 +56,14 @@ export default function Thumbnail(props: Props) {
 }
 
 /** The picture itself, for a caller that tells nearness itself (the gallery's tiles). `path` from the root of the tree. */
-export function FileThumb({ vault, path, at = {}, fit = "cover", alt = "", kind = fileKindOf(path) }: Props) {
+export function FileThumb({ vault, path, at = {}, fit = "cover", alt = "", kind = fileKindOf(path), size }: Props) {
   // A text file or any other file is never drawn, not even as an image: an icon stands for it.
   if (kind === "text" || kind === "file") {
     const Icon = fileKindIcon[kind];
     return <Icon size={28} role={alt ? "img" : undefined} aria-label={alt || undefined} aria-hidden={alt ? undefined : true} className="absolute inset-0 m-auto text-dim" />;
   }
+  // Over 15 MB (up to a gigabyte) a picture would cost the whole file: only opening it in the lightbox fetches it.
+  if (size !== undefined && size > MAX_ATTACHMENT_BYTES) return <Placeholder pdf={kind === "pdf"} alt={alt} />;
   return kind === "pdf" ? <PdfThumb vault={vault} path={path} at={at} fit={fit} alt={alt} /> : <ImageThumb vault={vault} path={path} at={at} fit={fit} alt={alt} />;
 }
 
@@ -69,7 +75,7 @@ function Placeholder({ pdf, alt }: { pdf: boolean; alt: string }) {
 const fitClass = { cover: "object-cover", contain: "object-contain" };
 
 /** The image itself, scaled by the browser (there are no thumbnails on the server in this part); fetched in turn. */
-function ImageThumb({ vault, path, at, fit, alt }: Required<Omit<Props, "kind">>) {
+function ImageThumb({ vault, path, at, fit, alt }: Required<Omit<Props, "kind" | "size">>) {
   const url = useAttachmentUrl(vault, inVault(path), at.version, at.checkpoint, imageThumbTurn);
   const [broken, setBroken] = useState(false);
   if (!url || broken) return <Placeholder pdf={false} alt={alt} />;
@@ -134,7 +140,7 @@ export const imageThumbTurn = turns(maxImageThumbs);
  * A PDF's first page at the box's size, drawn by pdf.js; the document is let go of as soon as it is drawn, and the
  * canvas emptied when the thumbnail goes (browsers cap what all canvases together may hold, iOS Safari above all).
  */
-function PdfThumb({ vault, path, at, fit, alt }: Required<Omit<Props, "kind">>) {
+function PdfThumb({ vault, path, at, fit, alt }: Required<Omit<Props, "kind" | "size">>) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [drawn, setDrawn] = useState(false);
   const { version, checkpoint } = at;
