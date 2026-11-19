@@ -45,10 +45,10 @@ export default defineConfig({
     // No screenshots of the setup: its screens show the recovery keys.
     { name: "setup", testMatch: /global\.setup\.ts/, use: { ...desktop, storageState: undefined, screenshot: "off" } },
     // No browser: its tests use the `request` fixture only (e2e/mcp/fixtures.ts), and no saved session.
-    { name: "mcp", dependencies: ["setup"], testMatch: /mcp\/.*\.spec\.ts/ },
-    { name: "desktop", dependencies: ["setup"], testIgnore: /mcp\//, grepInvert: /@serial/, use: desktop },
-    { name: "phone", dependencies: ["setup"], testIgnore: /mcp\//, grep: /@phone/, grepInvert: /@serial/, use: phone },
-    { name: "serial", dependencies: ["desktop", "phone"], testIgnore: /mcp\//, grep: /@serial/, workers: 1, use: desktop },
-    { name: "serial-phone", dependencies: ["serial"], testIgnore: /mcp\//, grep: /(?=.*@serial)(?=.*@phone)/, workers: 1, use: phone },
+    { name: "mcp", dependencies: ["setup"], testMatch: "mcp/**/*.spec.ts" },
+    { name: "desktop", dependencies: ["setup"], testIgnore: "mcp/**", grepInvert: /@serial/, use: desktop },
+    { name: "phone", dependencies: ["setup"], testIgnore: "mcp/**", grep: /@phone/, grepInvert: /@serial/, use: phone },
+    { name: "serial", dependencies: ["desktop", "phone", "mcp"], testIgnore: "mcp/**", grep: /@serial/, workers: 1, use: desktop },
+    { name: "serial-phone", dependencies: ["serial"], testIgnore: "mcp/**", grep: /(?=.*@serial)(?=.*@phone)/, workers: 1, use: phone },
   ],
 });

@@ -24,8 +24,10 @@ type WorkerFixtures = {
 };
 
 /**
- * Text with its secrets replaced by `<redacted>`, before an `expect` that would print it: upload tokens, URL
- * fragments (reader, share and join links carry their code there), share codes, Bearer tokens and keys.
+ * Text with its secrets replaced by `<redacted>`, before an `expect` that would print it: the token after
+ * `/api/agent-upload/`, a URL's fragment (reader, share and join links carry their code there), a formatted share
+ * code, `Bearer …`, anything starting `kumbu_`, and any run of 32 or more letters and digits. That last rule blanks
+ * 32-hex ids too, so a test asserts ids on the unredacted value.
  */
 export const redact = (text: string) =>
   text

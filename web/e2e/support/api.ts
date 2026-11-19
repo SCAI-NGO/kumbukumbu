@@ -196,15 +196,17 @@ export class Mcp {
       clientInfo: { name: "kumbu-e2e", version: "0" },
     });
     expect(status, "MCP initialize").toBe(200);
-    if (message?.error) throw new Error(`MCP initialize: ${message.error.message}`);
-    return message!.result as InitializeResult;
+    if (!message) throw new Error("MCP initialize: the answer held no JSON-RPC message");
+    if (message.error) throw new Error(`MCP initialize: ${message.error.message}`);
+    return message.result as InitializeResult;
   }
 
   async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
     const { status, message } = await this.raw("tools/call", { name: tool, arguments: args }, `MCP ${tool}`);
     expect(status, `MCP ${tool}`).toBe(200);
-    if (message!.error) throw new Error(`MCP ${tool}: ${message!.error.message}`);
-    const result = message!.result as { content: { type: string; text: string }[]; isError?: boolean };
+    if (!message) throw new Error(`MCP ${tool}: the answer held no JSON-RPC message`);
+    if (message.error) throw new Error(`MCP ${tool}: ${message.error.message}`);
+    const result = message.result as { content: { type: string; text: string }[]; isError?: boolean };
     return { text: result.content.map((c) => c.text).join("\n"), isError: !!result.isError };
   }
 
