@@ -145,6 +145,21 @@ public sealed class LargeFileTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_large_image_above_the_pixel_limit_is_kept_with_its_size()
+    {
+        // Nothing decodes an image larger than 15 MB (decision 12), so the 50 megapixels that guard the decoder don't apply.
+        var user = await RestClient.NewAsync(Api);
+        var png = LargeFiles.Of(16 * 1024 * 1024, 13, FileApiTests.Png(10_000, 10_000));
+
+        using var put = await user.SendContentAsync(HttpMethod.Put, user.Url("poster.png", "files"), new LargeFiles.Streamed(png, true), followRedirects: false);
+
+        var state = await StoredAsync(put);
+        Assert.Equal("image/png", state["mediaType"]!.GetValue<string>());
+        Assert.Equal(10_000, state["width"]!.GetValue<int>());
+        Assert.Equal(10_000, state["height"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task A_large_svg_is_a_413_saying_why()
     {
         var user = await RestClient.NewAsync(Api);

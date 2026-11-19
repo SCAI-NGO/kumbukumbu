@@ -201,9 +201,10 @@ public static class FileApi
 
     /// <summary>
     /// A file larger than 15 MB (files spec, decision 11): checked from its first bytes (<paramref name="head"/>: a known
-    /// format's magic bytes, an image's header; an SVG must be read whole, so it can't be this large), asked for a
-    /// conflict, then the rest of the body streamed to the store, and its record written. Nothing is held but a chunk or
-    /// two at a time. A body that doesn't arrive whole, or runs past the bound, stores nothing.
+    /// format's magic bytes; an image's size from its header where it reads, without the pixel limit, as nothing decodes
+    /// it; an SVG must be read whole, so it can't be this large), asked for a conflict, then the rest of the body
+    /// streamed to the store, and its record written. Nothing is held but a chunk or two at a time. A body that doesn't
+    /// arrive whole, or runs past the bound, stores nothing.
     /// </summary>
     private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> StoreLargeAsync(
         VaultPath filePath, string? version, ReadOnlyMemory<byte> head, HttpRequest request, long? declared, long bound, IAttachmentStore files, AttachmentWriter writer,
@@ -211,7 +212,7 @@ public static class FileApi
     {
         if (AttachmentFormat.TooLargeToCheck(filePath) is { } tooLarge) throw new ApiException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
         if (AttachmentFormat.LargeProblem(filePath, head.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
-        var dimensions = Dimensions(filePath, head);
+        var dimensions = AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } ? ImageHeader.Size(head.Span) : null;
         if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
 
         LargeBlob blob;

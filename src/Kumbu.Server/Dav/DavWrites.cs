@@ -616,7 +616,8 @@ internal sealed partial class DavWrites(
             if (AttachmentFormat.TooLargeToCheck(path) is { } tooLarge) throw new DavException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
             if (AttachmentFormat.LargeProblem(path, bytes) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
             matches = true;
-            var dimensions = Dimensions(path, format, bytes);
+            // Its size where the header reads, without the pixel limit: nothing decodes a large image (files spec, decision 12).
+            var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes) : null;
             var blob = await PutLargeAsync(files, path, bytes, copied, bound, ct);
             write = async v => (await files.WriteLargeAsync(path.Value, blob, bytes, dimensions, v, ct)).Result;
         }
