@@ -82,7 +82,7 @@ public class LinkCommandsTests
             1: [w](<welcome.md#Welcome>) → /Demo/welcome.md
             2: [p](plan.md) → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
             2: [n](nope.md) → not found
-            2: [r](report.docx) → attachment (not a note)
+            2: [r](report.docx) → not found
             2: [h](#Top) → this note
             """,
             (await sh("links /Demo/md.md")).Output);
@@ -302,7 +302,7 @@ public class LinkCommandsTests
     [InlineData("mv /Demo/a/plan.md /Ideas/plan.md", "mv: notes can't move between vaults (Demo → Ideas); a vault is its own space")]
     [InlineData("mv /Demo/a/plan.md /Demo/CON.md", "mv: /Demo/CON.md: 'CON.md' is a reserved name on Windows")]
     [InlineData("mv /Demo/a/plan.md /Demo/a/plan.txt", "mv: /Demo/a/plan.txt: note names end in .md")]
-    [InlineData("mv /Demo/a/plan.md /Demo/welcome.md/x.md", "mv: /Demo/welcome.md: Not a directory")]
+    [InlineData("mv /Demo/a/plan.md /Demo/welcome.md/x.md", "mv: /Demo/welcome.md is a note, not a folder; nothing can be kept below it")]
     [InlineData("mv /Demo/a/plan.md#X /Demo/x.md", "mv: moves whole notes; to move a section, edit both notes")]
     [InlineData("mv -f /Demo/a/plan.md /Demo/x.md", "mv: invalid option -- 'f'")]
     public async Task MvErrors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));

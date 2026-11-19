@@ -56,6 +56,17 @@ public class CheckpointAttachmentTests
         preview.Output.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))["plan: ".Length..];
 
     [Fact]
+    public async Task A_file_restored_where_a_folder_now_is_says_so()
+    {
+        await Upload("/Work/data", "a;b\n"u8.ToArray());
+        await Run("mkcp /Work/data one");
+        Assert.False((await _files.RemoveAsync("/Work/data", Ct)).IsError);
+        Assert.False((await _writer.WriteAsync("/Work/data/notes.md", "n\n", null, Ct)).IsError);
+
+        Assert.Equal("restore: /Work/data is a folder; a file and a folder can't share a name", (await Run("restore --checkpoint one /Work/data")).Output);
+    }
+
+    [Fact]
     public async Task A_checkpoint_keeps_an_attachment_version_after_it_changes()
     {
         var v1 = await Upload("/Work/shot.png", Png(1));

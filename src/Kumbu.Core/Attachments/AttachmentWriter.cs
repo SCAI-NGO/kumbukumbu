@@ -62,14 +62,11 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: {FolderMarker.InVaultRoot}");
         }
 
-        if (AttachmentFormat.ForPath(path) is not { } format)
+        // A skill's folder by the vault's mark, not its name: the store refuses what it doesn't keep by the same rule.
+        var skillsVault = await notes.SkillsVaultAsync(ct);
+        if (AttachmentFormat.ForPath(path, skillsVault) is not { } format)
         {
-            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: {AttachmentFormat.UnsupportedMessage}");
-        }
-
-        if (format.Kind == AttachmentKind.Text && !SkillPaths.IsInSkillFolder(path, await notes.SkillsVaultAsync(ct)))
-        {
-            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: text files are kept only inside a skill's folder (/Skills/<skill>/ or /<vault>/_skills/<skill>/)");
+            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, bytes.Span, skillsVault)}");
         }
 
         if (bytes.Length > AttachmentFormat.MaxBytes)
@@ -77,7 +74,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name} is larger than 15 MB, the limit for a file");
         }
 
-        if (AttachmentFormat.Problem(path, bytes.Span) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
+        if (AttachmentFormat.Problem(path, bytes.Span, skillsVault) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
 
         var image = format == AttachmentFormat.Svg ? SvgImage.Size(bytes.Span) : format.Kind == AttachmentKind.Image ? dimensions : null;
         var existing = await store.GetAttachmentAsync(path, ct);
@@ -251,6 +248,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
                     : ShellResult.Error($"{tool}: {Shown(path)} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
             }
 
+            if (await RoomAsync(tool, path, ct) is { } taken) return ShellResult.Error(taken) with { Kind = ShellErrorKind.Conflict };
             var restored = Restored(trashed.Attachment, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct));
             var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
             return (await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
@@ -287,7 +285,8 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
     private async Task<AttachmentState> StateAsync(
         VaultPath path, AttachmentFormat format, ReadOnlyMemory<byte> bytes, (int W, int H)? image, CancellationToken ct) =>
-        new(format.MediaType, bytes.Length, image?.W, image?.H, VersionToken.Of(bytes.Span), await store.PutBlobAsync(path.Segments[0], bytes, ct));
+        new(format == AttachmentFormat.File ? AttachmentFormat.MediaTypeOf(bytes.Span) : format.MediaType,
+            bytes.Length, image?.W, image?.H, VersionToken.Of(bytes.Span), await store.PutBlobAsync(path.Segments[0], bytes, ct));
 
     /// <summary>The checks of a new note's path (<see cref="NoteWriter"/>), for notes and attachments alike.</summary>
     private async Task<WriteResult?> CheckNewAsync(VaultPath path, CancellationToken ct)
@@ -295,24 +294,26 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (path.Segments.Count < 2) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {Shown(path)}: attachments live inside a vault, e.g. /Work/shot.png");
         if (NoteNames.NameProblem(path) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {Shown(path)}: {problem}");
 
-        var vault = VaultPath.Root.Child(path.Segments[0]);
         if (!(await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
         {
             return Fail(ShellErrorKind.NotFound, $"{ToolOf(path)}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
         }
 
+        return await RoomAsync(ToolOf(path), path, ct) is { } taken ? Fail(ShellErrorKind.Conflict, taken) : null;
+    }
+
+    /// <summary>Why nothing can be stored at <paramref name="path"/>: a folder is there, or a note or file is above it
+    /// (<see cref="FileOrFolder"/>); null if it can.</summary>
+    private async Task<string?> RoomAsync(string tool, VaultPath path, CancellationToken ct)
+    {
         if ((await notes.ListNotesUnderAsync(path, ct)).Count > 0 || (await store.ListAttachmentsUnderAsync(path, ct)).Count > 0)
         {
-            return Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)}: Is a directory");
+            return FileOrFolder.IsFolder(tool, path);
         }
 
-        for (var dir = vault; dir.Segments.Count < path.Segments.Count - 1;)
+        foreach (var dir in FileOrFolder.FoldersAbove(path))
         {
-            dir = dir.Child(path.Segments[dir.Segments.Count]);
-            if (await notes.ReadAsync(dir, ct) is not null || await store.GetAttachmentAsync(dir, ct) is not null)
-            {
-                return Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(dir)}: Not a directory");
-            }
+            if (await notes.ReadAsync(dir, ct) is not null || await store.GetAttachmentAsync(dir, ct) is not null) return FileOrFolder.NotFolder(tool, dir);
         }
 
         return null;

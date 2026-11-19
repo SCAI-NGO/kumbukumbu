@@ -490,9 +490,9 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_note_or_file_with_notes_below_its_path_is_not_a_folder()
+    public async Task A_note_or_file_does_not_come_back_where_a_folder_took_its_name()
     {
-        // Writing refuses a path below a note or a file, but restoring one from the trash doesn't look below it.
+        // A file and a folder never share a name (spec 2026-11-18, decision 2): restoring checks below the path too.
         var user = await FoldersAsync();
         var key = await user.KeyAsync("maintain", KeyRight.Maintain);
         foreach (var path in new[] { "/Work/plan.md", "/Work/Pictures/shot.png" })
@@ -500,15 +500,9 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
             Assert.False((await user.ShAsync($"rm {path}", key)).IsError);
             await user.CreateAsync($"{path["/Work/".Length..]}/below.md", "# Below\n");
             var restored = await user.ShAsync($"restore {path}", key);
-            Assert.False(restored.IsError, restored.Text);
-        }
-
-        foreach (var path in new[] { "/Work/plan.md", "/Work/Pictures/shot.png" })
-        {
-            var view = await CdViewAsync(user, path);
-
-            Assert.True(IsError(view), path);
-            Assert.Equal($"cd: {path}: not a folder", Text(view));
+            Assert.True(restored.IsError, restored.Text);
+            Assert.Equal($"restore: {path} is a folder; a file and a folder can't share a name", restored.Text);
+            Assert.False(IsError(await CdViewAsync(user, path)), path);
         }
     }
 

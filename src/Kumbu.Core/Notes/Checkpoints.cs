@@ -316,6 +316,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
+            // Before the store, which would refuse it as a clash: the sentence says what is in the way.
+            if (await writer.RoomAsync("restore", path, ct) is { } taken) return taken;
             var created = new StoredNote(path, then, 1, label, writer.Now, [], Ref: writer.Caller.ReferenceIn(path.Segments[0]));
             return await store.TryCreateAsync(created, ct)
                 ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", created.Path, created.Version)
@@ -346,6 +348,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
+            if (await writer.RoomAsync("restore", path, ct) is { } taken) return taken;
             var created = new StoredAttachment(path, then, 1, label, writer.Now, [], null, writer.Caller.ReferenceIn(path.Segments[0]));
             return (await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, ct)).Count == 0
                 ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", path, created.Version)

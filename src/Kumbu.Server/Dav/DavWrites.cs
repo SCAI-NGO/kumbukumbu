@@ -44,7 +44,7 @@ internal sealed partial class DavWrites(
     /// <summary>
     /// <c>PUT</c> (RFC 4918 §9.7): 201 for a new file, 204 for one replaced, with the <c>ETag</c> of what was stored.
     /// What it is goes by its name's extension, in any case (brief open point 6; a note's name the target's resolution
-    /// already spelt <c>.md</c>): a note, an attachment of a format Kumbu² keeps, a parked file, or a 415. A parked
+    /// already spelt <c>.md</c>): a note, a parked file, or else a file (a format's bytes checked, 415 otherwise). A parked
     /// placeholder (an empty attachment) is not parked for its own sake: the write that follows it goes to the store.
     /// </summary>
     public async Task PutAsync(DavTarget target, CancellationToken ct)
@@ -56,8 +56,7 @@ internal sealed partial class DavWrites(
         {
             var name = target.Path.Name;
             if (target.Path.IsNote) await PutNoteAsync(target, ct);
-            else if (AttachmentFormat.ForPath(target.Path) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(target.Path, place, format, ct);
-            else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
+            else await PutAttachmentAsync(target.Path, place, Kept(target.Path), ct);
             return;
         }
 
@@ -448,8 +447,7 @@ internal sealed partial class DavWrites(
         if (await tree.FindAsync(destination.Path, ct) is { IsCollection: true }) throw DavException.FolderHasNoContent();
         var path = destination.Path;
         if (path.IsNote) await PutNoteAsync(destination, ct, item.Bytes, moved: move);
-        else if (AttachmentFormat.ForPath(path) is { } format && format != AttachmentFormat.Marker) await PutAttachmentAsync(path, to, format, ct, item.Bytes);
-        else throw new DavException(StatusCodes.Status415UnsupportedMediaType, AttachmentFormat.UnsupportedMessage);
+        else await PutAttachmentAsync(path, to, Kept(path), ct, item.Bytes);
         if (move && caller.Place(from) is { } place) parking.Remove(caller.ShareId, place.VaultId, place.Path);
     }
 
@@ -688,6 +686,12 @@ internal sealed partial class DavWrites(
             _ => StatusCodes.Status400BadRequest,
         },
         result.Output);
+
+    /// <summary>The format a file's <c>PUT</c> keeps at <paramref name="path"/>, no note's: any name is a file but a folder's
+    /// marker, which <c>MKCOL</c> writes (415).</summary>
+    private static AttachmentFormat Kept(VaultPath path) =>
+        AttachmentFormat.ForPath(path) is { } format && format != AttachmentFormat.Marker ? format
+        : throw new DavException(StatusCodes.Status415UnsupportedMediaType, $"{FolderMarker.Name} is a folder's marker, which Kumbu² keeps itself; make a folder with MKCOL.");
 
     private static DavException NoAttachments() => new(StatusCodes.Status404NotFound, "This server keeps no attachments.");
 
