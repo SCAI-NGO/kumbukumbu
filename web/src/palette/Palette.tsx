@@ -143,9 +143,9 @@ export default function Palette({ note = null }: { note?: PaletteNote | null }) 
   }, [id, at]);
 
   const run = (entry: Row | null) => {
-    // Search and the note's actions are the shell's: under a window they would be out of reach, so the window closes
-    // first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
-    const overWindow = (entry === null || entry.group === "Note") && useWindows.getState().open;
+    // Search and the actions (the note's, Insert template) are the shell's: under a window they would be out of reach,
+    // so the window closes first; an action runs once it is gone, so that what it opens isn't inert and keeps the focus.
+    const overWindow = (entry === null || "action" in entry.run) && useWindows.getState().open;
     if (overWindow) closeWindow();
     if (entry === null) {
       close();
