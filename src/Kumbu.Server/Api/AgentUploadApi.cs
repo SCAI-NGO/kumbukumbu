@@ -43,21 +43,22 @@ public static class AgentUploadApi
         var filePath = ApiPaths.Parse(asked.Segments[0], string.Join('/', asked.Segments.Skip(1)), PathKind.Attachment);
 
         var stored = await FileApi.StoreAsync(filePath, ticket.Version, context.Request, caller, store, notes, labels, ct);
+        var skillsVault = await store.SkillsVaultAsync(ct);
         return stored.Result switch
         {
-            Created<FileStateView> created => TypedResults.Created(created.Location, View(created.Value!, filePath, links)),
-            Ok<FileStateView> ok => TypedResults.Ok(View(ok.Value!, filePath, links)),
+            Created<FileStateView> created => TypedResults.Created(created.Location, View(created.Value!, filePath, skillsVault, links)),
+            Ok<FileStateView> ok => TypedResults.Ok(View(ok.Value!, filePath, skillsVault, links)),
             Conflict<FileConflictView> conflict => conflict,
             _ => throw new InvalidOperationException("StoreAsync answered something else"),
         };
     }
 
     /// <summary>The link as the manual teaches it (the path inside the vault, encoded where Markdown would misread it),
-    /// an image's embedded with <c>!</c>.</summary>
-    private static AgentUploadView View(FileStateView file, VaultPath path, DeepLinks links)
+    /// an image's embedded with <c>!</c> (an SVG in a skill's folder is a text file, by <paramref name="skillsVault"/>).</summary>
+    private static AgentUploadView View(FileStateView file, VaultPath path, string? skillsVault, DeepLinks links)
     {
         var text = path.Name.Replace(@"\", @"\\", StringComparison.Ordinal).Replace("[", @"\[", StringComparison.Ordinal).Replace("]", @"\]", StringComparison.Ordinal);
-        var image = AttachmentFormat.ForPath(path) is { Kind: AttachmentKind.Image };
+        var image = AttachmentFormat.ForPath(path, skillsVault) is { Kind: AttachmentKind.Image };
         return new AgentUploadView(file, $"{(image ? "!" : "")}[{text}]({MarkdownLink.Encode(path)})", links.For(path.Value));
     }
 
