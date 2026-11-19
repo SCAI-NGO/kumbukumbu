@@ -33,14 +33,16 @@ public sealed record Authorship(string Hash, DateTime? Earlier, bool Dropped, IR
     /// <summary>
     /// The record of <paramref name="next"/>, the state that replaces <paramref name="current"/> (null for a create):
     /// lines the line diff keeps keep their writer, the others are <paramref name="next"/>'s writer's. A state carried as
-    /// it was (a move) keeps <paramref name="current"/>'s record. Whatever record <paramref name="next"/> carries is ignored.
+    /// it was (a move) keeps <paramref name="current"/>'s record, the backfilled one included: a move counts up the
+    /// revision, and a note at revision 2 reads its history otherwise than one at revision 1. Whatever record
+    /// <paramref name="next"/> carries is ignored.
     /// </summary>
-    public static Authorship? After(StoredNote? current, StoredNote next)
+    public static Authorship After(StoredNote? current, StoredNote next)
     {
         var by = new Write(next.LastWriter, next.Ref, next.LastWriteAt);
         if (current is null) return New(next.Content, by);
-        if (WriterRef.Keeps(current, next) && current.Content == next.Content) return current.Authorship;
-        return Of(current).Then(current.Content, next.Content, by);
+        var record = Of(current);
+        return WriterRef.Keeps(current, next) && current.Content == next.Content ? record : record.Then(current.Content, next.Content, by);
     }
 
     /// <summary>

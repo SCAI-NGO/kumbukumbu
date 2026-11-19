@@ -173,7 +173,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         foreach (var path in (await store.ListNotesUnderAsync(root, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal))
         {
             var n = (await store.GetAsync(path, Ct))!;
-            notes.Add(new { Path = n.Path.Value, n.Content, n.Revision, n.LastWriter, n.LastWriteAt, History = n.History.Select(h => new { h.Content, h.WrittenBy, h.WrittenAt }) });
+            notes.Add(new { Path = n.Path.Value, n.Content, n.Revision, n.LastWriter, n.LastWriteAt, History = n.History.Select(h => new { h.Content, h.WrittenBy, h.WrittenAt }), n.Authorship });
         }
 
         var checkpoints = new List<object>();
@@ -187,7 +187,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         {
             Vaults = (await store.UnlockedVaultsAsync(Ct)).OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new { v.Name, v.Vault.EmbeddingProvider }),
             Notes = notes,
-            Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt }),
+            Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt, t.Note.Authorship }),
             Moves = (await store.ListMovesAsync(root, Ct)).Select(m => new { From = m.From.Value, To = m.To.Value, m.MovedBy }),
             Checkpoints = checkpoints,
             Search = new { search.State, search.Pending, Hits = search.Hits.Select(h => new { Path = h.Path.Value, h.StartLine, Score = Math.Round(h.Score, 5) }) },
@@ -391,8 +391,9 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(0, summary.Damaged);
         Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
         Assert.Equal(before, await SnapshotAsync(Store(a)));
-        // A second process loads it with the new key too.
+        // A second process loads it with the new key too, with who wrote which line.
         Assert.Equal(before, await SnapshotAsync(Store(a, NewCatalog())));
+        Assert.Equal([Now, Now, Now.AddMinutes(60)], (await Store(a, NewCatalog()).GetAsync(P("/Arbeit/plan.md"), Ct))!.Authorship!.ByLine().Select(w => w!.At));
         // Nothing is embedded again: the resealed embeddings are current.
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(embedded, RemoteNotes);

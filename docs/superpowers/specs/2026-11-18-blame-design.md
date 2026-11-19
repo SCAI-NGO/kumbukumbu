@@ -90,7 +90,7 @@ Why backfill rather than not: on the day of the upgrade, a protocol begun that m
 
 ### 5.3 Where it lives: in the note's own sealed payload, in the same transaction
 
-*(Claude's call.)* One more field of `NotePayload` (`src/Kumbu.Server/Vaults/UnlockedVault.cs:759`), `by`, omitted when null, sealed with the note under its document id and revision (`SealNote`, `UnlockedVault.cs:276`). Compact: `Writes` as `[label, ref, at]`, `Runs` as one flat array `[lines, write, lines, write, …]`.
+*(Claude's call.)* One more field of `NotePayload` (`src/Kumbu.Server/Vaults/UnlockedVault.cs:759`), `by`, omitted when null, sealed with the note under its document id and revision (`SealNote`, `UnlockedVault.cs:276`). Compact: `Writes` as `[label, ref, at]`, `Runs` as one flat array `[lines, write, lines, write, …]`. *Amended while building:* the whole field is `{h, w, r, e?, d?}` (`AuthorshipPayload`, `UnlockedVault.cs`); `ref` is the reference as every payload seals it (`WriterRefPayload`), `"legacy"` for a write backfilled from a history entry from before references, and null for one sealed without a reference, so that each reads back as the history shows it.
 
 Why here and not in a collection of its own like the extracts:
 
@@ -108,7 +108,9 @@ Every write that changes a note's content or path ends in `EncryptedNoteStore`: 
 next = next with { Authorship = Authorship.After(storedCurrent, next) }
 ```
 
-where `storedCurrent` is the working set's entry the compare-and-swap replaces (null for a create), and `After` is `Of(storedCurrent)` updated by §4 with `next`'s writer, or `storedCurrent.Authorship` unchanged when `WriterRef.Keeps(current, next)` and the content is the same. Whatever `Authorship` the caller put on `next` is ignored. `InMemoryNoteStore` (tests) does the same in its three methods.
+where `storedCurrent` is the working set's entry the compare-and-swap replaces (null for a create), and `After` is `Of(storedCurrent)` updated by §4 with `next`'s writer, or `Of(storedCurrent)` unchanged when `WriterRef.Keeps(current, next)` and the content is the same. Whatever `Authorship` the caller put on `next` is ignored.
+
+*Amended while building:* a carried state keeps `Of(storedCurrent)`, not `storedCurrent.Authorship`. A move counts the revision up (`NoteMover.cs:273`), so a note from before the record that was never written since (revision 1, all its creator's) would read "earlier than …" after a plain move; storing the backfilled record keeps the read the same. It costs a move of such a note the backfill once (§9). `InMemoryNoteStore` (tests) does the same in its three methods.
 
 Why the store and not `NoteWriter.Next`: it covers every path, including those that build a `StoredNote` themselves (create in `NoteWriter.cs:154`, `cp` in `TreeWriter.cs:150`, the board's new card, uploads, the seeder, the welcome vault, a checkpoint restore of a removed note at `Checkpoints.cs:319`), and it computes against the state actually replaced, not the one a caller believed current.
 

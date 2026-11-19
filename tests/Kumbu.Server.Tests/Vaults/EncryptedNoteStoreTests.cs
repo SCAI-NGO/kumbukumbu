@@ -54,8 +54,11 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         var read = await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct);
         Assert.NotNull(read);
-        Assert.Equal(note with { History = [] }, read with { History = [] });
+        Assert.Equal(note with { History = [] }, read with { History = [], Authorship = null });
         Assert.Equal(note.History, read.History);
+        // The store recorded who wrote which line: a new note, every line its creator's.
+        Assert.Equal([new Authorship.Run(1, 0)], read.Authorship!.Runs);
+        Assert.Equal([new Authorship.Write(Writers.Dev, WriterRef.Server, T0)], read.Authorship.Writes);
     }
 
     [Fact]
