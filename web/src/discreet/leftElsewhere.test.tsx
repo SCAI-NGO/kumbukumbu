@@ -211,6 +211,19 @@ describe("a vault marked discreet in another session", () => {
     expect(useEditor.getState().draft).toEqual({ username: user.username, path: "/Tagebuch/geheim.md", text: "Not saved yet.", version: "v1" });
   });
 
+  it("closes the split view's left pane on a note of it, and the right becomes the only pane", async () => {
+    const { at } = server(["Work", "Tagebuch"]);
+    const { router, queryClient } = await tabOn("/notes/Tagebuch/geheim.md?beside=Work/inbox.md", at);
+    await waitFor(() => expect(useEditor.getState().panes.right?.path).toBe("/Work/inbox.md"));
+
+    await markedElsewhere(queryClient, at, ["Work"]);
+
+    await waitFor(() => expect(router.state.location.pathname + router.state.location.search).toBe("/notes/Work/inbox.md"));
+    expect(router.state.historyAction).toBe("REPLACE");
+    expect(useEditor.getState().panes).toEqual({ left: { path: "/Work/inbox.md", mode: "read" }, right: null });
+    expect(useEditor.getState().currentPath).toBe("/Work/inbox.md");
+  });
+
   it("never replaces a draft there is already", async () => {
     const { at, router, queryClient } = await writing();
     const draft = { username: user.username, path: "/Tagebuch/brief.md", text: "Left by a session's end.", version: "v3" };

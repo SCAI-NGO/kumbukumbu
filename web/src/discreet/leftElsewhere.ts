@@ -32,8 +32,10 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
   const edited = editedPath(editor);
   const open = edited !== null && names.has(vaultOf(edited)) ? edited : null;
   const { left: leftPane, right } = editor.panes;
-  const besideOnly =
-    !!right && names.has(vaultOf(right.path)) && leftPane.path !== null && !names.has(vaultOf(leftPane.path)) && pathname.startsWith("/notes/");
+  const note = pathname.startsWith("/notes/");
+  const besideOnly = !!right && names.has(vaultOf(right.path)) && leftPane.path !== null && !names.has(vaultOf(leftPane.path)) && note;
+  // The other way round, the right pane becomes the only one (`forgetShown`), and the URL goes to it, as hiding again does.
+  const besideStays = !!right && leftPane.path !== null && names.has(vaultOf(leftPane.path)) && !names.has(vaultOf(right.path)) && note;
   const username = useSession.getState().user?.username;
   const text = open ? editor.unsaved?.() : null;
   if (open && text && username && !editor.draft) editor.setDraft({ username, path: open, ...text });
@@ -45,6 +47,7 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
   try {
     const shown = vaultOfRoute(pathname);
     if (besideOnly) navigate(noteUrl(leftPane.path!), { replace: true });
+    else if (besideStays) navigate(noteUrl(right.path), { replace: true });
     else if ((shown !== null && names.has(shown)) || open) navigate("/", { replace: true });
     useEditor.getState().forgetShown(names);
   } finally {
