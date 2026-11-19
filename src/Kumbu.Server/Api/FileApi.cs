@@ -42,7 +42,7 @@ public static class FileApi
     /// format's magic bytes and an image's header, which comes before its pixels.</summary>
     internal const int HeadBytes = 1024 * 1024;
 
-    private const string CutOff = "The upload ended before all of the file arrived; nothing was stored. Try again.";
+    internal const string CutOff = "The upload ended before all of the file arrived; nothing was stored. Try again.";
 
     /// <summary>The media types a browser may be given inline: the known formats', and text.</summary>
     private static readonly string[] InlineTypes = [.. AttachmentFormat.All.Select(f => f.MediaType).Append(AttachmentFormat.TextMediaType).Distinct()];

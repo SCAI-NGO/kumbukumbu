@@ -5,9 +5,11 @@ using System.Text.Json.Nodes;
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
@@ -327,9 +329,13 @@ public sealed class LargeFileKestrelTests(KumbuAppFactory app)
     private static HttpClient Client(WebApplicationFactory<Program> real) =>
         new() { BaseAddress = new Uri(real.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First()) };
 
-    private WebApplicationFactory<Program> Kestrel()
+    private WebApplicationFactory<Program> Kestrel(Outcomes? outcomes = null)
     {
-        var real = app.PublicApi.WithWebHostBuilder(b => b.UseUrls("http://127.0.0.1:0"));
+        var real = app.PublicApi.WithWebHostBuilder(b =>
+        {
+            b.UseUrls("http://127.0.0.1:0");
+            if (outcomes is not null) b.ConfigureServices(s => s.AddSingleton<IStartupFilter>(outcomes));
+        });
         real.UseKestrel();
         real.StartServer();
         return real;
@@ -407,5 +413,80 @@ public sealed class LargeFileKestrelTests(KumbuAppFactory app)
         });
         Assert.IsAssignableFrom<IOException>(failed is HttpRequestException { InnerException: { } inner } ? inner : failed);
         Assert.True(read < LargeFiles.Size, $"read {read} bytes");
+    }
+
+    /// <summary>What the server made of each request, whether or not the client is still there to read it: its status,
+    /// or the exception that left the app (which the host logs as an error and answers with 500).</summary>
+    private sealed class Outcomes : IStartupFilter
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(string Path, int Status, Exception? Error)> All { get; } = new();
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => builder =>
+        {
+            builder.Use(async (context, inner) =>
+            {
+                try
+                {
+                    await inner(context);
+                    All.Enqueue((context.Request.Path, context.Response.StatusCode, null));
+                }
+                catch (Exception e)
+                {
+                    All.Enqueue((context.Request.Path, 500, e));
+                    throw;
+                }
+            });
+            next(builder);
+        };
+    }
+
+    /// <summary>
+    /// A PUT over a socket of its own: the headers (a <c>Content-Length</c> of <paramref name="size"/> if
+    /// <paramref name="declare"/>, else chunked), <paramref name="sent"/> bytes of the body, then the connection is reset,
+    /// as when a client goes away.
+    /// </summary>
+    private static async Task PutCutOffAsync(WebApplicationFactory<Program> real, string path, string authorization, int size, int sent, bool declare)
+    {
+        var address = new Uri(real.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First());
+        using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        await socket.ConnectAsync(address.Host, address.Port, Ct);
+        var head = $"PUT {path} HTTP/1.1\r\nHost: {address.Authority}\r\nAuthorization: {authorization}\r\nX-Forwarded-Proto: https\r\n"
+            + $"X-Forwarded-For: {Dav.DavClient.NewIp()}\r\n{(declare ? $"Content-Length: {size}" : "Transfer-Encoding: chunked")}\r\n\r\n";
+        await socket.SendAsync(System.Text.Encoding.ASCII.GetBytes(head), Ct);
+        var piece = LargeFiles.Of(64 * 1024, 41);
+        for (var at = 0; at < sent; at += piece.Length)
+        {
+            if (!declare) await socket.SendAsync(System.Text.Encoding.ASCII.GetBytes($"{piece.Length:x}\r\n"), Ct);
+            await socket.SendAsync(piece, Ct);
+            if (!declare) await socket.SendAsync("\r\n"u8.ToArray(), Ct);
+        }
+
+        // Let the server take in what was sent before the reset.
+        await Task.Delay(500, Ct);
+        socket.LingerState = new System.Net.Sockets.LingerOption(true, 0);
+        socket.Close();
+    }
+
+    /// <summary>A WebDAV client that goes away during a large PUT ends it as on /api/files: stopped, nothing stored, and
+    /// no exception that the host logs as an error and answers with 500.</summary>
+    [Theory]
+    [InlineData(true, 20_000_000)]
+    [InlineData(false, 20_000_000)]
+    [InlineData(false, 8_000_000)]
+    public async Task A_dav_put_cut_off_midway_stores_nothing_and_is_no_error(bool declare, int sent)
+    {
+        var outcomes = new Outcomes();
+        var dav = await Dav.DavClient.NewAsync(app.PublicApi);
+        await using var real = Kestrel(outcomes);
+
+        await PutCutOffAsync(real, "/dav/Work/big.bin", dav.Authorization, LargeFiles.Size, sent, declare);
+
+        for (var i = 0; i < 500 && !outcomes.All.Any(o => o.Path == "/dav/Work/big.bin"); i++) await Task.Delay(20, Ct);
+        var (_, status, error) = Assert.Single(outcomes.All, o => o.Path == "/dav/Work/big.bin");
+        Assert.Null(error);
+        // 499 when the host saw the client go first; never the 500 of an exception the host had to answer.
+        Assert.True(status is StatusCodes.Status400BadRequest or StatusCodes.Status499ClientClosedRequest, $"{status}");
+        using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/big.bin");
+        Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
     }
 }

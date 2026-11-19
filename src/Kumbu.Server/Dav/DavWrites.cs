@@ -585,7 +585,14 @@ internal sealed partial class DavWrites(
             if (Request.ContentLength > bound) throw new DavException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
             // The 64 MiB of every other request under /dav, lifted for a file's.
             Api.FileApi.LiftBodyLimit(http, bound);
-            (bytes, large) = await DavBody.ReadStartAsync(Request, AttachmentFormat.MaxBytes, Api.FileApi.HeadBytes, ct);
+            try
+            {
+                (bytes, large) = await DavBody.ReadStartAsync(Request, AttachmentFormat.MaxBytes, Api.FileApi.HeadBytes, ct);
+            }
+            catch (Exception e) when (e is IOException || e is BadHttpRequestException { StatusCode: not StatusCodes.Status413PayloadTooLarge })
+            {
+                throw CutOff();
+            }
         }
         else (bytes, large) = (copied, AttachmentFormat.IsLarge(copied.Length));
 
@@ -642,7 +649,7 @@ internal sealed partial class DavWrites(
 
     /// <summary>A large file's bytes into the store (<see cref="AttachmentWriter.PutLargeAsync"/>): the start already read,
     /// then the rest of the body, or a parked file's bytes whole. Past the bound 413, a body of another length than it
-    /// declared 400.</summary>
+    /// declared or cut off 400.</summary>
     private async Task<LargeBlob> PutLargeAsync(AttachmentWriter files, VaultPath path, byte[] head, byte[]? copied, long bound, CancellationToken ct)
     {
         try
@@ -661,7 +668,16 @@ internal sealed partial class DavWrites(
         {
             throw new DavException(StatusCodes.Status400BadRequest, e.Message);
         }
+        catch (Exception e) when (e is IOException or BadHttpRequestException)
+        {
+            throw CutOff();
+        }
     }
+
+    /// <summary>The client went away mid-body (a reset is an <see cref="IOException"/>, Kestrel's "unexpected end" a
+    /// <see cref="BadHttpRequestException"/>): 400, as /api/files answers it, rather than a 500 and an error in the log
+    /// for each upload a client gave up on.</summary>
+    private static DavException CutOff() => new(StatusCodes.Status400BadRequest, Api.FileApi.CutOff);
 
     /// <summary>
     /// <c>If-Match</c> and <c>If-None-Match</c> (RFC 9110 §13.1.1, §13.1.2) against <paramref name="version"/>, the
