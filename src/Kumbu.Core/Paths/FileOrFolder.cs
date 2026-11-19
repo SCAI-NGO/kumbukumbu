@@ -14,8 +14,11 @@ public static class FileOrFolder
         $"{tool}: {folder.Value} is a folder; a file and a folder can't share a name";
 
     /// <summary>The refusal of anything below <paramref name="entry"/>, a note or a file.</summary>
-    public static string NotFolder(string tool, VaultPath entry) =>
-        $"{tool}: {entry.Value} is {(entry.IsNote ? "a note" : "a file")}, not a folder; nothing can be kept below it";
+    public static string NotFolder(string tool, VaultPath entry) => $"{tool}: {NotFolder(entry)}";
+
+    /// <summary>The same, without a tool: as a reason one of several files was skipped.</summary>
+    public static string NotFolder(VaultPath entry) =>
+        $"{entry.Value} is {(entry.IsNote ? "a note" : "a file")}, not a folder; nothing can be kept below it";
 
     /// <summary>
     /// The first path of <paramref name="placed"/> that breaks the rule once every one of them is stored, or the note or

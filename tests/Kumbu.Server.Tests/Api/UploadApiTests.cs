@@ -57,6 +57,21 @@ public sealed class UploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_note_below_a_file_is_skipped_with_the_sentence_and_the_rest_written()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateFileAsync("x", "bytes"u8.ToArray());
+
+        using var response = await user.SendAsync(HttpMethod.Post, $"/api/upload/{user.Vault}", new { files = new[] { File("x/a.md", "a\n"), File("b.md", "b\n") } });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await JsonAsync(response);
+        Assert.Equal(1, body["written"]!.GetValue<int>());
+        Assert.Equal(["x/a.md"], Strings(body["skipped"], "path"));
+        Assert.Equal($"/{user.Vault}/x is a file, not a folder; nothing can be kept below it", body["skipped"]![0]!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task An_upload_to_the_vault_root_works_and_is_one_changeset()
     {
         var user = await RestClient.NewAsync(Api);

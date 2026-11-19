@@ -564,9 +564,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         return await RoomAsync(tool, path, ct);
     }
 
-    /// <summary>Why no note can be stored at <paramref name="path"/>: a folder is there, or a note or file is above it
+    /// <summary>Why no note or file can be stored at <paramref name="path"/>: a folder is there, or a note or file is above it
     /// (<see cref="FileOrFolder"/>); null if it can.</summary>
-    private async Task<ShellResult?> RoomAsync(string tool, VaultPath path, CancellationToken ct)
+    internal async Task<ShellResult?> RoomAsync(string tool, VaultPath path, CancellationToken ct)
     {
         if ((await store.ListNotesUnderAsync(path, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, path, ct)).Count > 0)
         {
