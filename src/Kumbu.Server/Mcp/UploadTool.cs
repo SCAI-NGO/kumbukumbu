@@ -63,10 +63,12 @@ public static class UploadTool
         }
 
         // What the PUT refuses by the name alone; a format's bytes it checks then.
-        var format = AttachmentFormat.ForPath(filePath);
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        var format = AttachmentFormat.ForPath(filePath, skillsVault);
         var refusal = format == AttachmentFormat.Marker ? "a folder is made with sh mkdir, not uploaded"
             : format?.Kind == AttachmentKind.Text ? "a skill's text file is written with the write tool, not uploaded"
-            : format == AttachmentFormat.File ? AttachmentFormat.Problem(filePath, []) : null;
+            // The path names the file once, before the sentence.
+            : format == AttachmentFormat.File && AttachmentFormat.Problem(filePath, [], skillsVault) is not null ? AttachmentFormat.SkillFolderMessage : null;
         if (refusal is not null) return ShellResult.Error($"upload: {filePath.Value}: {refusal}") with { Kind = ShellErrorKind.Invalid };
 
         var existing = await FileApi.Files(store).GetAttachmentAsync(filePath, ct);

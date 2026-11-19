@@ -297,7 +297,9 @@ public class AttachmentCommandTests
 
         Assert.Equal("/Work/data.csv:2:rose;3", (await Run("rg rose /Work")).Output);
         Assert.Equal("/Work/data.csv:2:rose;3", (await Run("rg rose /Work/data.csv")).Output);
-        Assert.Equal("/Work/other.md\n/Work/plan.md", (await Run("rg --files /Work")).Output);
+        Assert.Equal("/Work/data.csv\n/Work/other.md\n/Work/plan.md", (await Run("rg --files /Work")).Output);
+        Assert.Equal("/Work/data.csv", (await Run("rg --files /Work/data.csv")).Output);
+        Assert.Equal("/Work/other.md\n/Work/plan.md", (await Run("rg --files /Work -g '*.md'")).Output);
         Assert.Equal("rg: /Work/rose.bin is an attachment; rg searches the text of notes and text files only", (await Run("rg x /Work/rose.bin")).Output);
     }
 

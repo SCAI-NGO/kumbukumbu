@@ -55,7 +55,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     public string Usage => "rg [options] <regex> [path...]";
 
-    public string Summary => "search notes and PDF text (prints path:line:text); --files lists note paths";
+    public string Summary => "search notes, text files and PDF text (prints path:line:text); --files lists what it searches";
 
     public string Help => """
         rg [options] <regex> [path...]
@@ -76,7 +76,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           64 MB of them a search (a notice says where rg stopped); --tag leaves them out.
           Images and other files are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
-          List the paths of all notes below each path; with no path, of every note.
+          List the paths of all notes and text files below each path; with no path, of every one (with --tag, of notes).
 
           -i, --ignore-case          case-insensitive
           -F, --fixed-strings        the pattern is a literal string, not a regex
@@ -763,10 +763,13 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         {
             if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
 
-            var below = await notes.ListNotesUnderAsync(path, ct);
+            // The text files rg searches are listed with the notes.
+            var texts = (await StoreAttachments.UnderAsync(notes, path, ct)).Where(a => a.Current.MediaType == AttachmentFormat.TextMediaType).Select(a => a.Path);
+            IReadOnlyList<VaultPath> below = [.. await notes.ListNotesUnderAsync(path, ct), .. texts];
             if (below.Count == 0 && !path.IsRoot)
             {
                 if (await notes.ReadAsync(path, ct) is not null) below = [path];
+                else if (await StoreAttachments.GetAsync(notes, path, ct) is { Current.MediaType: AttachmentFormat.TextMediaType }) below = [path];
                 else if (!await HasNothingToSearchAsync(path, ct)) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
             }
 

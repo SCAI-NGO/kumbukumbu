@@ -131,8 +131,8 @@ public static class Manual
 
     public const string UploadDescription = """
         Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a
-        PDF, a spreadsheet, a CSV, whatever you can't send as text. Notes are not files: create and change those with
-        the write tool. Two steps:
+        PDF, a spreadsheet, a CSV. The write tool writes notes, SVGs and a skill's text files; everything else is
+        uploaded here. Two steps:
 
         1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you
            need write access). It answers a one-time URL and a curl line.

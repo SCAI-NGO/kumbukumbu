@@ -133,6 +133,17 @@ public sealed class UploadToolTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Names_a_file_a_skills_folder_refuses_once()
+    {
+        var (vault, _, key, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/_skills/x/tool.bin");
+
+        Assert.Equal($"upload: /{vault}/_skills/x/tool.bin: {Kumbu.Core.Attachments.AttachmentFormat.SkillFolderMessage}", Text(result));
+    }
+
+    [Fact]
     public async Task Refuses_a_note_path_and_points_at_write()
     {
         var (vault, _, key, _) = await OwnVaultAsync();
