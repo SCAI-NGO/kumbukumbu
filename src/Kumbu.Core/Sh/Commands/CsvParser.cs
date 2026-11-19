@@ -73,7 +73,8 @@ internal static class CsvParser
                     i = end;
                 }
 
-                if (field.EndsWith('\r') && i < text.Length && text[i] == '\n') field = field[..^1];
+                // CRLF ends the line, and so does a CR that ends the text.
+                if (field.EndsWith('\r') && (i == text.Length || text[i] == '\n')) field = field[..^1];
                 fields.Add(field);
                 if (i < text.Length && text[i] == separator)
                 {

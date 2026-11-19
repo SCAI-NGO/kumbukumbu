@@ -199,6 +199,16 @@ public class CsvTests
             """, await Ok("csv /Work/q.csv --header"));
     }
 
+    [Theory]
+    [InlineData("Name,Amount\r\nTea,3\r")]
+    [InlineData("Name,Amount\r\nTea,\"3\"\r")]
+    public async Task A_carriage_return_that_ends_the_file_ends_the_line(string text)
+    {
+        _store.AddTextFile("/Work/cr.csv", text);
+
+        Assert.Equal("Name\tAmount\nTea\t3", await Ok("csv /Work/cr.csv --tsv"));
+    }
+
     [Fact]
     public async Task Excel_semicolon_csv_with_decimal_commas_and_a_byte_order_mark()
     {
