@@ -18,7 +18,7 @@ public sealed class TextAttachmentTests
     private static (InMemoryNoteStore Store, NoteWriter Writer, AttachmentWriter Files, Shell Shell) Make(string? skillsVault = "Skills", Func<string, bool>? canWrite = null)
     {
         var store = new InMemoryNoteStore { SkillsVault = skillsVault };
-        store.AddVault("Skills"); store.AddVault("Work");
+        store.AddVault("Skills"); store.AddVault("Work"); store.AddVault("Tools");
         var caller = new FixedCaller(Writers.Dev, canWrite);
         var writer = new NoteWriter(store, Time, caller);
         return (store, writer, writer.ForAttachments()!, new Shell(store, writer, new NoteMover(store, Time, caller)));
@@ -78,6 +78,59 @@ public sealed class TextAttachmentTests
     {
         var (_, writer, _, _) = Make();
         Assert.Equal("write: /Work/run.py: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", (await writer.WriteAsync("/Work/run.py", "x", null, Ct)).Output);
+    }
+
+    [Fact]
+    public async Task Write_creates_a_text_file_in_a_skill_of_a_marked_vault_of_another_name()
+    {
+        var (store, writer, _, _) = Make(skillsVault: "Tools");
+        var created = await writer.WriteAsync("/Tools/x/scripts/run.py", "print(1)\n", null, Ct);
+        Assert.False(created.IsError, created.Output);
+        Assert.Equal("created /Tools/x/scripts/run.py", created.Output);
+        Assert.Equal(AttachmentFormat.TextMediaType, (await store.GetAttachmentAsync(P("/Tools/x/scripts/run.py"), Ct))!.Current.MediaType);
+    }
+
+    [Fact]
+    public async Task Edit_refuses_a_text_file_in_a_skill_of_a_marked_vault_of_another_name()
+    {
+        var (_, writer, files, _) = Make(skillsVault: "Tools");
+        var seeded = await files.WriteAsync("/Tools/x/run.py", "print(1)\n"u8.ToArray(), null, null, Ct);
+        Assert.False(seeded.Result.IsError, seeded.Result.Output);
+        var edited = await writer.EditAsync("/Tools/x/run.py", seeded.Result.Version!.Token, null, "x", Ct);
+        Assert.Equal("edit: run.py is a text file in a skill; replace it whole with write", edited.Output);
+    }
+
+    [Fact]
+    public async Task Replace_refuses_a_text_file_in_a_skill_of_a_marked_vault_of_another_name()
+    {
+        var (store, _, files, _) = Make(skillsVault: "Tools");
+        await files.WriteAsync("/Tools/x/run.py", "print(1)\n"u8.ToArray(), null, null, Ct);
+        var replaced = await new Replacer(store, Time, new Plans(), new FixedCaller(Writers.Dev)).RunAsync("/Tools/x/run.py", "1", "2", false, null, Ct);
+        Assert.Equal("replace: run.py is a text file in a skill; replace it whole with write", replaced.Output);
+    }
+
+    [Fact]
+    public async Task Write_refuses_a_text_name_in_an_unmarked_vault_named_Skills_as_anywhere()
+    {
+        var (store, writer, _, _) = Make(skillsVault: null);
+        var work = await writer.WriteAsync("/Work/x/run.py", "print(1)\n", null, Ct);
+        var skills = await writer.WriteAsync("/Skills/x/run.py", "print(1)\n", null, Ct);
+        Assert.Equal("write: /Work/x/run.py: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", work.Output);
+        Assert.Equal("write: /Skills/x/run.py: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", skills.Output);
+        Assert.Null(await store.GetAttachmentAsync(P("/Skills/x/run.py"), Ct));
+    }
+
+    [Theory]
+    [InlineData("/Tools/run.py")]
+    [InlineData("/Tools/x/tool.bin")]
+    public async Task Write_keeps_refusing_what_upload_refuses_in_a_marked_vault(string path)
+    {
+        var (store, writer, _, _) = Make(skillsVault: "Tools");
+        var written = await writer.WriteAsync(path, "print(1)\n", null, Ct);
+        Assert.True(written.IsError, written.Output);
+        Assert.Equal($"write: {path}: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)", written.Output);
+        Assert.Null(await store.GetAttachmentAsync(P(path), Ct));
+        Assert.Null(await store.GetAsync(P(path), Ct));
     }
 
     [Fact]

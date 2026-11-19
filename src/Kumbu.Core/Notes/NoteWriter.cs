@@ -124,9 +124,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
+        var skillsVault = await store.SkillsVaultAsync(ct);
         // A text file in a skill is an attachment of the text kind, written as given; so is an SVG, an image an agent
         // draws, looks at with img and draws again (spec 2026-11-17).
-        if (AttachmentFormat.ForPath(path) is { } kept && (kept.Kind == AttachmentKind.Text || kept == AttachmentFormat.Svg))
+        if (AttachmentFormat.ForPath(path, skillsVault) is { } kept && (kept.Kind == AttachmentKind.Text || kept == AttachmentFormat.Svg))
         {
             if (ForAttachments() is not { } files) return ShellResult.Error($"{tool}: {path.Name}: this server keeps no files besides notes") with { Kind = ShellErrorKind.Invalid };
             var (written, stored) = await files.WriteAsync(path.Value, Encoding.UTF8.GetBytes(content), null, version, ct);
@@ -144,7 +145,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
                 : written;
         }
 
-        if (NotText(tool, path) is { } attachment) return attachment;
+        if (NotText(tool, path, skillsVault) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         content = Normalize(content);
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
@@ -195,7 +196,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
-        if (NotText(tool, path) is { } attachment) return attachment;
+        if (NotText(tool, path, await store.SkillsVaultAsync(ct)) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         if (replaceSection && fragment is null)
         {
@@ -330,7 +331,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
-        if (NotText(tool, path) is { } attachment) return attachment;
+        if (NotText(tool, path, await store.SkillsVaultAsync(ct)) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
 
         var existing = await store.GetAsync(path, ct);
@@ -608,12 +609,13 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     }
 
     /// <summary>The refusal of a text tool for an attachment's path: its bytes aren't text to write or edit. A folder's
-    /// marker is never described, so its path is no such file, as everywhere in the shell.</summary>
-    public static ShellResult? NotText(string tool, VaultPath path) =>
+    /// marker is never described, so its path is no such file, as everywhere in the shell. <paramref name="skillsVault"/>
+    /// is the caller's name for her marked skills vault, as for <see cref="AttachmentFormat.ForPath"/>.</summary>
+    public static ShellResult? NotText(string tool, VaultPath path, string? skillsVault) =>
         FolderMarker.Is(path) ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory")
-        : AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text ? ShellResult.Error($"{tool}: {path.Name} is a text file in a skill; replace it whole with write")
-        : AttachmentFormat.ForPath(path) == AttachmentFormat.Svg ? ShellResult.Error($"{tool}: {path.Name} is an SVG; replace it whole with write")
-        : AttachmentFormat.ForPath(path) == AttachmentFormat.File ? ShellResult.Error(tool == "write"
+        : AttachmentFormat.ForPath(path, skillsVault)?.Kind == AttachmentKind.Text ? ShellResult.Error($"{tool}: {path.Name} is a text file in a skill; replace it whole with write")
+        : AttachmentFormat.ForPath(path, skillsVault) == AttachmentFormat.Svg ? ShellResult.Error($"{tool}: {path.Name} is an SVG; replace it whole with write")
+        : AttachmentFormat.ForPath(path, skillsVault) == AttachmentFormat.File ? ShellResult.Error(tool == "write"
             ? $"{tool}: {path.Value}: note names end in .md; write keeps notes, SVGs and a skill's text files, and other files are uploaded (the upload tool)"
             : $"{tool}: {path.Value}: note names end in .md; {tool} changes notes only")
         : path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
