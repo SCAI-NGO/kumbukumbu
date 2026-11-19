@@ -175,6 +175,30 @@ describe("the panes", () => {
     expect(useEditor.getState().panes.left.mode).toBe("read");
   });
 
+  describe("Write mode started by a click (writeHere)", () => {
+    const at = { path: "/Work/b.md", offset: 4, y: 200 };
+
+    it("keeps where the click was for the editor to take, also once the other pane's save made way", async () => {
+      writingLeft();
+      editor(true);
+      await useEditor.getState().writeHere(at);
+      expect(useEditor.getState()).toMatchObject({ panes: { left: { mode: "read" }, right: { mode: "write" } }, writeAt: at });
+    });
+
+    // The editor failed to load, say, and never took it: a later Write mode on the note doesn't start at that click.
+    it("forgets it once that pane leaves Write mode without an editor taking it", async () => {
+      writingLeft();
+      editor(true);
+      await useEditor.getState().writeHere(at);
+      await useEditor.getState().endWrite();
+      expect(useEditor.getState()).toMatchObject({ panes: { right: { mode: "read" } }, writeAt: null });
+
+      await useEditor.getState().writeHere(at);
+      await useEditor.getState().setMode("read");
+      expect(useEditor.getState()).toMatchObject({ mode: "read", writeAt: null });
+    });
+  });
+
   it("open a note in Read mode while the other pane writes", () => {
     writingLeft();
     useEditor.getState().openNote("/Work/c.md", "write");

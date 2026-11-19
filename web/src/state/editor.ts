@@ -83,9 +83,10 @@ interface EditorState {
   goToLine: ((line: number) => void) | null;
   /**
    * Where Write mode, started by a click into a pane's text, puts the caret in the note at `path` (workspace spec §3):
-   * at `offset` in its text, the caret's line at `y` on screen, where the click was. Taken by the editor as it mounts.
+   * at `offset` in its text, the caret's line at `y` on screen, where the click was, in the pane on `side`. Taken by the
+   * editor as it mounts; gone as that pane leaves Write mode (an editor that failed to load never took it).
    */
-  writeAt: { path: string; offset: number; y: number } | null;
+  writeAt: { path: string; offset: number; y: number; side: Side } | null;
   /** Where the reader of the note at `path` is in Read mode: the line of the last heading above the top of the visible text, 0 above the first. */
   reading: { path: string; line: number } | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
@@ -125,7 +126,7 @@ interface EditorState {
   setGoToLine(goToLine: ((line: number) => void) | null): void;
   /** Write mode in the focused pane, its caret at `at` (a click into its text); not if the other pane's save fails. */
   writeHere(at: { path: string; offset: number; y: number }): Promise<void>;
-  setWriteAt(writeAt: { path: string; offset: number; y: number } | null): void;
+  setWriteAt(writeAt: EditorState["writeAt"]): void;
   setReading(reading: { path: string; line: number } | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
@@ -188,7 +189,7 @@ const initial = {
   caretAt: null as CaretAt | null,
   live: null as Live | null,
   goToLine: null as ((line: number) => void) | null,
-  writeAt: null as { path: string; offset: number; y: number } | null,
+  writeAt: null as EditorState["writeAt"],
   reading: null as { path: string; line: number } | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
@@ -308,7 +309,7 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
     const apply = (mode: Mode) =>
       set((s) =>
         mode !== "write"
-          ? { mode }
+          ? { mode, writeAt: s.writeAt?.side === s.focused ? null : s.writeAt }
           : s.currentPath !== null && s.renaming.includes(s.currentPath)
             ? {}
             : { mode, noteTool: null, renameProblem: s.renameProblem?.path === s.currentPath ? null : s.renameProblem },
@@ -329,8 +330,9 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
     const guard = get().beforeRead;
     if (guard && !(await guard())) return;
     const s = get();
-    if (side === s.focused) set({ mode: "read" });
-    else if (s.panes[side]) set({ panes: { ...s.panes, [side]: { ...s.panes[side], mode: "read" } } });
+    const writeAt = s.writeAt?.side === side ? null : s.writeAt;
+    if (side === s.focused) set({ mode: "read", writeAt });
+    else if (s.panes[side]) set({ panes: { ...s.panes, [side]: { ...s.panes[side], mode: "read" } }, writeAt });
   },
   focus: (side) =>
     set((s) => {
@@ -362,10 +364,11 @@ export const useEditor = create<EditorState>()(focusedInStep((set, get) => ({
   setGoToLine: (goToLine) => set({ goToLine }),
   setWriteAt: (writeAt) => set({ writeAt }),
   writeHere: async (at) => {
-    set({ writeAt: at });
+    const writeAt = { ...at, side: get().focused };
+    set({ writeAt });
     await get().setMode("write");
     // Not started (the other pane's save failed, the note being named): nothing is left for a later editor to take.
-    if (get().writeAt === at && get().mode !== "write") set({ writeAt: null });
+    if (get().writeAt === writeAt && get().mode !== "write") set({ writeAt: null });
   },
   setReading: (reading) => set({ reading }),
   setDraft: (draft) => set({ draft }),

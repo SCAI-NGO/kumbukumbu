@@ -689,7 +689,16 @@ describe("write follows the click", () => {
 
   it("saves the writing pane first, which then reads; a failed save switches nothing and keeps its text", async () => {
     let fail = true;
-    const { u, puts } = await split(undefined, { "PUT /api/notes/*": () => (fail ? json(500, { title: "boom" }) : json(200, { path: "/Work/a.md", version: "v2", lastWriteAt: "2026-10-25T09:01:00Z" })) });
+    const saved: string[] = [];
+    const { u } = await split(undefined, {
+      "PUT /api/notes/*": async (r) => {
+        if (fail) return json(500, { title: "boom" });
+        const { content } = (await r.json()) as { content: string };
+        // With the right pane's mode as the save goes: it starts writing only after.
+        saved.push(`${content} | right ${useEditor.getState().panes.right?.mode}`);
+        return json(200, { path: "/Work/a.md", content, version: "v2", lastWriter: "ada", lastWriteAt: "2026-10-25T09:01:00Z", current: true });
+      },
+    });
     await u.click(within(within(pane("left")).getByRole("group", { name: "This note" })).getByText("a"));
     await u.click(screen.getByRole("button", { name: "Write" }));
     const left = await within(pane("left")).findByRole("textbox", { name: "Markdown source" });
@@ -703,9 +712,10 @@ describe("write follows the click", () => {
 
     fail = false;
     click(see("right"));
+    await waitFor(() => expect(saved).toEqual(["# Note a\n\nSee [[next a]].\n kept | right read"]));
     await waitFor(() => expect(source("right")).toBeInTheDocument());
     expect(source("left")).toBeNull();
-    expect(puts).toEqual([]);
+    expect(saved).toHaveLength(1);
   });
 
   it("switches nothing for a drag, nor with text selected", async () => {
@@ -789,6 +799,8 @@ describe("the live preview", () => {
     expect(right.selectionStart).toBe(text.indexOf("words"));
     expect(await within(pane("left")).findByRole("img", { name: "Live preview of a" })).toBeInTheDocument();
     expect(await within(pane("left")).findByText("Fresh words")).toBeInTheDocument();
+    // Taken by the editor that opened at the click: nothing left for a later one.
+    expect(useEditor.getState().writeAt).toBeNull();
     delete (document as { caretPositionFromPoint?: unknown }).caretPositionFromPoint;
   });
 
