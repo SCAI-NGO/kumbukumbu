@@ -7,17 +7,25 @@
 //     shows its icon, name, size and Download, never a preview; a text
 //     file outside a skill's folder gets no viewer either; Download
 //     gives the same bytes                                              → "files #1", "files #2"
+// 12. large PDFs and images keep their kind and are shown by the
+//     browser, streamed                                                 → "files #4"
 // 15. the upload takes any file; one over 15 MB is sent as the File
 //     itself with a progress bar; it comes back with the same bytes     → "files #3" (@large, about 100 MB)
-// Left out: a file over the bound refused before sending (the bound is 1 GiB: UploadSheet.test.tsx covers it with a
-// small bound), thumbnails over 15 MB by their icon (UI unit tests), the drop (Playwright can't drop a file of the
-// disk), the ZIP import of a large file (not cheap: a 100 MB ZIP made in the test), Obsidian 0.3.1, rclone and 500 MB
-// over a proxy (spec's hand tests).
+// Left out:
+//  15's file over the bound refused before sending: the bound is 1 GiB, so it needs a body over 1 GiB or a changed
+//    admin bound on the stack.
+//  Thumbnails over 15 MB shown by their icon (PR #257): outside spec §2's @files scope, which takes the spec's
+//    decisions; the thumbnails are no decision of the spec's.
+//  A drop: Playwright can't drop a file from the disk, and the picker takes the same path (decision 15).
+//  The ZIP import of a large file: the brief takes it only if cheap, and it needs a ZIP over 15 MB made in the test.
+//  Obsidian 0.3.1, rclone and 500 MB over a proxy: the spec's hand tests.
 import type { Download, Locator, Page, TestInfo } from "@playwright/test";
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, createWriteStream, rmSync } from "node:fs";
+import { createReadStream, createWriteStream, readFileSync, rmSync } from "node:fs";
 import { once } from "node:events";
+import { join } from "node:path";
 import { encodePath, type Api } from "../support/api";
+import { fixturesDir } from "../support/env";
 import { expect, onPhone, shot, test } from "../support/test";
 
 const noteUrl = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
@@ -58,9 +66,14 @@ async function savedPath(download: Download) {
   return path;
 }
 
-async function removeFile(api: Api, path: string) {
-  const response = await api.send("DELETE", `/api/files/${encodePath(path)}`);
-  if (!response.ok() && response.status() !== 404) throw new Error(`DELETE file ${path}: ${response.status()}`);
+/** Removes what a test wrote: every path is tried, one gone already (404) is fine, other failures are thrown at the end. */
+async function remove(api: Api, ...paths: string[]) {
+  const failures: string[] = [];
+  for (const path of paths) {
+    const response = await api.send("DELETE", `/api/${path.endsWith(".md") ? "notes" : "files"}/${encodePath(path)}`);
+    if (!response.ok() && response.status() !== 404) failures.push(`DELETE ${path}: ${response.status()}`);
+  }
+  if (failures.length) throw new Error(failures.join("; "));
 }
 
 test("files #1: a file in a note is a chip with Download; it opens as a card, never a preview, and downloads its bytes @files @phone", async ({ page, aliceApi, folder }, testInfo) => {
@@ -68,11 +81,11 @@ test("files #1: a file in a note is a chip with Download; it opens as a card, ne
   const bytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]), randomBytes(2043)]);
   const file = `/Work/${folder}/report.docx`;
   const note = `/Work/${folder}/Hub.md`;
-  await aliceApi.putFile(file, bytes);
-  await aliceApi.putNote(note, `# Hub\n\nThe [[report.docx]] is attached.\n`);
   try {
+    await aliceApi.putFile(file, bytes);
+    await aliceApi.putNote(note, `# Hub\n\nThe [[report.docx]] is attached.\n`);
     await openNote(page, note);
-    const article = page.locator("article");
+    const article = page.getByRole("article");
     const chip = article.getByRole("link", { name: "Open the file report.docx" });
     await expect(chip).toHaveAttribute("href", `/view/Work/${folder}/report.docx`);
     // Download straight from the chip.
@@ -94,16 +107,15 @@ test("files #1: a file in a note is a chip with Download; it opens as a card, ne
     const fromCard = await downloaded(page, card.getByRole("button", { name: "Download" }));
     expect(fromCard).toEqual({ name: "report.docx", sha: sha256(bytes) });
   } finally {
-    await aliceApi.deleteNote(note).catch(() => undefined);
-    await removeFile(aliceApi, file);
+    await remove(aliceApi, note, file);
   }
 });
 
 test("files #2: a text file outside a skill's folder opens as a card too, without a viewer @files", async ({ page, aliceApi, folder }) => {
   const text = "Item,Amount\nlantern,12.50\n";
   const file = `/Work/${folder}/costs.csv`;
-  await aliceApi.putFile(file, Buffer.from(text));
   try {
+    await aliceApi.putFile(file, Buffer.from(text));
     await page.goto(`/view/Work/${folder}/costs.csv`);
     const viewer = page.getByRole("main", { name: "costs.csv" });
     const card = viewer.getByRole("region", { name: "costs.csv" });
@@ -113,7 +125,7 @@ test("files #2: a text file outside a skill's folder opens as a card too, withou
     const fromCard = await downloaded(page, card.getByRole("button", { name: "Download" }));
     expect(fromCard).toEqual({ name: "costs.csv", sha: sha256(Buffer.from(text)) });
   } finally {
-    await removeFile(aliceApi, file);
+    await remove(aliceApi, file);
   }
 });
 
@@ -121,16 +133,15 @@ test("files #3: about 100 MB go through the upload with its progress bar and dow
   test.setTimeout(600_000);
   // Made in the test, written to the disk (setInputFiles refuses a buffer over 50 MB), removed at the end.
   const source = testInfo.outputPath("big.bin");
-  const out = createWriteStream(source);
-  for (let i = 0; i < 100; i++) if (!out.write(randomBytes(1024 * 1024))) await once(out, "drain");
-  out.end();
-  await once(out, "finish");
-  const sha = await sha256File(source);
-
   const note = `/Work/${folder}/Hub.md`;
   const file = `/Work/${folder}/big.bin`;
-  await aliceApi.putNote(note, "# Hub\n");
   try {
+    const out = createWriteStream(source);
+    for (let i = 0; i < 100; i++) if (!out.write(randomBytes(1024 * 1024))) await once(out, "drain");
+    out.end();
+    await once(out, "finish");
+    const sha = await sha256File(source);
+    await aliceApi.putNote(note, "# Hub\n");
     await openNote(page, note);
     const tree = await openTree(page, testInfo);
     await tree.getByRole("button", { name: `Actions for ${folder}` }).click();
@@ -165,7 +176,34 @@ test("files #3: about 100 MB go through the upload with its progress bar and dow
     await download.delete();
   } finally {
     rmSync(source, { force: true });
-    await aliceApi.deleteNote(note).catch(() => undefined);
-    await removeFile(aliceApi, file);
+    await remove(aliceApi, note, file);
+  }
+});
+
+test("files #4: an image and a PDF over 15 MB keep their kind and are shown, streamed @files", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(120_000);
+  const large = 15 * 1024 * 1024 + 1;
+  // Real ones, padded after their end to one byte over the bound (the MCP side asserts their bytes come back).
+  const pad = (name: string) => {
+    const bytes = readFileSync(join(fixturesDir, "tags", "recent", "Pump", name));
+    return Buffer.concat([bytes, randomBytes(large - bytes.length)]);
+  };
+  const png = `/Work/${folder}/scan.png`;
+  const pdf = `/Work/${folder}/manual.pdf`;
+  try {
+    await aliceApi.putFile(png, pad("scan.png"));
+    await aliceApi.putFile(pdf, pad("manual.pdf"));
+
+    await page.goto(`/view/Work/${folder}/scan.png`);
+    const image = page.getByRole("main", { name: "scan.png" }).getByRole("img", { name: "scan.png" });
+    await expect(image).toBeVisible();
+    await expect.poll(() => image.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth), "the image loaded").toBe(8);
+
+    await page.goto(`/view/Work/${folder}/manual.pdf`);
+    const viewer = page.getByRole("main", { name: "manual.pdf" });
+    await expect(viewer.getByLabel("Page 1")).toBeVisible();
+    await expect(viewer.getByRole("alert")).toHaveCount(0);
+  } finally {
+    await remove(aliceApi, png, pdf);
   }
 });
