@@ -103,7 +103,8 @@ test("calendar until #2: a time without Until writes no until @calendar", async 
 test("calendar until #3: the server refuses an until before or at the time, without one, or malformed, and stores nothing @calendar", async ({ aliceApi, folder }) => {
   const day = addDays(today(), 16);
   const title = `Refused ${folder}`;
-  titles.push(title);
+  // Should a refusal fail and the server store the entry after all, a taken title gives "Title 2", "Title 3", …
+  titles.push(title, `${title} 2`, `${title} 3`, `${title} 4`);
   for (const [body, error] of [
     [{ time: "12:00", until: "11:00" }, "until 11:00 is not after 12:00"],
     [{ time: "12:00", until: "12:00" }, "until 12:00 is not after 12:00"],

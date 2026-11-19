@@ -50,6 +50,7 @@ async function seed(api: Api, folder: string) {
   await api.putNote(`${base}/Alpine.md`, "# Alpine\n");
   await api.putNote(`${base}/Meeting Notes.md`, "# Meeting\n\nThe agenda of the harbour board.\n");
   await api.putNote(`${base}/Summary.md`, "# Summary\n");
+  await api.putNote(`${base}/it's.md`, "# Apostrophe\n\nIt is here.\n");
   await api.putNote(`${base}/Sub/Inner.md`, "# Inner\n");
   await api.putNote(`${base}/T-${folder}.md`, "# Target\n\nWhere the link leads.\n");
   await api.putNote(
@@ -157,7 +158,6 @@ test("console #1: Tab completes a unique match fully, several to their common st
   await tabTo(input, `cat "${base}/Meeting Notes.md" `);
 
   // Any other character the tokeniser wouldn't read as itself is escaped too, and the line runs.
-  await aliceApi.putNote(`${base}/it's.md`, "# Apostrophe\n\nIt is here.\n");
   await input.fill(`cat ${base}/it`);
   await tabTo(input, `cat ${base}/it\\'s.md `);
   await input.press("Enter");
@@ -305,8 +305,8 @@ test("console #5: l, la and lsa are written out as ls -l, ls -a and ls -la, and 
   await runLine(page, "clear");
   await runLine(page, `la ${base} | wc -l`);
   await expect(log).toContainText(`→ ls -a ${base} | wc -l`);
-  // Alpha, Alpine, Meeting Notes, Peek, Sub/, Summary, T-…: seven entries.
-  await expect(log.locator("[data-line]").last()).toHaveText("7");
+  // Alpha, Alpine, it's, Meeting Notes, Peek, Sub/, Summary, T-…: eight entries.
+  await expect(log.locator("[data-line]").last()).toHaveText("8");
 
   await runLine(page, "clear");
   await runLine(page, `lsa ${base}/Sub`);
