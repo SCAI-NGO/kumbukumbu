@@ -277,4 +277,29 @@ public class HelpTests
         Assert.Contains("An SVG and a skill's text file are written whole, as a note is (no version creates one, the version replaces it);", text);
         Assert.DoesNotContain("since they only write text", text);
     }
+
+    [Fact]
+    public async Task No_usage_is_longer_than_graphs()
+    {
+        // help pads every row to the longest Usage: a longer one would push every summary to the right.
+        var graph = new Kumbu.Core.Sh.Commands.GraphCommand(new InMemoryNoteStore());
+
+        Assert.Contains($"\n  {graph.Usage}  {graph.Summary}\n", (await Run("help")).Output);
+    }
+
+    [Fact]
+    public async Task Help_cat_says_what_each_kind_of_file_prints_and_when_the_embeds_block_is_left_out()
+    {
+        var help = (await Run("help cat")).Output;
+        var flat = System.Text.RegularExpressions.Regex.Replace(help, @"\s+", " ");
+
+        Assert.StartsWith("cat [--version V] <path>[#section] [<path>…]\n", help);
+        Assert.Contains("An image or a PDF prints one line instead of its bytes", flat);
+        Assert.Contains("An SVG prints its line and then its source", flat);
+        Assert.Contains("A text file (a script, a CSV, an HTML or XML file) prints its content, wherever it is.", flat);
+        Assert.Contains("Any other file prints one line: its kind and file size.", flat);
+        Assert.Contains("No block in a pipeline, with --version or with --checkpoint.", flat);
+        Assert.DoesNotContain("A text file in a skill's folder", flat);
+        Assert.DoesNotContain("An attachment (an image or a PDF) prints one line", flat);
+    }
 }

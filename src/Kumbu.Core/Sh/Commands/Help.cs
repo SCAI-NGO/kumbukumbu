@@ -124,10 +124,12 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             """,
     };
 
-    /// <summary>A command's help; a reader's ends with a pointer to the checkpoint topic, a command that is also a topic
-    /// ('archive') with one to the topic, which 'help' shows after the command's own.</summary>
+    /// <summary>A command's help; a reader's ends with a pointer to the checkpoint topic (calendar's says that only its
+    /// reading forms run there), a command that is also a topic ('archive') with one to the topic, which 'help' shows
+    /// after the command's own.</summary>
     public static string Of(ICommand command) => Shell.Readers.Contains(command.Name)
         ? command.Help.TrimEnd() + "\n  --checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'"
+            + (command.Name == "calendar" ? "\n                       the reading forms only; set, move, close, reopen and unset are refused there" : "")
         : Topics.ContainsKey(command.Name)
             ? command.Help.TrimEnd() + $"\n  'help {command.Name}' adds the {command.Name} topic"
             : command.Help;

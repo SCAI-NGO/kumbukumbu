@@ -517,7 +517,10 @@ public class CalendarCommandTests
             Assert.Contains("\n" + form + "\n", help);
         }
 
-        Assert.EndsWith("--checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'", help);
+        Assert.EndsWith(
+            "\n  --checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'\n"
+            + "                       the reading forms only; set, move, close, reopen and unset are refused there",
+            help);
         Assert.Contains("\n  calendar <vault>                ", Manual.ToolDescription);
     }
 
