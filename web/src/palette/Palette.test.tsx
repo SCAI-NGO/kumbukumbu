@@ -559,6 +559,23 @@ describe("the note's actions", () => {
     await waitFor(() => expect(question.contains(document.activeElement)).toBe(true));
   });
 
+  it("over_a_window_insert_template_opens_the_list_once_the_window_is_gone", async () => {
+    signedInApi();
+    const router = await shown();
+    await userEvent.click(await screen.findByRole("button", { name: "Write" }));
+    await screen.findByRole("textbox", { name: "Markdown source" });
+    await navigateAway(router, "/console");
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    ctrlP();
+    await screen.findByRole("dialog", { name: "Favourites and commands" });
+    await userEvent.type(field(), "insert template");
+    await waitFor(() => expect(highlighted()).toBe("Insert template, inbox"));
+    await userEvent.keyboard("{Enter}");
+    const find = await screen.findByRole("combobox", { name: "Find a template" });
+    expect(find.closest("[inert]")).toBeNull();
+    await waitFor(() => expect(find).toHaveFocus());
+  });
+
   it("the_palette_closes_before_the_action_runs", async () => {
     signedInApi();
     await openPalette();

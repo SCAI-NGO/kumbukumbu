@@ -4,6 +4,7 @@ import { fileKindOfEntry, type TreeFolder, type TreeView, type VaultView } from 
 import { crumbOf, inVault, noteUrl, titleOf } from "../api/paths";
 import type { MenuItem } from "../components/Menu";
 import { treeHas } from "../shell/lastNote";
+import { useEditor } from "../state/editor";
 import { schemes } from "../theme/schemes";
 
 /**
@@ -56,6 +57,14 @@ export const splitRow = (action: () => void): Row => command("view.split", "View
 /** The open note's menu, as rows placed with its title; not pinnable, as they act on the note that is open. */
 export function noteActionRows(title: string, items: MenuItem[]): Row[] {
   return items.map((item) => ({ key: `note-action:${item.label}`, group: "Note", name: item.label, place: title, run: { action: item.onSelect } }));
+}
+
+/**
+ * The commands for the note being written, placed with its title: Insert template (workspace spec §4). Not pinnable, as
+ * they act on the editor that is open.
+ */
+export function writeRows(title: string): Row[] {
+  return [{ key: "write:insert-template", group: "Commands", name: "Insert template", place: title, run: { action: () => useEditor.getState().setTemplates(true) } }];
 }
 
 export function vaultRows(vaults: VaultView[]): Row[] {
