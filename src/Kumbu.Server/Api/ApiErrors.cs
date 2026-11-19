@@ -137,6 +137,12 @@ public static class ApiErrors
             SetRetryAfter(context.HttpContext, BusyRetryAfter);
             return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
         }
+        // Every write slot for a file larger than 15 MB was taken for as long as an upload may wait for one.
+        catch (Kumbu.Server.Vaults.TooManyUploadsException e)
+        {
+            SetRetryAfter(context.HttpContext, Kumbu.Server.Vaults.TooManyUploadsException.RetryAfter);
+            return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
+        }
         // An attachment's bytes are gone or don't open: the server's fault, not a deletion (a client reads 404 as one).
         catch (Kumbu.Server.Vaults.ContentMissingException e)
         {

@@ -37,12 +37,18 @@ public sealed class EncryptedNoteStore(
 
     internal EncryptedNoteStore(
         VaultCatalog catalog, ICredential credential, Search.SearchIndex? index, Accounts.ApiKeys? keys, Attachments.PdfAnalysisRunner? pdf,
-        Publishing.Publications? publications, Accounts.StorageQuota? quota = null)
+        Publishing.Publications? publications, Accounts.StorageQuota? quota = null, string? account = null)
         : this(catalog, credential, index, keys, pdf)
     {
         _publications = publications;
         _quota = quota;
+        _account = account ?? "";
     }
+
+    /// <summary>The account the request's credential belongs to (its user's id; "" for the dev token and the stores of
+    /// the seeder and the welcome vault): whose share of the large uploads' slots a put takes
+    /// (<see cref="VaultCatalog.TakeFileWriteAsync"/>).</summary>
+    private readonly string _account = "";
 
     /// <summary>What a record (an attachment's, a checkpoint's) takes beside the content it names, roughly: the quota's
     /// estimate, which the recount corrects.</summary>
@@ -585,7 +591,8 @@ public sealed class EncryptedNoteStore(
     /// <summary>
     /// As the stream's overload, for a body whose start, <paramref name="head"/>, the caller read already. A body known to
     /// be larger than 15 MB (a head longer than that, or a declared length above it) takes its write slots
-    /// (<see cref="VaultCatalog.FileWrites"/>) holding only that head, and is streamed on from it as it is: copied, a head
+    /// (<see cref="VaultCatalog.TakeFileWriteAsync"/>; <see cref="TooManyUploadsException"/> if they don't come in time)
+    /// holding only that head, and is streamed on from it as it is: copied, a head
     /// of 15 MB and a byte, read to tell the body from a small one, would be held twice while it waits for a slot. Any
     /// other is read on after the head, as the stream's overload reads it.
     /// </summary>
@@ -615,15 +622,10 @@ public sealed class EncryptedNoteStore(
             head = start.GetBuffer().AsMemory(0, (int)start.Length);
         }
 
-        // A slot for the whole upload: each holds two chunks' bytes while it streams, whatever its link's speed.
-        await catalog.FileWrites.WaitAsync(ct);
-        try
+        // Slots for the whole upload: each holds two chunks' bytes while it streams, whatever its link's speed.
+        using (await catalog.TakeFileWriteAsync(_account, ct))
         {
             return await PutLargeBlobAsync(v, head, rest, bound, declaredLength, ct);
-        }
-        finally
-        {
-            catalog.FileWrites.Release();
         }
     }
 

@@ -121,6 +121,11 @@ public static class DavEndpoints
             ApiErrors.SetRetryAfter(http, ApiErrors.BusyRetryAfter);
             await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
         }
+        catch (TooManyUploadsException e) when (!response.HasStarted)
+        {
+            ApiErrors.SetRetryAfter(http, TooManyUploadsException.RetryAfter);
+            await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
+        }
         // A write that would withdraw a publication, which a share never may (publish design §3.7): a MOVE of a published
         // note into an unpublishable folder (WebDAV design §3.6 case 7), a COPY or MOVE over one, or a note published
         // after a DELETE looked (case 6 holds those it finds). The store refuses the whole batch, with the reason.

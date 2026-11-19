@@ -214,6 +214,7 @@ public static class FileApi
         if (AttachmentFormat.LargeProblem(filePath, head.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
         var dimensions = AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } ? ImageHeader.Size(head.Span) : null;
         if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
+        RequireLargeBodyRate(request.HttpContext);
 
         LargeBlob blob;
         try
@@ -247,6 +248,31 @@ public static class FileApi
         if (http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
         {
             limit.MaxRequestBodySize = bound + 64 * 1024;
+        }
+    }
+
+    /// <summary>The least a large body must keep arriving at, after <see cref="LargeBodyGrace"/>: 8 KiB a second. Kestrel's
+    /// default, 240 bytes, would let a client that all but stopped hold a write slot for days; and the sweep takes chunks
+    /// no head names once the newest is older than its grace of 10 minutes, which 4 MiB at 8 KiB a second (about 8.5
+    /// minutes a chunk) stays within.</summary>
+    internal const int LargeBodyBytesPerSecond = 8 * 1024;
+
+    internal static readonly TimeSpan LargeBodyGrace = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Holds a body known to be larger than 15 MB to <see cref="LargeBodyBytesPerSecond"/>, before the rest of it is read,
+    /// where the server lets a request set it: over HTTP/1.1. HTTP/2 keeps its rates per connection, and its feature
+    /// refuses one per request; the test host has none.
+    /// </summary>
+    internal static void RequireLargeBodyRate(HttpContext http)
+    {
+        if (http.Features.Get<Microsoft.AspNetCore.Server.Kestrel.Core.Features.IHttpMinRequestBodyDataRateFeature>() is not { } rate) return;
+        try
+        {
+            rate.MinDataRate = new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(LargeBodyBytesPerSecond, LargeBodyGrace);
+        }
+        catch (NotSupportedException)
+        {
         }
     }
 

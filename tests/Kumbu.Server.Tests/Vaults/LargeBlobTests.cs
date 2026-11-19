@@ -207,6 +207,57 @@ public sealed class LargeBlobTests(MongoFixture fixture)
         Assert.Equal(10, Count(world, "blob_chunks"));
     }
 
+    /// <summary>A store of <paramref name="account"/>'s, as a request of hers has it.</summary>
+    private static EncryptedNoteStore StoreOf(VaultCatalog catalog, string account) => new(catalog, new FixedCredential(Token), null, null, null, null, null, account);
+
+    /// <summary>An upload of 20 MB that holds its slots, its first chunk written, until <paramref name="until"/>.</summary>
+    private static Task<string> HoldingAsync(EncryptedNoteStore store, int seed, Task until) =>
+        Task.Run(() => store.PutBlobAsync("Work", new FailingStream(Random(20_000_000, seed), int.MaxValue) { Wait = (18_000_000, until) }, null, Ct), Ct);
+
+    private static async Task<int> HeadsWithChunksAsync(VaultWorld world) =>
+        (await (await Raw(world, "blob_chunks").DistinctAsync<ObjectId>("head", F.Empty, cancellationToken: Ct)).ToListAsync(Ct)).Count;
+
+    [Fact]
+    public async Task One_account_streams_at_most_two_large_uploads_at_once()
+    {
+        var (world, catalog, _) = await WorldAsync(fileWrites: 4);
+        var held = new TaskCompletionSource();
+        var first = HoldingAsync(StoreOf(catalog, "lea"), 40, held.Task);
+        var second = HoldingAsync(StoreOf(catalog, "lea"), 41, held.Task);
+        await WaitForAsync(() => HeadsWithChunksAsync(world).Result == 2);
+
+        // Her third waits, though the server has slots left; another account's doesn't.
+        var third = PutAsync(StoreOf(catalog, "lea"), Random(20_000_000, 42));
+        await PutAsync(StoreOf(catalog, "max"), Random(20_000_000, 43));
+        Assert.False(third.IsCompleted);
+        Assert.Equal(3, await HeadsWithChunksAsync(world));
+
+        held.SetResult();
+        await Task.WhenAll(first, second, third);
+        Assert.Equal(4, Count(world, "blobs"));
+    }
+
+    [Fact]
+    public async Task A_large_upload_waits_for_its_slot_only_so_long_then_is_refused()
+    {
+        var (world, catalog, store) = await WorldAsync(fileWrites: 1);
+        catalog.FileWriteWait = TimeSpan.FromMilliseconds(300);
+        var held = new TaskCompletionSource();
+        var first = HoldingAsync(store, 44, held.Task);
+        await WaitForAsync(() => Count(world, "blob_chunks") > 0);
+
+        var refused = await Assert.ThrowsAsync<TooManyUploadsException>(() => PutAsync(StoreOf(catalog, "max"), Random(20_000_000, 45)));
+        // The same for a third of one account's, whose own slots it waits for first.
+        var second = HoldingAsync(StoreOf(catalog, "lea"), 46, held.Task);
+        var third = HoldingAsync(StoreOf(catalog, "lea"), 47, held.Task);
+        await Assert.ThrowsAsync<TooManyUploadsException>(() => Task.WhenAll(second, third));
+
+        Assert.Equal(TooManyUploadsException.Sentence, refused.Message);
+        held.SetResult();
+        await first;
+        Assert.Equal(1, await HeadsWithChunksAsync(world));
+    }
+
     private static async Task WaitForAsync(Func<bool> condition)
     {
         for (var i = 0; i < 300 && !condition(); i++) await Task.Delay(20, Ct);

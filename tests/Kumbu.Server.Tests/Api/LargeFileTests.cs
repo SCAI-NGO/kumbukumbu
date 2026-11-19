@@ -226,6 +226,36 @@ public sealed class LargeFileTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
     }
 
+    /// <summary>With every write slot taken past the bound on the wait, /api/files and WebDAV refuse a large upload with
+    /// 503 and a minute to wait, rather than holding it without end.</summary>
+    [Fact]
+    public async Task A_large_upload_that_waits_too_long_for_a_slot_is_a_503()
+    {
+        await using var api = Api.WithWebHostBuilder(_ => { });
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        catalog.FileWriteWait = TimeSpan.FromMilliseconds(200);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var dav = await Dav.DavClient.NewAsync(api, user);
+        var held = catalog.FileWrites.CurrentCount;
+        for (var i = 0; i < held; i++) await catalog.FileWrites.WaitAsync(Ct);
+        try
+        {
+            using var put = await user.SendContentAsync(HttpMethod.Put, user.Url("big.bin", "files"), new LargeFiles.Streamed(LargeFiles.Of(LargeFiles.Size, 50), true), followRedirects: false);
+            using var davPut = await dav.SendAsync(HttpMethod.Put, "/dav/Work/big.bin", new LargeFiles.Streamed(LargeFiles.Of(LargeFiles.Size, 51), false));
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, put.StatusCode);
+            Assert.Equal("60", put.Headers.RetryAfter?.ToString());
+            Assert.Equal(TooManyUploadsException.Sentence, await RestClient.ErrorAsync(put));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, davPut.StatusCode);
+            Assert.Equal("60", davPut.Headers.RetryAfter?.ToString());
+            Assert.Equal(TooManyUploadsException.Sentence, await davPut.Content.ReadAsStringAsync(Ct));
+        }
+        finally
+        {
+            catalog.FileWrites.Release(held);
+        }
+    }
+
     [Fact]
     public async Task The_session_names_the_bound_per_file()
     {
