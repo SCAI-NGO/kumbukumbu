@@ -856,6 +856,126 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.All(await DocumentsAsync(id), d => Assert.True(Opens(newKey, d.Collection, d.Doc), d.Collection));
     }
 
+    /// <summary>
+    /// In "Arbeit": a file of 20 MB, five chunks under one head, at two paths, and a small image beside it. Returns the
+    /// vault's chunks as MongoDB holds them.
+    /// </summary>
+    private async Task<(Account Account, string Chunks)> LargeFileAsync()
+    {
+        var a = await AccountAsync("Arbeit");
+        var store = Store(a);
+        var bytes = Bytes();
+        foreach (var path in new[] { "/Arbeit/big.bin", "/Arbeit/copy.bin" })
+        {
+            var state = new AttachmentState("application/octet-stream", bytes.Length, null, null, VersionToken.Of(bytes), await store.PutBlobAsync("Arbeit", new MemoryStream(bytes), null, Ct));
+            var attachment = new StoredAttachment(P(path), state, 1, "lea", Now, [], null, Ref: WriterRef.Server);
+            Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea", WriterRef.Server, Now, Ct));
+        }
+
+        await AttachAsync(store, "/Arbeit/small.png", Png(2000, 2));
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", a.Id("Arbeit")), cancellationToken: Ct));
+        var chunks = await ChunksAsync(a.Id("Arbeit"));
+        Assert.Equal(5, chunks.Split('\n').Length);
+        return (a, chunks);
+    }
+
+    /// <summary>The large file's bytes.</summary>
+    private static byte[] Bytes()
+    {
+        var bytes = new byte[20_000_000];
+        new Random(5).NextBytes(bytes);
+        return bytes;
+    }
+
+    private async Task<string> ChunksAsync(string vaultId) =>
+        string.Join('\n', (await Raw("blob_chunks").Find(new BsonDocument("vault", vaultId)).Sort(new BsonDocument("_id", 1)).ToListAsync(Ct)).Select(d => d.ToJson()));
+
+    private async Task<BsonDocument> LargeHeadAsync(string vaultId) =>
+        await Raw("blobs").Find(new BsonDocument { ["vault"] = vaultId, ["chunks"] = new BsonDocument("$exists", true) }).SingleAsync(Ct);
+
+    [Fact]
+    public async Task Rekeying_a_vault_with_a_large_file_reseals_only_its_head()
+    {
+        var (a, chunks) = await LargeFileAsync();
+        var id = a.Id("Arbeit");
+        var before = await BlobReferencesAsync(a);
+        var head = await LargeHeadAsync(id);
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        // Both paths still name the one head, updated in place: its _id and count kept, its id and seal new.
+        Assert.Single(after.Where(r => r.Where.EndsWith(".bin", StringComparison.Ordinal)).Select(r => r.BlobId).Distinct());
+        var resealed = await LargeHeadAsync(id);
+        Assert.Equal((head["_id"], head["chunks"]), (resealed["_id"], resealed["chunks"]));
+        Assert.NotEqual(head["bid"], resealed["bid"]);
+        Assert.NotEqual(head["blob"], resealed["blob"]);
+        Assert.Equal(Convert.ToBase64String(resealed["bid"].AsByteArray), after.Single(r => r.Where == "/Arbeit/big.bin").BlobId);
+        // The chunks are untouched, byte for byte.
+        Assert.Equal(chunks, await ChunksAsync(id));
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct));
+
+        // A sweep afterwards finds the file referenced.
+        _time.Advance(TimeSpan.FromHours(1));
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
+        Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
+        Assert.Equal(chunks, await ChunksAsync(id));
+    }
+
+    [Fact]
+    public async Task An_interrupted_rekeying_of_a_large_file_resumes()
+    {
+        var (a, chunks) = await LargeFileAsync();
+        var id = a.Id("Arbeit");
+        var before = await BlobReferencesAsync(a);
+        Catalog().BatchDocuments = 1;
+        // The head's batch goes first (by _id), then the crash: the records still name its old id.
+        CrashOnceAt("after-batch");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        Catalog().RekeyFaultAt = null;
+        await NewCatalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        Assert.Equal(chunks, await ChunksAsync(id));
+    }
+
+    [Fact]
+    public async Task A_forged_head_that_claims_a_large_files_new_id_goes_with_its_chunks()
+    {
+        var (a, chunks) = await LargeFileAsync();
+        var id = a.Id("Arbeit");
+        var before = await BlobReferencesAsync(a);
+        var sha = SHA256.HashData(Bytes());
+        var forged = ObjectId.GenerateNewId();
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            // As a writer with the database might leave it: a head under the new key's id, with chunks of its own.
+            var next = new UnlockedVault(id, "", await VaultKeyAsync(a.Key, id, SlotDocument.UserNext), DateTime.UtcNow, new VaultLocks());
+            await Raw("blobs").InsertOneAsync(
+                new BsonDocument { ["_id"] = forged, ["vault"] = id, ["bid"] = next.LargeBlobId(sha), ["blob"] = RandomNumberGenerator.GetBytes(200), ["at"] = Now, ["chunks"] = 1 },
+                cancellationToken: Ct);
+            await Raw("blob_chunks").InsertOneAsync(
+                new BsonDocument { ["_id"] = ObjectId.GenerateNewId(), ["vault"] = id, ["head"] = forged, ["n"] = 0, ["blob"] = RandomNumberGenerator.GetBytes(64), ["at"] = Now },
+                cancellationToken: Ct);
+        };
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.Equal(0, await Raw("blobs").CountDocumentsAsync(new BsonDocument("_id", forged), cancellationToken: Ct));
+        Assert.Equal(chunks, await ChunksAsync(id));
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+    }
+
     [Fact]
     public async Task Rekeying_remaps_shared_blob_ids_for_every_referrer()
     {

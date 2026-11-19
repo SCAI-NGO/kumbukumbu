@@ -417,7 +417,7 @@ const Tile = memo(function Tile({
     >
       {/* Far from the screen a tile holds nothing: its image's object URL is revoked, its PDF canvas emptied. At the
           version the tree lists: a file changed meanwhile is fetched anew, not shown as it was. */}
-      {near && <FileThumb vault={vault} path={file.path} at={{ version: file.version }} />}
+      {near && <FileThumb vault={vault} path={file.path} at={{ version: file.version }} size={file.size} />}
       <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-0.5 text-left text-[10px] text-white">
         {file.name}
       </span>

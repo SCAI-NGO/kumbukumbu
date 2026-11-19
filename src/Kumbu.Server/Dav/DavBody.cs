@@ -22,6 +22,38 @@ public static class DavBody
     }
 
     /// <summary>
+    /// A file's body, whole if it is at most <paramref name="whole"/> bytes (<c>Large</c> false); else the start of it
+    /// (<c>Large</c> true), which the caller streams on from: with a <c>Content-Length</c> above <paramref name="whole"/>,
+    /// its first <paramref name="head"/> bytes, and without one, the <paramref name="whole"/> bytes and more that told it
+    /// apart. A body shorter than it declared is the store's to refuse, by its length. Read into one array that grows with
+    /// the bytes received (doubling, up to the declared length or <paramref name="whole"/> and a byte), never with the
+    /// length declared, and handed out as it is, not copied: at its largest step it holds the half it had and the new
+    /// array, about 23 MB for 15 MB, and then the bytes once.
+    /// </summary>
+    public static async Task<(ReadOnlyMemory<byte> Bytes, bool Large)> ReadStartAsync(HttpRequest request, long whole, int head, CancellationToken ct)
+    {
+        var large = request.ContentLength > whole;
+        var limit = (int)(large ? head : Math.Min(request.ContentLength ?? whole + 1, whole + 1));
+        var buffer = new byte[Math.Min(limit, 81920)];
+        var length = 0;
+        int read;
+        while (length < limit)
+        {
+            if (length == buffer.Length)
+            {
+                var grown = new byte[Math.Min(limit, buffer.Length * 2)];
+                buffer.AsSpan(0, length).CopyTo(grown);
+                buffer = grown;
+            }
+
+            if ((read = await request.Body.ReadAsync(buffer.AsMemory(length), ct)) == 0) break;
+            length += read;
+        }
+
+        return (buffer.AsMemory(0, length), large || length > whole);
+    }
+
+    /// <summary>
     /// As <see cref="ReadLimitedAsync"/>, for a body whose room has been taken (<see cref="DavParkingBudget"/>): with a
     /// <c>Content-Length</c>, into an array of that length, so what is held is what was declared and is kept as it is;
     /// without one, into chunks that grow with the bytes received and are copied once into an array of their length at

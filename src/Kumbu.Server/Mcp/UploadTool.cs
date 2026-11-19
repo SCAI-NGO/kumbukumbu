@@ -97,7 +97,7 @@ public static class UploadTool
             expires {expiresAt:yyyy-MM-ddTHH:mm:ssZ}
             curl -sS -X PUT --data-binary @<local file> '{url}'
 
-            Run that curl line in a shell on the machine that holds the file, with <local file> its path. The URL works once and until the time above; at most 15 MB{(format == AttachmentFormat.File ? "" : $", and its content must be what the name {filePath.Name} says (the format is checked from the bytes)")}. If the PUT fails, call upload again for a new URL.
+            Run that curl line in a shell on the machine that holds the file, with <local file> its path. The URL works once and until the time above; at most {FileTooLargeException.Shown(options.Value.Vaults.MaxFileBytes)}{(format == AttachmentFormat.File ? "" : $", and its content must be what the name {filePath.Name} says (the format is checked from the bytes)")}. If the PUT fails, call upload again for a new URL.
             """);
     }
 

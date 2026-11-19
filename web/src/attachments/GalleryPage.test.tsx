@@ -580,6 +580,31 @@ describe("Gallery", () => {
   });
 });
 
+describe("Gallery of large files", () => {
+  it("shows a file over 15 MB by its kind's icon and never fetches it", async () => {
+    const large = {
+      damaged: 0,
+      root: {
+        name: "W",
+        path: "/W",
+        folders: [],
+        notes: [file("/W/small.png", at(28, 9), 2048), file("/W/huge.png", at(28, 8), 40_000_000), file("/W/scan.pdf", at(28, 7), 15_728_641)],
+      },
+    };
+    const fetch = api({ "GET /api/vaults/W/tree": () => json(200, large) });
+    renderApp("/gallery/W");
+    const tile = (name: string) => screen.getByRole("button", { name });
+
+    await waitFor(() => expect(tile("small.png").querySelector("img")).toHaveAttribute("src", "blob:file"));
+    await new Promise((r) => setTimeout(r, 30));
+    const fetched = fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname).filter((p) => p.startsWith("/api/files/"));
+    expect(fetched).toEqual(["/api/files/W/small.png"]);
+    expect(tile("huge.png").querySelector("img")).toBeNull();
+    expect(tile("scan.pdf").querySelector("canvas")).toBeNull();
+    expect(tile("huge.png").querySelector("svg")).not.toBeNull();
+  });
+});
+
 describe("Gallery for a member", () => {
   // W is shared with her to read; her own Home, which the drawer has open, she may write.
   const vaults = [

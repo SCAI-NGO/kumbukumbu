@@ -142,7 +142,8 @@ public static class Manual
            This needs a shell that can reach this server over the network. Without one, you can't upload; tell the user.
 
         To replace a file that exists, pass its version (sh: cat shows it); without version a path that exists is
-        refused. At most 15 MB. A name ending in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf must hold that format:
+        refused. Up to the server's bound per file (1 GiB unless its admin set another; the answer names it); a
+        file larger than 15 MB is kept, but not read (pdf, img and their kin say so). A name ending in .png, .jpg, .jpeg, .gif, .webp, .svg or .pdf must hold that format:
         Kumbu² checks it from the bytes, and a file that isn't what its name says is refused; any other file is kept
         as it is. The URL works once and expires after 10 minutes. If the PUT fails, call upload again for a new URL.
         The PUT's answer says where the file went and its version; reach it from a note with ![](/Folder/file.png)

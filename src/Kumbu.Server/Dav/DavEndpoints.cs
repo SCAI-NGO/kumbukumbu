@@ -23,7 +23,8 @@ public static class DavEndpoints
     {
         // The pattern matches /dav itself too, so the web app never answers there. The body may be as large as a parked
         // file and a little more, rather than Kestrel's default of 30,000,000 bytes: each method counts what it reads
-        // against its own limit (DavBody), and refuses beyond it with its own sentence.
+        // against its own limit (DavBody), and refuses beyond it with its own sentence. A file's PUT lifts it to the
+        // server's bound per file (files spec, decision 11), once its caller may upload.
         app.MapMethods(DavPaths.Prefix + "/{**path}", DavMethod.All, DispatchAsync)
             .WithMetadata(FileContentMetadata.Instance, new RequestSizeLimitAttribute(DavRules.ParkingCap + 64 * 1024))
             .ExcludeFromDescription();
@@ -118,6 +119,11 @@ public static class DavEndpoints
         catch (VaultBusyException e) when (!response.HasStarted)
         {
             ApiErrors.SetRetryAfter(http, ApiErrors.BusyRetryAfter);
+            await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
+        }
+        catch (TooManyUploadsException e) when (!response.HasStarted)
+        {
+            ApiErrors.SetRetryAfter(http, TooManyUploadsException.RetryAfter);
             await DavXml.WriteTextAsync(response, StatusCodes.Status503ServiceUnavailable, e.Message, ct);
         }
         // A write that would withdraw a publication, which a share never may (publish design §3.7): a MOVE of a published

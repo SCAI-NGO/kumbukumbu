@@ -779,7 +779,9 @@ public sealed partial class VaultCatalog
         return [.. blobs.Select(AsSealed)];
     }
 
-    private static SealedDocument AsSealed(BlobDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Blob = d.Blob, At = d.At };
+    /// <summary>A blob as a sealed document; a large file's head with its chunk count for the revision, which its
+    /// re-sealing checks (<see cref="UnlockedVault.Reseal"/>).</summary>
+    private static SealedDocument AsSealed(BlobDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Revision = d.Chunks ?? 0, Blob = d.Blob, At = d.At };
 
     private static SealedDocument AsSealed(PdfAnalysisDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Revision = d.Part, Blob = d.Blob, At = d.At };
 
@@ -895,6 +897,7 @@ public sealed partial class VaultCatalog
         {
             if (current.Content is { } text) ids.Texts[Convert.ToBase64String(old.TextId(text))] = next.TextId(text);
             if (current.Bytes is { } bytes) ids.Blobs[Convert.ToBase64String(old.BlobId(bytes))] = current.PathId;
+            if (current.Sha256 is { } sha) ids.Blobs[Convert.ToBase64String(old.LargeBlobId(sha))] = current.PathId;
             if (CryptographicOperations.FixedTimeEquals(current.PathId, doc.PathId)) return (true, null);
             log.LogWarning("Document {Id} of vault {VaultId} ({Collection}) is under the new key with another pid; its pid is corrected", doc.Id, doc.Vault, name);
             return (false, next.Reseal(name, doc, next, ids));
@@ -1045,13 +1048,30 @@ public sealed partial class VaultCatalog
         return await RekeyCollection(name).Find(f.Eq(d => d.Vault, doc.Vault) & f.Eq(d => d.PathId, pid) & f.Ne(d => d.Id, doc.Id)).FirstOrDefaultAsync(ct);
     }
 
-    /// <summary>Deletes a document if it is still the one read (as <see cref="WriteRekeyedAsync"/> tells it).</summary>
-    private Task DeleteRekeyedAsync(string name, SealedDocument doc, CancellationToken ct)
+    /// <summary>Deletes a document if it is still the one read (as <see cref="WriteRekeyedAsync"/> tells it); a large
+    /// file's head with its chunks, after it.</summary>
+    private async Task DeleteRekeyedAsync(string name, SealedDocument doc, CancellationToken ct)
     {
-        if (name == "blobs") return Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, doc.PathId), ct);
-        if (name == "pdf_analyses") return PdfParts.DeleteOneAsync(Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Blob, doc.Blob), ct);
+        if (name == "blobs")
+        {
+            var deleted = await Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, doc.PathId), ct);
+            if (deleted.DeletedCount > 0 && doc.Revision > 0)
+            {
+                var c = Builders<BlobChunkDocument>.Filter;
+                await BlobChunks.DeleteManyAsync(c.Eq(d => d.Vault, doc.Vault) & c.Eq(d => d.Head, doc.Id), ct);
+            }
+
+            return;
+        }
+
+        if (name == "pdf_analyses")
+        {
+            await PdfParts.DeleteOneAsync(Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Blob, doc.Blob), ct);
+            return;
+        }
+
         var f = Builders<SealedDocument>.Filter;
-        return RekeyCollection(name).DeleteOneAsync(f.Eq(d => d.Id, doc.Id) & f.Eq(d => d.Blob, doc.Blob), ct);
+        await RekeyCollection(name).DeleteOneAsync(f.Eq(d => d.Id, doc.Id) & f.Eq(d => d.Blob, doc.Blob), ct);
     }
 
     private static async Task AbortAsync(IClientSessionHandle session)

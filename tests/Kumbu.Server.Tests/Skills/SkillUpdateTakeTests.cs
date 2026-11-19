@@ -171,6 +171,29 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
         Assert.DoesNotContain("-Read the file.", hunks);
     }
 
+    /// <summary>A file larger than 15 MB in the copy (none of the ways in puts one there; written here past them, to the
+    /// store): Review would read it whole, so it refuses first, naming it, before a byte of any file is read.</summary>
+    [Fact]
+    public async Task Review_refuses_a_copy_that_holds_a_file_larger_than_15_MB()
+    {
+        await using var api = Api();
+        var alice = await InstalledAsync(api);
+        var store = new EncryptedNoteStore(api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(alice.User.Id, alice.UserKey));
+        var bytes = new byte[16 * 1024 * 1024];
+        var state = new Kumbu.Core.Attachments.AttachmentState(
+            "application/pdf", bytes.Length, null, null, Kumbu.Core.Notes.VersionToken.Of(bytes), await store.PutBlobAsync("Work", new MemoryStream(bytes), null, Ct));
+        var attachment = new Kumbu.Core.Attachments.StoredAttachment(
+            Kumbu.Core.Paths.VaultPath.TryParse(Folder + "/big.pdf", out var path) ? path : throw new InvalidOperationException(), state, 1, "alice", DateTime.UtcNow, [], null,
+            Ref: Kumbu.Core.Notes.WriterRef.Server);
+        Assert.Empty(await store.TryCommitAsync(new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { attachment } }, "alice", Kumbu.Core.Notes.WriterRef.Server, DateTime.UtcNow, Ct));
+
+        Publish(Newer, NextVersion());
+
+        using var review = await alice.GetAsync("/api/skills/updates/review?path=" + Uri.EscapeDataString(Folder));
+        Assert.Equal(HttpStatusCode.BadRequest, review.StatusCode);
+        Assert.Contains("/Work/_skills/pdf/big.pdf is larger than 15 MB", (await RestClient.JsonAsync(review))["error"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task Take_replaces_the_folder_and_keeps_history()
     {

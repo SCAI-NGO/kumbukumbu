@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, planUpload, toBatches, TOO_LARGE_FILE } from "./planUpload";
+import { boundSentence, DEFAULT_MAX_FILE_BYTES, MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, planUpload, toBatches } from "./planUpload";
 
 const hidden = (name: string) => `'${name}' starts with '.', which hides it in Obsidian`;
 
@@ -45,25 +45,41 @@ describe("planUpload", () => {
     ]);
   });
 
-  it("an image over 15 MB is offered for shrinking, a PDF over 15 MB is refused naming 15 MB", () => {
+  it("an image over 15 MB is offered for shrinking, any other file over 15 MB is sent up to the bound, an SVG is refused", () => {
     const { files, tooLarge, skipped } = planUpload([
       entry("fits.png", MAX_ATTACHMENT_BYTES),
       entry("photo.jpg", MAX_ATTACHMENT_BYTES + 1),
       entry("scan.pdf", MAX_ATTACHMENT_BYTES + 1),
       entry("map.svg", MAX_ATTACHMENT_BYTES + 1),
-      entry("data.xlsx", MAX_ATTACHMENT_BYTES + 1),
+      entry("data.xlsx", 40_000_000),
       entry("IMG_0002.HEIC", MAX_ATTACHMENT_BYTES + 1),
+      entry("film.mkv", DEFAULT_MAX_FILE_BYTES),
     ]);
     expect(MAX_ATTACHMENT_BYTES).toBe(15 * 1024 * 1024);
-    expect(files.map((f) => f.path)).toEqual(["fits.png"]);
+    expect(DEFAULT_MAX_FILE_BYTES).toBe(1024 ** 3);
+    expect(files.map((f) => f.path)).toEqual(["fits.png", "scan.pdf", "data.xlsx", "IMG_0002.HEIC", "film.mkv"]);
     expect(tooLarge.map((f) => f.path)).toEqual(["photo.jpg"]);
-    // An SVG is never shrunk or converted.
+    // An SVG is read whole by the server to be checked, so it has the 15 MB of old.
+    expect(skipped).toEqual([{ path: "map.svg", reason: "larger than 15 MB; an SVG image is read whole to be checked, so it can have at most 15 MB" }]);
+  });
+
+  it("refuses a file over the bound before it is sent, naming the bound as the server does", () => {
+    const { files, tooLarge, skipped } = planUpload([entry("film.mkv", DEFAULT_MAX_FILE_BYTES + 1), entry("big.bin", 21 * 1024 ** 2), entry("photo.jpg", 30 * 1024 ** 2)], 20 * 1024 ** 2);
+    expect(files).toEqual([]);
+    // A photo over the bound may still be shrunk under it.
+    expect(tooLarge.map((f) => f.path)).toEqual(["photo.jpg"]);
     expect(skipped).toEqual([
-      { path: "scan.pdf", reason: "larger than 15 MB, the limit for a file" },
-      { path: "map.svg", reason: "larger than 15 MB, the limit for a file" },
-      { path: "data.xlsx", reason: "larger than 15 MB, the limit for a file" },
-      { path: "IMG_0002.HEIC", reason: "larger than 15 MB, the limit for a file" },
+      { path: "film.mkv", reason: "A file can have at most 20 MiB." },
+      { path: "big.bin", reason: "A file can have at most 20 MiB." },
     ]);
+    expect(planUpload([entry("film.mkv", DEFAULT_MAX_FILE_BYTES + 1)]).skipped).toEqual([{ path: "film.mkv", reason: "A file can have at most 1 GiB." }]);
+  });
+
+  it("words the bound as the server's FileTooLargeException does", () => {
+    expect(boundSentence(1024 ** 3)).toBe("A file can have at most 1 GiB.");
+    expect(boundSentence(2 * 1024 ** 3)).toBe("A file can have at most 2 GiB.");
+    expect(boundSentence(20 * 1024 ** 2)).toBe("A file can have at most 20 MiB.");
+    expect(boundSentence(20_000_001)).toBe("A file can have at most 20,000,001 bytes.");
   });
 
   it("skips anything under .obsidian/ or .trash/ at any depth", () => {
@@ -112,9 +128,9 @@ describe("toBatches", () => {
   it("sends a script, in a skill folder or anywhere else", () =>
     expect(planUpload([entry("run.py", 9), entry("scripts/run.py", 9)]).files).toHaveLength(2));
 
-  it("skips a text file over 15 MB instead of offering to shrink it", () => {
+  it("sends a text file over 15 MB as it is instead of offering to shrink it", () => {
     const plan = planUpload([entry("run.py", MAX_ATTACHMENT_BYTES + 1)]);
     expect(plan.tooLarge).toEqual([]);
-    expect(plan.skipped).toEqual([{ path: "run.py", reason: TOO_LARGE_FILE }]);
+    expect(plan.files.map((f) => f.path)).toEqual(["run.py"]);
   });
 });

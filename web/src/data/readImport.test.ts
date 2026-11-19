@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { strToU8, zipSync, type Zippable } from "fflate";
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, TOO_LARGE, TOO_LARGE_FILE } from "../upload/planUpload";
+import { MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, TOO_LARGE } from "../upload/planUpload";
 import { ImportTooLarge, readImport, versionOf, versionOfBytes } from "./readImport";
 
 /** A ZIP of these entries; a name ending in "/" is a folder entry. */
@@ -149,7 +149,7 @@ describe("readImport", () => {
     expect(await versionOfBytes(pdf)).not.toBe(await versionOf("%PDF-1.7\r\nbody\r\n"));
     expect(await Promise.all(work.files.map(async (f) => Array.from(await f.read())))).toEqual([Array.from(png), Array.from(pdf), Array.from(strToU8("x"))]);
     expect(work.skipped).toEqual([
-      { path: "huge.jpg", reason: TOO_LARGE_FILE },
+      { path: "huge.jpg", reason: "larger than 15 MB, the limit for a file in an import; upload it on its own" },
       { path: ".obsidian/icon.png", reason: "Obsidian's settings or trash, not a note" },
     ]);
   });

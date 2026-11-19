@@ -227,15 +227,22 @@ internal sealed partial class SkillUpdateTaker(
     /// <summary>The new <c>SKILL.md</c> as Take writes it: with the new source and hash in its origin fields.</summary>
     private static string Manifest(byte[] bytes, SkillUpstream upstream) => SkillManifest.WithOrigin(Encoding.UTF8.GetString(bytes), upstream.Source, upstream.Hash);
 
-    /// <summary>The files of her copy now, by their path in the folder; folder markers aren't the skill's.</summary>
+    /// <summary>The files of her copy now, by their path in the folder; folder markers aren't the skill's. Each is read
+    /// whole, so a file larger than 15 MB (which none of the ways in puts into a skill's folder) is refused, by its
+    /// recorded size, before any is read.</summary>
     private async Task<Dictionary<string, Held>> HeldAsync(VaultPath folder, CancellationToken ct)
     {
         var prefix = folder.Value.Length + 1;
+        var attachments = (await StoreAttachments.UnderAsync(store, folder, ct)).Where(a => !FolderMarker.Is(a.Path)).ToList();
+        if (attachments.FirstOrDefault(a => AttachmentFormat.IsLarge(a.Current.Size)) is { } large)
+        {
+            throw ApiErrors.BadRequest($"{large.Path.Value} is {AttachmentFormat.NotRead}; move it out of the skill's folder to review the update.");
+        }
+
         var held = new Dictionary<string, Held>(StringComparer.Ordinal);
         foreach (var note in await store.ReadNotesUnderAsync(folder, ct)) held[note.Path.Value[prefix..]] = new Held(note.Path, VersionToken.Of(note.Content), note.Content, null);
-        foreach (var attachment in await StoreAttachments.UnderAsync(store, folder, ct))
+        foreach (var attachment in attachments)
         {
-            if (FolderMarker.Is(attachment.Path)) continue;
             var bytes = await StoreAttachments.ReadBytesAsync(store, attachment.Path, attachment.Current, ct)
                 ?? throw new ContentMissingException($"The content of {attachment.Path.Value} is missing.");
             held[attachment.Path.Value[prefix..]] = new Held(attachment.Path, attachment.Version, null, bytes);

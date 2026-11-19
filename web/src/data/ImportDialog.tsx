@@ -137,8 +137,8 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
           <>
             <p className="text-text-body">
               A ZIP such as Kumbu²'s export: each top-level folder becomes a vault. A ZIP of one Obsidian vault becomes one vault, named after the file.
-              History, trash and checkpoints aren't carried; only Markdown notes, PDFs and images (.pdf, .png, .jpg, .jpeg, .gif, .webp, .svg, up to 15 MB) are
-              imported.
+              History, trash and checkpoints aren't carried; Markdown notes and every other file up to 15 MB are imported (upload a larger file on its
+              own).
             </p>
             {view.error && <FormError>{view.error}</FormError>}
             <label

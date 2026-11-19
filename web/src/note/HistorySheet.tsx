@@ -246,7 +246,14 @@ function FileHistory({ path, onClose, onRestored = onClose }: Props) {
         <CompareFiles
           path={path}
           kind={fileKindOfEntry(chosen)}
-          sides={chosen.current ? [{ label: "This version", version: null }] : [{ label: "This version", version: chosen.version }, { label: "Now", version: null }]}
+          sides={
+            chosen.current
+              ? [{ label: "This version", version: null, size: Number(chosen.size) }]
+              : [
+                  { label: "This version", version: chosen.version, size: Number(chosen.size) },
+                  { label: "Now", version: null, size: history.data?.[0] ? Number(history.data[0].size) : undefined },
+                ]
+          }
         />
         <RestoreBar
           path={path}
@@ -278,7 +285,7 @@ function FileHistory({ path, onClose, onRestored = onClose }: Props) {
                 onClick={() => show(v)}
                 className="relative size-16 flex-none overflow-hidden rounded-[8px] bg-surface focus-visible:outline-2 focus-visible:outline-accent"
               >
-                <Thumbnail vault={vaultOf(path)} path={path} kind={fileKindOfEntry(v)} at={v.current ? {} : { version: v.version }} />
+                <Thumbnail vault={vaultOf(path)} path={path} kind={fileKindOfEntry(v)} at={v.current ? {} : { version: v.version }} size={Number(v.size)} />
               </button>
               <button
                 type="button"

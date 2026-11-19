@@ -65,6 +65,10 @@ public static class ImageHeader
         return (width, height);
     }
 
+    /// <summary>The dimensions as displayed, without the limits, or null where the header doesn't read: for a file larger
+    /// than 15 MB, which nothing decodes (files spec, decision 12), so the limits that guard the decoder don't apply.</summary>
+    public static (int Width, int Height)? Size(ReadOnlySpan<byte> head) => Parse(head) is var (width, height) && width > 0 && height > 0 ? (width, height) : null;
+
     private static (int Width, int Height)? Parse(ReadOnlySpan<byte> h)
     {
         if (h.StartsWith(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))

@@ -25,6 +25,13 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>15 MB per file.</summary>
     public const long MaxBytes = 15 * 1024 * 1024;
 
+    /// <summary>What a command says of a file it would read whole that is larger than <see cref="MaxBytes"/> (files spec,
+    /// decision 12), after the file's path or name: the sidecar and the pixel code hold whole files, sized for 15 MB.</summary>
+    public const string NotRead = "larger than 15 MB: Kumbu² keeps it, but doesn't read it";
+
+    /// <summary>Whether a file of <paramref name="size"/> bytes is kept in chunks, streamed, and never read whole.</summary>
+    public static bool IsLarge(long size) => size > MaxBytes;
+
     /// <summary>Why a file of no other format isn't kept inside a skill's folder, which holds what a skill runs and reads.</summary>
     public const string SkillFolderMessage =
         "a skill's folder keeps text files (scripts, data, LICENSE and the like), PDFs and images (PNG, JPEG, GIF, WebP, SVG) only; keep other files outside it";
@@ -114,9 +121,11 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <paramref name="target"/>; otherwise why not. Renaming doesn't change the bytes, so the new extension must name
     /// their format (.jpg and .jpeg are one); a file may take any name that names no format (spec 2026-11-18, decision 7).
     /// A skill's text file and a file are one kind of thing in two places: text leaves a skill's folder as a file, and a
-    /// file enters one under a text name only if it is text. <paramref name="skillsVault"/> as for <see cref="ForPath"/>.
+    /// file enters one under a text name only if it is text. An image or PDF of <paramref name="size"/> bytes over 15 MB
+    /// doesn't enter one, as it isn't uploaded there (<see cref="TooLargeToCheck"/>): copying the skill would read it
+    /// whole. <paramref name="skillsVault"/> as for <see cref="ForPath"/>.
     /// </summary>
-    public static string? RenameProblem(VaultPath source, string mediaType, VaultPath target, string? skillsVault = SkillPaths.SkillsVault)
+    public static string? RenameProblem(VaultPath source, string mediaType, long size, VaultPath target, string? skillsVault = SkillPaths.SkillsVault)
     {
         if (ForPath(source, skillsVault) is not { } format) return null;
         var kept = ForPath(target, skillsVault);
@@ -134,7 +143,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         }
 
         if (format == Marker) return kept == Marker ? null : $"{FolderMarker.Name} keeps its name";
-        if (kept?.MediaType == format.MediaType) return null;
+        if (kept?.MediaType == format.MediaType) return IsLarge(size) ? TooLargeToCheck(target, skillsVault) : null;
         if (format == Svg && kept == Text) return $"{source.Name} is an SVG image, and inside a skill's folder an .svg is a text file; upload it there instead";
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
@@ -173,6 +182,26 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
             ? null
             : $"{path.Name} isn't {format.Description} (its content doesn't match its name)";
     }
+
+    /// <summary>
+    /// <see cref="Problem"/> for a file larger than <see cref="MaxBytes"/>, from its first bytes only: a known format's
+    /// magic bytes, the place's rule. An SVG and a skill's text file are checked from their whole content, so they can't
+    /// be larger (<see cref="TooLargeToCheck"/>); nor can a folder's marker, which is empty.
+    /// </summary>
+    public static string? LargeProblem(VaultPath path, ReadOnlySpan<byte> head, string? skillsVault = SkillPaths.SkillsVault) =>
+        TooLargeToCheck(path, skillsVault) ?? Problem(path, head, skillsVault);
+
+    /// <summary>Why a file at <paramref name="path"/> can't be larger than <see cref="MaxBytes"/>: an SVG and a skill's text
+    /// file are read whole to be checked, a marker holds nothing, and what a skill's folder holds is read whole when the
+    /// skill is copied, shared or published; null for any other.</summary>
+    public static string? TooLargeToCheck(VaultPath path, string? skillsVault = SkillPaths.SkillsVault) => ForPath(path, skillsVault) switch
+    {
+        var f when f == Svg => $"{path.Name} is larger than 15 MB; an SVG image is read whole to be checked, so it can have at most 15 MB",
+        var f when f == Text => $"{path.Name} is larger than 15 MB; a skill's text file is read whole to be checked, so it can have at most 15 MB",
+        var f when f == Marker => $"A {FolderMarker.Name} keeps its folder and holds nothing; send it empty",
+        _ when SkillPaths.IsInSkillFolder(path, skillsVault) => $"{path.Name} is larger than 15 MB; a skill's folder keeps files up to 15 MB, as a skill is read whole when it is copied or shared",
+        _ => null,
+    };
 
     /// <summary>Null when the content is UTF-8 text without NUL bytes; otherwise why not.</summary>
     public static string? TextProblem(string name, ReadOnlySpan<byte> content)

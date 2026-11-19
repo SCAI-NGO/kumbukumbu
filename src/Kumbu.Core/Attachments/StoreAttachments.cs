@@ -21,14 +21,24 @@ public static class StoreAttachments
     public static async Task<IReadOnlyList<VaultPath>?> PathsUnderAsync(INoteReader notes, VaultPath folder, CancellationToken ct) =>
         notes is IAttachmentStore store ? [.. (await store.ListAttachmentsUnderAsync(folder, ct)).Select(a => a.Path)] : null;
 
-    /// <summary>The bytes of an attachment's state; null if the reader keeps none or the blob is gone.</summary>
+    /// <summary>The bytes of an attachment's state; null if the reader keeps none or the blob is gone. Up to 15 MB: a
+    /// larger file is refused (<see cref="TooLargeToReadException"/>), by its recorded size or, should that be wrong, once
+    /// more has been read, so no caller ever holds more than that.</summary>
     public static async Task<byte[]?> ReadBytesAsync(INoteReader notes, VaultPath path, AttachmentState state, CancellationToken ct)
     {
+        if (state.Size > AttachmentFormat.MaxBytes) throw new TooLargeToReadException();
         if (notes is not IAttachmentStore store || await store.OpenBlobAsync(path.Segments[0], state.BlobId, ct) is not { } stream) return null;
         await using (stream)
         {
             using var copy = new MemoryStream();
-            await stream.CopyToAsync(copy, ct);
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, ct)) > 0)
+            {
+                if (copy.Length + read > AttachmentFormat.MaxBytes) throw new TooLargeToReadException();
+                copy.Write(buffer, 0, read);
+            }
+
             return copy.ToArray();
         }
     }

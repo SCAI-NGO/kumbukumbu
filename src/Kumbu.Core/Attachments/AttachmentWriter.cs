@@ -11,6 +11,10 @@ namespace Kumbu.Core.Attachments;
 /// conflict (<see cref="ShellErrorKind.Conflict"/>), as it is now. A record carries no bytes.</summary>
 public sealed record WriteResult(ShellResult Result, StoredAttachment? Attachment = null);
 
+/// <summary>A file larger than 15 MB in the store, before its record names it (<see cref="AttachmentWriter.PutLargeAsync"/>):
+/// its blob id, its size, and the version token of its bytes.</summary>
+public sealed record LargeBlob(string BlobId, long Size, string Version);
+
 /// <summary>
 /// Every change to an attachment goes through here, with the rules of <see cref="NoteWriter"/>: validation, version
 /// tokens, history with the writer's changeset, and the trash. Changesets are shared with notes.
@@ -54,20 +58,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     public async Task<WriteResult> WriteAsync(
         string pathText, ReadOnlyMemory<byte> bytes, (int W, int H)? dimensions, string? version, CancellationToken ct)
     {
-        if (!TryParse(Upload, pathText, out var path, out var error)) return new WriteResult(error with { Kind = ShellErrorKind.Invalid });
-
-        if (caller.Refuse(Upload, path) is { } refused) return new WriteResult(refused with { Kind = ShellErrorKind.Refused });
-        if (FolderMarker.Is(path) && path.Segments.Count == 2)
-        {
-            return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: {FolderMarker.InVaultRoot}");
-        }
-
-        // A skill's folder by the vault's mark, not its name: the store refuses what it doesn't keep by the same rule.
-        var skillsVault = await notes.SkillsVaultAsync(ct);
-        if (AttachmentFormat.ForPath(path, skillsVault) is not { } format)
-        {
-            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, bytes.Span, skillsVault)}");
-        }
+        var (path, format, skillsVault, refusal) = await PlaceAsync(pathText, ct);
+        if (refusal is not null) return refusal;
+        if (format is null) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, bytes.Span, skillsVault)}");
 
         if (bytes.Length > AttachmentFormat.MaxBytes)
         {
@@ -77,6 +70,65 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (AttachmentFormat.Problem(path, bytes.Span, skillsVault) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
 
         var image = format == AttachmentFormat.Svg ? SvgImage.Size(bytes.Span) : format.Kind == AttachmentKind.Image ? dimensions : null;
+        return await CommitAsync(path, VersionToken.Of(bytes.Span), version, () => StateAsync(path, format, bytes, image, ct), ct);
+    }
+
+    /// <summary>
+    /// A file larger than 15 MB (files spec, decisions 9–12), streamed into the store before its record is written: the
+    /// first bytes, <paramref name="head"/>, then the rest of <paramref name="rest"/>, up to the server's bound
+    /// (<see cref="FileTooLargeException"/>). Its version token is the one <see cref="VersionToken"/> gives its bytes,
+    /// counted as they pass. Then <see cref="WriteLargeAsync"/> writes its record; a blob no record names is the sweep's.
+    /// </summary>
+    public async Task<LargeBlob> PutLargeAsync(string vault, ReadOnlyMemory<byte> head, Stream rest, long? declaredLength, CancellationToken ct)
+    {
+        // The head goes to the store as it is: copied, a body read to 15 MB to tell it from a small one would be held twice.
+        await using var read = new CountedStream(head, rest);
+        var id = await store.PutBlobAsync(vault, head, read, declaredLength, ct);
+        return new LargeBlob(id, read.Position, read.Version);
+    }
+
+    /// <summary>
+    /// The record of a file larger than 15 MB put with <see cref="PutLargeAsync"/>, with <see cref="WriteAsync"/>'s rules
+    /// and answers. What is known of its content is its <paramref name="head"/>: a known format's magic bytes are checked
+    /// there (<see cref="AttachmentFormat.LargeProblem"/>), and a file of no known format is kept as bytes, unread for
+    /// text (decision 3). <paramref name="dimensions"/> as for <see cref="WriteAsync"/>, read from the head.
+    /// </summary>
+    public async Task<WriteResult> WriteLargeAsync(
+        string pathText, LargeBlob blob, ReadOnlyMemory<byte> head, (int W, int H)? dimensions, string? version, CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(blob.Size, AttachmentFormat.MaxBytes);
+        var (path, format, skillsVault, refusal) = await PlaceAsync(pathText, ct);
+        if (refusal is not null) return refusal;
+        if (format is null) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, head.Span, skillsVault)}");
+        if (AttachmentFormat.LargeProblem(path, head.Span, skillsVault) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
+
+        var image = format.Kind == AttachmentKind.Image ? dimensions : null;
+        var state = new AttachmentState(
+            format == AttachmentFormat.File ? AttachmentFormat.OctetStream : format.MediaType, blob.Size, image?.W, image?.H, blob.Version, blob.BlobId);
+        return await CommitAsync(path, blob.Version, version, () => Task.FromResult(state), ct);
+    }
+
+    /// <summary>Where a write goes and what it may be: the path, its format (null for a note's name) and the caller's name
+    /// for the skills vault; or the refusal of a path that isn't one, the caller's right, a marker in a vault's root.</summary>
+    private async Task<(VaultPath Path, AttachmentFormat? Format, string? SkillsVault, WriteResult? Refusal)> PlaceAsync(string pathText, CancellationToken ct)
+    {
+        if (!TryParse(Upload, pathText, out var path, out var error)) return (path, null, null, new WriteResult(error with { Kind = ShellErrorKind.Invalid }));
+
+        if (caller.Refuse(Upload, path) is { } refused) return (path, null, null, new WriteResult(refused with { Kind = ShellErrorKind.Refused }));
+        if (FolderMarker.Is(path) && path.Segments.Count == 2)
+        {
+            return (path, null, null, Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: {FolderMarker.InVaultRoot}"));
+        }
+
+        // A skill's folder by the vault's mark, not its name: the store refuses what it doesn't keep by the same rule.
+        var skillsVault = await notes.SkillsVaultAsync(ct);
+        return (path, AttachmentFormat.ForPath(path, skillsVault), skillsVault, null);
+    }
+
+    /// <summary>The record of a checked write, created or overwritten: <paramref name="token"/> is the version its bytes
+    /// have, <paramref name="state"/> makes its state once it is known to be written (putting the bytes, for a small one).</summary>
+    private async Task<WriteResult> CommitAsync(VaultPath path, string token, string? version, Func<Task<AttachmentState>> state, CancellationToken ct)
+    {
         var existing = await store.GetAttachmentAsync(path, ct);
         if (version is null)
         {
@@ -89,7 +141,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             if (await notes.IsDamagedAsync(path, ct)) return Fail(ShellErrorKind.Conflict, Damage.Message(ToolOf(path), Shown(path)));
 
             var created = new StoredAttachment(
-                path, await StateAsync(path, format, bytes, image, ct), 1, caller.WriterIn(path.Segments[0]), Now, [], await ChangesetAsync(path, ct), caller.ReferenceIn(path.Segments[0]));
+                path, await state(), 1, caller.WriterIn(path.Segments[0]), Now, [], await ChangesetAsync(path, ct), caller.ReferenceIn(path.Segments[0]));
             var batch = new NoteBatch { AttachmentCreates = { created }, Changeset = created.Changeset };
             if ((await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0)
             {
@@ -103,9 +155,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
         if (existing is null) return await MissingAsync(path, ct);
         if (existing.Version != version) return Conflict(path, version, existing);
-        if (existing.Version == VersionToken.Of(bytes.Span)) return Written($"{Shown(path)} is unchanged", existing);
+        if (existing.Version == token) return Written($"{Shown(path)} is unchanged", existing);
 
-        var next = Next(existing, await StateAsync(path, format, bytes, image, ct), caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct));
+        var next = Next(existing, await state(), caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct));
         var replace = new NoteBatch { AttachmentReplaces = { (existing, next) }, Changeset = next.Changeset };
         if ((await notes.TryCommitAsync(replace, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0)
         {
@@ -113,6 +165,67 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         }
 
         return Written($"wrote {Shown(path)}", next);
+    }
+
+    /// <summary>The bytes of <see cref="PutLargeAsync"/>, read once: the head, hashed and counted from the start, then the
+    /// rest, hashed and counted as the store reads them.</summary>
+    private sealed class CountedStream : Stream
+    {
+        private readonly System.Security.Cryptography.IncrementalHash _hash =
+            System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+
+        private readonly Stream _rest;
+
+        private long _position;
+
+        public CountedStream(ReadOnlyMemory<byte> head, Stream rest)
+        {
+            _hash.AppendData(head.Span);
+            _position = head.Length;
+            _rest = rest;
+        }
+
+        /// <summary>The token of the bytes read, once they all are.</summary>
+        public string Version => Convert.ToHexStringLower(_hash.GetCurrentHash())[..VersionToken.Length];
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var n = await _rest.ReadAsync(buffer, cancellationToken);
+            _hash.AppendData(buffer.Span[..n]);
+            _position += n;
+            return n;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _hash.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     /// <summary>Moves an attachment to the trash, as <see cref="NoteWriter.RemoveAsync"/> does a note: with

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readDirectory, readEntry, type ZipEntry } from "./zipReader";
 import { MARKER } from "../api/paths";
-import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
+import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, OBSIDIAN, TOO_LARGE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
 export interface ImportNote {
@@ -32,6 +32,9 @@ export interface ImportVault {
 }
 
 const NOT_UTF8 = "not UTF-8 text";
+/** An import keeps the 15 MB of old per file: each file is unpacked into memory (twice, for its version and to send it),
+ * which for a file of the upload's bound (1 GiB) the browser can't be asked to hold. The upload streams larger ones. */
+export const TOO_LARGE_TO_IMPORT = "larger than 15 MB, the limit for a file in an import; upload it on its own";
 const SAME_PATH = "another file of this upload has the same path";
 // The ZIP's own compression methods: stored and deflate. Anything else the browser can't unpack.
 const UNREADABLE = "packed in a way this browser can't unpack (only stored and deflate are)";
@@ -109,7 +112,7 @@ const isSystem = (name: string) => /^__MACOSX(\/|$)/.test(name) || name.startsWi
  * The vaults of an import ZIP: each top-level folder is one, or, when any note, image or PDF sits at the ZIP's root (an
  * Obsidian vault zipped directly), the whole ZIP is one, named after the file. Which entries are unpacked is decided by
  * name and size alone, so other files are never inflated. The ZIP is read in slices, never whole (`zipReader`): its
- * directory, then one entry at a time. Images and PDFs (up to 15 MB) are unpacked one at a time for their version and
+ * directory, then one entry at a time. Files that aren't notes (up to 15 MB) are unpacked one at a time for their version and
  * dropped again; `read` unpacks one when it is sent. Notes that aren't UTF-8 are skipped, never imported with
  * replacement characters. Names come in NFC, as the server stores them (macOS writes NFD). Rejects when the bytes
  * aren't a ZIP, and with `ImportTooLarge` when the notes would unpack to more than `budget` bytes.
@@ -175,7 +178,7 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
       (seen.get(entry.name)! > 1 ? TWICE : null) ??
       reasonAgainst(relative) ??
       (note && entry.originalSize > MAX_NOTE_BYTES ? TOO_LARGE : null) ??
-      (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_FILE : null) ??
+      (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_TO_IMPORT : null) ??
       (entry.compression !== 0 && entry.compression !== 8 ? UNREADABLE : null);
     if (reason) {
       target.skipped.push({ path: relative, reason });
@@ -225,7 +228,7 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
   for (const [entry, { into, path }] of files) {
     const bytes = await readEntry(zip, entry);
     if (bytes.length > MAX_ATTACHMENT_BYTES) {
-      into.skipped.push({ path, reason: TOO_LARGE_FILE });
+      into.skipped.push({ path, reason: TOO_LARGE_TO_IMPORT });
       continue;
     }
     into.files.push({ path, size: bytes.length, version: await versionOfBytes(bytes), read: () => readEntry(zip, entry) });
