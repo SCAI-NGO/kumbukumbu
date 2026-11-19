@@ -173,7 +173,7 @@ test("smoke #6: a note moved to the trash is restored @smoke", async ({ page, se
   await row.scrollIntoViewIfNeeded();
   await row.getByRole("button", { name: "Restore Note" }).click();
   await expect(trash.getByRole("list", { name: "Restored notes" })).toContainText("Restored Note");
-  await trash.getByRole("button", { name: "Close" }).click();
+  await trash.getByRole("button", { name: "Close trash" }).click();
 
   tree = await openTree(page, testInfo);
   await expect(tree.getByRole("button", { name: "Note", exact: true })).toBeVisible();
