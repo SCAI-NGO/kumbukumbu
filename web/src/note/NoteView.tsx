@@ -254,16 +254,18 @@ export default function NoteView({ path, panel = false, dim = false }: { path: s
   }, [note.data?.content]);
 
   // A note opened in Read mode puts the screen reader at its title, unless something holds the focus already (the
-  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself.
+  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself. Only in the focused pane: the
+  // focus in a pane focuses it, and the other pane's note changing (its save held a navigation) mustn't.
   const titled = useRef<string | null>(null);
   const fileTitle = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (mode !== "read" || !note.data || titled.current === path) return;
     titled.current = path;
     if (document.activeElement && document.activeElement !== document.body) return;
+    if (useEditor.getState().focused !== side) return;
     // The note's own H1 carries `data-line`; an embedded note's H1 doesn't.
     (fileTitle.current ?? article.current?.querySelector<HTMLElement>("h1[data-line]"))?.focus({ preventScroll: true });
-  }, [mode, path, note.data]);
+  }, [mode, path, note.data, side]);
 
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();

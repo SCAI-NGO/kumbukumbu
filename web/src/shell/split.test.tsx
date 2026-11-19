@@ -550,3 +550,35 @@ describe("a pane closed under the writing one", () => {
     expect(right).toHaveValue("# Note b\n\nSee [[next b]].\n g");
   });
 });
+
+describe("the pane reached from the keyboard", () => {
+  it("is focused once the focus is in it: a link opened with Enter leads to its heading, and the tree opens there next", async () => {
+    const scrolled: Element[] = [];
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    try {
+      const { router, u } = await split(undefined, {
+        "GET /api/notes/Work/b.md": () => json(200, { path: "/Work/b.md", content: "# Note b\n\nSee [[c#Part]].\n", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+        "GET /api/links/Work/b.md": () => json(200, [{ line: 3, raw: "[[c#Part]]", target: "c", kind: "note", path: "/Work/c.md", candidates: [] }]),
+        "GET /api/notes/Work/c.md": () => json(200, { path: "/Work/c.md", content: "# Note c\n\nIntro.\n\n## Part\n\nThe part.\n", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      });
+      const link = await within(pane("right")).findByRole("link", { name: /^c/ });
+      for (let i = 0; i < 60 && document.activeElement !== link; i++) await u.tab();
+      expect(link).toHaveFocus();
+      expect(useEditor.getState().focused).toBe("right");
+      await u.keyboard("{Enter}");
+      const part = await within(pane("right")).findByRole("heading", { name: "Part" });
+      expect(at(router)).toBe("/notes/Work/a.md?beside=Work/c.md");
+      await waitFor(() => expect(scrolled.some((e) => e === part || e.contains(part) || part.contains(e))).toBe(true));
+
+      await u.click(await within(sidebar()).findByRole("button", { name: /^d/ }));
+      await within(pane("right")).findByRole("heading", { name: "Note d" });
+      expect(at(router)).toBe("/notes/Work/a.md?beside=Work/d.md");
+      expect(within(pane("left")).getByRole("heading", { name: "Note a" })).toBeInTheDocument();
+    } finally {
+      Element.prototype.scrollIntoView = scrollIntoView;
+    }
+  });
+});
