@@ -113,10 +113,10 @@ function keepCentred(article: HTMLElement, target: HTMLElement): () => void {
 }
 
 /**
- * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. Write mode: the
- * editor with its toolbar, in place of the dock.
+ * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it, unless the side
+ * panel beside it shows them (`panel`). Write mode: the editor with its toolbar, in place of the dock.
  */
-export default function NoteView({ path }: { path: string }) {
+export default function NoteView({ path, panel = false }: { path: string; panel?: boolean }) {
   const note = useNote(path);
   const mode = useEditor((s) => s.mode);
   const errorFor = useErrorTextFor(path);
@@ -339,6 +339,38 @@ export default function NoteView({ path }: { path: string }) {
     current?.scrollIntoView({ block: "center" });
   }, [noteTool, mode, finding?.query, finding?.current, note.data?.content]);
 
+  // Beside the side panel, where the reader is: the last heading above the top of the visible text, as they scroll.
+  const readAt = useCallback(() => {
+    if (!scroller.current || !article.current) return;
+    const top = scroller.current.getBoundingClientRect().top + 1;
+    let line = 0;
+    for (const h of article.current.querySelectorAll<HTMLElement>(headingLines)) {
+      if (h.getBoundingClientRect().top > top) break;
+      line = Number(h.dataset.line);
+    }
+    const { reading, setReading } = useEditor.getState();
+    if (reading?.path !== path || reading.line !== line) setReading({ path, line });
+  }, [path]);
+  useEffect(() => {
+    if (!panel || mode !== "read" || !note.data) return;
+    readAt();
+    // The text moves without a scroll too: late images, diagrams and maths, a resized window, the tree folding away.
+    if (!article.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(readAt);
+    observer.observe(article.current);
+    return () => observer.disconnect();
+  }, [panel, mode, note.data, readAt]);
+  // The outline is the panel's once it shows (a window widened past 1280 px): the sheet goes, and stays gone.
+  useEffect(() => {
+    if (panel && useEditor.getState().noteTool === "outline") useEditor.getState().setNoteTool(null);
+  }, [panel]);
+  useEffect(
+    () => () => {
+      if (useEditor.getState().reading?.path === path) useEditor.getState().setReading(null);
+    },
+    [path],
+  );
+
   const jump = (line: number) => {
     useEditor.getState().setNoteTool(null);
     [...(article.current?.querySelectorAll<HTMLElement>(headingLines) ?? [])].find((h) => Number(h.dataset.line) === line)?.scrollIntoView({ block: "start" });
@@ -551,7 +583,7 @@ export default function NoteView({ path }: { path: string }) {
           </p>
         )
       )}
-      <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      <div ref={scroller} {...dropTarget} onScroll={panel ? readAt : undefined} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {/* Nor one made from the path of a missing note whose vault the list doesn't name (a hidden one's bookmark). */}
         {!(note.data && startsWithH1(parts.body)) && !(unnamed && isNotFound(note.error)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
@@ -594,9 +626,9 @@ export default function NoteView({ path }: { path: string }) {
             />
           </article>
         )}
-        {note.data && <BacklinksList path={path} />}
+        {note.data && !panel && <BacklinksList path={path} />}
       </div>
-      {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
+      {noteTool === "outline" && note.data && !panel && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
       {noteTool === "addProperty" && note.data && mayWrite && <AddPropertyDialog onAdd={addProp} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );

@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useShallow } from "zustand/react/shallow";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -531,7 +532,10 @@ export default function TreeDrawer(props: {
   onFlag?: (path: string) => void;
 }) {
   const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate, onFlag } = props;
-  const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
+  // Picked: docked beside the editor, the tree isn't rendered again for every key typed (`live`).
+  const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor(
+    useShallow(({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay }) => ({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay })),
+  );
   const tree = useTree(activeVault);
   const navigate = useNavigate();
   const vaults = useVaults();

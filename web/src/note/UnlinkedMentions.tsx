@@ -29,8 +29,11 @@ function Marked({ text, marks }: Pick<Mention, "text" | "marks">) {
   return <>{parts}</>;
 }
 
-/** "Unlinked mentions": lines in other notes that name this one without linking it. Closed, and not asked, until opened. */
-export default function UnlinkedMentions({ path, linked = false }: { path: string; linked?: boolean }) {
+/**
+ * "Unlinked mentions": lines in other notes that name this one without linking it. Closed, and not asked, until opened.
+ * Right below "Linked from" (`linked`); otherwise set off from the note's text by a gap and a rule, or at the top of the side panel (`panel`).
+ */
+export default function UnlinkedMentions({ path, linked = false, panel = false }: { path: string; linked?: boolean; panel?: boolean }) {
   // Open for one path only: a change of note closes it again.
   const [openFor, setOpenFor] = useState<string | null>(null);
   const open = openFor === path;
@@ -40,7 +43,7 @@ export default function UnlinkedMentions({ path, linked = false }: { path: strin
   const Chevron = open ? ChevronDown : ChevronRight;
 
   return (
-    <section aria-label="Unlinked mentions" className={linked ? "mt-2" : "mt-[30px] border-t border-line pt-2"}>
+    <section aria-label="Unlinked mentions" className={linked ? "mt-2" : panel ? undefined : "mt-[30px] border-t border-line pt-2"}>
       <h2 className="font-mono text-[11px] font-medium tracking-[0.08em] text-dim uppercase">
         <button
           type="button"

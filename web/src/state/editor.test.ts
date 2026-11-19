@@ -64,6 +64,16 @@ describe("the store after a session that showed a vault", () => {
     });
   });
 
+  it("forgets the live text and the reading place of a note there, and keeps those of another vault", () => {
+    useEditor.setState({ live: { path: "/Work/a.md", text: "# Secret plan", caretLine: 1 }, reading: { path: "/Work/a.md", line: 3 } });
+    useEditor.getState().forgetShown(["Home"]);
+    expect(useEditor.getState()).toMatchObject({ live: { path: "/Work/a.md" }, reading: { path: "/Work/a.md" } });
+
+    useEditor.getState().forgetShown(["Work"]);
+
+    expect(useEditor.getState()).toMatchObject({ live: null, reading: null });
+  });
+
   it("changes nothing when no vault was shown", () => {
     useEditor.setState(kept);
 

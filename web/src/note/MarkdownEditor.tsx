@@ -23,6 +23,20 @@ function belowOnlyHeading(text: string): number | null {
   return heading && text.slice(heading[0].length).trim() === "" ? heading[0].length : null;
 }
 
+/** Where line `line` (1-based) of `text` starts; past its end, the text's end. */
+function lineStart(text: string, line: number) {
+  let at = 0;
+  for (let n = 1; n < line; n++) {
+    const next = text.indexOf("\n", at);
+    if (next < 0) return text.length;
+    at = next + 1;
+  }
+  return at;
+}
+
+/** The selection's moving end, where the caret stands. */
+const headOf = (area: HTMLTextAreaElement) => (area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd);
+
 /** What a line of the textarea's text wraps by; the rest of its look doesn't move the caret. */
 const MIRRORED = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight", "tabSize", "textIndent", "textTransform", "wordSpacing"] as const;
 
@@ -46,8 +60,7 @@ function caretOf(area: HTMLTextAreaElement) {
     whiteSpace: "pre-wrap",
     overflowWrap: "break-word",
   });
-  const head = area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd;
-  mirror.textContent = area.value.slice(0, head);
+  mirror.textContent = area.value.slice(0, headOf(area));
   const mark = document.createElement("span");
   mark.dataset.caret = "";
   mark.textContent = "\u200b";
@@ -160,6 +173,32 @@ export default function MarkdownEditor({
     useEditor.getState().setCaretAt(() => caretOf(textarea.current!));
     return () => useEditor.getState().setCaretAt(null);
   }, []);
+
+  // The text as it stands and the caret's line, for what follows the writing (the side panel's outline).
+  const publish = useCallback(() => {
+    const area = textarea.current;
+    if (!area) return;
+    const caretLine = (area.value.slice(0, headOf(area)).match(/\n/g)?.length ?? 0) + 1;
+    // It runs on every change and every selection event, often both for one keystroke: unchanged, nothing to tell.
+    const { live, setLive } = useEditor.getState();
+    if (live?.path === path && live.text === area.value && live.caretLine === caretLine) return;
+    setLive({ path, text: area.value, caretLine });
+  }, [path]);
+  useEffect(publish, [publish, value]);
+  useEffect(() => () => useEditor.getState().setLive(null), []);
+  useEffect(() => {
+    // The line at the textarea's top, as Read mode puts a heading jumped to at the page's.
+    useEditor.getState().setGoToLine((line) => {
+      const area = textarea.current;
+      if (!area) return;
+      const at = lineStart(area.value, line);
+      area.setSelectionRange(at, at);
+      area.focus({ preventScroll: true });
+      area.scrollTop += caretOf(area).top - area.getBoundingClientRect().top - area.clientTop - (parseFloat(getComputedStyle(area).paddingTop) || 0);
+      publish();
+    });
+    return () => useEditor.getState().setGoToLine(null);
+  }, [publish]);
 
   useEffect(() => {
     // Taken: from here on the editor holds the text.
@@ -314,7 +353,10 @@ export default function MarkdownEditor({
           change(e.target.value);
           completion.follow();
         }}
-        onSelect={completion.follow}
+        onSelect={() => {
+          completion.follow();
+          publish();
+        }}
         onKeyDown={completion.onKeyDown}
         {...completion.textareaProps}
         onBlur={() => saveNow()}

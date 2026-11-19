@@ -15,6 +15,8 @@ export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
 export type Unsaved = () => { text: string; version: string } | null;
 /** The caret's place on screen: its left, and the top and bottom of its line. */
 export type CaretAt = () => { left: number; top: number; bottom: number };
+/** The open editor's text as it stands (unsaved included) and the line its caret is on, 1-based. */
+export type Live = { path: string; text: string; caretLine: number };
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -60,6 +62,15 @@ interface EditorState {
   unsaved: Unsaved | null;
   /** Set by the open editor: where its caret stands on screen, for the note's menu from the keyboard. */
   caretAt: CaretAt | null;
+  /**
+   * Set by the open editor as the text or the caret moves, null without one: what follows the text being written (the
+   * side panel's outline, the live preview).
+   */
+  live: Live | null;
+  /** Set by the open editor: puts the caret at the start of a line (1-based), the focus in the editor, the line in view. */
+  goToLine: ((line: number) => void) | null;
+  /** Where the reader of the note at `path` is in Read mode: the line of the last heading above the top of the visible text, 0 above the first. */
+  reading: { path: string; line: number } | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
@@ -80,6 +91,9 @@ interface EditorState {
   setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: BeforeRead | null, unsaved?: Unsaved | null): void;
   setCaretAt(caretAt: CaretAt | null): void;
+  setLive(live: Live | null): void;
+  setGoToLine(goToLine: ((line: number) => void) | null): void;
+  setReading(reading: { path: string; line: number } | null): void;
   setDraft(draft: Draft | null): void;
   /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
   refused: { path: string; code: RefusalCode; at: number } | null;
@@ -137,6 +151,9 @@ const initial = {
   beforeRead: null,
   unsaved: null as Unsaved | null,
   caretAt: null as CaretAt | null,
+  live: null as Live | null,
+  goToLine: null as ((line: number) => void) | null,
+  reading: null as { path: string; line: number } | null,
   draft: null,
   refused: null as { path: string; code: RefusalCode; at: number } | null,
   scrollTarget: null,
@@ -185,6 +202,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
   },
   setBeforeRead: (beforeRead, unsaved = null) => set({ beforeRead, unsaved }),
   setCaretAt: (caretAt) => set({ caretAt }),
+  setLive: (live) => set({ live }),
+  setGoToLine: (goToLine) => set({ goToLine }),
+  setReading: (reading) => set({ reading }),
   setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
@@ -245,6 +265,8 @@ function forgotten(s: EditorState, vault: string, keepDraft: boolean): Partial<E
     selectedFolder: outside(s.selectedFolder) ? s.selectedFolder : null,
     refused: outside(s.refused?.path) ? s.refused : null,
     scrollTarget: outside(s.scrollTarget?.path) ? s.scrollTarget : null,
+    live: outside(s.live?.path) ? s.live : null,
+    reading: outside(s.reading?.path) ? s.reading : null,
     activeVault: s.activeVault === vault ? null : s.activeVault,
     expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
   };

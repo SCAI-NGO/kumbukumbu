@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ListTree, PanelLeft, Star } from "lucide-react";
+import { ListTree, PanelLeft, PanelRight, Star } from "lucide-react";
 import { crumbOf, titleOf } from "../api/paths";
+import { sidePanelId } from "../note/SidePanel";
 import { isMac } from "../palette/usePaletteShortcut";
 import { useEditor } from "../state/editor";
 import ModeToggle from "./ModeToggle";
@@ -8,21 +9,26 @@ import { sidebarId } from "./TreeDrawer";
 
 /** The id of the docked sidebar's toggle, which takes the focus when the shortcut hides the tree it was in. */
 export const sidebarToggleId = "file-tree-toggle";
+/** The side panel's toggle, likewise. */
+export const sidePanelToggleId = "side-panel-toggle";
 
 /**
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), the palette's star, its outline, and Read / Write.
  * Write only where the caller may change the note (`writable`); `refusal` says why not. With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
+ * With `sidePanel` (wide windows, a note open), the panel's toggle comes last in the bar, and the outline is in the panel instead of the top bar.
  */
 export default function TopBar({
   path,
   writable,
   refusal,
   sidebar,
+  sidePanel = null,
 }: {
   path: string | null;
   writable: boolean;
   refusal?: string | null;
   sidebar: { expanded: boolean; toggle(): void } | null;
+  sidePanel?: { expanded: boolean; toggle(): void } | null;
 }) {
   const openTree = () => useEditor.getState().setOverlay("tree");
   const mode = useEditor((s) => s.mode);
@@ -71,7 +77,7 @@ export default function TopBar({
       >
         <Star size={21} strokeWidth={1.8} aria-hidden />
       </button>
-      {path && mode === "read" && (
+      {path && mode === "read" && !sidePanel && (
         <button
           type="button"
           aria-label="Outline"
@@ -83,6 +89,21 @@ export default function TopBar({
         </button>
       )}
       {path && <ModeToggle writable={writable} refusal={refusal} />}
+      {sidePanel && (
+        <button
+          id={sidePanelToggleId}
+          type="button"
+          aria-label="Side panel"
+          aria-expanded={sidePanel.expanded}
+          aria-controls={sidePanelId}
+          aria-keyshortcuts={"Control+Shift+\\ Meta+Shift+\\"}
+          title={`${sidePanel.expanded ? "Hide" : "Show"} the side panel (Ctrl+Shift+\\ or ⌘⇧\\)`}
+          onClick={sidePanel.toggle}
+          className={buttonClass}
+        >
+          <PanelRight size={22} strokeWidth={1.8} aria-hidden />
+        </button>
+      )}
     </header>
   );
 }
