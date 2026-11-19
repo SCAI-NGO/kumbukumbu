@@ -9,7 +9,7 @@ import { e2eDir, fixturesDir, storageState, type User } from "./env";
 import { limitWindow, newSession } from "./session";
 
 /** Where each tag's screenshots go (spec §5): committed, so kept small. */
-export const shotsDir = join(e2eDir, "..", "..", "docs", "superpowers", "overnighter", "2026-11-14-ui-tests-0.5.0");
+export const shotsDir = join(e2eDir, "..", "..", "docs", "superpowers", "overnighter", "2026-11-19-tests-0-6-0");
 
 /** The phone projects (`phone`, `serial-phone`): for `test.fail(onPhone(testInfo), "F-NN …")`. */
 export const onPhone = (testInfo: TestInfo) => testInfo.project.name.endsWith("phone");
@@ -126,7 +126,7 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
   findingShot: [
     async ({ page }, use, testInfo) => {
       await use();
-      const finding = testInfo.annotations.find((a) => a.type === "finding")?.description?.match(/^F-\d+/)?.[0];
+      const finding = testInfo.annotations.find((a) => a.type === "finding")?.description?.match(/^F-(\d+|xx)/)?.[0];
       if (!finding || testInfo.expectedStatus !== "failed" || testInfo.status !== "failed") return;
       if (!testInfo.errors.some((e) => (e.message ?? "").includes(`${finding}:`))) {
         testInfo.expectedStatus = "passed";

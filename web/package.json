@@ -13,6 +13,7 @@
     "test:diagrams": "playwright test -c e2e/diagrams/playwright.config.ts",
     "e2e": "e2e/stack/run.sh",
     "e2e:0.5.0": "e2e/stack/run.sh --grep \"@smoke|@calendar|@flags|@explorer|@recent|@mermaid|@embeds|@aliases|@ailink|@blockrefs|@mentions|@photo|@properties\"",
+    "e2e:0.6.0": "e2e/stack/run.sh --grep \"@smoke|@memory|@graph|@svg|@deeplinks|@upload|@publish|@blame|@files|@readers|@shell|@palette|@windows|@filters|@console|@workspace|@calendar\"",
     "gen:api": "openapi-typescript ${KUMBU_OPENAPI_URL:-http://localhost:8083/api/openapi.json} -o src/api/schema.d.ts",
     "icons": "node scripts/icons.mjs"
   },

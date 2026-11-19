@@ -7,6 +7,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Api, seed } from "./support/api";
+import { reservePassword } from "./support/session";
 import { nowTime } from "./support/time";
 import { authDir, fixturesDir, stackDir, storageState, usernames, writeSecrets, type Secrets, type User } from "./support/env";
 
@@ -114,6 +115,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   await seed(write, fixtureFiles("Work"));
 
   // Home becomes discreet the app's way: a PIN, discreet mode, the mark, then hidden.
+  await reservePassword("alice");
   expect((await post("/api/account/discreet/pin", { password: secrets.passwords.alice, pin: secrets.pin })).ok(), "set the PIN").toBe(true);
   expect((await post("/api/account/discreet/reveal", { pin: secrets.pin })).ok(), "reveal").toBe(true);
   expect((await put("/api/account/discreet/vaults/Home", { discreet: true })).ok(), "mark Home discreet").toBe(true);
@@ -122,6 +124,7 @@ setup("Alice and Bob join, with Home (discreet) and Work", async ({ browser, bas
   // Bob: an account invitation, then a read-only invitation to Work, each through its link.
   const invitation = await (await post("/api/admin/invitations", { role: "user", expiresInDays: 1 })).json();
   await write.confirmPassword();
+  await reservePassword("alice");
   const share = await write.json<{ link: string }>("POST", "/api/vaults/Work/invitations", {
     password: secrets.passwords.alice,
     label: "Bob",
