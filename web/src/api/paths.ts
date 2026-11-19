@@ -7,6 +7,9 @@ import type { VaultView } from "./notes";
 /** The app's URL of a note, each segment encoded: vault and note names are content, not URL syntax. */
 export const noteUrl = (path: string) => `/notes/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
 
+/** The app's URL of a note's Who wrote what window. */
+export const blameUrl = (path: string) => `/blame/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
+
 /** The note path of `/notes/:vault/*`, from React Router's (decoded) params. */
 export const pathFromRoute = (vault: string, rest: string) => `/${vault}/${rest}`;
 

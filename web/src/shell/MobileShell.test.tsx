@@ -740,7 +740,7 @@ describe("the shell", () => {
     await screen.findByRole("heading", { name: "garden" });
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
-    expect(items.slice(items.indexOf("History") + 1, items.indexOf("History") + 4)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+    expect(items.slice(items.indexOf("History") + 1, items.indexOf("History") + 5)).toEqual(["Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
     expect(writeText).toHaveBeenCalledWith("[[garden]]");
@@ -985,7 +985,7 @@ describe("vaults shared with the user", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     // Copying writes nothing: the three copy items stay.
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Copy file path", "Copy link", "Copy markdown link"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "New" }));
     for (const item of screen.getAllByRole("menuitem")) expect(item).toBeDisabled();
@@ -1009,7 +1009,7 @@ describe("vaults shared with the user", () => {
     expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
     expect(screen.getByText(sentence)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Copy file path", "Copy link", "Copy markdown link"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
 
     await openDrawer();
