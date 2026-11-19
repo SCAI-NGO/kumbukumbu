@@ -67,7 +67,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var content = await notes.ReadAsync(path, ct);
-        if (content is null && fragment is null && (await notes.ListNotesUnderAsync(path, ct)).Count > 0)
+        if (content is null && fragment is null && await IsFolderAsync(path, ct))
         {
             return version is null
                 ? await CheckDirectoryAsync(vault, path, ct)
@@ -115,6 +115,13 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             },
         };
     }
+
+    /// <summary>A folder exists when notes are below it, when it is a vault, or when attachments or a folder marker
+    /// are below it (as mkdir keeps an empty one); a path that is none of these stays "No such file or directory".</summary>
+    private async Task<bool> IsFolderAsync(VaultPath path, CancellationToken ct) =>
+        (await notes.ListNotesUnderAsync(path, ct)).Count > 0
+        || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
+        || (await StoreAttachments.UnderAsync(notes, path, ct)).Count > 0;
 
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
     {
