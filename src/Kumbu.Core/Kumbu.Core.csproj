@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="AngleSharp" Version="1.10.5" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
