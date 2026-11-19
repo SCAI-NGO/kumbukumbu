@@ -11,8 +11,8 @@
 //  3. `blame <note>#Section` limits it to that section (§6) → "blame by run and by line …"
 //  4. `blame <folder>`: per note, lines per writer, then `total: …` per writer and the number of notes (§6)
 //     → "blame of a folder …"
-//  5. mv's link rewrite gives the rewritten lines to the mover as "(mv)"; the moved note itself keeps its record
-//     (§5.4 table, §12) → "a renamed note's rewritten links …"
+//  5. mv's link rewrite gives the rewritten lines to the mover as "(mv)", in a note linking to the moved one and in
+//     the moved note itself; a plain move keeps the record (§5.4 table, §12) → "a renamed note's rewritten links …"
 //  6. `replace` gives the changed lines to "label (replace)", a restore of a version to "label (restore)", only
 //     those lines (§5.4) → "replace and restore give only the lines they change …"
 //  7. Whoever reads the note's history reads its blame, with the labels the history shows: to Bob (a read-only
@@ -20,13 +20,25 @@
 //     anti-goal) → "Bob, a member, sees blame as he sees history …"
 //  8. Refusals as `history`: an attachment ("only notes have lines", and /api/blame 400), a missing path, a hidden
 //     discreet vault ("No such file or directory", /api/blame 404) (§6, §7.2, §8) → "blame refuses what history refuses …"
-//  9. Its help's first line "who wrote what", and a line in the sh tool's description (§6) → "blame refuses …"
+//  9. Its help as §6 prints it, the usage line and then "Who wrote what: …"; its summary in `help` and its line in
+//     the sh tool's description (§6) → "blame refuses …"
+// 10. A run's time is its newest line's, `--lines` each line's own, as `history` times the writes (§6, §13)
+//     → "blame by run and by line …"
+// 11. `edit` (MCP) gives the changed line to the caller; `rm`, then `restore` from the trash, changes no line's
+//     writer: the record comes back with the note, though history's current row is the restorer's (§5.4)
+//     → "an edit takes its line; rm and restore from the trash keep the record …"
+// 12. The output limit (PR #253): runs and lines are fitted to it, with the hint to blame a section in place of
+//     the rest, and the counts line always kept → "a note too long for one call …"
 // Left out: notes from before the record ("earlier than", the sentence): not reachable on a fresh stack, every note is
 // written by 0.6.0; a dropped record (4,096 changes of writer) needs thousands of writes; the 200-note cap of a folder
 // needs 201 notes; `cp` is not a command of the agent's shell ("cat the note, then create the copy with the write
 // tool"), so a copy is a plain create; a member without history rights doesn't exist (decision 7: whoever reads the
 // note reads its history); two members shown alike ("another user") needs a second member account; the calendar,
-// board, archive and checkpoint paths are covered by the xUnit tests the spec names (§10).
+// board, archive and checkpoint paths are covered by the xUnit tests the spec names (§10); a WebDAV PUT ("label
+// (dav)"): the stack runs on plain HTTP and /dav answers 403 "WebDAV needs HTTPS"; an Obsidian device's write needs
+// the plugin's sync client and a device key, which the suite has no client for (xUnit covers both, §10); Duplicate in
+// the web app: e2e/blame/blame.spec.ts "blame #4"; a damaged note's refusal: no call from outside can damage a sealed
+// note.
 import type { Api } from "../support/api";
 import { expect, test } from "./fixtures";
 
@@ -55,6 +67,15 @@ async function currentWriter(run: (command: string) => Promise<{ text: string }>
   const first = (await run(`history "${path}"`)).text.split("\n")[0];
   expect(first, "history's first line is the current version").toMatch(/\(current\)$/);
   return first.split(/ {2,}/)[2];
+}
+
+/** `history`'s time of each writer's version: the newest write of each, as blame must time its lines. */
+async function historyTimes(run: (command: string) => Promise<{ text: string }>, path: string) {
+  const versions = (await run(`history "${path}"`)).text.split("\n\nversion of ")[0].split("\n").map((l) => l.split(/ {2,}/));
+  const times = new Map<string, string>();
+  // Newest first: the first row of each writer is her newest write.
+  for (const [, at, writer] of versions) if (!times.has(writer)) times.set(writer, at);
+  return times;
 }
 
 const write = async (mcp: { call: (t: string, a: Record<string, unknown>) => Promise<{ text: string; isError: boolean }> }, path: string, version: string, content: string) => {
@@ -108,6 +129,12 @@ test("blame by run and by line: each line's last writer, the counts and the vers
     ["9-12", agent],
   ]);
   expect(counts(blamed.text)).toBe(`alice 4 lines, ${agent} 3 (blank lines not counted)`);
+  // Each run's time is its writer's write, as history times it.
+  const times = await historyTimes((c) => mcp.sh(c), path);
+  expect([...times.keys()]).toEqual([agent, "alice"]);
+  expect(rows(blamed.text).slice(0, -1).map(([range, , at]) => [range, at])).toEqual(
+    rows(blamed.text).slice(0, -1).map(([range, writer]) => [range, times.get(writer)]),
+  );
   // The version as `cat` carries it, for an edit on it.
   expect(blamed.text).toContain(`\n\nversion of ${path}: ${version}\n`);
 
@@ -125,7 +152,7 @@ test("blame by run and by line: each line's last writer, the counts and the vers
     const writer = i === 3 || i >= 8 ? agent : "alice";
     const match = line.match(/^(\d+) +(.+?) +(\d{4}-\d\d-\d\d \d\d:\d\d UTC)  (.*)$/);
     expect(match, `line ${i + 1}: ${line}`).not.toBeNull();
-    expect([match![1], match![2], match![4]]).toEqual([`${i + 1}`, writer, text[i]]);
+    expect([match![1], match![2], match![3], match![4]]).toEqual([`${i + 1}`, writer, times.get(writer), text[i]]);
   });
 
   // A section: its own lines only, their numbers as in the note.
@@ -133,9 +160,12 @@ test("blame by run and by line: each line's last writer, the counts and the vers
   expect(section.isError, section.text).toBe(false);
   expect(runs(section.text)).toEqual([["10-12", agent]]);
   expect(counts(section.text)).toBe(`${agent} 2 lines (blank lines not counted)`);
-  // As `cat` cuts a section: without its trailing blank lines.
+  // From its heading to the line before the next one; whether the blank line 9 is in it the spec doesn't say.
   const results = await mcp.sh(`blame --lines "${path}#Results"`);
-  expect(results.text.split("\n\nversion of ")[0].split("\n").map((l) => l.split(/ {2,}/)[0])).toEqual(["6", "7", "8"]);
+  const numbers = results.text.split("\n\nversion of ")[0].split("\n").map((l) => Number(l.split(/ {2,}/)[0]));
+  expect(numbers[0]).toBe(6);
+  expect(numbers).toContain(8);
+  expect(Math.max(...numbers)).toBeLessThan(10);
 });
 
 test("blame of a folder: per note, lines per writer, then the total @blame", async ({ mcp, folder, aliceApi }) => {
@@ -159,7 +189,7 @@ test("blame of a folder: per note, lines per writer, then the total @blame", asy
   expect(rows(sub.text).at(-1)).toEqual([`total: alice 2 lines in 1 note, ${agent} 1 in 1`]);
 });
 
-test("a renamed note's rewritten links go to the renamer as (mv), the moved note keeps its writer @blame", async ({ mcp, folder, aliceApi }) => {
+test("a renamed note's rewritten links go to the renamer as (mv), in a linking note and in the moved note itself @blame", async ({ mcp, folder, aliceApi }) => {
   // Names of the test's own: wiki links resolve vault-wide.
   const target = `Target ${folder}`;
   const linking = `/Work/${folder}/Linking.md`;
@@ -182,6 +212,80 @@ test("a renamed note's rewritten links go to the renamer as (mv), the moved note
   // A plain move changes no line's writer.
   const target2 = await mcp.sh(`blame "/Work/${folder}/${target} 2.md"`);
   expect(runs(target2.text)).toEqual([["1", "alice"]]);
+
+  // The moved note's own relative link, rewritten as it goes into a subfolder: that line is the mover's, the rest stays.
+  // A relative link that a name alone wouldn't settle: a second Other.md in the folder makes the move rewrite it.
+  const mover = `/Work/${folder}/Mover.md`;
+  await aliceApi.putNote(`/Work/${folder}/Other.md`, "# Other\n");
+  await aliceApi.putNote(`/Work/${folder}/Elsewhere/Other.md`, "# Other, elsewhere\n");
+  await aliceApi.putNote(mover, "# Mover\n\nsee [other](Other.md)\nplain\n");
+  const into = await mcp.sh(`mv "${mover}" "/Work/${folder}/Sub/Mover.md"`);
+  expect(into.isError, into.text).toBe(false);
+  const own = await mcp.sh(`blame --lines "/Work/${folder}/Sub/Mover.md"`);
+  const ownLines = own.text.split("\n\nversion of ")[0].split("\n").map((l) => l.split(/ {2,}/));
+  expect(ownLines[2][3], "the link now leads from the subfolder").toBe(`see [other](/${folder}/Other.md)`);
+  expect(ownLines.map((l) => l.slice(0, 2))).toEqual([
+    ["1", "alice"],
+    ["2", "alice"],
+    ["3", agent],
+    ["4", "alice"],
+  ]);
+});
+
+test("an edit takes its line; rm and restore from the trash keep the record @blame", async ({ mcp, folder, aliceApi }) => {
+  const path = `/Work/${folder}/Notes.md`;
+  const created = await aliceApi.putNote(path, "# Notes\n\nfirst\nsecond\n");
+  const edited = await mcp.call("edit", { path, version: created.version, old_text: "second", new_text: "second, edited" });
+  expect(edited.isError, edited.text).toBe(false);
+  const agent = await currentWriter((c) => mcp.sh(c), path);
+  const before = await mcp.sh(`blame --lines "${path}"`);
+  expect(rows(before.text).map((r) => r.slice(0, 2))).toEqual([
+    ["1", "alice"],
+    ["2", "alice"],
+    ["3", "alice"],
+    ["4", agent],
+  ]);
+
+  // Alice removes it in the web app and her agent brings it back: the record went into the trash with it.
+  await aliceApi.deleteNote(path);
+  const restored = await mcp.sh(`restore "${path}"`);
+  expect(restored.isError, restored.text).toBe(false);
+  expect(restored.text).toContain(`restored ${path} from the trash`);
+  const history = (await mcp.sh(`history "${path}"`)).text.split("\n")[0];
+  expect(history, "history's current row is the restore").toMatch(/ {2}\(current\) {2}\(restored\)$/);
+  const after = await mcp.sh(`blame --lines "${path}"`);
+  expect(rows(after.text)).toEqual(rows(before.text));
+});
+
+test("a note too long for one call: runs and lines fitted to the output limit, the counts kept @blame", async ({ mcp, folder, aliceApi }) => {
+  // 600 lines, every other one rewritten by the agent: 600 runs, more than the shell's 24,000 characters hold.
+  const path = `/Work/${folder}/Long.md`;
+  const lines = Array.from({ length: 600 }, (_, i) => `line ${i + 1}`);
+  const created = await aliceApi.putNote(path, `${lines.join("\n")}\n`);
+  await write(mcp, path, created.version, `${lines.map((l, i) => (i % 2 === 0 ? l.toUpperCase() : l)).join("\n")}\n`);
+  const agent = await currentWriter((c) => mcp.sh(c), path);
+  const outlineHint = `('outline ${path}' lists them)]`;
+  const limit = 24_000;
+
+  const blamed = await mcp.sh(`blame "${path}"`);
+  expect(blamed.isError, blamed.text).toBe(false);
+  const body = blamed.text.split("\n\nversion of ")[0];
+  expect(body.length).toBeLessThanOrEqual(limit);
+  const shown = body.split("\n");
+  expect(shown.slice(0, 2).map((l) => l.split(/ {2,}/).slice(0, 2))).toEqual([
+    ["1", agent],
+    ["2", "alice"],
+  ]);
+  expect(shown.at(-2)).toBe(`[too many runs for one call; blame a section: blame "${path}#Section" ${outlineHint}`);
+  expect(shown.at(-1), "the counts survive the limit").toBe(`${agent} 300 lines, alice 300 (blank lines not counted)`);
+
+  const byLine = await mcp.sh(`blame --lines "${path}"`);
+  expect(byLine.isError, byLine.text).toBe(false);
+  const lineBody = byLine.text.split("\n\nversion of ")[0];
+  expect(lineBody.length).toBeLessThanOrEqual(limit);
+  const lineRows = lineBody.split("\n");
+  expect(lineRows[0]).toMatch(new RegExp(`^1 +${agent} +\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC  LINE 1$`));
+  expect(lineRows.at(-1)).toBe(`[too long for one call; blame a section: blame --lines "${path}#Section" ${outlineHint}`);
 });
 
 test("replace and restore give only the lines they change to (replace) and (restore) @blame", async ({ mcp, folder, aliceApi }) => {
@@ -255,7 +359,7 @@ test("blame refuses what history refuses: an attachment, a missing note, a hidde
   expect((await aliceApi.send("GET", "/api/blame/Home/Zahnarzt.md")).status()).toBe(404);
 
   // Its help and the sh tool's description.
-  expect((await mcp.sh("help blame")).text.split("\n")[0]).toBe("blame [--lines] <path>");
+  expect((await mcp.sh("help blame")).text.startsWith("blame [--lines] <path>\n  Who wrote what:"), "help blame starts as §6 prints it").toBe(true);
   expect((await mcp.sh("help")).text).toMatch(/^ {2}blame \[--lines\] <path>\[#section\] +who wrote what: the writer of each run of lines of a note; of a folder: lines per writer$/m);
   const { message } = await mcp.raw("tools/list", {});
   const sh = (message?.result as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "sh");
