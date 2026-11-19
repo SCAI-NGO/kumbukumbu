@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { errorText } from "../api/error-text";
 import {
   BundleChangedError,
@@ -29,6 +29,9 @@ const notesText = (n: number) => (n === 1 ? "1 note" : `${n} notes`);
 // The Take back in button: the secondary button, 48 px tall as a touch target in a list.
 const takeBackClass = secondaryButtonClass.replace("min-h-11", "min-h-12");
 
+/** The control that takes the focus once the new list shows it: the note's box, or its Take back in button. */
+type Focus = { path: string; on: "box" | "back" };
+
 const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 
 /**
@@ -40,14 +43,30 @@ function BundleList({
   preview,
   start,
   without,
+  focus,
   onToggle,
+  onFocused,
 }: {
   preview: PublicationPreviewView;
   start: string;
   without: readonly string[];
-  onToggle(path: string): void;
+  focus: Focus | null;
+  onToggle(path: string, then: Focus["on"]): void;
+  onFocused(): void;
 }) {
   const id = useId();
+  // The list unmounts while the next preview loads, and the focused control with it: the focus goes to what the note
+  // became, if the new list shows it.
+  const controls = useRef(new Map<string, HTMLElement>());
+  const control = (key: string) => (e: HTMLElement | null) => {
+    if (e) controls.current.set(key, e);
+    else controls.current.delete(key);
+  };
+  useEffect(() => {
+    if (!focus) return;
+    controls.current.get(`${focus.on}:${focus.path}`)?.focus();
+    onFocused();
+  });
   const count = preview.notes.length;
   const many = count >= manyNotes;
   // A path taken out that the preview doesn't name is listed too, so that it can be taken back in.
@@ -67,7 +86,7 @@ function BundleList({
         <legend className="px-1 text-sm text-text-body">What goes out</legend>
         {preview.notes.map((n) => (
           <label key={n.path} className="flex min-h-9 items-center gap-2 text-sm text-text">
-            <input type="checkbox" checked disabled={n.path === start} onChange={() => onToggle(n.path)} />
+            <input type="checkbox" checked disabled={n.path === start} onChange={() => onToggle(n.path, "back")} ref={control(`box:${n.path}`)} />
             <span className="min-w-0 break-words">
               {n.title} <span className="font-mono text-[12px] text-muted">{n.path}</span>
             </span>
@@ -80,13 +99,19 @@ function BundleList({
             Stays behind
           </h3>
           <ul aria-labelledby={`${id}-left`} className="text-sm text-text-body">
-            {behind.map((l) => (
+            {behind.map((l, i) => (
               <li key={l.path} className="flex flex-wrap items-center gap-x-2 break-words">
-                <span className="min-w-0">
+                <span id={`${id}-behind-${i}`} className="min-w-0">
                   <span className="font-mono text-[12px]">{l.path}</span>: {reasons[l.reason] ?? l.reason}
                 </span>
                 {l.reason === "without" && (
-                  <button type="button" onClick={() => onToggle(l.path)} className={takeBackClass}>
+                  <button
+                    type="button"
+                    ref={control(`back:${l.path}`)}
+                    aria-describedby={`${id}-behind-${i}`}
+                    onClick={() => onToggle(l.path, "box")}
+                    className={takeBackClass}
+                  >
                     Take back in
                   </button>
                 )}
@@ -123,6 +148,7 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
   const [depth, setDepth] = useState(update?.depth ?? 0);
   const [without, setWithout] = useState<string[]>(update?.without ?? []);
   const [changed, setChanged] = useState<PublicationPreviewView | null>(null);
+  const [focus, setFocus] = useState<Focus | null>(null);
   const [published, setPublished] = useState<{ link: string; plain: string[] } | null>(null);
   const [refusal, setRefusal] = useState<Error | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -136,8 +162,9 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
   const blocked = bundle && (!preview || preview.tooMany || preview.tooLarge);
   const disabled = pending || blocked || (!update && (!passwordWindow.known || (asks && password === "")));
 
-  const toggle = (note: string) => {
+  const toggle = (note: string, then: Focus["on"]) => {
     setChanged(null);
+    setFocus({ path: note, on: then });
     setWithout((w) => (w.includes(note) ? w.filter((p) => p !== note) : [...w, note]));
   };
 
@@ -249,7 +276,7 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
                 </span>
               </div>
             </div>
-            {bundle && preview && <BundleList preview={preview} start={path} without={without} onToggle={toggle} />}
+            {bundle && preview && <BundleList preview={preview} start={path} without={without} focus={focus} onToggle={toggle} onFocused={() => setFocus(null)} />}
             {asks && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
             {refusal && <FormError>{refusal instanceof BundleChangedError ? refusal.message : errorText(refusal)}</FormError>}
             {asked.error && <FormError>{errorText(asked.error)}</FormError>}

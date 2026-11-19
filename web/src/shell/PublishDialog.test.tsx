@@ -249,9 +249,14 @@ describe("PublishDialog", () => {
       expect(within(screen.getByRole("group", { name: "What goes out" })).queryByRole("checkbox", { name: /Beta/ })).not.toBeInTheDocument();
       const back = within(item).getByRole("button", { name: "Take back in" });
       expect(back).toHaveClass("min-h-12");
+      // The button names its note to a screen reader, and has the focus the box had.
+      expect(back).toHaveAccessibleDescription("/Work/Beta.md: taken out by you");
+      await vi.waitFor(() => expect(document.activeElement).toBe(back));
       await userEvent.click(back);
       await vi.waitFor(() => expect(asked.at(-1)).toBe("?depth=1"));
-      expect(await within(screen.getByRole("group", { name: "What goes out" })).findByRole("checkbox", { name: /Beta/ })).toBeChecked();
+      const box = await within(screen.getByRole("group", { name: "What goes out" })).findByRole("checkbox", { name: /Beta/ });
+      expect(box).toBeChecked();
+      await vi.waitFor(() => expect(document.activeElement).toBe(box));
       expect(screen.queryByText(/taken out by you/)).not.toBeInTheDocument();
     });
 
