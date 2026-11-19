@@ -163,10 +163,18 @@ public sealed partial class Xml(INoteReader notes) : ICommand
                 : ShellResult.Ok(Value(result));
         }
 
+        // Kept only as many as the output can show, each taking a character at least; the others are only counted.
+        var counting = modes.Contains("count");
         var picked = new List<XPathNavigator>();
-        while (nodes.MoveNext()) picked.Add(nodes.Current!.Clone());
-        if (modes.Contains("count")) return ShellResult.Ok(picked.Count.ToString(CultureInfo.InvariantCulture));
-        if (picked.Count == 0)
+        var count = 0;
+        while (nodes.MoveNext())
+        {
+            if (!counting && picked.Count < OutputLimit.MaxChars) picked.Add(nodes.Current!.Clone());
+            count++;
+        }
+
+        if (counting) return ShellResult.Ok(count.ToString(CultureInfo.InvariantCulture));
+        if (count == 0)
         {
             var hint = defaultNamespace.Length > 0 && !HasPrefix(xpath)
                 ? $"xml: nothing matched; the document's default namespace is {defaultNamespace}, so name its elements as d:<name> (//d:{FirstChildName(root)})"
@@ -175,7 +183,7 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         }
 
         // Made one by one, as the output takes them: an element's XML or text holds all below it.
-        return TextFiles.Listed("xml", picked.Count, picked.Select(n => asXml ? Outer(n) : TextFiles.Collapse(n.Value)), "\n", "nodes", "narrow the XPath");
+        return TextFiles.Listed("xml", count, picked.Select(n => asXml ? Outer(n) : TextFiles.Collapse(n.Value)), "\n", "nodes", "narrow the XPath");
     }
 
     /// <summary>A navigator that checks the token at every step and every value it reads, so that whatever an XPath

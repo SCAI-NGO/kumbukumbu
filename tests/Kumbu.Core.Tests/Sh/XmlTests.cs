@@ -280,6 +280,30 @@ public class XmlTests
     }
 
     [Fact]
+    public async Task Only_the_nodes_that_can_be_printed_are_kept()
+    {
+        // Each picked node kept is a navigator: kept all, 600,000 nodes took 65 MB for 24,000 characters printed.
+        _store.AddTextFile("/Work/many.xml", $"<r>{string.Concat(Enumerable.Repeat("<a b=\"1\">x</a>", 300_000))}</r>");
+        var printed = await Run("xml /Work/many.xml '//a/@b | //a/text()'");
+        Assert.EndsWith("of 600,000 nodes shown; narrow the XPath", printed.Output);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        await Run("xml /Work/many.xml 'count(//a/@b | //a/text())'");
+        var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var count = await Run("xml --count /Work/many.xml '//a/@b | //a/text()'");
+        var counting = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        printed = await Run("xml /Work/many.xml '//a/@b | //a/text()'");
+        var printing = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal("600000", count.Output);
+        // The file read and parsed, and the union walked, take about 100 MB, as counting the nodes inside the XPath shows.
+        Assert.True(counting - baseline < 10_000_000, $"{counting:N0} bytes counting, {baseline:N0} for count()");
+        Assert.True(printing - baseline < 20_000_000, $"{printing:N0} bytes printing, {baseline:N0} for count()");
+    }
+
+    [Fact]
     public async Task Printing_the_xml_of_nested_nodes_stops_at_the_output_limit()
     {
         // Each element's XML holds all below it: printed whole for every one, 20,000 nested elements would be 4 GB.
