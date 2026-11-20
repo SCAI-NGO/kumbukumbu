@@ -25,7 +25,7 @@
 // 8. A window's content follows the discreet state → "windows: hidden with ✕ …" (What's on, Recent, Settings' Vaults and
 //    Security). Hidden while a window is open, the window stays without Home → the same test, its second half (What's
 //    on, hidden from elsewhere: the pill is out of reach under a window); ✕ then shows the vault list, and Recent and
-//    Settings after it → "windows: hidden from elsewhere while a window is open … (F-10, F-11)", fixme while F-11 stands.
+//    Settings after it → "windows: hidden from elsewhere while a window is open … (F-10, F-11)".
 // Console (2026-11-18-console-autocomplete-design.md, "Data"; the console resets on hiding):
 // 9. Completion's listings go with the reset: `cat /H` Tab completes nothing, the vaults listed by Tab or offered as
 //    chips leave Home out → "console: …".
@@ -431,7 +431,7 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
     await expect(page.getByText("Zahnarzt")).toHaveCount(0);
 
     // Shown again, What's on open over Zahnarzt, hidden from elsewhere: the window stays, without Home. Where the shell
-    // behind it goes, and ✕, are the fixme test's (F-10).
+    // behind it goes, and ✕, are the next test's (F-10, F-11).
     await reveal(page, testInfo);
     await runFromPalette(page, "Zahnarzt", "Zahnarzt, Home");
     await expect(page.locator("article").getByRole("heading", { name: "Zahnarzt", level: 1 })).toBeVisible();
@@ -449,10 +449,9 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
 });
 
 // F-10 under a window: a vault list read before the hide was heard once left the shell behind on Home's note in the
-// clear; the hide now covers every vault shown in the mode, so the shell behind shows nothing of Home. F-11 is reached
-// only by this path (the pill is out of reach under a window).
+// clear; the hide now covers every vault shown in the mode, so the shell behind shows nothing of Home. F-11 (✕ then
+// shows the vault list) is reached only by this path (the pill is out of reach under a window).
 test("discreet-0-6-0 windows: hidden from elsewhere while a window is open over a Home note, the window stays without Home, and ✕ shows the vault list (F-10, F-11) @windows @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
-  test.fixme(true, "F-11: ✕ on a window over a note hidden again shows the last ordinary note");
   const { context, page, note } = await start(freshSession, aliceApi, folder);
   let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {

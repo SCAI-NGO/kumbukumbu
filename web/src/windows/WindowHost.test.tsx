@@ -243,6 +243,31 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
+  it("closes to the vault list after the discreet vault behind it hides, also with an ordinary note read before", async () => {
+    let shown = true;
+    signedInApi(() => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/readme.md", queryClient);
+    await screen.findByText("Text of /Work/readme.md.");
+    await act(() => router.navigate("/notes/Tagebuch/a.md"));
+    await screen.findByText("Text of /Tagebuch/a.md.");
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    await act(() => router.navigate("/console"));
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+
+    shown = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: false, hiding: false }));
+
+    await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(router.state.location.state).toMatchObject({ overview: true });
+    expect(screen.getByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe("/");
+    expect(document.body.textContent).not.toContain("Tagebuch");
+  });
+
   it("stays open without the discreet note behind it when the vault list was read again before the hide", async () => {
     let shown = true;
     signedInApi(() => shown);
