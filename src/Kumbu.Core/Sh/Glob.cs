@@ -57,6 +57,11 @@ public sealed class Glob
             error = $"rg: bad glob '{pattern}': invalid class";
             return false;
         }
+        catch (NotSupportedException)
+        {
+            error = $"rg: bad glob '{pattern}': too long";
+            return false;
+        }
 
         return true;
     }
