@@ -16,6 +16,9 @@
 // 6. The same "Not here" page when the vault isn't in the reader's list: Bob opens a link into a vault of Alice's he
 //    isn't a member of → "a link into a vault Bob isn't a member of leads to the same Not here". Alice's `Welcome`, not
 //    `Home`: her saved session keeps Home hidden, so its id isn't in her vault list without a PIN entry (Task 8's).
+// 7. A link into another vault switches the shell to it: from a note of Welcome, Alice opens a link into Work, and the
+//    vault picker and the tree say Work with the note marked → "a link into another vault switches the picker and the
+//    tree to it".
 // Left out: the sign-in coming back to the link afterwards (needs a sign-in of its own; covered by
 // SignIn.test.tsx:134-155); the one page for a discreet vault while hidden (Task 8, @serial); an archived note's link (covered by DeepLink.test.tsx, and over MCP by
 // e2e/mcp/deeplinks.spec.ts).
@@ -23,7 +26,7 @@ import type { Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { Api, Mcp } from "../support/api";
 import { shareWithBob, unshare, type Share } from "../support/share";
-import { expect, shot, test } from "../support/test";
+import { expect, onPhone, shot, test } from "../support/test";
 
 const noteUrl = (path: string) => `/notes/${path.replace(/^\//, "").split("/").map(encodeURIComponent).join("/")}`;
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -134,6 +137,32 @@ test("deeplinks: a link into a vault Bob isn't a member of leads to the same Not
   await expect(bobPage.getByRole("heading", { name: "Not here", level: 1 })).toBeVisible();
   await expect(bobPage.getByText(notHere, { exact: true })).toBeVisible();
   await expect(bobPage.getByRole("button", { name: "Search for it" })).toBeVisible();
+});
+
+test("deeplinks: a link into another vault switches the picker and the tree to it @deeplinks @phone", async ({ page, aliceApi, mcp, folder }, testInfo) => {
+  // Meaningful only if the shell's default vault isn't the link's: the old bug left the tree on that default.
+  const vaults = await aliceApi.json<{ name: string; kind?: string }[]>("GET", "/api/vaults");
+  expect(vaults.find((v) => v.kind !== "skills")?.name, "the default vault isn't the link's").not.toBe("Work");
+  const tree = await aliceApi.json<{ root: { notes: { path: string }[] } }>("GET", "/api/vaults/Welcome/tree");
+  const start = tree.root.notes.find((n) => n.path.endsWith(".md"))?.path;
+  expect(start, "a note at the top of Alice's Welcome").toBeDefined();
+  const name = `Alpha ${folder}`;
+  const path = `/Work/${folder}/HT/${name}.md`;
+  const link = await writeWithLink(mcp, path, "# Alpha\n\nThe first.\n");
+
+  await answerInstallHint(page);
+  await page.goto(noteUrl(start!));
+  await expect(page.locator("article").getByRole("heading", { level: 1 }).first()).toBeVisible();
+  await page.goto(link);
+  await expectNote(page, path, "Alpha");
+
+  let sidebar = page.getByRole("complementary", { name: "File tree" });
+  if (onPhone(testInfo)) {
+    await page.getByRole("button", { name: "Open file tree" }).click();
+    sidebar = page.getByRole("dialog", { name: "File tree" });
+  }
+  await expect(sidebar.getByRole("button", { name: "Switch vault: Work" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: new RegExp(`^${escape(name)}`) })).toHaveAttribute("aria-current", "page");
 });
 
 test.describe("deeplinks in a shared vault", () => {
