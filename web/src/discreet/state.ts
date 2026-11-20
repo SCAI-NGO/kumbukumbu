@@ -18,6 +18,11 @@ interface DiscreetState {
   /** When the mode ends; null for Never (or while hidden). */
   until: string | null;
   names: ReadonlySet<string>;
+  /**
+   * The discreet vaults the list has named since the mode was last reset: hiding again hides them all, one the list no
+   * longer names (read once the session hid them, before this tab heard of it) too.
+   */
+  listed: ReadonlySet<string>;
   /** While this tab hides them again: the views of the discreet vaults are closing, none opens meanwhile. */
   hiding: boolean;
   /** This tab hid them, and the server hasn't heard of it yet (offline): until it has, a session saying shown is not followed. */
@@ -33,7 +38,7 @@ interface DiscreetState {
   reset(): void;
 }
 
-const initial = { revealed: false, until: null, names: new Set<string>() };
+const initial = { revealed: false, until: null, names: new Set<string>(), listed: new Set<string>() };
 
 export const useDiscreet = create<DiscreetState>()((set, get) => ({
   ...initial,
@@ -44,15 +49,18 @@ export const useDiscreet = create<DiscreetState>()((set, get) => ({
   setFromSession: (view) => set({ revealed: !!view?.revealed, until: view?.revealed ? view.until : null }),
   setFromVaults: (vaults) => {
     const names = vaults.filter((v) => v.discreet).map((v) => v.name);
-    const { names: now, gone } = get();
+    const { names: now, gone, listed } = get();
     // Listed as ordinary (made so, or an ordinary vault of that name later), its notes render again.
     const ordinary = vaults.filter((v) => !v.discreet && gone.has(v.name)).map((v) => v.name);
     if (ordinary.length > 0) set({ gone: new Set([...gone].filter((n) => !ordinary.includes(n))) });
+    // A vault listed as ordinary is no longer one to hide.
+    const kept = new Set([...listed, ...names].filter((n) => !vaults.some((v) => v.name === n && !v.discreet)));
+    if (kept.size !== listed.size || [...kept].some((n) => !listed.has(n))) set({ listed: kept });
     if (names.length === now.size && names.every((n) => now.has(n))) return;
     set({ names: new Set(names) });
   },
   // `hiding`, `unsent` and `gone` outlast it: hiding again resets on its way.
-  reset: () => set({ ...initial, names: new Set() }),
+  reset: () => set({ ...initial, names: new Set(), listed: new Set() }),
 }));
 
 /**

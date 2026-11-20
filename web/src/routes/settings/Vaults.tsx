@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api, call } from "../../api/client";
 import { errorText } from "../../api/error-text";
 import { useVaults } from "../../api/notes";
 import { withdrawnSentence } from "../../api/sharing";
+import { goneVault, useDiscreet } from "../../discreet/state";
 import { storageText, useAccountStorage } from "../../api/storage";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { PasswordField } from "../../components/PasswordField";
@@ -50,7 +51,18 @@ function VaultsSection() {
   const vaults = useVaults();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [rekeying, setRekeying] = useState<string | null>(null);
-  const [rekeyed, setRekeyed] = useState<string | null>(null);
+  const [rekeyed, setRekeyed] = useState<{ vault: string; text: string } | null>(null);
+  // A dialog about a vault hidden again goes with it, as the tree's do: its title names the vault.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        if (s.gone === previous.gone && s.names === previous.names) return;
+        setDeleting((vault) => (goneVault(s, vault) ? null : vault));
+        setRekeying((vault) => (goneVault(s, vault) ? null : vault));
+        setRekeyed((done) => (done && goneVault(s, done.vault) ? null : done));
+      }),
+    [],
+  );
   return (
     <Section title="Vaults">
       <p className="text-text-body">
@@ -90,9 +102,10 @@ function VaultsSection() {
           ))}
         </ul>
       )}
-      {rekeyed && <Done>{rekeyed}</Done>}
+      {rekeyed && <Done>{rekeyed.text}</Done>}
       {deleting !== null && <DeleteVaultDialog vault={deleting} onClose={() => setDeleting(null)} />}
-      {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={setRekeyed} onClose={() => setRekeying(null)} />}
+      {/* A re-encrypt answered once its vault is hidden again leaves no line. */}
+      {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={(text) => !goneVault(useDiscreet.getState(), rekeying) && setRekeyed({ vault: rekeying, text })} onClose={() => setRekeying(null)} />}
     </Section>
   );
 }

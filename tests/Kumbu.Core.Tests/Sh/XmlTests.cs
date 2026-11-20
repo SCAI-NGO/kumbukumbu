@@ -259,6 +259,23 @@ public class XmlTests
     public async Task Concat_with_eight_arguments_or_fewer_works(string xpath, string expected) =>
         Assert.Equal(ShellResult.Ok(expected), await Run($"xml /Work/rss.xml \"{xpath}\""));
 
+    [Theory]
+    [InlineData("translate(//title, //link, '')")]
+    [InlineData("translate(., 'a', //title)")]
+    [InlineData("translate(., concat('a','b'), 'c')")]
+    [InlineData("translate (., //title, '')")]
+    public async Task Translate_takes_its_lists_as_quoted_text(string xpath) =>
+        Assert.Equal(
+            ShellResult.Error($"xml: '{xpath}': translate() takes its second and third arguments as quoted text, such as translate(., 'abc', 'ABC')"),
+            await Run($"xml /Work/rss.xml \"{xpath}\""));
+
+    [Theory]
+    [InlineData("translate('abc', 'abc', 'ABC')", "ABC")]
+    [InlineData("translate( 'a,b' , \"a,\" , 'A' )", "Ab")]
+    [InlineData("string-length(translate(//item[1]/title, 'aeiou', ''))", "21")]
+    public async Task Translate_with_quoted_lists_works(string xpath, string expected) =>
+        Assert.Equal(ShellResult.Ok(expected), await Run($"xml /Work/rss.xml \"{xpath.Replace("\"", "\\\"")}\""));
+
     [Fact]
     public async Task An_xpath_is_at_most_1000_characters_long()
     {

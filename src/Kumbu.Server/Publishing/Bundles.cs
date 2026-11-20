@@ -294,7 +294,7 @@ internal sealed partial class Publications
                     {
                         var state = attachments[path].Current;
                         var raw = EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blob) ? await catalog.ReadBlobAsync(access.Vault, blob, ct) : null;
-                        stripped[path] = file = raw is null ? null : ImageMetadata.Strip(raw, state.MediaType);
+                        stripped[path] = file = raw is null ? null : ImageMetadata.Strip(raw, state.MediaType, ct);
                     }
 
                     if (file is null)

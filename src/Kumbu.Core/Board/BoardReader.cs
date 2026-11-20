@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
+using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Board;
 
@@ -26,6 +29,7 @@ public static class BoardReader
         var problems = new List<BoardProblem>();
         foreach (var note in all.OrderBy(n => n.Path.Value, StringComparer.Ordinal))
         {
+            ct.ThrowIfCancellationRequested();
             if (note.Path == definitionPath || note.Path.Value.StartsWith(archive, StringComparison.Ordinal)) continue;
             if (note.Path.Segments.Count > folder.Segments.Count + 1)
             {
@@ -50,7 +54,11 @@ public static class BoardReader
 
     private static (Card? Card, string? Problem) ReadCard(Note note, BoardDefinition definition)
     {
-        var read = Frontmatter.Read(note.Content);
+        var lines = Lines.Split(note.Content);
+        // Frontmatter longer than aliases are read from is too large for the board too.
+        var read = lines.Take(Outline.FrontmatterEnd(lines)).Sum(l => l.Length + 1) > NoteAliases.MaxFrontmatterLength
+            ? new FrontmatterValues(new Dictionary<string, object?>(), Frontmatter.TooLargeProblem)
+            : Frontmatter.Read(note.Content);
         if (read.Problem is not null) return (null, $"the frontmatter does not parse: {read.Problem}");
 
         var values = read.Values;

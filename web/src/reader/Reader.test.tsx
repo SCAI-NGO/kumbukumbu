@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Reader, { copyMarkdown } from "./Reader";
+import Reader, { copyMarkdown, sectionOf } from "./Reader";
 import { snapshotText } from "./snapshot";
 
 // Counts the loads of the Mermaid module: the reader page never loads it. The factory runs only on the first import in
@@ -462,6 +462,14 @@ describe("snapshotText", () => {
         { id: 2, title: "Budget", markdown: "Spend less. ![Plan](#kn-1)", depth: 1, files: [] },
       ],
     };
+
+    it("finds an embed's part below a heading with closing hashes and trailing blanks", () => {
+      expect(sectionOf("# Intro\ntext\n## Big idea ##  \nbody\n## Next\nx", "Big idea")).toBe("## Big idea ##  \nbody");
+    });
+
+    it("reads a heading's link by its text, also when its address holds brackets", () => {
+      expect(sectionOf("## See [the plan](Plan[1].md)\nx", "see the plan")).toBe("## See [the plan](Plan[1].md)\nx");
+    });
 
     it("goes between its notes, with contents, and shows an embedded note in place", async () => {
       Element.prototype.scrollIntoView = vi.fn();

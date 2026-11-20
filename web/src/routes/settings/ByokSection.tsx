@@ -62,7 +62,7 @@ export default function ByokSection() {
         <>
           <p className="text-text">TensorX key: saved, ends in …{view.last4}</p>
           {view.refusedAt && <p className="text-text-body">TensorX refused the key on {when(view.refusedAt)}; its vaults are found by words until you replace it.</p>}
-          <p className="text-sm text-muted">Choose which vaults use it in each vault's ⋯ menu, "Search by meaning…". New vaults start with it.</p>
+          <p className="text-sm text-muted">Choose which vaults use it in each vault's ⋯ menu, "Search by meaning…", or when you make a new vault.</p>
           {removing ? (
             <div role="group" aria-label="Remove the key" className="flex flex-col gap-2 rounded-[12px] border border-line bg-surface-2 p-3">
               <p className="text-text-body">The vaults that use it go back to this server and are embedded here again; nothing more is sent to TensorX.</p>

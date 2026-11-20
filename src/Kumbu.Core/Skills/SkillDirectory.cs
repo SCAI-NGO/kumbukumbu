@@ -70,27 +70,40 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
 
     /// <summary>
     /// Who wrote the skill: the label of the last writer of any of its files, and whether another user (by the writer
-    /// reference, as <see cref="WriterMarks"/> decides it) last wrote one of them. A skill is all its files:
-    /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote. Asked in her own vaults
-    /// too, shared or not: a member's write stays another user's after the vault stops being shared with them.
+    /// reference, as <see cref="WriterMarks"/> decides it) last wrote one of them or wrote a line still in one of its
+    /// notes, as the note's <see cref="Authorship"/> records it. A skill is all its files and all their lines:
+    /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote, and a member's line stays
+    /// his after the owner's rename, <c>replace</c> or restore rewrote the file around it (decided 2026-11-19). A line the
+    /// record doesn't know counts as the file's last writer's when it is older than the record: such text was written
+    /// before 0.6.0, and counting it as another user's would stop her own older skills from starting. A record that
+    /// started again (<see cref="Authorship.Dropped"/>) no longer knows whose its lines are, so that note counts as another
+    /// user's. Asked in her own vaults too, shared or not: a member's
+    /// write stays another user's after the vault stops being shared with them.
     /// </summary>
     private async Task<(string? Editor, bool ByOther)> WritersAsync(
         string vault, VaultPath folder, IReadOnlyList<VaultPath> notePaths, IReadOnlyList<StoredAttachment> attachments, CancellationToken ct)
     {
         var prefix = folder.Value + "/";
         var writes = new List<(string Label, WriterRef? Ref, DateTime At)>();
+        var lineWriters = new List<WriterRef?>();
+        var restarted = false;
         foreach (var path in notePaths.Where(p => p.Value.StartsWith(prefix, StringComparison.Ordinal)))
         {
-            if (await notes.GetAsync(path, ct) is { } note) writes.Add((note.LastWriter, note.Ref, note.LastWriteAt));
+            if (await notes.GetAsync(path, ct) is not { } note) continue;
+            writes.Add((note.LastWriter, note.Ref, note.LastWriteAt));
+            var record = Authorship.Of(note);
+            lineWriters.AddRange(record.Writes.Select(w => w.Ref));
+            restarted |= record.Dropped;
         }
 
         writes.AddRange(attachments.Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).Select(a => (a.LastWriter, a.Ref, a.LastWriteAt)));
         if (writes.Count == 0) return (null, false);
         var last = writes.MaxBy(w => w.At);
         var editor = (await labels.RenderAsync(vault, last.Label, last.Ref, ct)).Display;
-        foreach (var write in writes)
+        if (restarted) return (editor, true);
+        foreach (var writer in writes.Select(w => w.Ref).Concat(lineWriters).Distinct())
         {
-            if (!await labels.IsOwnAsync(vault, write.Ref, ct)) return (editor, true);
+            if (!await labels.IsOwnAsync(vault, writer, ct)) return (editor, true);
         }
 
         return (editor, false);
@@ -124,8 +137,9 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
             var (editor, byOther) = await WritersAsync(vault, folder, notePaths, attachments, ct);
             // The manifest's name counts only when it keeps every rule, being the folder's name among them: so the folder's
             // name is the skill's, and a manifest can't name its skill after another one.
-            // The start-up mark counts only in her own vault and only while no other user changed the skill: a writer of a
-            // shared vault must not steer every reader's agent before its first answer. Otherwise it is an ordinary skill.
+            // The start-up mark counts only in her own vault and only while no line or file of the skill is another user's:
+            // a writer of a shared vault must not steer every reader's agent before its first answer. Otherwise it is an
+            // ordinary skill.
             var atStart = manifest.AtStart && info?.Owner is null && !byOther;
             skills.Add(new Skill(name, folder, manifest.Description ?? "", manifest.Source, editor, byOther, manifest.Problems) { SharedBy = info?.Owner, AtStart = atStart });
         }

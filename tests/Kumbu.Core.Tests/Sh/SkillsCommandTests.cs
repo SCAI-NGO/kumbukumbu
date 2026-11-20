@@ -206,11 +206,39 @@ public class SkillsCommandTests
     }
 
     [Fact]
-    public async Task A_skill_in_a_vaults_skills_folder_leaves_the_name_ambiguous()
+    public async Task A_system_skills_name_reads_the_system_skill_beside_a_vaults_skill_of_that_name()
     {
-        Put("/Work/_skills/create-skill/SKILL.md", "---\nname: create-skill\ndescription: Theirs.\n---\n");
+        var builtIn = SystemSkills.Find("project-memory")!.Files[0].Content;
+        const string Theirs = "---\nname: project-memory\ndescription: Theirs.\n---\n# Theirs\n";
+        Put("/Work/_skills/project-memory/SKILL.md", Theirs);
 
-        Assert.Equal("skills cat: 'create-skill' names 2 skills: system:create-skill, /Work/_skills/create-skill; give the path", (await Run("skills cat create-skill")).Output);
+        Assert.Equal(builtIn, (await Run("skills cat project-memory")).Output);
+        Assert.Equal(builtIn, (await Run("skills cat project-memory/SKILL.md")).Output);
+        Assert.Equal(Theirs, (await Run("skills cat /Work/_skills/project-memory")).Output);
+        var listed = (await Run("skills ls")).Output;
+        Assert.Contains("project-memory (system", listed);
+        Assert.Contains("/Work/_skills/project-memory", listed);
+    }
+
+    [Fact]
+    public async Task Her_own_skill_in_Skills_still_takes_the_system_skills_name_beside_a_vaults_skill_of_that_name()
+    {
+        const string Own = "---\nname: project-memory\ndescription: Mine.\n---\n# Mine\n";
+        Put("/Skills/project-memory/SKILL.md", Own);
+        Put("/Work/_skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Theirs.\n---\n# Theirs\n");
+
+        Assert.Equal(Own, (await Run("skills cat project-memory")).Output);
+        Assert.Equal(SystemSkills.Find("project-memory")!.Files[0].Content, (await Run("skills cat system:project-memory")).Output);
+    }
+
+    [Fact]
+    public async Task Two_vault_skills_of_one_name_stay_ambiguous()
+    {
+        Put("/Home/_skills/release-notes/SKILL.md", "---\nname: release-notes\ndescription: Mine.\n---\n");
+
+        var result = await Run("skills cat release-notes");
+        Assert.StartsWith("skills cat: 'release-notes' names 2 skills:", result.Output);
+        Assert.Equal(ShellErrorKind.Invalid, result.Kind);
     }
 
     [Fact]

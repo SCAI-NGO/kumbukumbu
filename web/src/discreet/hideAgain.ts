@@ -114,6 +114,9 @@ async function tellServer() {
 
 let running: Promise<void> | null = null;
 
+/** The answers a view on screen may still show as the vaults are hidden: emptied and asked again, not removed. */
+const ASKED_AGAIN = ["whats-on", "recent", "keys", "dav-shares", "connections"];
+
 /**
  * Hides the discreet vaults again in this tab (spec §3.8): the open discreet note saves first, then (`tell`) the
  * server hears of it; the tab closes the discreet vaults' views, drops every cached answer but the session (asked again
@@ -128,7 +131,8 @@ export function hideAgain(queryClient: QueryClient, navigate: NavigateFunction, 
 }
 
 async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: boolean, pathname: string) {
-  const names = new Set(useDiscreet.getState().names);
+  const { names: shown, listed } = useDiscreet.getState();
+  const names = new Set([...shown, ...listed]);
   const until = useDiscreet.getState().until;
   const discreet = (path: string | null | undefined): path is string => path != null && names.has(vaultOf(path));
 
@@ -191,13 +195,13 @@ async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: b
     // Going back to a discreet view's entry now finds /discreet, which goes to the vault list.
     forgetDiscreet();
 
-    // What's on and its count named the discreet vaults' entries, as Recent changes did: the app's icon is cleared, and
-    // each, kept for the views still showing them (the badge, the What's on page, Recent changes), is emptied at once
-    // and asked again; a removed query would stay on screen with what it had until its view rendered again.
+    // What's on and its count named the discreet vaults' entries, as Recent changes and the lists of keys, shares and
+    // connections did: the app's icon is cleared, and each, kept for the views still showing them (the badge, the What's
+    // on page, Recent changes, the Access tabs), is emptied at once and asked again; a removed query would stay on screen
+    // with what it had until its view rendered again.
     clearAppBadge();
-    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && q.queryKey[0] !== "whats-on" && q.queryKey[0] !== "recent" });
-    void queryClient.resetQueries({ queryKey: ["whats-on"] });
-    void queryClient.resetQueries({ queryKey: ["recent"] });
+    queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" && !ASKED_AGAIN.includes(q.queryKey[0] as string) });
+    for (const key of ASKED_AGAIN) void queryClient.resetQueries({ queryKey: [key] });
     sweep(queryClient, names);
     for (const m of queryClient.getMutationCache().getAll()) if (m.state.status !== "pending") queryClient.getMutationCache().remove(m);
     void queryClient.refetchQueries({ queryKey: ["session"] });

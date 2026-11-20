@@ -67,6 +67,9 @@ services:
       pdf:
         condition: service_started
         required: false
+    # The server's memory (KUMBU_MEM_LIMIT, e.g. 8g): past it the kernel ends the server, not the host. The default
+    # is twice what the end-to-end suite's server took at its peak, with the embedding model added.
+    mem_limit: ${KUMBU_MEM_LIMIT:-4g}
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
       # Optional; set, the server signs in to MongoDB as `kumbu` (see the mongo service). Empty, it doesn't.

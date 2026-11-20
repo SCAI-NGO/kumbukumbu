@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../api/schema";
@@ -85,11 +86,12 @@ const protocol: BlameView = {
 
 const vault = (name: string) => ({ name, notes: 4, embeddings: "internal", canWrite: true, level: "owner" });
 
-/** The app's API, with `/api/blame` answering `answer`. */
-function api(answer: () => Response | Promise<Response>) {
+/** The app's API, with `/api/blame` answering `answer` and the vault list holding `at.names`. */
+function api(answer: () => Response | Promise<Response>, at = { names: ["Work"] }) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
-    "GET /api/vaults": () => json(200, ["Work"].map(vault)),
+    "GET /api/vaults": () => json(200, at.names.map(vault)),
+    "POST /api/ws-ticket": () => json(200, { ticket: "t1", expiresAt: "2026-11-17T10:00:30Z" }),
     "GET /api/calendar/whats-on": () => json(200, { items: [], count: 0, overdue: false, vaults: [], couldntRead: 0, couldntReadVaults: [] }),
     "GET /api/blame/*": answer,
     "GET /api/embeddings": () => json(200, []),
@@ -274,6 +276,44 @@ describe("Who wrote what", () => {
     answer(json(200, protocol));
     await waitFor(() => expect(sections()).toHaveLength(4));
     expect(screen.queryByText("Loading …")).not.toBeInTheDocument();
+  });
+
+  it("closes, showing nothing of the note, when its vault leaves the vault list", async () => {
+    const at = { names: ["Work", "Garten"] };
+    api(() => json(200, protocol), at);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp(["/notes/Work/protocol.md", "/blame/Work/protocol.md"], queryClient);
+    await page();
+    expect(await screen.findByText(/Brita wrote this\./)).toBeInTheDocument();
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    FakeSocket.all.at(-1)!.open();
+    await waitFor(() => expect(queryClient.getQueryData<{ name: string }[]>(["vaults"])?.map((v) => v.name)).toEqual(["Work", "Garten"]));
+
+    // The socket is closed for the vault, opens again, and the list no longer has Work.
+    at.names = ["Garten"];
+    FakeSocket.all.at(-1)!.drop(4412);
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(2));
+    FakeSocket.all.at(-1)!.open();
+    await waitFor(() => expect(queryClient.getQueryData<{ name: string }[]>(["vaults"])?.map((v) => v.name)).toEqual(["Garten"]));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Who wrote what" })).not.toBeInTheDocument());
+    expect(screen.queryByText(/Brita wrote this\./)).not.toBeInTheDocument();
+    expect(router.state.location.pathname).not.toMatch(/^\/blame\//);
+    expect(window.location.pathname).not.toContain("Work/protocol");
+  });
+
+  it("shows only the error when the note is read again and refused", async () => {
+    let refused = false;
+    api(() => (refused ? json(400, { error: "/Work/protocol.md can't be read now." }) : json(200, protocol)));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/blame/Work/protocol.md", queryClient);
+    await page();
+    expect(await screen.findByText(/Brita wrote this\./)).toBeInTheDocument();
+    refused = true;
+    await act(() => queryClient.refetchQueries({ predicate: (q) => q.queryKey[0] === "blame" }));
+    await waitFor(() => expect(screen.queryByText("Loading …")).not.toBeInTheDocument());
+    expect(await screen.findByText("/Work/protocol.md can't be read now.")).toBeInTheDocument();
+    expect(screen.queryByText(/Brita wrote this\./)).not.toBeInTheDocument();
   });
 
   it("an error says what went wrong", async () => {

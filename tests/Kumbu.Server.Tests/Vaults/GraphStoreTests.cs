@@ -135,6 +135,35 @@ public sealed class GraphStoreTests(MongoFixture fixture)
         Assert.Equal(parsed + 1, vault.Parses);
     }
 
+    // The first reader's build is stood in for by holding the graph's gate: the second reader waits behind it.
+    [Fact]
+    public async Task A_graph_read_whose_caller_has_given_up_is_cancelled()
+    {
+        var (_, catalog, store) = await WorldAsync();
+        await WriteAsync(store, "/Work/A.md", "see [[B]]\n");
+        await store.GraphAsync(Work, Ct);
+        var vault = catalog.OpenVaults.Single();
+        await WriteAsync(store, "/Work/A.md", "see [[C]]\n");
+
+        await vault.GraphGate.WaitAsync(Ct);
+        try
+        {
+            using var givenUp = new CancellationTokenSource();
+            var read = store.GraphAsync(Work, givenUp.Token);
+            Assert.False(read.IsCompleted);
+
+            await givenUp.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+            Assert.Equal(0, vault.GraphGate.CurrentCount);
+        }
+        finally
+        {
+            vault.GraphGate.Release();
+        }
+
+        Assert.Equal(["/Work/A.md -> ?C"], Edges(await store.GraphAsync(Work, Ct)));
+    }
+
     // A note made again at its path starts at revision 1 again: its extract must not be the old note's.
     [Fact]
     public async Task A_note_made_again_at_its_path_is_parsed_again()

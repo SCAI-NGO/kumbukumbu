@@ -13,7 +13,7 @@ public sealed record SavedKey(string Key, string Id);
 /// The user's own TensorX key (BYOK spec, "How the key is kept"), on her user document, sealed under a key derived from
 /// the user key as the discreet list is (<see cref="DiscreetVaults"/>), and sealed again when the user key changes
 /// (<see cref="UserKeyRotation"/>). Each vault that uses it holds a copy in its own meta; this one is what the settings
-/// show and what a new vault starts with. A copy counts only while it carries the key's current id, so a key replaced
+/// show and what a new vault chosen for TensorX gets. A copy counts only while it carries the key's current id, so a key replaced
 /// or removed is dead in every vault at once, also in those the change couldn't write.
 /// </summary>
 public sealed class EmbeddingsKeys(IMongoDatabase db, ILogger<EmbeddingsKeys> log)

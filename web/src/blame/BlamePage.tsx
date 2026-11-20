@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useLinks } from "../api/notes";
 import { pathFromRoute, titleOf } from "../api/paths";
 import { timeText } from "../components/Sheet";
 import { useErrorTextFor } from "../discreet/errorText";
+import { useGoneWithVaults } from "../discreet/state";
 import { useDesktop } from "../hooks/useDesktop";
 import { ago } from "../note/AgentBanner";
 import { maskComments } from "../note/comments";
 import MarkdownView from "../note/MarkdownView";
 import { Properties } from "../note/NoteView";
 import { splitFrontmatter } from "../note/properties";
+import { useCloseWindow } from "../windows/context";
 import WindowFrame from "../windows/WindowFrame";
 import { useBlame, type BlameCount, type BlameSection, type BlameView } from "./api";
 
@@ -43,7 +45,14 @@ export default function BlamePage() {
   const blame = useBlame(path);
   const errorFor = useErrorTextFor(path);
   const desktop = useDesktop();
+  // The one window whose address names a vault: it goes with the vault, which the location behind has already left.
+  const gone = useGoneWithVaults(path);
+  const close = useCloseWindow();
+  useEffect(() => {
+    if (gone) close();
+  }, [gone, close]);
 
+  if (gone) return <></>;
   return (
     <WindowFrame kind="light" title="Who wrote what" heading={title}>
       <div className="px-3 py-3 lg:px-4">
@@ -51,7 +60,7 @@ export default function BlamePage() {
           {desktop && <h3 className="truncate text-xl font-bold text-text">{title}</h3>}
           {blame.isPending && <p className="text-sm text-muted">Loading …</p>}
           {blame.isError && <p className="text-text">{errorFor(blame.error)}</p>}
-          {blame.data && <Blame view={blame.data} path={path} desktop={desktop} />}
+          {blame.data && !blame.isError && <Blame view={blame.data} path={path} desktop={desktop} />}
         </div>
       </div>
     </WindowFrame>

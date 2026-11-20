@@ -12,7 +12,7 @@ public class LinkGraphTests
     private static Dictionary<VaultPath, LinkExtract> Extracts(params (string Path, string Content)[] notes) =>
         notes.ToDictionary(n => P(n.Path), n => LinkExtract.Of(P(n.Path), n.Content));
 
-    private static LinkGraph Build(params (string Path, string Content)[] notes) => LinkGraph.Build("W", Extracts(notes), []);
+    private static LinkGraph Build(params (string Path, string Content)[] notes) => LinkGraph.Build("W", Extracts(notes), [], TestContext.Current.CancellationToken);
 
     private static GraphNode Node(LinkGraph graph, string key) => Assert.Single(graph.Nodes, n => n.Key == key);
 
@@ -53,6 +53,76 @@ public class LinkGraphTests
         Assert.Equal(2, graph.Edges.Count);
         Assert.Equal(EdgeFlags.Ambiguous, Edge(graph, "/W/x/A.md", "/W/y/Plan.md").Flags);
         Assert.Equal(EdgeFlags.Ambiguous, Edge(graph, "/W/x/A.md", "/W/z/Plan.md").Flags);
+    }
+
+    [Fact]
+    public void Repeated_links_to_a_name_several_notes_carry_give_each_note_one_edge_with_every_line()
+    {
+        var graph = Build(("/W/a/x.md", ""), ("/W/b/x.md", ""), ("/W/c/x.md", ""), ("/W/hub.md", "[[x]]\n[[x]]\n![[x]]\n[[a/x]]\n"));
+
+        Assert.Equal(3, graph.OutEdges(Index(graph, "/W/hub.md")).Count);
+        var a = Edge(graph, "/W/hub.md", "/W/a/x.md");
+        Assert.Equal([0, 1, 2, 3], a.Lines);
+        Assert.Equal(EdgeFlags.Ambiguous | EdgeFlags.Embed, a.Flags);
+        foreach (var other in new[] { "/W/b/x.md", "/W/c/x.md" })
+        {
+            var edge = Edge(graph, "/W/hub.md", other);
+            Assert.Equal([0, 1, 2], edge.Lines);
+            Assert.Equal(EdgeFlags.Ambiguous | EdgeFlags.Embed, edge.Flags);
+        }
+
+        Assert.Equal([0, 1, 2, 3], graph.LinksOf(P("/W/hub.md")).Select(l => l.Link.Line));
+    }
+
+    [Fact]
+    public void Links_to_a_missing_name_written_alike_lead_to_one_ghost()
+    {
+        var graph = Build(("/W/A.md", "[[Gone]]\n[[gone]]\n[[Gone]]\n"));
+
+        var ghost = Assert.Single(graph.Nodes, n => n.Kind == NodeKind.Ghost);
+        Assert.Equal("Gone", ghost.Title);
+        Assert.Equal([0, 1, 2], Assert.Single(graph.Edges).Lines);
+    }
+
+    [Fact]
+    public void A_wikilink_finds_an_alias_and_a_Markdown_link_of_the_same_text_does_not()
+    {
+        var graph = Build(("/W/A.md", "[[Pumpe]]\n[p](Pumpe)\n"), ("/W/B.md", "---\naliases: [Pumpe]\n---\n"));
+
+        Assert.Equal([0], Edge(graph, "/W/A.md", "/W/B.md").Lines);
+        Assert.Equal([1], Edge(graph, "/W/A.md", "?PUMPE").Lines);
+    }
+
+    [Fact]
+    public void Links_to_an_ambiguous_name_written_in_any_case_give_each_candidate_one_edge_with_every_line()
+    {
+        var graph = Build(("/W/x/A.md", "[[Plan]]\n[[plan]]\n[[ PLAN ]]\n"), ("/W/y/Plan.md", ""), ("/W/z/Plan.md", ""));
+
+        Assert.Equal(2, graph.Edges.Count);
+        foreach (var candidate in new[] { "/W/y/Plan.md", "/W/z/Plan.md" })
+        {
+            var edge = Edge(graph, "/W/x/A.md", candidate);
+            Assert.Equal([0, 1, 2], edge.Lines);
+            Assert.Equal(EdgeFlags.Ambiguous, edge.Flags);
+        }
+    }
+
+    [Fact]
+    public void A_relative_link_that_names_the_vault_names_it_in_its_case()
+    {
+        var graph = Build(("/W/a/A.md", "[[../../W/B]]\n[[../../w/B]]\n"), ("/W/B.md", ""));
+
+        Assert.Equal([0], Edge(graph, "/W/a/A.md", "/W/B.md").Lines);
+        Assert.Equal(LinkKind.NotFound, graph.LinksOf(P("/W/a/A.md"))[1].Resolution.Kind);
+    }
+
+    [Fact]
+    public void A_link_by_the_kept_folder_file_name_reads_its_case()
+    {
+        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[.vaultkeep]]\n[[.VAULTKEEP]]\n"), ("/W/.vaultkeep.md", "")),
+            [P("/W/f/.Vaultkeep")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([P("/W/f/.Vaultkeep"), P("/W/.vaultkeep.md")], graph.LinksOf(P("/W/A.md")).Select(l => l.Resolution.Target));
     }
 
     [Fact]
@@ -116,7 +186,7 @@ public class LinkGraphTests
     [Fact]
     public void Day_and_attachment_kinds()
     {
-        var graph = LinkGraph.Build("W", Extracts(("/W/2026-11-12.md", "![[a.png]]"), ("/W/A.md", "")), [P("/W/img/a.png"), P("/W/img/b.png")]);
+        var graph = LinkGraph.Build("W", Extracts(("/W/2026-11-12.md", "![[a.png]]"), ("/W/A.md", "")), [P("/W/img/a.png"), P("/W/img/b.png")], TestContext.Current.CancellationToken);
 
         Assert.Equal(NodeKind.Day, Node(graph, "/W/2026-11-12.md").Kind);
         var attachment = Node(graph, "/W/img/a.png");
@@ -169,7 +239,7 @@ public class LinkGraphTests
     [Fact]
     public void Rebased_maps_every_path()
     {
-        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[B]] ![[a.png]] [[Nobody]]"), ("/W/B.md", "")), [P("/W/img/a.png")]);
+        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[B]] ![[a.png]] [[Nobody]]"), ("/W/B.md", "")), [P("/W/img/a.png")], TestContext.Current.CancellationToken);
 
         var rebased = graph.Rebased(p => p.WithVault("Shared"));
 
@@ -186,7 +256,7 @@ public class LinkGraphTests
     [Fact]
     public void A_version_is_kept_by_a_rebase()
     {
-        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[B]]"), ("/W/B.md", "")), []);
+        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[B]]"), ("/W/B.md", "")), [], TestContext.Current.CancellationToken);
 
         var versioned = graph.WithVersion("ab.3");
 

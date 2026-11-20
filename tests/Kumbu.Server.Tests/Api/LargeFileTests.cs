@@ -4,6 +4,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -11,7 +12,10 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol.Protocol;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -61,6 +65,27 @@ internal static class LargeFiles
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
             Task.Delay(Timeout.Infinite, TestContext.Current.CancellationToken);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = declared;
+            return true;
+        }
+    }
+    /// <summary>A body that declares <paramref name="declared"/> bytes, sends <paramref name="sent"/> and then nothing more
+    /// until <see cref="Release"/>.</summary>
+    public sealed class Stalled(byte[] sent, long declared) : HttpContent
+    {
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _released.TrySetResult();
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            for (var at = 0; at < sent.Length; at += 64 * 1024) await stream.WriteAsync(sent.AsMemory(at, Math.Min(64 * 1024, sent.Length - at)));
+            await stream.FlushAsync();
+            await _released.Task;
+        }
 
         protected override bool TryComputeLength(out long length)
         {
@@ -291,6 +316,155 @@ public sealed class LargeFileTests(KumbuAppFactory app)
 
         Assert.Equal(LargeFiles.Size, (await StoredAsync(put))["file"]!["size"]!.GetValue<long>());
         await AssertDownloadsAsync(user, "big.pdf", bytes);
+    }
+
+    /// <summary>A large upload whose client stops sending is ended after a while without a byte, on every way in: 400,
+    /// nothing stored, its slot given back.</summary>
+    [Theory]
+    [InlineData("files")]
+    [InlineData("dav")]
+    [InlineData("agent-upload")]
+    public async Task A_large_upload_that_stops_sending_is_ended_and_stores_nothing(string route)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        catalog.LargeBodySilence = TimeSpan.FromSeconds(1);
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var free = catalog.FileWrites.CurrentCount;
+        var content = new LargeFiles.Stalled(LargeFiles.Of(2 * FileApi.HeadBytes, 14, FileApiTests.Pdf), LargeFiles.Size);
+        try
+        {
+            Task<HttpResponseMessage> sending;
+            Dav.DavClient? dav = null;
+            if (route == "files") sending = user.SendContentAsync(HttpMethod.Put, user.Url("big.pdf", "files"), content, followRedirects: false);
+            else if (route == "dav")
+            {
+                dav = await Dav.DavClient.NewAsync(api, user);
+                sending = dav.SendAsync(HttpMethod.Put, "/dav/Work/big.pdf", content);
+            }
+            else
+            {
+                var key = await user.KeyAsync("Claude", KeyRight.Write);
+                var tool = await user.ToolAsync("upload", new Dictionary<string, object?> { ["path"] = "/Work/big.pdf" }, key);
+                var url = Assert.IsType<TextContentBlock>(tool.Content[0]).Text.Split('\n')[0];
+                var request = new HttpRequestMessage(HttpMethod.Put, new Uri(url).PathAndQuery) { Content = content };
+                request.Headers.Add("X-Forwarded-For", $"198.21.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}");
+                var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = false, BaseAddress = new Uri("https://kumbu.test") });
+                sending = client.SendAsync(request, Ct);
+            }
+
+            for (var i = 0; i < 500 && catalog.FileWrites.CurrentCount == free && !sending.IsCompleted; i++) await Task.Delay(20, Ct);
+            Assert.False(sending.IsCompleted, "answered before the body stopped");
+            for (var i = 0; i < 100 && !sending.IsCompleted; i++)
+            {
+                time.Advance(TimeSpan.FromSeconds(2));
+                await Task.Delay(50, Ct);
+            }
+
+            using var put = await sending.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+            if (dav is null) Assert.Equal(FileApi.CutOff, await RestClient.ErrorAsync(put));
+            using var get = dav is null ? await user.GetAsync(user.Url("big.pdf", "files")) : await dav.SendAsync(HttpMethod.Get, "/dav/Work/big.pdf");
+            Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
+            Assert.Equal(free, catalog.FileWrites.CurrentCount);
+        }
+        finally
+        {
+            content.Release();
+        }
+    }
+
+    /// <summary>A large body, with its length declared or sent chunked, is held to the server's least rate from its
+    /// first byte on.</summary>
+    [Theory]
+    [InlineData("files", true)]
+    [InlineData("files", false)]
+    [InlineData("dav", true)]
+    [InlineData("dav", false)]
+    public async Task A_large_bodys_rate_is_asked_for_before_its_first_byte(string route, bool declare)
+    {
+        var rates = new FirstReadRates();
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s => s.AddSingleton<IStartupFilter>(rates)));
+        var user = await RestClient.NewAsync(api, vault: "Work");
+        var content = new LargeFiles.Streamed(LargeFiles.Of(LargeFiles.Size, 15), declare);
+
+        using var put = route == "files"
+            ? await user.SendContentAsync(HttpMethod.Put, user.Url("big.bin", "files"), content, followRedirects: false)
+            : await (await Dav.DavClient.NewAsync(api, user)).SendAsync(HttpMethod.Put, "/dav/Work/big.bin", content);
+
+        Assert.True(put.StatusCode == HttpStatusCode.Created, await put.Content.ReadAsStringAsync(Ct));
+        var path = route == "files" ? user.Url("big.bin", "files").Split('?')[0] : "/dav/Work/big.bin";
+        Assert.Equal(FileApi.LargeBodyBytesPerSecond, Assert.Single(rates.All, r => r.Path == path).BytesPerSecond);
+    }
+
+    /// <summary>Gives each request a rate feature, as Kestrel's over HTTP/1.1, and notes the rate it holds when its body is
+    /// first read (null for none).</summary>
+    private sealed class FirstReadRates : IStartupFilter
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(string Path, double? BytesPerSecond)> All { get; } = new();
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => builder =>
+        {
+            builder.Use(async (context, inner) =>
+            {
+                var rate = new RateFeature();
+                context.Features.Set<IHttpMinRequestBodyDataRateFeature>(rate);
+                context.Request.Body = new FirstRead(context.Request.Body, () => All.Enqueue((context.Request.Path, rate.MinDataRate?.BytesPerSecond)));
+                await inner(context);
+            });
+            next(builder);
+        };
+    }
+
+    private sealed class RateFeature : IHttpMinRequestBodyDataRateFeature
+    {
+        public Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate? MinDataRate { get; set; }
+    }
+
+    private sealed class FirstRead(Stream inner, Action first) : Stream
+    {
+        private bool _read;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_read)
+            {
+                _read = true;
+                first();
+            }
+
+            return inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     [Fact]

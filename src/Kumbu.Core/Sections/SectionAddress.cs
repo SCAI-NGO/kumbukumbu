@@ -82,12 +82,16 @@ public static partial class SectionAddress
     /// </summary>
     public static IReadOnlyList<Heading> Resolve(IReadOnlyList<Heading> headings, IReadOnlyList<AddressSegment> segments)
     {
+        // A heading's shown form is worked out once per lookup, not once per heading whose chain holds it.
+        var shown = new Dictionary<string, string>(StringComparer.Ordinal);
+        string LinkedShown(string h) => shown.TryGetValue(h, out var s) ? s : shown[h] = Linked(Shown(h));
+
         foreach (var same in new Func<string, string, bool>[]
         {
             (a, h) => a == h,
             (a, h) => string.Equals(a, h, StringComparison.OrdinalIgnoreCase),
             (a, h) => Linked(a) is { Length: > 0 } link
-                && (string.Equals(link, Linked(h), StringComparison.OrdinalIgnoreCase) || string.Equals(link, Linked(Shown(h)), StringComparison.OrdinalIgnoreCase)),
+                && (string.Equals(link, Linked(h), StringComparison.OrdinalIgnoreCase) || string.Equals(link, LinkedShown(h), StringComparison.OrdinalIgnoreCase)),
         })
         {
             var matches = headings.Where(h => Matches(h, segments, same)).ToList();
@@ -106,7 +110,7 @@ public static partial class SectionAddress
     private static string Shown(string text)
     {
         // "%%" inside a code span is text: the comments' marks are found with the spans blanked.
-        var masked = CodeSpanRegex().Replace(text, m => new string(' ', m.Length));
+        var masked = MaskCodeSpans(text);
         var outside = new StringBuilder();
         var from = 0;
         var open = false;
@@ -119,8 +123,8 @@ public static partial class SectionAddress
 
         if (!open) outside.Append(text, from, text.Length - from);
         var shown = WikiLinkRegex().Replace(outside.ToString(), m => WikiLabel(m.Groups[1].Value));
-        shown = MarkdownLinkRegex().Replace(shown, "$1");
-        shown = HighlightRegex().Replace(shown, "$1");
+        shown = WithoutMarkdownLinks(shown);
+        shown = WithoutHighlights(shown);
         return EmphasisRegex().Replace(shown, "$2").Trim();
     }
 
@@ -163,19 +167,119 @@ public static partial class SectionAddress
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
 
-    // The web app's patterns (outline.ts): a code span, its backticks paired by count; a wiki link; a Markdown link
-    // or image; a highlight; emphasis, strike-through and code marks.
-    [GeneratedRegex(@"(`+)[\s\S]*?(?<!`)\1(?!`)")]
-    private static partial Regex CodeSpanRegex();
+    // The web app's patterns (outline.ts): a code span, its backticks paired by count, (`+)[\s\S]*?(?<!`)\1(?!`);
+    // a wiki link; a Markdown link or image, !?\[([^\]]*)\]\([^)]*\); a highlight, ==(?=[^\s=])(.+?)(?<=[^\s=])==;
+    // emphasis, strike-through and code marks. The scans below give exactly what those patterns give
+    // (SectionAddressTests).
+
+    /// <summary>The text with each code span blanked to spaces: an opening run of backticks closes at the next run
+    /// of exactly its length, else, as the web app's pattern does, of the longest shorter length that has one.</summary>
+    internal static string MaskCodeSpans(string text)
+    {
+        var runs = new List<(int Start, int Length)>();
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '`') continue;
+            var start = i;
+            while (i + 1 < text.Length && text[i + 1] == '`') i++;
+            runs.Add((start, i - start + 1));
+        }
+
+        if (runs.Count < 2) return text;
+        var byLength = new Dictionary<int, List<int>>();
+        for (var r = 0; r < runs.Count; r++)
+        {
+            if (!byLength.TryGetValue(runs[r].Length, out var list)) byLength[runs[r].Length] = list = [];
+            list.Add(r);
+        }
+
+        var masked = text.ToCharArray();
+        for (var r = 0; r < runs.Count; r++)
+        {
+            for (var length = runs[r].Length; length >= 1; length--)
+            {
+                if (!byLength.TryGetValue(length, out var list)) continue;
+                var at = list.BinarySearch(r + 1);
+                if (at < 0) at = ~at;
+                if (at == list.Count) continue;
+                var closer = list[at];
+                Array.Fill(masked, ' ', runs[r].Start, runs[closer].Start + length - runs[r].Start);
+                r = closer;
+                break;
+            }
+        }
+
+        return new string(masked);
+    }
+
+    /// <summary>The text with each Markdown link or image replaced by its text: '[' up to the first ']', which a '('
+    /// follows, up to the first ')' after it.</summary>
+    internal static string WithoutMarkdownLinks(string text)
+    {
+        var nextBracket = NextOf(text, ']');
+        var nextParen = NextOf(text, ')');
+        var result = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            var open = text[i] == '!' && i + 1 < text.Length && text[i + 1] == '[' ? i + 1 : i;
+            if (text[open] == '[')
+            {
+                var close = nextBracket[open + 1];
+                if (close + 1 < text.Length && text[close + 1] == '(' && nextParen[close + 2] is var end && end < text.Length)
+                {
+                    result.Append(text, open + 1, close - open - 1);
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            result.Append(text[i++]);
+        }
+
+        return result.ToString();
+    }
+
+    /// <summary>The text with each highlight's "==" marks gone: an opening "==" before a character that is neither
+    /// whitespace nor '=' closes at the first "==" on its line after one that is neither, at least one character on.</summary>
+    internal static string WithoutHighlights(string text)
+    {
+        static bool Plain(char c) => c != '=' && !char.IsWhiteSpace(c);
+
+        // nextCloser[k]: the first position at or after k where a closing "==" starts; nextNewline likewise.
+        var nextCloser = new int[text.Length + 1];
+        nextCloser[text.Length] = text.Length;
+        for (var k = text.Length - 1; k >= 0; k--)
+            nextCloser[k] = k >= 1 && k + 1 < text.Length && text[k] == '=' && text[k + 1] == '=' && Plain(text[k - 1]) ? k : nextCloser[k + 1];
+        var nextNewline = NextOf(text, '\n');
+
+        var result = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            if (i + 3 < text.Length && text[i] == '=' && text[i + 1] == '=' && Plain(text[i + 2])
+                && nextCloser[i + 3] is var close && close < text.Length && nextNewline[i + 2] > close)
+            {
+                result.Append(text, i + 2, close - i - 2);
+                i = close + 2;
+                continue;
+            }
+
+            result.Append(text[i++]);
+        }
+
+        return result.ToString();
+    }
+
+    /// <summary>For each position, the first position at or after it that holds the character, else the text's length.</summary>
+    private static int[] NextOf(string text, char c)
+    {
+        var next = new int[text.Length + 1];
+        next[text.Length] = text.Length;
+        for (var k = text.Length - 1; k >= 0; k--) next[k] = text[k] == c ? k : next[k + 1];
+        return next;
+    }
 
     [GeneratedRegex(@"!?\[\[([^\[\]\n]+?)\]\]")]
     private static partial Regex WikiLinkRegex();
-
-    [GeneratedRegex(@"!?\[([^\]]*)\]\([^)]*\)")]
-    private static partial Regex MarkdownLinkRegex();
-
-    [GeneratedRegex(@"==(?=[^\s=])(.+?)(?<=[^\s=])==")]
-    private static partial Regex HighlightRegex();
 
     [GeneratedRegex(@"(\*\*|__|\*|_|~~|`)(.+?)\1")]
     private static partial Regex EmphasisRegex();

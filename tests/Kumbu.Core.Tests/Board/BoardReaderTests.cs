@@ -208,6 +208,33 @@ public class BoardReaderTests
         Assert.Equal(overProblem, boardProblem);
     }
 
+    // A card in Doing whose frontmatter, its "---" lines included, is the given number of characters long.
+    private static string CardOf(int length)
+    {
+        const string start = "---\ncolumn: Doing\nnotes: ";
+        const string end = "\n---\n";
+        return start + new string('x', length - start.Length - end.Length) + end + "Text\n";
+    }
+
+    [Fact]
+    public async Task A_card_with_frontmatter_longer_than_aliases_are_read_from_is_a_problem()
+    {
+        var (board, problem) = await Read(("/Work/Board/Board.md", Header),
+            ("/Work/Board/Fits.md", CardOf(Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength)),
+            ("/Work/Board/Over.md", CardOf(Kumbu.Core.Links.NoteAliases.MaxFrontmatterLength + 1)));
+
+        Assert.Null(problem);
+        Assert.Equal(["Fits"], Titles(board!, "Doing"));
+        var over = Assert.Single(board!.Problems);
+        Assert.Equal(P("/Work/Board/Over.md"), over.Path);
+        Assert.Equal($"the frontmatter does not parse: {Frontmatter.TooLargeProblem}", over.What);
+    }
+
+    [Fact]
+    public async Task A_cancelled_board_read_stops() =>
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => BoardReader.ReadAsync(
+            new InMemoryNoteStore([("/Work/Board/Board.md", Header), ("/Work/Board/A.md", Card("Doing"))]), "Work", new CancellationToken(true)));
+
     [Fact]
     public void Readers_of_the_same_definition_share_one_read()
     {

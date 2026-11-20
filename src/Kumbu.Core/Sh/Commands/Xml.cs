@@ -61,7 +61,8 @@ public sealed partial class Xml(INoteReader notes) : ICommand
                              in an Atom feed, //d:entry/d:title. XPath names an element without a prefix only in no namespace.
           A document with a DTD (<!DOCTYPE …>) is refused: Kumbu² neither expands its entities nor reads anything
           outside the file. A call stops after 10 seconds. An XPath is at most 1,000 characters long, and its
-          concat() calls take at most 8 arguments in all.
+          concat() calls take at most 8 arguments in all; translate() takes its two lists of characters as
+          quoted text.
 
           xml /Work/feed.xml
           xml /Work/feed.xml '//item/title'
@@ -117,6 +118,11 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         if (ConcatArguments(xpath) > MaxConcatArguments)
         {
             return ShellResult.Error($"xml: '{xpath}': concat() takes at most {MaxConcatArguments} arguments in all, as each can be the whole document's text");
+        }
+
+        if (!TranslateListsAreLiterals(xpath))
+        {
+            return ShellResult.Error($"xml: '{xpath}': translate() takes its second and third arguments as quoted text, such as translate(., 'abc', 'ABC')");
         }
 
         var manager = new XmlNamespaceManager(root.NameTable);
@@ -372,6 +378,31 @@ public sealed partial class Xml(INoteReader notes) : ICommand
         return arguments;
     }
 
+    /// <summary>Whether every translate() call in a compiled XPath gives its second and third arguments as string literals.</summary>
+    private static bool TranslateListsAreLiterals(string xpath)
+    {
+        var code = Literal().Replace(xpath, "''");
+        foreach (Match call in Translate().Matches(code))
+        {
+            var arguments = new List<string>();
+            var start = call.Index + call.Length;
+            for (int i = start, depth = 1; i < code.Length && depth > 0; i++)
+            {
+                if (code[i] == '(') depth++;
+                else if (code[i] == ')') depth--;
+                if (depth == 0 || (code[i] == ',' && depth == 1))
+                {
+                    arguments.Add(code[start..i].Trim());
+                    start = i + 1;
+                }
+            }
+
+            if (arguments.Count != 3 || arguments[1] != "''" || arguments[2] != "''") return false;
+        }
+
+        return true;
+    }
+
     /// <summary>Whether an XPath names a prefix: a single colon outside its string literals (an axis has two).</summary>
     private static bool HasPrefix(string xpath) => Prefixed().IsMatch(Literal().Replace(xpath, ""));
 
@@ -401,6 +432,9 @@ public sealed partial class Xml(INoteReader notes) : ICommand
     // A function call: concat, not part of a longer name (my-concat), then its opening parenthesis.
     [GeneratedRegex(@"(?<![\w.:-])concat\s*\(")]
     private static partial Regex Concat();
+
+    [GeneratedRegex(@"(?<![\w.:-])translate\s*\(")]
+    private static partial Regex Translate();
 
     [GeneratedRegex("(?<!:):(?!:)")]
     private static partial Regex Prefixed();

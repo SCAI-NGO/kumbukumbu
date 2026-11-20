@@ -305,10 +305,23 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     /// <summary>How often a blob was opened: what a test asserts to see that bytes were not read.</summary>
     public int BlobOpens { get; private set; }
 
+    /// <summary>Called when a blob opened by <see cref="OpenBlobAsync"/> has been read to its end.</summary>
+    public Action? BlobReadToEnd { get; set; }
+
     public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         BlobOpens++;
-        return Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+        return Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new BlobStream(bytes, BlobReadToEnd) : null);
+    }
+
+    private sealed class BlobStream(byte[] bytes, Action? readToEnd) : MemoryStream(bytes, writable: false)
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            var read = await base.ReadAsync(buffer, ct);
+            if (read == 0) readToEnd?.Invoke();
+            return read;
+        }
     }
 
     /// <summary>The exception storing these bytes throws (a full vault's <see cref="QuotaExceededException"/>, say), or null to store them.</summary>
