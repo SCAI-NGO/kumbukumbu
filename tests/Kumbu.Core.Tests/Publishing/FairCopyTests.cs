@@ -587,12 +587,14 @@ public class FairCopyTests
         Assert.Equal(new HashSet<int> { 4, 5 }, FairCopies.NoteIds("`[a](#kn-3)` [b](#kn-4/x)\n\n![c](#kn-5)").ToHashSet());
 
     [Fact]
-    public void Note_links_are_found_in_every_short_text_as_the_pattern_reads_them()
+    public void Note_links_are_found_and_relinked_in_every_short_text_as_the_pattern_reads_them()
     {
         var pattern = new Regex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)");
-        string[] tokens = ["[", "]", "](#kn-1)", "](#kn-12/a%20b)", "](#kn-12/a b)", "\\", "!", "x", " "];
+        string[] tokens = ["[", "]", "](#kn-1)", "](#kn-2/a)", "](#kn-3)", "](#kn-4/a b)", "\\", "!"];
+        // Drops note 1, keeps note 3 as it is, and moves every other note.
+        string? Target(int id, string subpath) => id switch { 1 => "", 3 => null, _ => $"#kn-{id + 10}/{subpath}" };
         var texts = new List<string> { "" };
-        for (var (from, length) = (0, 1); length <= 5; length++)
+        for (var (from, length) = (0, 1); length <= 6; length++)
         {
             var to = texts.Count;
             for (var i = from; i < to; i++)
@@ -601,9 +603,15 @@ public class FairCopyTests
         }
 
         foreach (var text in texts)
-            Assert.Equal(Found(pattern.Matches(text)), Found(FairCopies.NoteLinkRegex().Matches(text)));
-
-        static string[] Found(MatchCollection matches) =>
-            [.. matches.Select(m => $"{m.Index}:{m.Length}:" + string.Join(":", m.Groups.Cast<Group>().Skip(1).Select(g => g.Success ? g.Value : "-")))];
+        {
+            var relinked = pattern.Replace(text, m => Target(int.Parse(m.Groups[2].Value), m.Groups[3].Value) switch
+            {
+                null => m.Value,
+                "" => Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value),
+                var target => $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({target})",
+            });
+            Assert.Equal(relinked, FairCopies.Relink(text, Target));
+            Assert.Equal(pattern.Matches(text).Select(m => int.Parse(m.Groups[2].Value)).ToHashSet(), FairCopies.NoteIds(text));
+        }
     }
 }

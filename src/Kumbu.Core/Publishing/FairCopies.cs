@@ -113,14 +113,24 @@ public static partial class FairCopies
     /// its text, anything else is its new destination. Outside code, as <see cref="Unlink"/>.
     /// </summary>
     public static string Relink(string markdown, Func<int, string, string?> target) =>
-        OutsideCode(markdown, text => NoteLinkRegex().Replace(text, m =>
+        OutsideCode(markdown, text =>
         {
-            var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
-            if (to is null) return m.Value;
-            // Only the brackets the copy escaped in the text: any other escape stays, so the text reads as it did.
-            if (to.Length == 0) return Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value);
-            return $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({to})";
-        }));
+            var relinked = new StringBuilder();
+            var at = 0;
+            foreach (Match m in NoteLinkRegex().Matches(text))
+            {
+                var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
+                if (to is null) continue;
+                var embed = m.Index > 0 && text[m.Index - 1] == '!';
+                relinked.Append(text, at, m.Index - (embed ? 1 : 0) - at);
+                at = m.Index + m.Length;
+                // Only the brackets the copy escaped in the text: any other escape stays, so the text reads as it did.
+                if (to.Length == 0) relinked.Append(Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value));
+                else relinked.Append(embed ? "!" : "").Append('[').Append(m.Groups[1].Value).Append("](").Append(to).Append(')');
+            }
+
+            return at == 0 ? text : relinked.Append(text, at, text.Length - at).ToString();
+        });
 
     /// <summary>The ids of the notes the copy <paramref name="markdown"/> links to or embeds, outside code.</summary>
     public static IReadOnlySet<int> NoteIds(string markdown)
@@ -1557,7 +1567,7 @@ public static partial class FairCopies
     [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
 
-    // Linear in the text, as the outline's patterns.
-    [GeneratedRegex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)", RegexOptions.NonBacktracking)]
-    internal static partial Regex NoteLinkRegex();
+    // Linear in the text, as the outline's patterns; an embed's "!" is the character before the match.
+    [GeneratedRegex(@"\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)", RegexOptions.NonBacktracking)]
+    private static partial Regex NoteLinkRegex();
 }
