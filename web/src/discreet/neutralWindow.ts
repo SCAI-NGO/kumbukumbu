@@ -28,11 +28,14 @@ export function besideVaultOf(url: string): string | null {
   return beside && vaultOf(beside).normalize("NFC");
 }
 
-/** Whether a URL of the app (a path, or a full URL) shows a vault that is discreet now, in either pane of the split view. */
+/**
+ * Whether a URL of the app (a path, or a full URL) shows a vault that is discreet now, in either pane of the split view:
+ * one shown in the mode counts until the mode is reset, also once the vault list no longer names it.
+ */
 export function discreetUrl(url: string): boolean {
   const path = pathOf(url);
-  const names = useDiscreet.getState().names;
-  return [vaultOfRoute(path), besideVaultOf(path)].some((vault) => vault !== null && names.has(vault));
+  const { names, listed } = useDiscreet.getState();
+  return [vaultOfRoute(path), besideVaultOf(path)].some((vault) => vault !== null && (names.has(vault) || listed.has(vault)));
 }
 
 function pathOf(url: string | URL): string {
@@ -96,7 +99,7 @@ export function createNeutralWindow(real: Window): Window {
     // A replaced entry can't come back: what is remembered of it goes (and comes again below if it is still needed).
     const replaced = method === "replaceState" ? (history.state as HistoryState | null)?.key : undefined;
     if (typeof replaced === "string") memory.delete(replaced);
-    const keepUsr = discreet || (given?.usr != null && useDiscreet.getState().names.size > 0);
+    const keepUsr = discreet || (given?.usr != null && (useDiscreet.getState().names.size > 0 || useDiscreet.getState().listed.size > 0));
     if (!keepUsr) return history[method](state, "", url);
     const { usr, ...rest } = given ?? {};
     const key = typeof rest.key === "string" ? rest.key : newKey();
