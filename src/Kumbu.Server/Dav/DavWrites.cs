@@ -585,7 +585,7 @@ internal sealed partial class DavWrites(
             if (Request.ContentLength > bound) throw new DavException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
             // The 64 MiB of every other request under /dav, lifted for a file's.
             Api.FileApi.LiftBodyLimit(http, bound);
-            if (Request.ContentLength > AttachmentFormat.MaxBytes) Api.FileApi.RequireLargeBodyRate(http);
+            if (Request.ContentLength is null or > AttachmentFormat.MaxBytes) Api.FileApi.RequireLargeBodyRate(http);
             try
             {
                 (bytes, large) = await DavBody.ReadStartAsync(Request, AttachmentFormat.MaxBytes, Api.FileApi.HeadBytes, ct);

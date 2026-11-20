@@ -379,16 +379,19 @@ public sealed class LargeFileTests(KumbuAppFactory app)
         }
     }
 
-    /// <summary>A body declared larger than 15 MB is held to the server's least rate from its first byte on.</summary>
+    /// <summary>A large body, with its length declared or sent chunked, is held to the server's least rate from its
+    /// first byte on.</summary>
     [Theory]
-    [InlineData("files")]
-    [InlineData("dav")]
-    public async Task A_declared_large_bodys_rate_is_asked_for_before_its_first_byte(string route)
+    [InlineData("files", true)]
+    [InlineData("files", false)]
+    [InlineData("dav", true)]
+    [InlineData("dav", false)]
+    public async Task A_large_bodys_rate_is_asked_for_before_its_first_byte(string route, bool declare)
     {
         var rates = new FirstReadRates();
         await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s => s.AddSingleton<IStartupFilter>(rates)));
         var user = await RestClient.NewAsync(api, vault: "Work");
-        var content = new LargeFiles.Streamed(LargeFiles.Of(LargeFiles.Size, 15), true);
+        var content = new LargeFiles.Streamed(LargeFiles.Of(LargeFiles.Size, 15), declare);
 
         using var put = route == "files"
             ? await user.SendContentAsync(HttpMethod.Put, user.Url("big.bin", "files"), content, followRedirects: false)

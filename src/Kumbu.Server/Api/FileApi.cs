@@ -187,8 +187,8 @@ public static class FileApi
         var declared = request.ContentLength;
         if (declared > bound) throw new ApiException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
         LiftBodyLimit(request.HttpContext, bound);
-        // Kestrel takes the rate at the body's first read.
-        if (declared > AttachmentFormat.MaxBytes) RequireLargeBodyRate(request.HttpContext);
+        // A body that may be large: declared above 15 MB, or of no declared length.
+        if (declared is null or > AttachmentFormat.MaxBytes) RequireLargeBodyRate(request.HttpContext);
 
         using var body = new ReceivedBody();
         if (!await body.ReadAsync(request, declared, ct)) return await StoreLargeAsync(filePath, version, body.Bytes, request, declared, bound, files, writer, store, labels, ct);
@@ -264,9 +264,10 @@ public static class FileApi
     internal static readonly TimeSpan LargeBodyGrace = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Holds a body declared larger than 15 MB to <see cref="LargeBodyBytesPerSecond"/>, before the body's first byte is
-    /// read: Kestrel takes a request's rate once, at that read. Only where the server lets a request set it, over
-    /// HTTP/1.1: HTTP/2 keeps its rates per connection, and its feature refuses one per request; the test host has none.
+    /// Holds a body that may be larger than 15 MB (declared so, or of no declared length) to
+    /// <see cref="LargeBodyBytesPerSecond"/>, before the body's first byte is read: Kestrel takes a request's rate once,
+    /// at that read. Only where the server lets a request set it, over HTTP/1.1: HTTP/2 keeps its rates per connection,
+    /// and its feature refuses one per request; the test host has none.
     /// </summary>
     internal static void RequireLargeBodyRate(HttpContext http)
     {
