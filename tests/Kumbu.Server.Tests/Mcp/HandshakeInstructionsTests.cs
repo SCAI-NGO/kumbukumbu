@@ -147,6 +147,87 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
         Assert.Contains("- release-notes (/Work/_skills/release-notes, last changed by Carol, another user): Drafts release notes.", text);
     }
 
+    private const string Helper = "---\nname: helper\ndescription: Helps with the plan.\nmetadata:\n  kumbu-when: session-start\n---\n";
+
+    /// <summary>The entries under the start-up head, up to the blank line after them; empty without the head.</summary>
+    private static string StartPart(string instructions)
+    {
+        var at = instructions.IndexOf(Kumbu.Core.Skills.SkillInstructions.StartHead, StringComparison.Ordinal);
+        return at < 0 ? "" : instructions[at..instructions.IndexOf("\n\n", at, StringComparison.Ordinal)];
+    }
+
+    private static string HelperLine(string instructions) =>
+        Assert.Single(instructions.Split('\n'), l => l.StartsWith("- helper (", StringComparison.Ordinal));
+
+    private static void AssertCarolsHelper(string instructions)
+    {
+        var line = HelperLine(instructions);
+        Assert.StartsWith("- helper (/Work/_skills/helper, last changed by ", line);
+        Assert.EndsWith(", another user): Helps with the plan.", line);
+        Assert.DoesNotContain("- helper (", StartPart(instructions));
+    }
+
+    private async Task<RestClient> CarolAsync(RestClient alice)
+    {
+        var carol = await RestClient.NewAsync(app.PublicApi, vault: "Private");
+        await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, carol, "Garten", Kumbu.Server.Sharing.MemberRole.Write, label: "Carol");
+        return carol;
+    }
+
+    [Fact]
+    public async Task A_members_skill_stays_his_after_the_owner_renames_a_note_it_links_to()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await CarolAsync(alice);
+        await PutAsync(alice, "/Work/Plan.md", "# Plan\n");
+        await PutAsync(carol, "/Garten/_skills/helper/SKILL.md", Helper + "See [[Plan]].\n");
+
+        using (var move = await alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Work/Plan.md", to = "/Work/Roadmap.md" }))
+            Assert.True(move.IsSuccessStatusCode, await move.Content.ReadAsStringAsync(Ct));
+
+        Assert.EndsWith("See [[Roadmap]].\n", (await alice.ReadAsync("_skills/helper/SKILL.md"))["content"]!.GetValue<string>());
+        AssertCarolsHelper(await InstructionsAsync(key));
+    }
+
+    [Fact]
+    public async Task A_members_skill_stays_his_after_the_owners_replace_across_the_vault()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await CarolAsync(alice);
+        await PutAsync(alice, "/Work/_skills/helper/SKILL.md", Helper + "Follow references/steps.md for the draft.\n");
+        await PutAsync(carol, "/Garten/_skills/helper/references/steps.md", "# Steps\n\nWrite the draft.\nRead it aloud.\n");
+        var writing = await alice.KeyAsync("Writer", KeyRight.Write);
+
+        var args = new Dictionary<string, object?> { ["path"] = "/Work", ["old_text"] = "draft", ["new_text"] = "outline" };
+        var preview = await alice.ToolAsync("replace", args, writing);
+        var plan = string.Join('\n', preview.Content.OfType<TextContentBlock>().Select(b => b.Text)).Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))[6..];
+        var applied = await alice.ToolAsync("replace", new Dictionary<string, object?>(args) { ["plan"] = plan }, writing);
+        Assert.False(applied.IsError ?? false);
+
+        Assert.Contains("Write the outline.", (await alice.ReadAsync("_skills/helper/references/steps.md"))["content"]!.GetValue<string>());
+        AssertCarolsHelper(await InstructionsAsync(key));
+    }
+
+    [Fact]
+    public async Task A_skill_the_owner_rewrote_whole_is_hers()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await CarolAsync(alice);
+        string version;
+        using (var put = await carol.SendAsync(HttpMethod.Put, "/api/notes/Garten/_skills/helper/SKILL.md", new { content = "# Helper\nCarol's steps.\n" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+            version = (await RestClient.JsonAsync(put))["version"]!.GetValue<string>();
+        }
+
+        using (var put = await alice.SendAsync(HttpMethod.Put, "/api/notes/Work/_skills/helper/SKILL.md", new { content = Helper + "# Plan helper\nRead the plan first.\n", version }))
+            Assert.True(put.IsSuccessStatusCode, await put.Content.ReadAsStringAsync(Ct));
+
+        var text = await InstructionsAsync(key);
+        Assert.DoesNotContain("another user", HelperLine(text));
+        Assert.Contains("- helper (/Work/_skills/helper, ", StartPart(text));
+    }
+
     [Fact]
     public async Task A_key_without_Skills_sees_none_of_its_skills()
     {
