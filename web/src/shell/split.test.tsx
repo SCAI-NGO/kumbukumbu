@@ -759,6 +759,20 @@ describe("write follows the click", () => {
     expect(source("right")!.selectionStart).toBe(SEE);
   });
 
+  it("starts Write mode 200 ms after a plain click, not before", async () => {
+    await split();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      click(see("right"));
+      await act(() => vi.advanceTimersByTimeAsync(199));
+      expect(useEditor.getState().panes.right.mode).toBe("read");
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(useEditor.getState().panes.right.mode).toBe("write");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Double click to select a word, triple for the paragraph: the most common way to copy, which the split view serves.
   for (const [what, clicks] of [["a double click", 2], ["a triple click", 3]] as const) {
     it(`switches nothing for ${what}, which selects`, async () => {

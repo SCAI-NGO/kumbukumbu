@@ -76,7 +76,7 @@ function EditorLoadFailed() {
 const OWN_CLICK = "a, button, input, label, select, summary, textarea, [role=button], [role=checkbox], [aria-label=Properties]";
 
 /** How long a plain click waits for a second one before it starts Write mode: a double click selects a word. */
-const DOUBLE_CLICK_MS = 250;
+const DOUBLE_CLICK_MS = 200;
 
 /** How long the typing pauses before the live preview shows what was typed. */
 const PREVIEW_PAUSE_MS = 250;
