@@ -8,8 +8,9 @@ import { useDialog } from "../hooks/useDialog";
 import { FormError, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
 
 /**
- * Asks for a vault's name and creates it; the server says what a name may be. With her own TensorX key saved, the server
- * starts the vault on TensorX (BYOK spec): the dialog says so in one line, and unticked, the vault stays on this server.
+ * Asks for a vault's name and creates it; the server says what a name may be. With her own TensorX key saved, the dialog
+ * offers TensorX, ticked, says so in one line and names it in the create; unticked, or before the key's status is known,
+ * the vault stays on this server.
  */
 export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void; onCreated(name: string): void }) {
   const [name, setName] = useState("");
