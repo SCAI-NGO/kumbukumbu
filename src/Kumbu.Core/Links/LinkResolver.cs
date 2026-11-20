@@ -52,10 +52,11 @@ public sealed class LinkResolver
     private readonly Dictionary<string, List<VaultPath>> _notesByPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<VaultPath>> _attachmentsByPath = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The notes, and the attachments, by every end of their path inside the vault that starts a segment
-    /// ("/x.md", "/F1/x.md"), for a link that names the end of a path.</summary>
-    private readonly Dictionary<string, List<VaultPath>> _notesBySuffix = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, List<VaultPath>> _attachmentsBySuffix = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The notes, and the attachments, by the hash of every end of their path inside the vault that starts a
+    /// segment ("/x.md", "/F1/x.md"; <see cref="SuffixHash"/>), for a link that names the end of a path. Hashed segment by
+    /// segment from the end, so a deep path costs its length, not its length times its depth.</summary>
+    private readonly Dictionary<int, List<(VaultPath Path, string InVault)>> _notesBySuffix = [];
+    private readonly Dictionary<int, List<(VaultPath Path, string InVault)>> _attachmentsBySuffix = [];
 
     /// <param name="notes">Every note of one vault.</param>
     /// <param name="attachments">Every attachment of the vault; null if unknown, so a link to a file is then
@@ -92,16 +93,39 @@ public sealed class LinkResolver
         }
     }
 
-    private static void Add(Dictionary<string, List<VaultPath>> byPath, Dictionary<string, List<VaultPath>> bySuffix, VaultPath path)
+    private static void Add(
+        Dictionary<string, List<VaultPath>> byPath, Dictionary<int, List<(VaultPath Path, string InVault)>> bySuffix, VaultPath path)
     {
         var inVault = "/" + string.Join('/', path.Segments.Skip(1));
         Add(byPath, inVault, path);
-        for (var slash = inVault.Length; (slash = inVault.LastIndexOf('/', slash - 1)) >= 0;)
+        var hash = 0;
+        for (var end = inVault.Length; end > 0;)
         {
-            Add(bySuffix, inVault[slash..], path);
-            if (slash == 0) break;
+            var slash = inVault.LastIndexOf('/', end - 1);
+            hash = Step(hash, inVault.AsSpan(slash + 1, end - slash - 1));
+            if (!bySuffix.TryGetValue(hash, out var list)) bySuffix[hash] = list = [];
+            // Two ends of one path that hash alike would list it twice.
+            if (list.Count == 0 || list[^1].Path != path) list.Add((path, inVault));
+            end = slash;
         }
     }
+
+    /// <summary>The hash of a path's end that starts a segment ("/F1/x.md"), as the index of ends keeps it.</summary>
+    private static int SuffixHash(string suffix)
+    {
+        var hash = 0;
+        for (var end = suffix.Length; end > 0;)
+        {
+            var slash = suffix.LastIndexOf('/', end - 1);
+            hash = Step(hash, suffix.AsSpan(slash + 1, end - slash - 1));
+            end = slash;
+        }
+
+        return hash;
+    }
+
+    private static int Step(int hash, ReadOnlySpan<char> segment) =>
+        HashCode.Combine(hash, string.GetHashCode(segment, StringComparison.OrdinalIgnoreCase));
 
     private static void Add(Dictionary<string, List<VaultPath>> index, string key, VaultPath path)
     {
@@ -189,12 +213,14 @@ public sealed class LinkResolver
     /// <summary>The note or attachment (by <paramref name="kind"/>) that <paramref name="path"/> names, as the rules
     /// above say; null if none matches.</summary>
     private static LinkResolution? Find(
-        Dictionary<string, List<VaultPath>> byPath, Dictionary<string, List<VaultPath>> bySuffix, LinkKind kind, VaultPath source,
+        Dictionary<string, List<VaultPath>> byPath, Dictionary<int, List<(VaultPath Path, string InVault)>> bySuffix, LinkKind kind, VaultPath source,
         string path, string suffix, bool exact)
     {
         // Looked up by the path, or by the end of it, that the link names: every note found there is of the link's name,
         // in the order the notes were given.
-        List<VaultPath> candidates = [.. (exact ? byPath : bySuffix).GetValueOrDefault(suffix) ?? []];
+        List<VaultPath> candidates = exact
+            ? [.. byPath.GetValueOrDefault(suffix) ?? []]
+            : [.. (bySuffix.GetValueOrDefault(SuffixHash(suffix)) ?? []).Where(e => e.InVault.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)).Select(e => e.Path)];
 
         // A path with a folder ("Work/plan") is, as in Obsidian, first a path below the source's folder,
         // then a path from the vault's root, and only then a path suffix.
