@@ -26,9 +26,9 @@ Decided by Chris on 2026-11-18. His reason: together these cover every sensible 
 - **The key belongs to the account.** People enter it once, in the settings.
   - Decided by Chris. His reason: one key, one bill.
 - **The choice is made per vault,** with the existing "Search by meaning…" dialog. It lists "TensorX (your own key)" next to the internal model and any providers the admin configured.
-- **New vaults use the better provider.** When the account has a key, a new vault starts on TensorX with that key, and the dialog shows that it does.
+- **New vaults use the better provider when chosen.** When the account has a key, the New vault dialog offers TensorX, ticked, and says in one line that the vault's text goes there; the vault starts on TensorX only with that choice (`POST /api/vaults` with `provider`). A vault created without one, as an import does, starts on this server.
   - Decided by Chris. His reason: TensorX's embeddings are better.
-  - The new-vault dialog says, in one line, that the vault's text goes to TensorX. People can switch to internal there.
+  - Changed by Chris on 2026-11-19: only a named provider puts a vault on TensorX. His reason: honest by default, a vault's text leaves the server only on a choice that was shown.
 - **Existing vaults are not moved silently.** After someone saves a key, the app asks once: "Move these N vaults to TensorX too?". It lists the vaults with checkboxes, all ticked, and offers "Not now".
   - My call: from then on the vaults' text leaves the server, and people have to choose that consciously (the honesty principle in the design principles).
 - **Discreet vaults never use BYOK.** A discreet vault's text stays on the server. The option doesn't appear for a discreet vault, and the API refuses it.
@@ -76,7 +76,7 @@ xUnit:
 - non-owners refused;
 - a rejected key isolates that account only;
 - BYOK switched off falls back to `internal`;
-- new vaults start on BYOK when the account has a key;
+- new vaults start on BYOK when the dialog's box is ticked;
 - the key never appears in logs, API answers or history.
 
 Vitest:

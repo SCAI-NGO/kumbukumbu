@@ -216,15 +216,19 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task With_a_key_a_new_vault_starts_on_tensorx()
+    public async Task With_a_key_a_new_vault_starts_on_tensorx_only_when_chosen()
     {
         var user = await WithKeyAsync();
 
-        using var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Ideen" });
+        using var chosen = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Ideen", provider = Byok.Provider });
+        using var unnamed = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Import" });
 
-        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        Assert.Equal(Byok.Provider, (await RestClient.JsonAsync(created))["embeddings"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, chosen.StatusCode);
+        Assert.Equal(Byok.Provider, (await RestClient.JsonAsync(chosen))["embeddings"]!.GetValue<string>());
         Assert.Equal(Byok.Provider, await ProviderOfAsync(user, "Ideen"));
+        Assert.Equal(HttpStatusCode.Created, unnamed.StatusCode);
+        Assert.Equal("internal", (await RestClient.JsonAsync(unnamed))["embeddings"]!.GetValue<string>());
+        Assert.Equal("internal", await ProviderOfAsync(user, "Import"));
         Assert.Equal("internal", await ProviderOfAsync(user, "Garten"));
     }
 
