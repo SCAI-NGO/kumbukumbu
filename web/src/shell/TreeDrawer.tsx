@@ -371,7 +371,7 @@ function ArchiveEntry({ files, bytes, onOpen }: { files: number; bytes: number; 
     <button type="button" data-tree-row onClick={onOpen} className={`${rowClass} mt-1 w-full pl-[22px] text-muted`}>
       <Archive size={18} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />
       <span className="min-w-0 flex-1 truncate">
-        Archive · {files === 1 ? "1 file" : `${files} files`} · {storageText(bytes)}
+        Archive · {files === 1 ? "1 item" : `${files} items`} · {storageText(bytes)}
       </span>
     </button>
   );
