@@ -233,4 +233,33 @@ public class NoteMoverTests
         Assert.False(result.IsError, result.Output);
         Assert.Equal("[[Old/Plan#^controller]]\n[c](/Old/Plan.md#%5Econtroller)\n", await store.ReadAsync(P("/Work/Pump/Tasks.md"), Ct));
     }
+
+    [Fact]
+    public async Task A_move_keeps_the_creation_time_of_a_note_written_once()
+    {
+        var store = new InMemoryNoteStore(("/Work/Pump/Delta.md", "Delta\n"));
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Shell(store, new NoteWriter(store, _time, caller), new NoteMover(store, _time, caller));
+
+        Assert.False((await shell.RunAsync("mv /Work/Pump/Delta.md /Work/Archive/", Ct)).IsError);
+        Assert.Equal((InMemoryNoteStore.Seeded, false), NoteCreation.Of((await store.GetAsync(P("/Work/Archive/Delta.md"), Ct))!));
+
+        Assert.False((await shell.RunAsync("rm /Work/Archive/Delta.md", Ct)).IsError);
+        Assert.False((await shell.RunAsync("restore /Work/Archive/Delta.md", Ct)).IsError);
+        Assert.Equal((InMemoryNoteStore.Seeded, false), NoteCreation.Of((await store.GetAsync(P("/Work/Archive/Delta.md"), Ct))!));
+    }
+
+    [Fact]
+    public async Task A_move_keeps_a_note_at_the_latest_as_old_as_its_oldest_state()
+    {
+        var oldest = InMemoryNoteStore.Seeded.AddDays(-3);
+        var store = new InMemoryNoteStore();
+        store.Put(new StoredNote(P("/Work/Old.md"), "Old\n", 2, Writers.Seed, InMemoryNoteStore.Seeded, [new("Older\n", Writers.Seed, oldest, null, null)],
+            Ref: WriterRef.Server));
+        var mover = new NoteMover(store, _time, new FixedCaller(Writers.Dev));
+
+        Assert.False((await mover.MoveAsync(P("/Work/Old.md"), P("/Work/Archive/Old.md"), rewriteLinks: true, Ct)).IsError);
+
+        Assert.Equal((oldest, true), NoteCreation.Of((await store.GetAsync(P("/Work/Archive/Old.md"), Ct))!));
+    }
 }

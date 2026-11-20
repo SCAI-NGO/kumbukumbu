@@ -35,17 +35,28 @@ const listed =
 const asked = (fetch: ReturnType<typeof fakeApi>, path: string) =>
   fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === path).length;
 
-function renderBar(owner = true) {
+function renderBar(owner = true, lastWriteAt?: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <PublicationBar path={NOTE} owner={owner} />
+        <PublicationBar path={NOTE} owner={owner} lastWriteAt={lastWriteAt} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
   return container;
 }
+
+// The start notes of the bundles the note went out with, and the copy each start's publication answers.
+const PLAN = "/Work/Plan.md";
+const PLAN_API = "/api/publications/Work/Plan.md";
+const ROADMAP = "/Work/Roadmap.md";
+const ROADMAP_API = "/api/publications/Work/Roadmap.md";
+const bundledIn =
+  (...starts: string[]) =>
+  () =>
+    json(200, { publications: [], unpublishable: [], bundled: starts.map((start) => ({ path: NOTE, start })) });
+const startCopy = (at: string | null, path = PLAN) => ({ path, snapshotAt: at, older: false, changedAt: null, publishedBy: "you", link, depth: 1, notes: 2 });
 
 const bar = () => screen.findByRole("region", { name: "Publication" });
 
@@ -275,6 +286,7 @@ describe("PublicationBar", () => {
     fakeApi({
       "GET /api/session": session(),
       [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: "/Work/Plan.md" }] }),
+      [`GET ${PLAN_API}`]: () => json(200, startCopy(snapshotAt)),
     });
     renderBar();
     const region = await bar();
@@ -294,5 +306,91 @@ describe("PublicationBar", () => {
     const region = await bar();
     expect(region).toHaveTextContent("Published by the vault's owner");
     expect(within(region).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("a bundled note's bar turns yellow when the copy is older than the note", async () => {
+    fakeApi({ "GET /api/session": session(), [LIST]: bundledIn(PLAN), [`GET ${PLAN_API}`]: () => json(200, startCopy(snapshotAt)) });
+    renderBar(true, changedAt);
+    const region = await bar();
+    await waitFor(() => expect(region).toHaveAttribute("data-tone", "yellow"));
+    // What to do, and where: the copy is updated at its start note.
+    expect(within(region).getByRole("status")).toHaveTextContent(/^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 16:05\. Update it from Plan\.$/);
+    expect(within(region).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/notes/Work/Plan.md");
+    expect(within(region).queryByRole("button", { name: "Update copy" })).not.toBeInTheDocument();
+  });
+
+  it("stays without a tone while the copy is as new as the note", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: bundledIn(PLAN), [`GET ${PLAN_API}`]: () => json(200, startCopy(changedAt)) });
+    renderBar(true, snapshotAt);
+    const region = await bar();
+    await waitFor(() => expect(asked(fetch, PLAN_API)).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(region).not.toHaveAttribute("data-tone");
+    expect(region).toHaveTextContent(/^Published with Plan$/);
+  });
+
+  it("with two bundles, yellow if one copy is older", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [LIST]: bundledIn(PLAN, ROADMAP),
+      [`GET ${PLAN_API}`]: () => json(200, startCopy(changedAt)),
+      [`GET ${ROADMAP_API}`]: () => json(200, startCopy(snapshotAt, ROADMAP)),
+    });
+    renderBar(true, new Date("2026-11-05T15:00:00").toISOString());
+    const region = await bar();
+    await waitFor(() => expect(region).toHaveAttribute("data-tone", "yellow"));
+    // Only the older copy's start: Plan's copy is as new as the note.
+    expect(within(region).getByRole("status")).toHaveTextContent(/^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 15:00\. Update it from Roadmap\.$/);
+    expect(within(region).queryByRole("link", { name: "Plan" })).not.toBeInTheDocument();
+  });
+
+  it("with two older copies, names both starts", async () => {
+    fakeApi({
+      "GET /api/session": session(),
+      [LIST]: bundledIn(PLAN, ROADMAP),
+      [`GET ${PLAN_API}`]: () => json(200, startCopy(snapshotAt)),
+      [`GET ${ROADMAP_API}`]: () => json(200, startCopy(new Date("2026-11-05T15:00:00").toISOString(), ROADMAP)),
+    });
+    renderBar(true, changedAt);
+    const region = await bar();
+    await waitFor(() => expect(region).toHaveAttribute("data-tone", "yellow"));
+    expect(within(region).getByRole("status")).toHaveTextContent(/^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 16:05\. Update them from Plan and Roadmap\.$/);
+  });
+
+  it("a member's bar asks no start and stays 'Published by the vault's owner'", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: () => json(200, { publications: [], unpublishable: [], bundled: [{ path: NOTE, start: null }] }) });
+    renderBar(false, changedAt);
+    const region = await bar();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(region).toHaveTextContent(/^Published by the vault's owner$/);
+    expect(region).not.toHaveAttribute("data-tone");
+    const publications = fetch.mock.calls.filter(([r]) => new URL((r as Request).url).pathname.startsWith("/api/publications/"));
+    expect(publications).toHaveLength(0);
+  });
+
+  it("keeps the start's link in no cache once the bar is gone", async () => {
+    fakeApi({ "GET /api/session": session(), [LIST]: bundledIn(PLAN), [`GET ${PLAN_API}`]: () => json(200, startCopy(snapshotAt)) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <PublicationBar path={NOTE} owner lastWriteAt={changedAt} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(async () => expect(await bar()).toHaveAttribute("data-tone", "yellow"));
+    expect(queryClient.getQueryData(["publication", PLAN])).toBeDefined();
+    unmount();
+    await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: ["publication", PLAN] })).toBeUndefined());
+  });
+
+  it("no tone when the start's snapshotAt is null", async () => {
+    const fetch = fakeApi({ "GET /api/session": session(), [LIST]: bundledIn(PLAN), [`GET ${PLAN_API}`]: () => json(200, startCopy(null)) });
+    renderBar(true, changedAt);
+    const region = await bar();
+    await waitFor(() => expect(asked(fetch, PLAN_API)).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(region).not.toHaveAttribute("data-tone");
+    expect(region).not.toHaveTextContent("older");
   });
 });

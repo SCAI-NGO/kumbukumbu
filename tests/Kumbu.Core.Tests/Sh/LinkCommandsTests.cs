@@ -377,6 +377,15 @@ public class LinkCommandsTests
         (await Run("rm /Demo/projects/kumbu.md")).Output);
 
     [Fact]
+    public async Task RmSaysThatOneLinkNowLeadsNowhere()
+    {
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/x.md", out var p) ? p : null!, "x\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/y.md", out var q) ? q : null!, "[[x]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
+
+        Assert.EndsWith("; 1 link in /Demo/y.md now leads nowhere", (await Run("rm /Demo/x.md")).Output);
+    }
+
+    [Fact]
     public async Task LinksOfOneSection()
     {
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/s.md", out var p) ? p : null!,

@@ -12,9 +12,9 @@ function atDockButton(): MenuPoint | null {
   const button = document.querySelector<HTMLElement>('nav[aria-label="Vault actions"] [aria-label="Note actions"]');
   if (!button) return null;
   const box = button.getBoundingClientRect();
-  // From its right edge: with the ⋯ near the window's edge there is no room to the right, so the menu flips left and
-  // ends at the button, as the dock's own does.
-  return { left: box.right, top: box.top - 4, bottom: box.bottom };
+  // Ending at its right edge whatever the room to the right: the dock's own menu does, and a window wide enough to open
+  // rightwards would otherwise put the list beside the button.
+  return { left: box.right, top: box.top - 4, bottom: box.bottom, align: "end" };
 }
 
 /**

@@ -105,7 +105,20 @@ public sealed class UploadToolTests(KumbuAppFactory app)
         var result = await UploadAsync(client, $"/{vault}/photo.png");
 
         Assert.True(result.IsError);
+        Assert.Equal($"upload: this key can only read vault {vault}", Text(result));
         Assert.Equal(before, Tickets);
+    }
+
+    [Fact]
+    public async Task Points_a_read_only_key_with_a_note_path_at_write()
+    {
+        var (vault, key, _, _) = await OwnVaultAsync();
+        await using var client = await app.ConnectAsync(key);
+
+        var result = await UploadAsync(client, $"/{vault}/x.md");
+
+        Assert.True(result.IsError);
+        Assert.Equal($"upload: /{vault}/x.md is a note; create or replace it with the write tool", Text(result));
     }
 
     [Theory]

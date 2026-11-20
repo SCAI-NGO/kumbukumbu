@@ -419,7 +419,6 @@ test("palette #7: Shift+F10 opens the note's menu, with Read mode's items in Rea
 });
 
 test("palette #8: the keyboard menu takes the focus, and Esc closes it with the caret where it was @palette", async ({ page, aliceApi, folder }) => {
-  test.fail(true, "F-12 (Medium, bug): the keyboard menu never takes the focus (it is focused while still hidden for its placement), so Esc, the arrows and Tab don't reach it and Esc leaves it open");
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
   await openNote(page, path);
@@ -432,16 +431,26 @@ test("palette #8: the keyboard menu takes the focus, and Esc closes it with the 
   const menu = page.getByRole("menu", { name: "Note actions" });
   await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
-  const focused = await page.evaluate(() => document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName ?? "");
-  expect(focused, "F-12: the focus on the menu's first item").toBe("menuitem");
+  // The focused element's role and text, beside the items' own texts.
+  const focused = () => page.evaluate(() => ({ role: document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName ?? "", text: document.activeElement?.textContent ?? "" }));
+  const items = await menu.getByRole("menuitem").allTextContents();
+  expect(await focused(), "F-12: the focus on the menu's first item").toEqual({ role: "menuitem", text: items[0] });
+  await page.keyboard.press("ArrowDown");
+  expect(await focused(), "F-12: ↓ moves the focus to the second item").toEqual({ role: "menuitem", text: items[1] });
   await page.keyboard.press("Escape");
   await expect(menu, "F-12: Esc closes the menu").toHaveCount(0);
   await expect(source).toBeFocused();
   expect(await source.evaluate((a: HTMLTextAreaElement) => [a.selectionStart, a.selectionEnd]), "the caret where it was").toEqual([5, 5]);
+
+  // Shift+Tab on the first item closes it too (the list doesn't wrap).
+  await page.keyboard.press("Shift+F10");
+  await expect(menu.getByRole("menuitem", { name: "Duplicate", exact: true })).toBeVisible();
+  expect(await focused(), "F-12: the focus on the first item again").toEqual({ role: "menuitem", text: items[0] });
+  await page.keyboard.press("Shift+Tab");
+  await expect(menu, "F-12: Shift+Tab on the first item closes the menu").toHaveCount(0);
 });
 
 test("palette #9: Shift+F10 straight after the note opens gives a menu that fits the window @palette", async ({ page, aliceApi, folder }) => {
-  test.fail(true, "F-13 (Medium, bug): the keyboard menu is placed for the items known when it opens and isn't placed again when the rest arrive, so its lower items run off the window");
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
   // The favourites and the vault's publications held until the menu is open, as on a slow line: the menu opens with
@@ -465,15 +474,21 @@ test("palette #9: Shift+F10 straight after the note opens gives a menu that fits
   await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeAttached();
   const box = await boxOf(menu);
   expect(box.bottom, `F-13: the menu ends within the window (${page.viewportSize()!.height} px)`).toBeLessThanOrEqual(page.viewportSize()!.height);
+  expect(box.top, "F-13: and starts within it").toBeGreaterThanOrEqual(0);
 });
 
 test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ opens it @palette", async ({ page, aliceApi, folder }) => {
-  test.fail(true, "F-14 (Low, bug): in Read mode the keyboard menu opens right of the dock's ⋯ where there is room, while the dock's own menu ends at the button");
   const path = `/Work/${folder}/Harbour.md`;
   await aliceApi.putNote(path, "# Harbour\n\nThe lighthouse.\n");
   await openNote(page, path);
 
   const menu = page.getByRole("menu", { name: "Note actions" });
+  // The dock's menu is placed once, when it opens: opened first until every item is in, the favourites' too, then
+  // again to be measured.
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
   await page.getByRole("button", { name: "Note actions" }).click();
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
   const byMouse = await boxOf(menu);
@@ -482,8 +497,11 @@ test("palette #10: in Read mode Shift+F10 opens the menu where the dock's ⋯ op
 
   await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem", { name: "Delete note", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Add to favourites", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("role")), "F-12: the focus on a menu item in Read mode too").toBe("menuitem");
   const byKey = await boxOf(menu);
-  expect({ left: Math.round(byKey.left), right: Math.round(byKey.right) }, "F-14: the same place as the dock's own menu").toEqual({ left: Math.round(byMouse.left), right: Math.round(byMouse.right) });
+  const place = (box: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom) });
+  expect(place(byKey), "F-14: the same place as the dock's own menu").toEqual(place(byMouse));
 });
 
 test("palette #11: Duplicate in Write mode saves the unsaved text first, and the copy holds it @palette", async ({ page, aliceApi, folder }) => {

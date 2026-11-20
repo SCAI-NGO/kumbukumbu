@@ -440,7 +440,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (linking.Count > 0)
         {
             var links = linking.Sum(x => x.Count);
-            message += $"; {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", linking.Select(x => x.Path.Value))} now lead nowhere";
+            message += $"; {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", linking.Select(x => x.Path.Value))} now {(links == 1 ? "leads" : "lead")} nowhere";
         }
 
         return ShellResult.Ok(message);
