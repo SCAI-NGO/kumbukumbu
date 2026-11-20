@@ -3,6 +3,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { useDiscreet } from "../../discreet/state";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../../test/app";
@@ -30,6 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
+  useDiscreet.setState({ gone: new Set(), names: new Set() });
 });
 
 describe("Settings: Vaults", () => {
@@ -151,6 +154,46 @@ describe("Settings: Vaults", () => {
     expect(vaultsSection).toHaveTextContent(
       "Re-encrypting a vault gives it a new key. API keys, connected apps and WebDAV shares with access to it lose it and need to be set up or reconnected.",
     );
+  });
+
+  it("the Delete and Re-encrypt dialogs of a vault hidden again close with it, and so does the re-encrypted line", async () => {
+    api({
+      "GET /api/keys": () => json(200, []),
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
+      "GET /api/vaults/Work/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
+      "POST /api/vaults/Diary/rekey": () => json(200, { revokedApiKeys: 0, disconnectedApps: 0, revokedShares: 0 }),
+    });
+    const hide = () => act(() => useDiscreet.setState({ gone: new Set(["Diary"]), names: new Set() }));
+    const show = () => act(() => useDiscreet.setState({ gone: new Set(), names: new Set(["Diary"]) }));
+    renderApp("/settings/vaults");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Delete Diary" }));
+    expect(screen.getByRole("alertdialog", { name: "Delete Diary?" })).toBeInTheDocument();
+    hide();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete Diary?")).not.toBeInTheDocument();
+    show();
+
+    await userEvent.click(within(vaultsSection).getByRole("button", { name: "Re-encrypt Diary" }));
+    expect(screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" })).toBeInTheDocument();
+    hide();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    show();
+
+    await userEvent.click(within(vaultsSection).getByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    await userEvent.type(await within(dialog).findByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+    expect(await within(vaultsSection).findByText(/^Diary is re-encrypted\./)).toBeInTheDocument();
+    hide();
+    expect(within(vaultsSection).queryByText(/^Diary is re-encrypted\./)).not.toBeInTheDocument();
+    show();
+
+    // A dialog of another vault stays open.
+    await userEvent.click(within(vaultsSection).getByRole("button", { name: "Delete Work" }));
+    hide();
+    expect(screen.getByRole("alertdialog", { name: "Delete Work?" })).toBeInTheDocument();
   });
 
   it("a pending vault shows as being re-encrypted", async () => {
