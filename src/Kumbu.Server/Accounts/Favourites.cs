@@ -37,6 +37,12 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
     /// <summary>How many she keeps, hidden ones counted: a person's favourites are few.</summary>
     public const int Cap = 200;
 
+    /// <summary>The longest path a note's favourite takes: a deep path is about 500 characters, and this doubles it.</summary>
+    public const int MaxPathLength = 1024;
+
+    /// <summary>The largest favourites write: room for <see cref="Cap"/> entries of the longest path.</summary>
+    internal const long MaxBody = 1024 * 1024;
+
     private const string SealedLabel = "kumbu/v1/favourites";
     private const string VersionLabel = "kumbu/v1/favourites-version";
 

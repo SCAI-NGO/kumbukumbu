@@ -287,6 +287,24 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
         await AssertCopyAsync(shown);
     }
 
+    /// <summary>Sets a field of <paramref name="user"/>'s document that the readers have no use for to what no reader could
+    /// read: they look at whether the account is active, and at nothing else of it.</summary>
+    internal static Task SetUnreadableAsync(IMongoDatabase db, string userId) =>
+        db.GetCollection<BsonDocument>("users").UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", userId), Builders<BsonDocument>.Update.Set("favouritesSealed", "x"), cancellationToken: Ct);
+
+    [Fact]
+    public async Task A_published_note_opens_whatever_else_its_owners_account_holds()
+    {
+        var published = await PublishedAsync();
+        using var reader = new Reader(Api, "203.0.113.112");
+        await SetUnreadableAsync(app.Database, published.Alice.User.Id);
+
+        using var response = await reader.PostAsync(published.Formatted);
+
+        await AssertCopyAsync(response);
+    }
+
     [Fact]
     public async Task Switched_off_reads_nothing()
     {

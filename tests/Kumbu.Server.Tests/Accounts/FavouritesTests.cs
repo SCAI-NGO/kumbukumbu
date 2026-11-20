@@ -261,6 +261,20 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_note_favourite_with_a_path_longer_than_a_path_is_kept_is_refused()
+    {
+        var alice = await NewAsync(Api, vault: "Work");
+        var longest = new string('a', Favourites.MaxPathLength - 3) + ".md";
+        await WriteAsync(alice, Note("Work", longest));
+
+        using var refused = await PutAsync(alice, Note("Work", "b" + longest));
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Equal($"A note's favourite names a path of at most {Favourites.MaxPathLength} characters.", await ErrorAsync(refused));
+        Assert.Equal([$"note Work/{longest}"], await EntriesAsync(alice));
+    }
+
+    [Fact]
     public async Task Hidden_entries_count_towards_the_cap()
     {
         var w = await HiddenWorld.NewAsync(Api);

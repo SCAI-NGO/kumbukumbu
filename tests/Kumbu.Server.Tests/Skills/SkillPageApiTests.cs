@@ -127,6 +127,18 @@ public sealed class SkillPageApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_shared_skill_opens_whatever_else_its_owners_account_holds()
+    {
+        var (alice, code) = await SharedAsync();
+        await ReaderApiTests.SetUnreadableAsync(app.Database, alice.User.Id);
+
+        using var open = await OpenAsync(code);
+
+        Assert.Equal(HttpStatusCode.OK, open.StatusCode);
+        Assert.Equal("write-as-alice", (await RestClient.JsonAsync(open))["name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task The_answer_names_no_owner_vault_path_or_code()
     {
         var (alice, code) = await SharedAsync();
