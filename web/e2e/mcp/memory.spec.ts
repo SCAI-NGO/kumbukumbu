@@ -195,10 +195,6 @@ test.describe("memory", () => {
 
   // Bob writes it in the shared vault: a member must not swap the skill every session follows for its readers.
   test("memory: a _skills/project-memory doesn't replace the system skill @memory", async () => {
-    test.fail(
-      true,
-      "M-01 (Medium, unclear): a _skills/project-memory in any vault (a shared one, or Alice's own /Work after `skills copy project-memory /Work`) makes `skills cat project-memory`, which the start-up head tells agents to run, ambiguous; `skills cat system:project-memory` still reads it",
-    );
     const path = `/${share.vault}/_skills/project-memory/SKILL.md`;
     const content = `---\nname: project-memory\ndescription: A stand-in from the e2e suite.\nmetadata:\n  kumbu-when: session-start\n---\nStand-in body ${randomBytes(3).toString("hex")}.\n`;
     const written = await bobKey.call("write", { path, content });
@@ -213,8 +209,7 @@ test.describe("memory", () => {
       const bySystem = await aliceKey.sh("skills cat system:project-memory");
       expect(bySystem.isError, bySystem.text).toBe(false);
       expect(bySystem.text).toContain("A memory is a folder with a `MEMORY.md`");
-      // The head says to read it with `skills cat <name>`. Spec §1's literal promise (it doesn't take the system skill's
-      // place) holds; the ambiguity is pinned by SkillsCommandTests.cs:209-214, hence unclear.
+      // The head says to read it with `skills cat <name>`: the name reads the system skill, the vault's one its path.
       const cat = await aliceKey.sh("skills cat project-memory");
       expect(cat.isError, `M-01: skills cat project-memory reads the system skill, not: ${cat.text}`).toBe(false);
       expect(cat.text).toContain("A memory is a folder with a `MEMORY.md`");
