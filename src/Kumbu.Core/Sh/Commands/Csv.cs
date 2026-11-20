@@ -21,6 +21,9 @@ public sealed partial class Csv(INoteReader notes) : ICommand
 
     private const int OverviewRows = 10;
 
+    /// <summary>The longest <c>--tsv</c> output, in characters: as much text as a file may hold, which a pipe already takes from <c>cat</c>.</summary>
+    internal int TsvBudget { get; init; } = (int)AttachmentFormat.MaxBytes;
+
     public string Name => "csv";
 
     public string Usage => "csv [options] [path] [B2:D20]";
@@ -44,7 +47,7 @@ public sealed partial class Csv(INoteReader notes) : ICommand
                           empty cell, a number (or date) or a name twice
           Quoting as RFC 4180 has it ("a, b", "say ""hi"""); a quoted field may span lines, shown as <br>, and
           a quote left open is an error with its line. A table is cut at the output limit with a line on how
-          to narrow it; --tsv isn't, so a pipe gets every row.
+          to narrow it; --tsv isn't, so a pipe gets every row (up to 15 MB of text), each with its own cells.
           Reads text files only (UTF-8, up to 15 MB), whatever their name; a note's tables are read with cat.
 
           csv /Work/costs.csv
@@ -132,10 +135,10 @@ public sealed partial class Csv(INoteReader notes) : ICommand
             var from = Math.Max(1, (r.FirstRow ?? 1) - table.Offset);
             var to = Math.Min(table.Data.Count, (r.LastRow ?? lines) - table.Offset);
             var columns = Enumerable.Range(r.FirstColumn - 1, r.LastColumn - r.FirstColumn + 1).ToList();
-            return Print(table, from, to, columns, tsv);
+            return Print(table, from, to, columns, tsv, ct);
         }
 
-        var cols = Enumerable.Range(0, table.Columns).ToList();
+        List<int>? cols = null;
         if (options.Value("cols") is { } colsText)
         {
             var chosen = Columns(table, colsText, source, out var colsError);
@@ -146,10 +149,10 @@ public sealed partial class Csv(INoteReader notes) : ICommand
         if (rows is { } wanted)
         {
             if (wanted.From > table.Data.Count) return ShellResult.Error($"csv: --rows {options.Value("rows")}: {source} has {Count(table.Data.Count)} rows");
-            return Print(table, wanted.From, Math.Min(table.Data.Count, wanted.To ?? table.Data.Count), cols, tsv);
+            return Print(table, wanted.From, Math.Min(table.Data.Count, wanted.To ?? table.Data.Count), cols, tsv, ct);
         }
 
-        if (options.Has("cols") || tsv) return Print(table, 1, table.Data.Count, cols, tsv);
+        if (options.Has("cols") || tsv) return Print(table, 1, table.Data.Count, cols, tsv, ct);
         return Overview(table, separator.Value, parse.Quoted);
     }
 
@@ -351,16 +354,44 @@ public sealed partial class Csv(INoteReader notes) : ICommand
     private static string NameSaid(Table table, int column) =>
         table.Header is { } h && column < h.Length && h[column].Length > 0 ? $"{Letters(column + 1)} {h[column]}" : Letters(column + 1);
 
-    private static ShellResult Print(Table table, int from, int to, List<int> columns, bool tsv)
+    /// <summary>Rows <paramref name="from"/>-<paramref name="to"/> as a table or as tab-separated lines; null
+    /// <paramref name="columns"/> means every column, and in <c>--tsv</c> each row's own cells.</summary>
+    private ShellResult Print(Table table, int from, int to, List<int>? columns, bool tsv, CancellationToken ct)
     {
         if (tsv)
         {
             var lines = new StringBuilder();
-            if (table.HasHeader) lines.AppendJoin('\t', columns.Select(c => Flat(Cell(table.Header!, c)))).Append('\n');
-            for (var i = from; i <= to; i++) lines.AppendJoin('\t', columns.Select(c => Flat(Cell(table.Data[i - 1], c)))).Append('\n');
-            return ShellResult.Ok(lines.ToString().TrimEnd('\n'));
+            if (table.HasHeader && !AppendLine(table.Header!)) return TooLong();
+            for (var i = from; i <= to; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!AppendLine(table.Data[i - 1])) return TooLong();
+            }
+
+            var end = lines.Length;
+            while (end > 0 && lines[end - 1] == '\n') end--;
+            return ShellResult.Ok(lines.ToString(0, end));
+
+            bool AppendLine(string[] record)
+            {
+                var first = true;
+                foreach (var c in columns ?? Enumerable.Range(0, record.Length))
+                {
+                    if (!first) lines.Append('\t');
+                    lines.Append(Flat(Cell(record, c)));
+                    first = false;
+                    if (lines.Length > TsvBudget) return false;
+                }
+
+                lines.Append('\n');
+                return true;
+            }
+
+            ShellResult TooLong() =>
+                ShellResult.Error($"csv: the tab-separated output would be longer than {AttachmentText.Size(TsvBudget)}; narrow it with --rows or --cols");
         }
 
+        columns ??= [.. Enumerable.Range(0, table.Columns)];
         var output = new StringBuilder();
         var wanted = Math.Max(0, to - from + 1);
         var printed = Markdown(output, table, from, to, columns);
