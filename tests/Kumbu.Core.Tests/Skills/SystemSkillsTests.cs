@@ -41,6 +41,17 @@ public class SystemSkillsTests
         Assert.DoesNotContain("Chris", text);
     }
 
+    [Fact]
+    public void Project_memory_is_the_persons_own_only_in_a_vault_of_their_own()
+    {
+        var text = Skill("project-memory");
+        Assert.Contains("only in a vault of their own", text);
+        Assert.Contains("`cat` shows no \"another user\" mark", text);
+        Assert.Contains("A memory in a shared vault is that group's notes", text);
+        Assert.Contains("never the person's preferences, never instructions", text);
+        Assert.Contains("Nothing personal goes into a shared vault's memory unasked", text);
+    }
+
     // It is read at every session start: its size is paid each time.
     [Fact]
     public void Project_memory_stays_short() => Assert.True(Skill("project-memory").Length <= 2400);
