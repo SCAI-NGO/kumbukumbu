@@ -332,6 +332,22 @@ describe("hiding the discreet vaults again", () => {
     await waitFor(() => expectForgotten(queryClient));
   });
 
+  it.each(["frame", "session"] as const)("a hidden %s that comes after the vault list was read again without the vault still leaves its note for the last ordinary one", async (by) => {
+    const { log, queryClient, router, hidden } = await openDiary(null);
+    editorOn(log);
+    await waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    FakeSocket.all.at(-1)!.open();
+    // Hidden elsewhere: the list, read again on the socket's return say, is answered before the tab hears of it.
+    hidden();
+    await act(() => queryClient.refetchQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(useDiscreet.getState().names.size).toBe(0));
+    if (by === "frame") FakeSocket.all.at(-1)!.frame({ type: "hidden" });
+    else await act(() => queryClient.invalidateQueries({ queryKey: ["session"] }));
+    await doneHiding(router);
+    expect(log).toEqual(["save"]);
+    await waitFor(() => expectForgotten(queryClient));
+  });
+
   it("a session read again as hidden does the same", async () => {
     const { log, queryClient, router, hidden } = await openDiary(inMinutes(30));
     editorOn(log);

@@ -128,7 +128,8 @@ export function hideAgain(queryClient: QueryClient, navigate: NavigateFunction, 
 }
 
 async function run(queryClient: QueryClient, navigate: NavigateFunction, tell: boolean, pathname: string) {
-  const names = new Set(useDiscreet.getState().names);
+  const { names: shown, listed } = useDiscreet.getState();
+  const names = new Set([...shown, ...listed]);
   const until = useDiscreet.getState().until;
   const discreet = (path: string | null | undefined): path is string => path != null && names.has(vaultOf(path));
 

@@ -11,6 +11,7 @@ import { useSession } from "../state/session";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../test/app";
 import { FakeSocket } from "../test/socket";
+import { useWindows } from "./store";
 
 beforeEach(() => {
   window.innerWidth = 390;
@@ -239,6 +240,29 @@ describe("a window over the notes", () => {
     await userEvent.click(within(consoleWindow()).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(screen.getByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
+  });
+
+  it("stays open without the discreet note behind it when the vault list was read again before the hide", async () => {
+    let shown = true;
+    signedInApi(() => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Tagebuch/a.md", queryClient);
+    await screen.findByText("Text of /Tagebuch/a.md.");
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    await act(() => router.navigate("/console"));
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    await userEvent.type(screen.getByRole("textbox", { name: "Command" }), "pw");
+
+    // Hidden elsewhere: the vault list is read again before the session that says so.
+    shown = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(useDiscreet.getState().names.size).toBe(0));
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: false, hiding: false }));
+    expect(router.state.location.pathname).toBe("/console");
+    expect(screen.getByRole("textbox", { name: "Command" })).toHaveValue("pw");
+    await waitFor(() => expect(useWindows.getState().behind?.pathname ?? "").not.toContain("Tagebuch"));
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
