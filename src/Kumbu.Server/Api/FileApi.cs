@@ -187,6 +187,8 @@ public static class FileApi
         var declared = request.ContentLength;
         if (declared > bound) throw new ApiException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
         LiftBodyLimit(request.HttpContext, bound);
+        // A body that may be large: declared above 15 MB, or of no declared length.
+        if (declared is null or > AttachmentFormat.MaxBytes) RequireLargeBodyRate(request.HttpContext);
 
         using var body = new ReceivedBody();
         if (!await body.ReadAsync(request, declared, ct)) return await StoreLargeAsync(filePath, version, body.Bytes, request, declared, bound, files, writer, store, labels, ct);
@@ -205,7 +207,8 @@ public static class FileApi
     /// format's magic bytes; an image's size from its header where it reads, without the pixel limit, as nothing decodes
     /// it; an SVG must be read whole, so it can't be this large), asked for a conflict, then the rest of the body
     /// streamed to the store, and its record written. Nothing is held but a chunk or two at a time. A body that doesn't
-    /// arrive whole, or runs past the bound, stores nothing.
+    /// arrive whole, or runs past the bound, stores nothing; one that sends nothing is ended after 30 s without a byte
+    /// (<see cref="VaultCatalog.LargeBodySilence"/>).
     /// </summary>
     private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> StoreLargeAsync(
         VaultPath filePath, string? version, ReadOnlyMemory<byte> head, HttpRequest request, long? declared, long bound, IAttachmentStore files, AttachmentWriter writer,
@@ -216,12 +219,13 @@ public static class FileApi
         if (AttachmentFormat.LargeProblem(filePath, head.Span, skillsVault) is { } problem) throw ApiErrors.BadRequest(problem + ".");
         var dimensions = AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } ? ImageHeader.Size(head.Span) : null;
         if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
-        RequireLargeBodyRate(request.HttpContext);
+        var services = request.HttpContext.RequestServices;
+        var body = new QuietBody(request.Body, services.GetRequiredService<VaultCatalog>().LargeBodySilence, services.GetRequiredService<TimeProvider>());
 
         LargeBlob blob;
         try
         {
-            blob = await writer.PutLargeAsync(filePath.Segments[0], head, request.Body, declared, ct);
+            blob = await writer.PutLargeAsync(filePath.Segments[0], head, body, declared, ct);
         }
         catch (FileTooLargeException e)
         {
@@ -234,7 +238,7 @@ public static class FileApi
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            // The client went away mid-body, or it held another length than it declared.
+            // The client went away or stopped sending mid-body, or it held another length than it declared.
             throw ApiErrors.BadRequest(e is InvalidDataException ? e.Message : CutOff);
         }
 
@@ -262,9 +266,10 @@ public static class FileApi
     internal static readonly TimeSpan LargeBodyGrace = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Holds a body known to be larger than 15 MB to <see cref="LargeBodyBytesPerSecond"/>, before the rest of it is read,
-    /// where the server lets a request set it: over HTTP/1.1. HTTP/2 keeps its rates per connection, and its feature
-    /// refuses one per request; the test host has none.
+    /// Holds a body that may be larger than 15 MB (declared so, or of no declared length) to
+    /// <see cref="LargeBodyBytesPerSecond"/>, before the body's first byte is read: Kestrel takes a request's rate once,
+    /// at that read. Only where the server lets a request set it, over HTTP/1.1: HTTP/2 keeps its rates per connection,
+    /// and its feature refuses one per request; the test host has none.
     /// </summary>
     internal static void RequireLargeBodyRate(HttpContext http)
     {

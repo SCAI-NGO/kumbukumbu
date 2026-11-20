@@ -218,23 +218,22 @@ public sealed class LargeBlobTests(MongoFixture fixture)
         (await (await Raw(world, "blob_chunks").DistinctAsync<ObjectId>("head", F.Empty, cancellationToken: Ct)).ToListAsync(Ct)).Count;
 
     [Fact]
-    public async Task One_account_streams_at_most_two_large_uploads_at_once()
+    public async Task One_account_streams_one_large_upload_at_a_time()
     {
         var (world, catalog, _) = await WorldAsync(fileWrites: 4);
         var held = new TaskCompletionSource();
         var first = HoldingAsync(StoreOf(catalog, "lea"), 40, held.Task);
-        var second = HoldingAsync(StoreOf(catalog, "lea"), 41, held.Task);
-        await WaitForAsync(() => HeadsWithChunksAsync(world).Result == 2);
+        await WaitForAsync(() => HeadsWithChunksAsync(world).Result == 1);
 
-        // Her third waits, though the server has slots left; another account's doesn't.
-        var third = PutAsync(StoreOf(catalog, "lea"), Random(20_000_000, 42));
-        await PutAsync(StoreOf(catalog, "max"), Random(20_000_000, 43));
-        Assert.False(third.IsCompleted);
-        Assert.Equal(3, await HeadsWithChunksAsync(world));
+        // Her second waits, though the server has slots left; another account's doesn't.
+        var second = PutAsync(StoreOf(catalog, "lea"), Random(20_000_000, 41));
+        await PutAsync(StoreOf(catalog, "max"), Random(20_000_000, 42));
+        Assert.False(second.IsCompleted);
+        Assert.Equal(2, await HeadsWithChunksAsync(world));
 
         held.SetResult();
-        await Task.WhenAll(first, second, third);
-        Assert.Equal(4, Count(world, "blobs"));
+        await Task.WhenAll(first, second);
+        Assert.Equal(3, Count(world, "blobs"));
     }
 
     [Fact]

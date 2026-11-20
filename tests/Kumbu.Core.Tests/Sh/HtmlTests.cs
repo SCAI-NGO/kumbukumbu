@@ -86,6 +86,64 @@ public class HtmlTests
         Assert.Equal("<a href=\"https://example.org/b\" class=\"ext\">two</a>", (await Run("html --html /Work/page.html a.ext")).Output);
     }
 
+    [Theory]
+    [InlineData("<p>a<br>b</p>", "p")]
+    [InlineData("<p><img src=\"a&amp;b.png\" alt='\"x\"'> <input type=checkbox checked></p>", "p")]
+    [InlineData("<script>if (a < b && c > d) {}</script>", "script")]
+    [InlineData("<style>p > a { content: \"&\" }</style>", "style")]
+    [InlineData("<div><template><p>t</p><b>u</b></template></div>", "div")]
+    [InlineData("<pre>\nx</pre>", "pre")]
+    [InlineData("<pre>\n\nx</pre>", "pre")]
+    [InlineData("<textarea>\ny</textarea>", "textarea")]
+    [InlineData("<textarea>\n\ny</textarea>", "textarea")]
+    [InlineData("<listing>\n\nz</listing>", "listing")]
+    [InlineData("<xmp>a < b</xmp>", "xmp")]
+    [InlineData("<div><!-- a note -->x</div>", "div")]
+    [InlineData("<p>&amp; &lt; &gt; &nbsp; \"q\"</p>", "p")]
+    [InlineData("<ul><li>a<li>b <i>c</i></ul>", "ul")]
+    [InlineData("<svg viewBox=\"0 0 1 1\"><path d=\"M0 0\"/><a xlink:href=\"#x\">l</a></svg>", "svg")]
+    [InlineData("<math><mi>x</mi></math>", "math")]
+    [InlineData("<table><tr><td>1</td></tr></table>", "table")]
+    [InlineData("<p title=\"a &amp; b\" data-x='&lt;'>t</p>", "p")]
+    [InlineData("<noscript><b>n</b></noscript>", "noscript")]
+    public async Task Html_prints_each_kind_of_node_as_AngleSharp_writes_it(string body, string selector)
+    {
+        var page = $"<!doctype html><html><head><title>t</title></head><body>{body}</body></html>";
+        _store.AddTextFile("/Work/kinds.html", page);
+        var expected = new AngleSharp.Html.Parser.HtmlParser().ParseDocument(page).QuerySelector(selector)!.OuterHtml;
+
+        Assert.Equal(expected, (await Run($"html --html /Work/kinds.html {selector}")).Output);
+    }
+
+    [Fact]
+    public async Task An_element_longer_than_the_output_is_printed_up_to_the_limit_and_said_to_be_cut()
+    {
+        _store.AddTextFile("/Work/long.html", $"<main>{string.Concat(Enumerable.Range(0, 3000).Select(n => $"<p>Line {n}</p>"))}</main>");
+
+        var output = (await Run("html --html /Work/long.html main")).Output;
+
+        Assert.StartsWith("<main><p>Line 0</p><p>Line 1</p>", output);
+        Assert.True(output.Length <= OutputLimit.MaxChars, $"{output.Length} characters");
+        Assert.EndsWith("\nhtml: the first of 1 elements is cut at the output limit; narrow the selector", output);
+    }
+
+    [Fact]
+    public void An_elements_html_is_made_up_to_the_limit_it_is_given()
+    {
+        var main = new AngleSharp.Html.Parser.HtmlParser().ParseDocument($"<main>{string.Concat(Enumerable.Range(0, 100).Select(n => $"<p>Line {n}</p>"))}</main>").QuerySelector("main")!;
+
+        Assert.Equal(main.OuterHtml[..50], HtmlMarkup.Of(main, 50, CancellationToken.None));
+        Assert.Equal(main.OuterHtml, HtmlMarkup.Of(main, 100_000, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Making_an_elements_html_stops_when_the_call_is_cancelled()
+    {
+        var main = new AngleSharp.Html.Parser.HtmlParser().ParseDocument("<main><p>Line 0</p></main>").QuerySelector("main")!;
+
+        Assert.Throws<OperationCanceledException>(() => HtmlMarkup.Of(main, 100_000, new CancellationToken(canceled: true)));
+    }
+
     [Fact]
     public async Task Attr_prints_one_attribute_and_skips_elements_without_it()
     {

@@ -19,7 +19,8 @@ public enum EdgeFlags { None = 0, Embed = 1, Alias = 2, Ambiguous = 4 }
 public sealed record GraphNode(string Key, VaultPath? Path, string Title, NodeKind Kind,
     IReadOnlyList<string> Tags, CalendarTime? When, CalendarTime? Until, bool Archived);
 
-/// <summary>Every link from one note to one node; <paramref name="Lines"/> 0-based, distinct and ascending.</summary>
+/// <summary>Every link from one note to one node; <paramref name="Lines"/> 0-based, distinct and ascending, and
+/// possibly the same list as another edge's of the note.</summary>
 public sealed record GraphEdge(int From, int To, EdgeFlags Flags, IReadOnlyList<int> Lines);
 
 /// <summary>
@@ -102,7 +103,11 @@ public sealed class LinkGraph
     /// them; empty for a path that is no note of the graph.</summary>
     public IReadOnlyList<ResolvedLink> LinksOf(VaultPath note) => _links.GetValueOrDefault(note) ?? [];
 
-    public static LinkGraph Build(string vault, IReadOnlyDictionary<VaultPath, LinkExtract> notes, IReadOnlyCollection<VaultPath> attachments)
+    /// <summary>The graph of <paramref name="notes"/>: each distinct link of a note (its target text and kind) is resolved
+    /// once, and its lines go to every note it reaches together.</summary>
+    public static LinkGraph Build(
+        string vault, IReadOnlyDictionary<VaultPath, LinkExtract> notes, IReadOnlyCollection<VaultPath> attachments,
+        CancellationToken ct = default)
     {
         // One order for everything that follows: the resolver's tie-breaks, the ghosts' titles, the nodes and edges.
         var sources = notes.Keys.OrderBy(p => p.Value, TextOrder.Default).ToList();
@@ -112,10 +117,25 @@ public sealed class LinkGraph
         var links = new Dictionary<VaultPath, IReadOnlyList<ResolvedLink>>();
         var linked = new HashSet<VaultPath>();
         var ghosts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var read = 0;
         foreach (var source in sources)
         {
-            var resolved = notes[source].Links.Select(l => new ResolvedLink(l, resolver.Resolve(source, l))).ToList();
+            ct.ThrowIfCancellationRequested();
+            // Resolve reads only the target, as SameResolution keys it, and whether the link is a wikilink, so the links
+            // of a note that it reads alike share one resolution. [Markdown, wikilink] for text that ignores case, and again
+            // for text whose case counts.
+            Dictionary<string, LinkResolution>[] ignoringCase = [new(StringComparer.OrdinalIgnoreCase), new(StringComparer.OrdinalIgnoreCase)];
+            Dictionary<string, LinkResolution>[] withCase = [new(StringComparer.Ordinal), new(StringComparer.Ordinal)];
+            var resolved = notes[source].Links.Select(l =>
+            {
+                if (++read % 256 == 0) ct.ThrowIfCancellationRequested();
+                var (text, caseCounts) = LinkResolver.SameResolution(l.Target);
+                var cache = (caseCounts ? withCase : ignoringCase)[l is WikiLink ? 1 : 0];
+                if (!cache.TryGetValue(text, out var resolution)) cache[text] = resolution = resolver.Resolve(source, l);
+                return new ResolvedLink(l, resolution);
+            }).ToList();
             links[source] = resolved;
+            var counted = new HashSet<LinkResolution>(ReferenceEqualityComparer.Instance);
             foreach (var (link, resolution) in Edged(resolved))
             {
                 if (Ghost(resolution))
@@ -124,6 +144,7 @@ public sealed class LinkGraph
                     continue;
                 }
 
+                if (!counted.Add(resolution)) continue;
                 foreach (var target in Targets(resolution))
                 {
                     if (!notes.ContainsKey(target)) linked.Add(target);
@@ -143,28 +164,53 @@ public sealed class LinkGraph
         var edges = new List<GraphEdge>();
         foreach (var source in sources)
         {
+            ct.ThrowIfCancellationRequested();
             var from = index[source.Value];
-            var byTarget = new SortedDictionary<int, (EdgeFlags Flags, SortedSet<int> Lines)>();
+            // The links that share a resolution reach the same notes: their lines are gathered once, and an ambiguous
+            // link's candidates share that one list. A ghost is the link's own, by its key.
+            var groups = new Dictionary<LinkResolution, (EdgeFlags Flags, List<int> Lines)>(ReferenceEqualityComparer.Instance);
+            var ghostGroups = new Dictionary<string, (EdgeFlags Flags, List<int> Lines)>(StringComparer.Ordinal);
             foreach (var (link, resolution) in Edged(links[source]))
             {
+                if (++read % 256 == 0) ct.ThrowIfCancellationRequested();
                 var flags = (link is WikiLink { Embed: true } or MarkdownLink { Embed: true } ? EdgeFlags.Embed : 0)
                     | (resolution.ViaAlias ? EdgeFlags.Alias : 0)
                     | (resolution.Kind == LinkKind.Ambiguous ? EdgeFlags.Ambiguous : 0);
-                IEnumerable<int> targets = Ghost(resolution)
-                    ? [index["?" + GhostKeyOf(source, link.Target)]]
-                    : Targets(resolution).Select(t => index[t.Value]);
+                if (Ghost(resolution)) Gather(ghostGroups, "?" + GhostKeyOf(source, link.Target), flags, link.Line);
+                else Gather(groups, resolution, flags, link.Line);
+            }
+
+            var byTarget = new Dictionary<int, (EdgeFlags Flags, List<int[]> Lines)>();
+            void Reach(IEnumerable<int> targets, (EdgeFlags Flags, List<int> Lines) group)
+            {
+                int[] lines = [.. group.Lines.Order().Distinct()];
                 foreach (var to in targets)
                 {
-                    if (!byTarget.TryGetValue(to, out var edge)) byTarget[to] = edge = (EdgeFlags.None, []);
-                    edge.Lines.Add(link.Line);
-                    byTarget[to] = (edge.Flags | flags, edge.Lines);
+                    if (!byTarget.TryGetValue(to, out var edge)) edge = (EdgeFlags.None, []);
+                    edge.Lines.Add(lines);
+                    byTarget[to] = (edge.Flags | group.Flags, edge.Lines);
                 }
             }
 
-            edges.AddRange(byTarget.Select(e => new GraphEdge(from, e.Key, e.Value.Flags, [.. e.Value.Lines])));
+            foreach (var (resolution, group) in groups) Reach(Targets(resolution).Select(t => index[t.Value]), group);
+            foreach (var (ghost, group) in ghostGroups) Reach([index[ghost]], group);
+
+            foreach (var to in byTarget.Keys.Order())
+            {
+                var (flags, lines) = byTarget[to];
+                edges.Add(new GraphEdge(from, to, flags, lines.Count == 1 ? lines[0] : [.. lines.SelectMany(l => l).Order().Distinct()]));
+            }
         }
 
         return new LinkGraph(vault, nodes, [.. edges], links, notes, attachments);
+    }
+
+    private static void Gather<TKey>(Dictionary<TKey, (EdgeFlags Flags, List<int> Lines)> groups, TKey key, EdgeFlags flags, int line)
+        where TKey : notnull
+    {
+        if (!groups.TryGetValue(key, out var group)) group = (EdgeFlags.None, []);
+        group.Lines.Add(line);
+        groups[key] = (group.Flags | flags, group.Lines);
     }
 
     // Links to a heading of the note itself name no target and make no edge, as backlinks skip them today.
@@ -203,7 +249,8 @@ public sealed class LinkGraph
         && Nodes.Count == other.Nodes.Count
         && Nodes.Zip(other.Nodes).All(p => p.First with { Tags = p.Second.Tags } == p.Second && p.First.Tags.SequenceEqual(p.Second.Tags))
         && Edges.Count == other.Edges.Count
-        && Edges.Zip(other.Edges).All(p => p.First with { Lines = p.Second.Lines } == p.Second && p.First.Lines.SequenceEqual(p.Second.Lines));
+        && Edges.Zip(other.Edges).All(p => p.First with { Lines = p.Second.Lines } == p.Second
+            && (ReferenceEquals(p.First.Lines, p.Second.Lines) || p.First.Lines.SequenceEqual(p.Second.Lines)));
 
     /// <summary>The same graph under another version; it shares everything else.</summary>
     public LinkGraph WithVersion(string? version) => new(this, version);

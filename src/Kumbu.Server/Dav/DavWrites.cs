@@ -585,6 +585,7 @@ internal sealed partial class DavWrites(
             if (Request.ContentLength > bound) throw new DavException(StatusCodes.Status413PayloadTooLarge, new FileTooLargeException(bound).Message);
             // The 64 MiB of every other request under /dav, lifted for a file's.
             Api.FileApi.LiftBodyLimit(http, bound);
+            if (Request.ContentLength is null or > AttachmentFormat.MaxBytes) Api.FileApi.RequireLargeBodyRate(http);
             try
             {
                 (bytes, large) = await DavBody.ReadStartAsync(Request, AttachmentFormat.MaxBytes, Api.FileApi.HeadBytes, ct);
@@ -626,7 +627,6 @@ internal sealed partial class DavWrites(
             matches = true;
             // Its size where the header reads, without the pixel limit: nothing decodes a large image (files spec, decision 12).
             var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes.Span) : null;
-            if (copied is null) Api.FileApi.RequireLargeBodyRate(http);
             var blob = await PutLargeAsync(files, path, bytes, copied, bound, ct);
             write = async v => (await files.WriteLargeAsync(path.Value, blob, bytes, dimensions, v, ct)).Result;
         }
@@ -656,7 +656,10 @@ internal sealed partial class DavWrites(
     {
         try
         {
-            return await files.PutLargeAsync(path.Segments[0], head, copied is null ? Request.Body : Stream.Null, copied is null ? Request.ContentLength : copied.Length, ct);
+            var body = copied is null
+                ? new Api.QuietBody(Request.Body, http.RequestServices.GetRequiredService<Vaults.VaultCatalog>().LargeBodySilence, http.RequestServices.GetRequiredService<TimeProvider>())
+                : Stream.Null;
+            return await files.PutLargeAsync(path.Segments[0], head, body, copied is null ? Request.ContentLength : copied.Length, ct);
         }
         catch (FileTooLargeException e)
         {

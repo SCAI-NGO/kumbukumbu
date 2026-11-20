@@ -31,7 +31,8 @@ public sealed class Admin(
     public async Task<IReadOnlyList<UserSummary>> ListUsersAsync(User actor, CancellationToken ct)
     {
         await AdminRules.RequireAdminAsync(Users, actor, ct);
-        var users = await Users.Find(FilterDefinition<UserDocument>.Empty).SortBy(u => u.CreatedAt).ToListAsync(ct);
+        var users = await Users.Find(FilterDefinition<UserDocument>.Empty).SortBy(u => u.CreatedAt)
+            .Project(u => new { u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, u.Quota }).ToListAsync(ct);
 
         var slotFilter = Builders<SlotDocument>.Filter;
         var owned = await catalog.Slots.Find(slotFilter.Eq(s => s.Kind, SlotDocument.User) & slotFilter.Exists(s => s.Owner)).ToListAsync(ct);

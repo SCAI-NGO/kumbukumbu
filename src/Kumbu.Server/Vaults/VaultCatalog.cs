@@ -46,20 +46,24 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     internal SemaphoreSlim FileWrites { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileWrites));
 
     /// <summary>The large uploads one account streams at once, of the server's <see cref="FileWrites"/>: each holds its
-    /// slot for as long as its body takes, so without this a few slow links of one person could take them all.</summary>
-    internal const int LargeWritesPerAccount = 2;
+    /// slot for as long as its body takes: one large upload per account at a time.</summary>
+    internal const int LargeWritesPerAccount = 1;
 
     /// <summary>How long a large upload waits for its slots before it is refused (<see cref="TooManyUploadsException"/>):
     /// a waiter holds its head (up to 15 MB and a byte) and its connection, so it may not wait without end; half a minute
     /// covers an upload ahead of it finishing, and a client told to come back retries rather than hangs. Settable for tests.</summary>
     internal TimeSpan FileWriteWait { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>How long a large upload may send nothing before it is ended (400, nothing stored), its slot given back.
+    /// Settable for tests.</summary>
+    internal TimeSpan LargeBodySilence { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>Per account (the caller's user id; "" for the dev token), its share of <see cref="FileWrites"/>. One per
     /// account that has uploaded a large file, for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _accountWrites = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The slots of a large upload of <paramref name="account"/>'s: one of its own <see cref="LargeWritesPerAccount"/>,
+    /// The slots of a large upload of <paramref name="account"/>'s: its one of <see cref="LargeWritesPerAccount"/>,
     /// then one of the server's <see cref="FileWrites"/>, waited for together no longer than <see cref="FileWriteWait"/>
     /// (else <see cref="TooManyUploadsException"/>). Disposing the result gives both back.
     /// </summary>
@@ -1846,7 +1850,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // Parsed by the graph's build, outside the gate: a reader's first build waits for this one or this for it, so
             // a stale note is parsed once, and the batches below find every extract held. ExtractOf alone takes no lock,
             // so it would parse the same notes beside a build running at once.
-            vault.Graph();
+            await vault.GraphAsync(CancellationToken.None);
             foreach (var batch in paths.Chunk(ExtractBatch))
             {
                 await vault.Gate.WaitAsync();

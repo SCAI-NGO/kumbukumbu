@@ -163,6 +163,18 @@ public sealed class AiLinkApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_ai_link_opens_whatever_else_its_owners_account_holds()
+    {
+        using var linked = await LinkedAsync(Api, "100.70.17.1");
+        using var ai = new Fetcher(Api, "100.70.17.2");
+        await ReaderApiTests.SetUnreadableAsync(app.Database, linked.Published.Alice.User.Id);
+
+        using var response = await ai.GetAsync(linked.Link);
+
+        await AssertMarkdownAsync(response);
+    }
+
+    [Fact]
     public async Task An_svg_reads_from_its_image_URL_under_the_file_content_policy()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Work");

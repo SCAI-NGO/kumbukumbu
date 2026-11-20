@@ -14,6 +14,15 @@ public class GlobTests
     private static bool Keeps(string pattern, string path, string root = "/SWE") => Glob.Keeps([G(pattern)], P(path), P(root));
 
     [Fact]
+    public void A_glob_too_long_for_the_matcher_is_an_error()
+    {
+        var pattern = string.Concat(Enumerable.Repeat("*a", 2000));
+
+        Assert.False(Glob.TryParse(pattern, out _, out var error));
+        Assert.Equal($"rg: bad glob '{pattern}': too long", error);
+    }
+
+    [Fact]
     public void Exclude_with_double_star_drops_a_folder_at_any_depth()
     {
         Assert.True(G("!**/Memory/**").Excludes);

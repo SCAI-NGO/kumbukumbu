@@ -86,6 +86,21 @@ public sealed class AdminTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_user_list_shows_a_user_whatever_else_their_account_holds()
+    {
+        var admin = await UserAsync("anna", Roles.Admin);
+        var lea = await UserAsync("lea", Roles.User);
+        await _db.GetCollection<BsonDocument>("users").UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", lea.Id), Builders<BsonDocument>.Update.Set("favouritesSealed", "x"), cancellationToken: Ct);
+
+        var users = await Admin().ListUsersAsync(admin, Ct);
+
+        var row = users.Single(u => u.Username == "lea");
+        Assert.Equal(lea.Id, row.Id);
+        Assert.True(row.Active);
+    }
+
+    [Fact]
     public async Task Bytes_stored_grow_with_what_a_user_writes()
     {
         var admin = await UserAsync("anna", Roles.Admin);

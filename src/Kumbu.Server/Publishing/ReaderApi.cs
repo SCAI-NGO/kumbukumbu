@@ -152,7 +152,7 @@ public static class ReaderApi
         if (typed is not null)
         {
             if (ShareCode.Parse(typed) is { } code && await store.OpenPublicationAsync(code, ct) is { } opened
-                && await users.Users.Find(u => u.Id == opened.Owner).FirstOrDefaultAsync(ct) is { Active: true })
+                && await users.Users.Find(u => u.Id == opened.Owner).Project(u => u.Active).FirstOrDefaultAsync(ct))
             {
                 return (code, opened);
             }

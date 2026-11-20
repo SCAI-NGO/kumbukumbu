@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type F
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkHideBlockIds } from "./blockIds";
+import { atxHeading, headingText } from "./headings";
 import { makeAiLink, readAgain, readFile, readWithCode, type AiLinkResult, type ReaderCopy, type ReaderNote, type ReadResult } from "./readerApi";
 import { snapshotText, untilText } from "./snapshot";
 
@@ -94,14 +95,6 @@ function NoteLinkTo({ href, children }: { href: string; children: ReactNode }) {
 }
 
 const fence = /^ {0,3}(`{3,}|~{3,})/;
-const atx = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
-// A heading's text as it reads, near enough: links by their text, emphasis and code marks gone.
-const headingText = (md: string) =>
-  md
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_`~=]/g, "")
-    .trim()
-    .toLowerCase();
 
 /**
  * The part of a note an embed names (`![[Plan#Big idea]]`): its heading and what lies under it, to the next heading of
@@ -130,8 +123,8 @@ export function sectionOf(markdown: string, subpath: string): string | null {
     return lines.slice(from, to + 1).join("\n");
   }
   const wanted = subpath.trim().toLowerCase();
-  const level = (i: number) => (outside[i] ? (atx.exec(lines[i])?.[1].length ?? 0) : 0);
-  const at = lines.findIndex((line, i) => level(i) > 0 && headingText(atx.exec(line)![2]) === wanted);
+  const level = (i: number) => (outside[i] ? (atxHeading(lines[i])?.level ?? 0) : 0);
+  const at = lines.findIndex((line, i) => level(i) > 0 && headingText(atxHeading(line)!.text) === wanted);
   if (at < 0) return null;
   let end = at + 1;
   while (end < lines.length && !(level(end) > 0 && level(end) <= level(at))) end++;
@@ -144,8 +137,9 @@ function EmbeddedNote({ src, alt }: { src: string; alt: string }) {
   const bundle = useContext(Bundle);
   const target = noteLink(src);
   const note = target && bundle?.notes.get(target.id);
+  const heading = target?.heading;
+  const part = useMemo(() => (!note || bundle?.embedded ? null : heading ? sectionOf(note.markdown, heading) : note.markdown), [note, heading, bundle?.embedded]);
   if (!bundle || !note) return <>{alt}</>;
-  const part = target.heading ? sectionOf(note.markdown, target.heading) : note.markdown;
   if (bundle.embedded || part === null) return <NoteLinkTo href={src}>{alt || note.title}</NoteLinkTo>;
   return (
     <Bundle.Provider value={{ ...bundle, embedded: true }}>

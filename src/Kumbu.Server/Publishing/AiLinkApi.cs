@@ -75,7 +75,7 @@ public static class AiLinkApi
         if (limits.ReadersBlocked(http)) throw new Refusal(Gone);
         if (!options.Publish.Enabled) throw new Refusal(new Answer(StatusCodes.Status404NotFound, PlainText, Encoding.UTF8.GetBytes(ReaderApi.OffSentence)));
         if (AiLinkToken.Parse(typed) is { } token && await store.OpenAiLinkAsync(token, ct) is { } link
-            && await users.Users.Find(u => u.Id == link.Opened.Owner).FirstOrDefaultAsync(ct) is { Active: true }
+            && await users.Users.Find(u => u.Id == link.Opened.Owner).Project(u => u.Active).FirstOrDefaultAsync(ct)
             && await store.CountAiLinkAsync(link.Id, AiLinkToken.Ceiling(link.Opened.Copy.Files.Count), ct))
         {
             return (token, link.Opened);

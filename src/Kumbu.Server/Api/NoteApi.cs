@@ -455,14 +455,11 @@ public static class NoteApi
         CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, SearchIndex index, EmbeddingsKeys keys, CancellationToken ct)
     {
         var name = VaultNames.Check(body.Name);
-        // The provider before the vault, so that one refused leaves no vault. BYOK spec, "Decisions": unless she asks
-        // for another, with her own key saved a new vault starts on TensorX, whose embeddings rank better.
+        // The provider before the vault, so that one refused leaves no vault. Only a provider named puts a vault on
+        // TensorX (BYOK spec, "Decisions"): the dialog names it when its box is ticked; any other create stays on the
+        // server's default.
         var provider = body.Provider;
         var key = provider is null ? null : await ChosenKeyAsync(provider, caller, index, keys, ct);
-        if (provider is null && index.Providers.Byok is not null && await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) is { } saved)
-        {
-            (provider, key) = (Byok.Provider, saved);
-        }
 
         UnlockedVault created;
         try

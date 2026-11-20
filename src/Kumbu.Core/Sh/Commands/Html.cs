@@ -120,7 +120,8 @@ public sealed class Html(INoteReader notes) : ICommand
                 : ShellResult.Ok("") with { NoMatchHint = $"html: {Elements(matched.Count)} matched '{text}', none with the attribute {name}" };
         }
 
-        // Made one by one, as the output takes them: an element's HTML or text holds all below it.
+        // Made one by one, as the output takes them: an element's HTML or text holds all below it, and an element's HTML
+        // is made only as far as the output reaches.
         IEnumerable<string> Each(Func<IElement, string> print)
         {
             foreach (var element in matched)
@@ -130,7 +131,7 @@ public sealed class Html(INoteReader notes) : ICommand
             }
         }
 
-        if (options.Has("html")) return TextFiles.Listed(Name, matched.Count, Each(e => e.OuterHtml), "\n", "elements", "narrow the selector");
+        if (options.Has("html")) return TextFiles.Listed(Name, matched.Count, Each(e => HtmlMarkup.Of(e, OutputLimit.MaxChars, ct)), "\n", "elements", "narrow the selector");
 
         var tables = matched.Any(e => e is IHtmlTableElement);
         return TextFiles.Listed(Name, matched.Count, Each(e => e is IHtmlTableElement t ? Table(t) : TextFiles.Collapse(e.TextContent)), tables ? "\n\n" : "\n", "elements", "narrow the selector");

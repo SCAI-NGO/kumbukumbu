@@ -80,6 +80,19 @@ describe("the neutral window", () => {
     expect(neutralWindow.history.state).toEqual({ usr: { back: "/Tagebuch/a.md" }, key: "k1", idx: 1 });
   });
 
+  it("still writes /discreet for a vault shown in the mode once the vault list is read again without it, before the hide", () => {
+    useDiscreet.setState({ revealed: true });
+    useDiscreet.getState().setFromVaults([{ name: "Work" }, { name: "Tagebuch", discreet: true }]);
+    useDiscreet.getState().setFromVaults([{ name: "Work" }]);
+    neutralWindow.history.pushState({ usr: { back: "/Tagebuch/b.md" }, key: "k1", idx: 1 }, "", "/notes/Tagebuch/a.md");
+
+    expect(window.location.pathname).toBe("/discreet");
+    expect(neutralWindow.location.pathname).toBe("/notes/Tagebuch/a.md");
+    neutralWindow.history.pushState({ usr: { back: "/Tagebuch/b.md" }, key: "k2", idx: 2 }, "", "/settings");
+    expect(window.history.state).toEqual({ key: "k2", idx: 2 });
+    expect(browserKeeps()).not.toContain("Tagebuch");
+  });
+
   it("knows each kind of route that names a vault", () => {
     shown("Tagebuch");
     for (const url of ["/notes/Tagebuch/a.md", "/board/Tagebuch", "/gallery/Tagebuch", "/view/Tagebuch/b.png", "/checkpoints/Tagebuch/c1/a.md", "/blame/Tagebuch/a.md", "/notes/Tagebuch"])

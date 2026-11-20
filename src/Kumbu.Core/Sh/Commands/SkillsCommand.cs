@@ -150,6 +150,9 @@ public sealed class SkillsCommand(SkillDirectory skills, INoteStore notes, NoteW
         if (Inside(VaultPath.Root, file) is null) return (null, "", Invalid($"{command}: {address} {NotInAFolder}"));
         // A name finds what the person sees: her own skill in Skills takes a system skill's place; system: still reaches it.
         var matches = (builtIn ? visible : SkillDirectory.Effective(visible)).Where(s => s.Name == name && (!builtIn || s.IsSystem)).ToList();
+        // A name a built-in skill has is the built-in one's, or her own in Skills that takes its place; a vault's _skills
+        // skill of that name by its path.
+        if (!builtIn && matches.Count > 1 && SystemSkills.Find(name) is not null) matches = [.. matches.Where(s => s.IsSystem || s.Folder is { Segments.Count: 2 })];
         return matches.Count switch
         {
             0 => (null, "", NotFound(builtIn ? $"{command}: there is no built-in skill '{name}'" : $"{command}: no skill named '{name}' ('skills ls' lists them)")),

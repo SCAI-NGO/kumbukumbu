@@ -13,6 +13,9 @@ export type Behind = Pick<Location, "pathname" | "search" | "hash" | "state" | "
 /** The vault list's location: what a window reached without a location behind shows under it. */
 export const ROOT: Behind = { pathname: "/", search: "", hash: "", state: null, key: "behind" };
 
+/** The vault list itself, not the note `/` would open on. */
+export const OVERVIEW: Behind = { ...ROOT, state: { overview: true } };
+
 /**
  * The window over the notes, in memory only: the location the shell shows behind it (the last one that wasn't a
  * window), and whether that location is the history entry before the window's (reached in-app) or not (a deep link,
